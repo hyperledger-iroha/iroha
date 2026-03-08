@@ -133,6 +133,6 @@ ih58... now holds:
 - үшін `iroha --config defaults/client.toml transaction get --hash <hash>` пайдаланыңыз
   SDK жіберген транзакцияларды тексеріңіз.
 - `iroha --config defaults/client.toml asset list all --table` көмегімен баланстарды салыстыру
-  немесе `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  немесе `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Екі беттің де шығарылатынын растау үшін CLI өту жолынан бірдей ағынды қайталаңыз
   бірдей Norito пайдалы жүктемелер және транзакция күйлері.

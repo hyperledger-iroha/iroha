@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for the `RevokeRole` instruction. */
 public final class RevokeRoleInstruction implements InstructionTemplate {
@@ -89,7 +90,8 @@ public final class RevokeRoleInstruction implements InstructionTemplate {
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          Objects.requireNonNull(destinationAccountId, "destinationAccountId");
+          AccountIdLiteral.extractIh58Address(
+              Objects.requireNonNull(destinationAccountId, "destinationAccountId"));
       return this;
     }
 

@@ -1,9 +1,9 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 
-## Strict First-Release Cleanup
-1. No open blockers for the strict deploy/runtime cleanup track.
+## Account/Domain Hard-Cut
+1. No open A1-G1 runtime/parser/SDK hard-cut work remains in this repository.
 
-## Next Work Intake Rule
-1. New items should be added only if they introduce scope beyond this closed cleanup pass.
+## New Intake Rule
+1. Add new roadmap entries only for work beyond the completed A1-G1 hard-cut scope.

@@ -16710,11 +16710,11 @@ mod offline_cfg_tests {
             "enabled": true,
             "dedupe_ttl_secs": 120,
             "signer": {
-                "account_id": "iso@test",
+                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
-                {"iban": "DE137017", "account_id": "alice@test"}
+                {"iban": "DE137017", "account_id": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"}
             ],
             "currency_assets": [
                 {"currency": "USD", "asset_definition": "usd#fin"}
@@ -16732,7 +16732,10 @@ mod offline_cfg_tests {
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         let signer = parsed.signer.expect("signer present");
-        assert_eq!(signer.account_id, "iso@test");
+        assert_eq!(
+            signer.account_id,
+            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
         assert_eq!(parsed.reference_data.refresh_interval_secs, 3600);

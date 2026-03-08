@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.InstructionBox;
 
 /**
@@ -166,13 +167,21 @@ public final class SetKeyValueInstruction implements InstructionTemplate {
 
     Builder setTarget(final Target target, final String id) {
       Objects.requireNonNull(target, "target");
-      Objects.requireNonNull(id, "id");
+      final String normalizedId = normalizeTargetId(target, id);
       if (this.target != null && this.target != target) {
         throw new IllegalStateException("Instruction target already set to " + this.target);
       }
       this.target = target;
-      this.objectId = id;
+      this.objectId = normalizedId;
       return this;
+    }
+
+    private static String normalizeTargetId(final Target target, final String id) {
+      final String raw = Objects.requireNonNull(id, "id");
+      if (target == Target.ACCOUNT) {
+        return AccountIdLiteral.extractIh58Address(raw);
+      }
+      return raw;
     }
 
     public Builder setKey(final String key) {
@@ -211,4 +220,3 @@ public final class SetKeyValueInstruction implements InstructionTemplate {
     }
   }
 }
-

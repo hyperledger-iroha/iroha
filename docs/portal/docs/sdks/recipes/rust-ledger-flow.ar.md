@@ -128,6 +128,6 @@ ih58... now holds:
 ## تحقّق من التجزئات والتكافؤ
 
 - استخدم `iroha --config defaults/client.toml transaction get --hash <hash>` لفحص المعاملات التي أرسلها الـSDK.
-- قارن الأرصدة باستخدام `iroha --config defaults/client.toml asset list all --table` أو `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- قارن الأرصدة باستخدام `iroha --config defaults/client.toml asset list all --table` أو `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - أعد تنفيذ التدفق نفسه من جولة CLI لتأكيد أن السطحين ينتجان حمولات Norito وحالات المعاملات نفسها.
 

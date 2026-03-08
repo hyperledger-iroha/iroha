@@ -9,10 +9,9 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_transfer_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Transfer", action: "TransferAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
             let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
             let authority = try TransactionParityFixturesTests.canonicalAccountId(
                 fixture.payload.authority,
                 field: "payload.authority"
@@ -23,7 +22,7 @@ final class TransactionParityFixturesTests: XCTestCase {
             )
             let request = TransferRequest(chainId: fixture.payload.chain,
                                           authority: authority,
-                                          assetDefinitionId: components.definitionId,
+                                          assetDefinitionId: assetDefinitionId,
                                           quantity: quantity,
                                           destination: canonicalDestination,
                                           description: fixture.payload.metadata["memo"],
@@ -39,18 +38,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_mint_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Mint", action: "MintAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
+            let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
             let authority = try TransactionParityFixturesTests.canonicalAccountId(
                 fixture.payload.authority,
                 field: "payload.authority"
             )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Mint.MintAsset.destination"
+            )
             let request = MintRequest(chainId: fixture.payload.chain,
                                       authority: authority,
-                                      assetDefinitionId: components.definitionId,
+                                      assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
-                                      destination: components.accountId,
+                                      destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
                                       nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeMint(request: request,
@@ -63,18 +66,22 @@ final class TransactionParityFixturesTests: XCTestCase {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_burn_asset_basic") { fixture, keypair in
             let instruction = try fixture.payload.instruction(kind: "Burn", action: "BurnAsset")
-            let assetLiteral = try instruction.argument(named: "asset")
+            let assetDefinitionId = try instruction.argument(named: "asset_definition_id")
+            let destination = try instruction.argument(named: "destination")
             let quantity = try instruction.argument(named: "quantity")
-            let components = try TransactionParityFixturesTests.parseAssetLiteral(assetLiteral)
             let authority = try TransactionParityFixturesTests.canonicalAccountId(
                 fixture.payload.authority,
                 field: "payload.authority"
             )
+            let canonicalDestination = try TransactionParityFixturesTests.canonicalAccountId(
+                destination,
+                field: "Burn.BurnAsset.destination"
+            )
             let request = BurnRequest(chainId: fixture.payload.chain,
                                       authority: authority,
-                                      assetDefinitionId: components.definitionId,
+                                      assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
-                                      destination: components.accountId,
+                                      destination: canonicalDestination,
                                       ttlMs: fixture.payload.timeToLiveMs,
                                       nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeBurn(request: request,
@@ -150,22 +157,6 @@ final class TransactionParityFixturesTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: derived.privateKey)
         cachedKeypair = keypair
         return keypair
-    }
-
-    private static func parseAssetLiteral(_ literal: String) throws -> AssetLiteral {
-        let parts = literal.split(separator: "#", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else {
-            throw FixtureError.invalidAssetLiteral(literal)
-        }
-        let definitionId = parts[0...1].joined(separator: "#")
-        let accountId = parts[2...].joined(separator: "#")
-        guard !definitionId.isEmpty, !accountId.isEmpty else {
-            throw FixtureError.invalidAssetLiteral(literal)
-        }
-        return AssetLiteral(
-            definitionId: String(definitionId),
-            accountId: try canonicalAccountId(String(accountId), field: "asset.accountId")
-        )
     }
 
     private static func canonicalAccountId(_ value: String, field: String) throws -> String {
@@ -335,17 +326,11 @@ private struct TransactionInstruction: Decodable {
     }
 }
 
-private struct AssetLiteral {
-    let definitionId: String
-    let accountId: String
-}
-
 private enum FixtureError: Error, LocalizedError {
     case missingFixture(String)
     case unsupportedExecutable(String)
     case missingInstruction(String)
     case missingArgument(String, instruction: String)
-    case invalidAssetLiteral(String)
     case invalidAccountId(field: String, value: String)
     case invalidSigningSeed
     case bridgeKeypairUnavailable
@@ -360,8 +345,6 @@ private enum FixtureError: Error, LocalizedError {
             return "instruction \(label) not found in fixture"
         case let .missingArgument(arg, instruction):
             return "instruction \(instruction) missing argument '\(arg)'"
-        case let .invalidAssetLiteral(literal):
-            return "asset literal '\(literal)' is invalid"
         case let .invalidAccountId(field, value):
             return "account id for \(field) must be encoded-only (received '\(value)')"
         case .invalidSigningSeed:

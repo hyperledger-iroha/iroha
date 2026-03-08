@@ -184,5 +184,5 @@ public final class LedgerFlow {
 ## 5. Тепе-теңдікті тексеріңіз
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` арқылы транзакция хэштерін тексеріңіз.
-- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) көмегімен баланстарды алу.
+- CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) көмегімен баланстарды алу.
 - Әрбір SDK демо ағыны үшін бірдей Norito пайдалы жүктемелерді шығаратынына көз жеткізу үшін нәтижелерді Rust/Python/JavaScript/Swift рецептерімен салыстырыңыз.

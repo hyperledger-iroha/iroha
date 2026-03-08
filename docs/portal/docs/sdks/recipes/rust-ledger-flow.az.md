@@ -135,6 +135,6 @@ yeni ad.
 - `iroha --config defaults/client.toml transaction get --hash <hash>` istifadə edin
   SDK-nın təqdim etdiyi əməliyyatları yoxlayın.
 - `iroha --config defaults/client.toml asset list all --table` ilə balansları çarpaz yoxlayın
-  və ya `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  və ya `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Hər iki səthin istehsalını təsdiqləmək üçün CLI gedişindən eyni axını təkrarlayın
   eyni Norito faydalı yüklər və əməliyyat statusları.

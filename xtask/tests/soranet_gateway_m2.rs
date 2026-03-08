@@ -126,7 +126,7 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
             "usage": billing_usage,
             "catalog": billing_catalog,
             "guardrails": billing_guardrails,
-            "payer": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+            "payer": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "treasury": "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
             "asset": "xor#wonderland"
         },

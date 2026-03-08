@@ -450,8 +450,8 @@ export interface ProofAttachmentInput {
 /**
  * Canonicalise an account identifier to IH58.
  *
- * Accepts IH58/sora encoded account IDs plus alias forms (`<alias>@domain`).
- * Canonical hex account literals are rejected.
+ * Accepts only encoded account IDs (IH58 preferred, sora compressed accepted).
+ * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
 

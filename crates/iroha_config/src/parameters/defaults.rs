@@ -2223,8 +2223,9 @@ pub mod pipeline {
     pub const SIGNATURE_BATCH_MAX_PQC: usize = 8;
     /// BLS-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
-    /// Default gas-collection technical account identifier.
-    pub const GAS_TECH_ACCOUNT_ID: &str = "gas@ivm";
+    /// Default gas-collection technical account identifier (encoded-only literal).
+    pub const GAS_TECH_ACCOUNT_ID: &str =
+        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).

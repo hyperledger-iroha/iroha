@@ -35,7 +35,7 @@ translator: machine-google-reviewed
 - `IdBox`: ለማንኛውም የሚደገፍ መታወቂያ (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Norito, Norito, Norito, Norito, Norito,00000062X. `TriggerId`፣ `RoleId`፣ `Permission`፣ `CustomParameterId`)። ለአጠቃላይ ፍሰቶች እና Norito ኢንኮዲንግ እንደ ነጠላ አይነት ይጠቅማል።
 - `ChainId`: በግብይቶች ውስጥ ድጋሚ ለማጫወት ጥበቃ የሚያገለግል ግልጽ ያልሆነ ሰንሰለት መለያ።የመታወቂያዎች ሕብረቁምፊ ቅርጾች (ከ `Display`/`FromStr` ጋር)፡
 - `DomainId`: `name` (ለምሳሌ `wonderland`)።
-- `AccountId`፡ ቀኖናዊ መለያ በ`AccountAddress` የተመዘገበ፣ ይህም IH58ን፣ Sora compressed (`sora…`) እና ቀኖናዊ ሄክስ ኮዴኮችን (`AccountAddress::to_ih58`፣ I18000000 `canonical_hex`፣ `parse_encoded`)። IH58 ተመራጭ መለያ ቅርጸት ነው; የ `sora…` ቅጽ ለሶራ-ብቻ UX ሁለተኛ-ምርጥ ነው። ለሰው ተስማሚ የሆነ የማዞሪያ ስም `alias@domain` ለ UX ተጠብቆ ቆይቷል ነገር ግን እንደ ባለስልጣን መለያ ከአሁን በኋላ አይታይም። Torii መጪ ሕብረቁምፊዎችን በ`AccountAddress::parse_encoded` በኩል መደበኛ ያደርጋል። የመለያ መታወቂያዎች ሁለቱንም ነጠላ ቁልፍ እና ባለብዙ ሲግ መቆጣጠሪያዎችን ይደግፋሉ።
+- `AccountId`፡ ቀኖናዊ መለያ በ`AccountAddress` የተመዘገበ፣ ይህም IH58ን፣ Sora compressed (`sora…`) እና ቀኖናዊ ሄክስ ኮዴኮችን (`AccountAddress::to_ih58`፣ I18000000 `canonical_hex`፣ `parse_encoded`)። IH58 ተመራጭ መለያ ቅርጸት ነው; የ `sora…` ቅጽ ለሶራ-ብቻ UX ሁለተኛ-ምርጥ ነው። ለሰው ተስማሚ የሆነ የማዞሪያ ስም `alias` (rejected legacy form) ለ UX ተጠብቆ ቆይቷል ነገር ግን እንደ ባለስልጣን መለያ ከአሁን በኋላ አይታይም። Torii መጪ ሕብረቁምፊዎችን በ`AccountAddress::parse_encoded` በኩል መደበኛ ያደርጋል። የመለያ መታወቂያዎች ሁለቱንም ነጠላ ቁልፍ እና ባለብዙ ሲግ መቆጣጠሪያዎችን ይደግፋሉ።
 - `AssetDefinitionId`: `asset#domain` (ለምሳሌ `xor#soramitsu`)።
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`፡ `nft$domain` (ለምሳሌ `rose$garden`)።

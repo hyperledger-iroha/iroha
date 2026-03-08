@@ -3,16 +3,16 @@
   "dataspace": 11,
   "activation_epoch": 4096,
   "governance": {
-    "issuer": "parliament@cbdc",
+    "issuer": "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
     "evidence_ticket": "gov-2026-01-15-cbdc-wholesale",
     "quorum": 5
   },
   "validators": [
-    "cbdc-validator-1@cbdc",
-    "cbdc-validator-2@cbdc",
-    "cbdc-validator-3@cbdc",
-    "cbdc-validator-4@cbdc",
-    "cbdc-validator-5@cbdc"
+    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+    "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+    "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
   ],
   "validator_quorum": 3,
   "protected_namespaces": [
@@ -23,18 +23,18 @@
     "class": "A",
     "quorum": 8,
     "attesters": [
-      "da-attester-1@cbdc",
-      "da-attester-2@cbdc",
-      "da-attester-3@cbdc",
-      "da-attester-4@cbdc",
-      "da-attester-5@cbdc",
-      "da-attester-6@cbdc",
-      "da-attester-7@cbdc",
-      "da-attester-8@cbdc",
-      "da-attester-9@cbdc",
-      "da-attester-10@cbdc",
-      "da-attester-11@cbdc",
-      "da-attester-12@cbdc"
+      "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+      "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81",
+      "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et",
+      "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+      "6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY",
+      "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cz",
+      "6cmzPVPX5s45jk9DYbm2AAPACe6C3MyvakdpYkXeT2YUnfPu9VmyhbM",
+      "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChkB2",
+      "6cmzPVPX6y3sc78Afv2PhjjTDK2EjkvWtQCyc4kKLYNSyWFSLbozEeZ",
+      "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"
     ],
     "rotation_epochs": 96
   },

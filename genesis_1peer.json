@@ -1,5 +1,24 @@
 {
+  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "chain": "00000000-0000-0000-0000-000000000000",
+  "consensus_fingerprint": "0xee688abc7f5038a890012600786d188f00f0470fe0c1576c8f0f6d341180cad9",
+  "consensus_mode": "Npos",
+  "crypto": {
+    "allowed_curve_ids": [
+      1,
+      3,
+      4
+    ],
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1",
+      "bls_normal"
+    ],
+    "default_hash": "blake2b-256",
+    "sm2_distid_default": "1234567812345678",
+    "sm_intrinsics": "auto",
+    "sm_openssl_preview": false
+  },
   "executor": null,
   "ivm_dir": ".",
   "transactions": [
@@ -40,7 +59,9 @@
               },
               "id": "rose#wonderland",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -53,7 +74,9 @@
             "Domain": {
               "id": "garden_of_live_flowers",
               "logo": null,
-              "metadata": {}
+              "metadata": {
+                
+              }
             }
           }
         },
@@ -62,7 +85,9 @@
             "Account": {
               "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
               "label": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "uaid": null
             }
           }
@@ -79,7 +104,9 @@
               },
               "id": "cabbage#garden_of_live_flowers",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -88,51 +115,12 @@
           }
         }
       ],
-      "ivm_triggers": [],
+      "ivm_triggers": [
+        
+      ],
       "parameters": {
-        "sumeragi": {
-          "block_time_ms": 100,
-          "commit_time_ms": 100,
-          "max_clock_drift_ms": 1000,
-          "collectors_k": 3,
-          "collectors_redundant_send_r": 1,
-          "da_enabled": true,
-          "key_activation_lead_blocks": 1,
-          "key_overlap_grace_blocks": 8,
-          "key_expiry_grace_blocks": 0,
-          "key_require_hsm": false,
-          "key_allowed_algorithms": [
-            "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ],
-          "min_finality_ms": 100
-        },
         "block": {
           "max_transactions": 512
-        },
-        "transaction": {
-          "max_signatures": 16,
-          "max_instructions": 20000,
-          "ivm_bytecode_size": 4194304,
-          "max_tx_bytes": 10485760,
-          "max_decompressed_bytes": 10485760,
-          "max_metadata_depth": 8,
-          "require_height_ttl": false,
-          "require_sequence": false
-        },
-        "executor": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
-        },
-        "smart_contract": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
         },
         "custom": {
           "ivm_gas_limit_per_block": {
@@ -142,41 +130,84 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
-              "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
+              "activation_lag_blocks": 1,
               "block_time_ms": 100,
-              "timeout_propose_ms": 300,
-              "timeout_prevote_ms": 300,
-              "timeout_precommit_ms": 250,
+              "epoch_length_blocks": 3600,
+              "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
+              "evidence_horizon_blocks": 7200,
+              "finality_margin_blocks": 8,
+              "k_aggregators": 3,
+              "max_entity_correlation_pct": 25,
+              "max_nominator_concentration_pct": 25,
+              "max_validators": 128,
+              "min_nomination_bond": 1,
+              "min_self_bond": 1000,
+              "redundant_send_r": 1,
+              "seat_band_pct": 5,
+              "slashing_delay_blocks": 259200,
+              "timeout_aggregator_ms": 120,
               "timeout_commit_ms": 150,
               "timeout_da_ms": 300,
-              "timeout_aggregator_ms": 120,
-              "k_aggregators": 3,
-              "redundant_send_r": 1,
+              "timeout_precommit_ms": 250,
+              "timeout_prevote_ms": 300,
+              "timeout_propose_ms": 300,
               "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40,
-              "max_validators": 128,
-              "min_self_bond": 1000,
-              "min_nomination_bond": 1,
-              "max_nominator_concentration_pct": 25,
-              "seat_band_pct": 5,
-              "max_entity_correlation_pct": 25,
-              "finality_margin_blocks": 8,
-              "evidence_horizon_blocks": 7200,
-              "activation_lag_blocks": 1,
-              "slashing_delay_blocks": 259200,
-              "epoch_length_blocks": 3600
+              "vrf_reveal_window_blocks": 40
             }
           }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 3,
+          "collectors_redundant_send_r": 1,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "key_activation_lead_blocks": 1,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "yubihsm",
+            "softkey"
+          ],
+          "key_expiry_grace_blocks": 0,
+          "key_overlap_grace_blocks": 8,
+          "key_require_hsm": false,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 10485760,
+          "max_instructions": 20000,
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 10485760,
+          "require_height_ttl": false,
+          "require_sequence": false
         }
       },
-      "topology": []
+      "topology": [
+        
+      ]
     },
     {
       "instructions": [
         {
           "Mint": {
             "Asset": {
-              "destination": "rose##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c400000000000000ddd7a4b694c2dd9000810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365",
               "object": "13"
             }
           }
@@ -184,7 +215,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "cabbage#garden_of_live_flowers#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
               "object": "44"
             }
           }
@@ -239,8 +270,12 @@
           }
         }
       ],
-      "ivm_triggers": [],
-      "topology": []
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        
+      ]
     },
     {
       "instructions": [
@@ -256,7 +291,9 @@
               },
               "id": "sample#wonderland",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -267,62 +304,29 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "sample##34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c6000000000000003f6438b6f973274c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033350000000000000017000000000000000f00000000000000070000000000000064656661756c740e00000000000000060000000000000073616d706c65",
               "object": "100"
             }
           }
         }
       ],
-      "ivm_triggers": [],
-      "topology": []
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        
+      ]
     },
     {
-      "instructions": [],
-      "ivm_triggers": [],
+      "instructions": [
+        
+      ],
+      "ivm_triggers": [
+        
+      ],
       "parameters": {
-        "sumeragi": {
-          "block_time_ms": 100,
-          "commit_time_ms": 100,
-          "max_clock_drift_ms": 1000,
-          "collectors_k": 3,
-          "collectors_redundant_send_r": 1,
-          "da_enabled": true,
-          "key_activation_lead_blocks": 1,
-          "key_overlap_grace_blocks": 8,
-          "key_expiry_grace_blocks": 0,
-          "key_require_hsm": false,
-          "key_allowed_algorithms": [
-            "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ],
-          "min_finality_ms": 100
-        },
         "block": {
           "max_transactions": 10000
-        },
-        "transaction": {
-          "max_signatures": 16,
-          "max_instructions": 20000,
-          "ivm_bytecode_size": 4194304,
-          "max_tx_bytes": 10485760,
-          "max_decompressed_bytes": 10485760,
-          "max_metadata_depth": 8,
-          "require_height_ttl": false,
-          "require_sequence": false
-        },
-        "executor": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
-        },
-        "smart_contract": {
-          "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
         },
         "custom": {
           "ivm_gas_limit_per_block": {
@@ -332,38 +336,85 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
-              "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
+              "activation_lag_blocks": 1,
               "block_time_ms": 100,
-              "timeout_propose_ms": 1000,
-              "timeout_prevote_ms": 1000,
-              "timeout_precommit_ms": 1000,
+              "epoch_length_blocks": 3600,
+              "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
+              "evidence_horizon_blocks": 7200,
+              "finality_margin_blocks": 8,
+              "k_aggregators": 3,
+              "max_entity_correlation_pct": 25,
+              "max_nominator_concentration_pct": 25,
+              "max_validators": 128,
+              "min_nomination_bond": 1,
+              "min_self_bond": 1,
+              "redundant_send_r": 1,
+              "seat_band_pct": 100,
+              "slashing_delay_blocks": 259200,
+              "timeout_aggregator_ms": 1000,
               "timeout_commit_ms": 1000,
               "timeout_da_ms": 1000,
-              "timeout_aggregator_ms": 1000,
-              "k_aggregators": 3,
-              "redundant_send_r": 1,
+              "timeout_precommit_ms": 1000,
+              "timeout_prevote_ms": 1000,
+              "timeout_propose_ms": 1000,
               "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40,
-              "max_validators": 128,
-              "min_self_bond": 1,
-              "min_nomination_bond": 1,
-              "max_nominator_concentration_pct": 25,
-              "seat_band_pct": 100,
-              "max_entity_correlation_pct": 25,
-              "finality_margin_blocks": 8,
-              "evidence_horizon_blocks": 7200,
-              "activation_lag_blocks": 1,
-              "slashing_delay_blocks": 259200,
-              "epoch_length_blocks": 3600
+              "vrf_reveal_window_blocks": 40
             }
           }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 3,
+          "collectors_redundant_send_r": 1,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "key_activation_lead_blocks": 1,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "yubihsm",
+            "softkey"
+          ],
+          "key_expiry_grace_blocks": 0,
+          "key_overlap_grace_blocks": 8,
+          "key_require_hsm": false,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 10485760,
+          "max_instructions": 20000,
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 10485760,
+          "require_height_ttl": false,
+          "require_sequence": false
         }
       },
-      "topology": []
+      "topology": [
+        
+      ]
     },
     {
-      "instructions": [],
-      "ivm_triggers": [],
+      "instructions": [
+        
+      ],
+      "ivm_triggers": [
+        
+      ],
       "topology": [
         {
           "peer": "ea0130999C999F728B0829387F4E93732EE0479F911DE0CE1E9409C8CEA66CF99376F57DB2E709892648F222D9F4E90DB29B84",
@@ -378,7 +429,9 @@
             "Domain": {
               "id": "nexus",
               "logo": null,
-              "metadata": {}
+              "metadata": {
+                
+              }
             }
           }
         },
@@ -387,7 +440,9 @@
             "Domain": {
               "id": "ivm",
               "logo": null,
-              "metadata": {}
+              "metadata": {
+                
+              }
             }
           }
         },
@@ -396,7 +451,9 @@
             "Account": {
               "id": "34mSYn9S1PeuZ5MzswzhvR2aSz3BRmzoPgUrmwuesJsQvMumSjTSrsNMhxV29uqZfWBY3QVuM",
               "label": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "uaid": null
             }
           }
@@ -413,7 +470,9 @@
               },
               "id": "xor#nexus",
               "logo": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -426,7 +485,9 @@
             "Account": {
               "id": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
               "label": null,
-              "metadata": {},
+              "metadata": {
+                
+              },
               "uaid": null
             }
           }
@@ -434,14 +495,18 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "xor##28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c100000000000000352d7013be8c763500810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043454638334133363546313235454631434238463034303239304134433544323335363141323443433443363738324143303735303643373730303341463030300000000000000015000000000000000d0000000000000005000000000000006e657875730b000000000000000300000000000000786f72",
               "object": "10000"
             }
           }
         }
       ],
-      "ivm_triggers": [],
-      "topology": []
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        
+      ]
     },
     {
       "instructions": [
@@ -449,7 +514,9 @@
           "RegisterPublicLaneValidator": {
             "initial_stake": "10000",
             "lane_id": 0,
-            "metadata": {},
+            "metadata": {
+              
+            },
             "stake_account": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
             "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR"
           }
@@ -461,30 +528,15 @@
           }
         }
       ],
-      "ivm_triggers": [],
-      "topology": []
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        
+      ]
     }
   ],
-  "consensus_mode": "Npos",
-  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "wire_proto_versions": [
     1
-  ],
-  "consensus_fingerprint": "0xee688abc7f5038a890012600786d188f00f0470fe0c1576c8f0f6d341180cad9",
-  "crypto": {
-    "sm_openssl_preview": false,
-    "sm_intrinsics": "auto",
-    "default_hash": "blake2b-256",
-    "allowed_signing": [
-      "ed25519",
-      "secp256k1",
-      "bls_normal"
-    ],
-    "sm2_distid_default": "1234567812345678",
-    "allowed_curve_ids": [
-      1,
-      3,
-      4
-    ]
-  }
+  ]
 }

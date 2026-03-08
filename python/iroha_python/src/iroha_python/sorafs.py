@@ -21,9 +21,24 @@ from typing import (
     Union,
 )
 
-from . import _crypto as _crypto_module
+from ._native import load_crypto_extension
 
-_crypto: Any = _crypto_module
+try:
+    _crypto: Any = load_crypto_extension()
+    _CRYPTO_IMPORT_ERROR: Optional[RuntimeError] = None
+except RuntimeError as err:  # pragma: no cover - optional dependency
+    _CRYPTO_IMPORT_ERROR = err
+
+    class _MissingCrypto:
+        """Proxy that raises a stable error when native bindings are unavailable."""
+
+        def __getattr__(self, name: str) -> Any:
+            raise RuntimeError(
+                f"{name} requires the compiled iroha_python._crypto extension module. "
+                "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel)."
+            ) from _CRYPTO_IMPORT_ERROR
+
+    _crypto = _MissingCrypto()
 
 if TYPE_CHECKING:
     from .client import (
@@ -101,6 +116,16 @@ _LOGGER = logging.getLogger("iroha_python.sorafs")
 _HEADER_SORA_NAME = "Sora-Name"
 _HEADER_SORA_PROOF = "Sora-Proof"
 _HEADER_SORA_PROOF_STATUS = "Sora-Proof-Status"
+_FALLBACK_ALIAS_POLICY_DEFAULTS: Mapping[str, int] = {
+    "positive_ttl_secs": 10 * 60,
+    "refresh_window_secs": 2 * 60,
+    "hard_expiry_secs": 15 * 60,
+    "negative_ttl_secs": 60,
+    "revocation_ttl_secs": 5 * 60,
+    "rotation_max_age_secs": 6 * 60 * 60,
+    "successor_grace_secs": 5 * 60,
+    "governance_grace_secs": 0,
+}
 
 if TYPE_CHECKING:
     class SorafsMultiFetchError(RuntimeError):
@@ -113,7 +138,7 @@ else:
             """Raised when multi-source fetch fails in the native extension."""
 
             pass
-    except AttributeError:  # pragma: no cover - optional dependency
+    except (AttributeError, RuntimeError):  # pragma: no cover - optional dependency
         class SorafsMultiFetchError(RuntimeError):
             """Stub used when the native extension is unavailable in dev environments."""
 
@@ -148,6 +173,8 @@ def _first_present(mapping: Mapping[str, Any], *keys: str) -> Optional[Any]:
 
 
 def _default_policy_payload() -> Mapping[str, Any]:
+    if _CRYPTO_IMPORT_ERROR is not None:
+        return dict(_FALLBACK_ALIAS_POLICY_DEFAULTS)
     payload = _crypto.sorafs_alias_policy_defaults()
     if not isinstance(payload, Mapping):
         raise TypeError("alias policy defaults returned an unexpected payload")

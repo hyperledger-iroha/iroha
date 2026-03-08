@@ -19,7 +19,7 @@ outillage compagnon. Il fournit :
 
 ## Motivation
 
-Les portefeuilles et les outils hors chaîne s'appuient aujourd'hui sur des alias de routage bruts `alias@domain`. Ceci
+Les portefeuilles et les outils hors chaîne s'appuient aujourd'hui sur des alias de routage bruts `alias@domain` (rejected legacy form). Ceci
 présente deux inconvénients majeurs :
 
 1. **Aucune liaison réseau.** La chaîne n'a pas de somme de contrôle ni de préfixe de chaîne, donc les utilisateurs
@@ -62,12 +62,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -309,7 +305,7 @@ Détails clés de la mise en œuvre :
 - Les éléments de clé surdimensionnés ou mal formés soulèvent `KeyPayloadTooLong` ou `InvalidPublicKey`.
 - Les contrôleurs Multisig dépassant 255 membres génèrent `MultisigMemberOverflow`.
 - Conversions IME/NFKC : les Sora kana demi-largeur peuvent être normalisés dans leur forme pleine largeur sans interrompre le décodage, mais la sentinelle ASCII `sora` et les chiffres/lettres IH58 DOIVENT rester ASCII. Les sentinelles pleine largeur ou pliées font surface `ERR_MISSING_COMPRESSED_SENTINEL`, les charges utiles ASCII pleine largeur augmentent `ERR_INVALID_COMPRESSED_CHAR` et les discordances de somme de contrôle apparaissent sous la forme `ERR_CHECKSUM_MISMATCH`. Les tests de propriété dans `crates/iroha_data_model/src/account/address.rs` couvrent ces chemins afin que les SDK et les portefeuilles puissent s'appuyer sur des échecs déterministes.
-- L'analyse Torii et SDK des alias `address@domain` émettent désormais les mêmes codes `ERR_*` lorsque les entrées IH58 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
+- L'analyse Torii et SDK des alias `address@domain` (rejected legacy form) émettent désormais les mêmes codes `ERR_*` lorsque les entrées IH58 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
 - Les charges utiles du sélecteur local de moins de 12 octets apparaissent `ERR_LOCAL8_DEPRECATED`, préservant un basculement définitif à partir des anciens résumés Local‑8.
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -358,7 +354,7 @@ des formes textuelles cohérentes pour chaque charge utile canonique. Luminaires
 
 Ces chaînes correspondent à celles émises par la CLI (`iroha tools address convert`), Torii
 réponses (`address_format=ih58|compressed`) et assistants SDK, donc copier/coller UX
-les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>` uniquement lorsque vous avez besoin d'un indice de routage explicite ; le suffixe ne fait pas partie de la sortie canonique.
+les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>` (rejected legacy form) uniquement lorsque vous avez besoin d'un indice de routage explicite ; le suffixe ne fait pas partie de la sortie canonique.
 
 #### 2.6 Alias textuels pour l'interopérabilité (prévu)
 
@@ -586,7 +582,7 @@ le changement afin que la piste d'audit soit reconstructible hors ligne.
    La CLI accepte les littéraux IH58, `sora…` et canoniques `0x…` ; ajouter
    `@<domain>` uniquement lorsque vous devez conserver une étiquette pour les manifestes.
    Le résumé JSON fait apparaître ce domaine via le champ `input_domain`, et
-   `legacy  suffix` relit l'encodage converti sous la forme `<address>@<domain>` pour
+   `legacy  suffix` relit l'encodage converti sous la forme `<address>@<domain>` (rejected legacy form) pour
    différences manifestes (ce suffixe est une métadonnée, pas un identifiant de compte canonique).
    Pour les exportations orientées vers une nouvelle ligne, utilisez
    `iroha tools address normalize --input <file> legacy-selector input mode` pour convertir en masse Local
@@ -617,7 +613,7 @@ leurs billets de change.
   clairement marqué comme métadonnées descriptives susceptibles de changer, tandis que IH58 est le
   adresse stable.
 - **Canonique d'entrée :** Torii et les SDK acceptent IH58 (préféré)/sora (deuxième meilleur)/0x
-  adresses plus `alias@domain`, `uaid:…` et
+  adresses plus `alias@domain` (rejected legacy form), `uaid:…` et
   `opaque:…` formulaires, puis canonisez-les en IH58 pour la sortie. Il n'y a pas
   bascule en mode strict ; les identifiants bruts de téléphone/e-mail doivent être conservés hors grand livre
   via des mappages UAID/opaques.
@@ -655,11 +651,11 @@ leurs billets de change.
   les cartographies restent des travaux futurs).
 - **Outils CLI :** Fournissez un flux de travail déterministe pour l'opérateur via `iroha tools address convert`
   (voir `crates/iroha_cli/src/address.rs`), qui accepte les littéraux IH58/`sora…`/`0x…` et
-  étiquettes facultatives `<address>@<domain>`, par défaut la sortie IH58 en utilisant le préfixe Sora Nexus (`753`),
+  étiquettes facultatives `<address>@<domain>` (rejected legacy form), par défaut la sortie IH58 en utilisant le préfixe Sora Nexus (`753`),
   et n'émet l'alphabet compressé Sora uniquement que lorsque les opérateurs le demandent explicitement avec
   `--format compressed` ou le mode résumé JSON. La commande applique les attentes de préfixe sur
   analyser, enregistre le domaine fourni (`input_domain` en JSON) et l'indicateur `legacy  suffix`
-  relit l'encodage converti sous la forme `<address>@<domain>` afin que les différences manifestes restent ergonomiques.
+  relit l'encodage converti sous la forme `<address>@<domain>` (rejected legacy form) afin que les différences manifestes restent ergonomiques.
 - **Wallet/explorer UX :** Suivez les [consignes d'affichage de l'adresse](source/sns/address_display_guidelines.md)
   livré avec ADDR-6 : offre des boutons de double copie, conserve IH58 comme charge utile QR et avertit
   aux utilisateurs que le formulaire compressé `sora…` est uniquement Sora et sensible aux réécritures IME.

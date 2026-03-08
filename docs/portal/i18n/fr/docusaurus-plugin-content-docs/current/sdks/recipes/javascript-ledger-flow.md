@@ -49,9 +49,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -76,5 +76,5 @@ Exécutez `node --env-file=.env ledger-flow.mjs` (ou exportez les variables d’
 ## Vérifier la parité
 
 - Récupérez les détails de la transaction via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Vérifiez les soldes avec `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Vérifiez les soldes avec `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Comparez le hash émis avec les recettes Rust et Python pour garantir la parité des SDK.

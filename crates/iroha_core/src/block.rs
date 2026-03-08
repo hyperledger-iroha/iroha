@@ -64,7 +64,7 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId, Identifiable,
-    account::{AccountController, AccountDomainSelector, AccountId, AccountLabel, OpaqueAccountId},
+    account::{AccountController, AccountDomainSelector, ScopedAccountId},
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -82,11 +82,9 @@ use iroha_data_model::{
         GrantBox, InstructionBox, RemoveKeyValueBox, SetKeyValueBox, register::RegisterBox,
         transfer::TransferBox,
     },
-    name::Name,
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId,
-        proof_matches_manifest,
+        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -303,7 +301,7 @@ fn attach_manifest_roots_to_relays(
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 #[derive(Clone)]
 struct LaneSettlementBufferConfig {
-    account_id: AccountId,
+    account_id: ScopedAccountId,
     asset_definition_id: AssetDefinitionId,
     capacity: MicroXor,
 }
@@ -772,26 +770,19 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
 pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
     input: &str,
-) -> Option<AccountId> {
+) -> Option<ScopedAccountId> {
     let literal = input.trim();
     if literal.is_empty() {
         return None;
     }
-
-    if let Some(account_id) = parse_encoded_account_literal(world, literal) {
-        return Some(account_id);
-    }
-    if let Some(account_id) = parse_uaid_account_literal(world, literal) {
-        return Some(account_id);
-    }
-    if let Some(account_id) = parse_opaque_account_literal(world, literal) {
-        return Some(account_id);
-    }
-    parse_domain_scoped_legacy_literal(world, literal)
+    parse_encoded_account_literal(world, literal)
 }
 
-fn parse_encoded_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    let parsed = AccountId::parse_encoded(literal)
+fn parse_encoded_account_literal(
+    world: &impl WorldReadOnly,
+    literal: &str,
+) -> Option<ScopedAccountId> {
+    let parsed = ScopedAccountId::parse_encoded(literal)
         .ok()
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)?;
     let subject = parsed.subject_id();
@@ -809,71 +800,17 @@ fn parse_encoded_account_literal(world: &impl WorldReadOnly, literal: &str) -> O
 
 fn resolve_selector_domain_candidate(
     world: &impl WorldReadOnly,
-    parsed: &AccountId,
-) -> Option<AccountId> {
+    parsed: &ScopedAccountId,
+) -> Option<ScopedAccountId> {
     let selector = AccountDomainSelector::from_domain(parsed.domain()).ok()?;
     let resolved_domain = world.domain_selectors().get(&selector)?.clone();
-    Some(AccountId {
+    Some(ScopedAccountId {
         domain: resolved_domain,
         controller: parsed.controller().clone(),
     })
 }
 
-fn parse_uaid_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    if !literal
-        .get(..5)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("uaid:"))
-    {
-        return None;
-    }
-    let uaid = UniversalAccountId::from_str(literal).ok()?;
-    world.uaid_accounts().get(&uaid).cloned()
-}
-
-fn parse_opaque_account_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    if !literal
-        .get(..7)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("opaque:"))
-    {
-        return None;
-    }
-    let opaque = OpaqueAccountId::from_str(literal).ok()?;
-    let uaid = world.opaque_uaids().get(&opaque)?;
-    world.uaid_accounts().get(uaid).cloned()
-}
-
-fn parse_domain_scoped_legacy_literal(
-    world: &impl WorldReadOnly,
-    literal: &str,
-) -> Option<AccountId> {
-    let (identity, domain_raw) = literal.rsplit_once('@')?;
-    let identity = identity.trim();
-    if identity.is_empty() {
-        return None;
-    }
-    // Prevent mixed literals like `<ih58>@<domain>`.
-    if AccountId::parse_encoded(identity).is_ok() {
-        return None;
-    }
-
-    let domain = DomainId::from_str(domain_raw.trim()).ok()?;
-    if let Ok(public_key) = PublicKey::from_str(identity) {
-        let account_id = AccountId::new(domain.clone(), public_key);
-        return world.accounts().get(&account_id).map(|_| account_id);
-    }
-
-    let label = Name::from_str(identity).ok()?;
-    let account_label = AccountLabel::new(domain.clone(), label);
-    if let Some(account_id) = world.account_aliases().get(&account_label) {
-        return Some(account_id.clone());
-    }
-    if let Some(record) = world.account_rekey_records().get(&account_label) {
-        return Some(AccountId::new(domain, record.active_signatory.clone()));
-    }
-    None
-}
-
-fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
+fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<ScopedAccountId> {
     if let Some(rest) = key.strip_prefix("account:") {
         parse_account_literal_with_world(world, rest)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
@@ -902,7 +839,10 @@ struct PrefetchStats {
     roles_touched: usize,
 }
 
-fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId) -> PrefetchStats {
+fn prefetch_account_stores(
+    state_block: &StateBlock<'_>,
+    account_id: &ScopedAccountId,
+) -> PrefetchStats {
     let mut stats = PrefetchStats::default();
     if let Some(account) = state_block.world.accounts.get(account_id) {
         let _ = black_box(account);
@@ -935,7 +875,8 @@ mod prefetch_tests {
     use iroha_data_model::{
         Registrable,
         account::{
-            Account, AccountDetails, AccountDomainSelector, AccountId, AccountLabel, AccountValue,
+            Account, AccountDetails, AccountDomainSelector, AccountLabel, AccountValue,
+            ScopedAccountId,
         },
         asset::AssetDefinitionId,
         block::BlockHeader,
@@ -959,7 +900,7 @@ mod prefetch_tests {
 
     #[test]
     fn parse_account_key_variants() {
-        let alice: AccountId = (*ALICE_ID).clone();
+        let alice: ScopedAccountId = (*ALICE_ID).clone();
         let mut world = World::new();
         let selector =
             AccountDomainSelector::from_domain(alice.domain()).expect("selector from domain");
@@ -981,7 +922,7 @@ mod prefetch_tests {
 
     #[test]
     fn parse_account_literal_rejects_ih58_with_domain_suffix() {
-        let alice: AccountId = (*ALICE_ID).clone();
+        let alice: ScopedAccountId = (*ALICE_ID).clone();
         let domain = Domain::new(alice.domain().clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
         let world = World::with([domain], [account], []);
@@ -997,7 +938,7 @@ mod prefetch_tests {
 
     #[test]
     fn parse_account_literal_accepts_encoded_without_selector_registry() {
-        let alice: AccountId = (*ALICE_ID).clone();
+        let alice: ScopedAccountId = (*ALICE_ID).clone();
         let domain = Domain::new(alice.domain().clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
         let mut world = World::with([domain], [account], []);
@@ -1017,8 +958,8 @@ mod prefetch_tests {
         let signatory = ALICE_ID.signatory().clone();
         let alpha: DomainId = "alpha".parse().expect("alpha domain");
         let beta: DomainId = "beta".parse().expect("beta domain");
-        let alpha_account = AccountId::new(alpha.clone(), signatory.clone());
-        let beta_account = AccountId::new(beta.clone(), signatory);
+        let alpha_account = ScopedAccountId::new(alpha.clone(), signatory.clone());
+        let beta_account = ScopedAccountId::new(beta.clone(), signatory);
         let alpha_domain = Domain::new(alpha).build(&alpha_account);
         let beta_domain = Domain::new(beta).build(&alpha_account);
         let world = World::with(
@@ -1042,9 +983,9 @@ mod prefetch_tests {
     }
 
     #[test]
-    fn parse_account_literal_accepts_alias_domain_literals() {
+    fn parse_account_literal_rejects_alias_domain_literals() {
         let domain_id: DomainId = "ivm".parse().expect("domain");
-        let account_id = AccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
+        let account_id = ScopedAccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
         let alias = AccountLabel::new(
             domain_id.clone(),
             Name::from_str("gas").expect("alias name"),
@@ -1060,13 +1001,13 @@ mod prefetch_tests {
 
         assert_eq!(
             parse_account_literal_with_world(&world_view, "gas@ivm"),
-            Some(account_id)
+            None
         );
     }
 
     #[test]
     fn parse_lane_settlement_buffer_config_resolves_account() {
-        let alice: AccountId = (*ALICE_ID).clone();
+        let alice: ScopedAccountId = (*ALICE_ID).clone();
         let mut world = World::new();
         let selector =
             AccountDomainSelector::from_domain(alice.domain()).expect("selector from domain");
@@ -1115,7 +1056,7 @@ mod prefetch_tests {
 
     #[test]
     fn prefetch_account_reports_hits() {
-        let alice: AccountId = (*ALICE_ID).clone();
+        let alice: ScopedAccountId = (*ALICE_ID).clone();
         let mut world = World::new();
         world
             .accounts
@@ -1833,7 +1774,7 @@ pub enum InvalidGenesisError {
 #[allow(clippy::too_many_lines)]
 pub fn check_genesis_block(
     block: &SignedBlock,
-    genesis_account: &iroha_data_model::account::AccountId,
+    genesis_account: &iroha_data_model::account::ScopedAccountId,
     expected_chain_id: &ChainId,
 ) -> Result<(), InvalidGenesisError> {
     const MAX_GENESIS_TRANSACTIONS: usize = 16;
@@ -1863,10 +1804,12 @@ pub fn check_genesis_block(
     if transactions.is_empty() || transactions.len() > MAX_GENESIS_TRANSACTIONS {
         return Err(InvalidGenesisError::BadTransactionsAmount);
     }
-    let mut domain_owners: BTreeMap<DomainId, iroha_data_model::account::AccountId> =
+    let mut domain_owners: BTreeMap<DomainId, iroha_data_model::account::ScopedAccountId> =
         BTreeMap::new();
-    let mut domain_permissions: BTreeMap<iroha_data_model::account::AccountId, BTreeSet<DomainId>> =
-        BTreeMap::new();
+    let mut domain_permissions: BTreeMap<
+        iroha_data_model::account::ScopedAccountId,
+        BTreeSet<DomainId>,
+    > = BTreeMap::new();
     domain_owners.insert(GENESIS_DOMAIN_ID.clone(), genesis_account.clone());
 
     let mut chain_id: Option<ChainId> = None;
@@ -2434,7 +2377,7 @@ pub(crate) mod valid {
     use commit::CommittedBlock;
     use iroha_data_model::{
         ChainId,
-        account::AccountId,
+        account::ScopedAccountId,
         events::pipeline::PipelineEventBox,
         nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
     };
@@ -3764,7 +3707,7 @@ pub(crate) mod valid {
 
         fn ensure_genesis_transactions_clean(
             block: &SignedBlock,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             expected_chain_id: &ChainId,
         ) -> Result<(), BlockValidationError> {
             if block.header().is_genesis() {
@@ -3793,7 +3736,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<Result<ValidBlock, Error>> {
@@ -3832,7 +3775,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
             send_events: F,
@@ -3897,7 +3840,7 @@ pub(crate) mod valid {
             block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -3927,7 +3870,7 @@ pub(crate) mod valid {
             block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -3954,7 +3897,7 @@ pub(crate) mod valid {
             block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -3980,7 +3923,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -4223,7 +4166,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -4398,7 +4341,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             topology: &Topology,
             chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             state: &impl StateReadOnly,
             soft_fork: bool,
             time_source: &TimeSource,
@@ -4551,7 +4494,7 @@ pub(crate) mod valid {
         fn validate_static_with_snapshot(
             block: &SignedBlock,
             chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             cached_ok: Option<&[bool]>,
@@ -5489,7 +5432,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             topology: &Topology,
             chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             state: &StateBlock<'_>,
             soft_fork: bool,
             time_source: &TimeSource,
@@ -7360,7 +7303,7 @@ pub(crate) mod valid {
                 #[derive(Clone)]
                 struct PreparedEntry {
                     idx: usize,
-                    authority: AccountId,
+                    authority: ScopedAccountId,
                     chunk_size: usize,
                     _log_only: bool,
                 }
@@ -7632,7 +7575,7 @@ pub(crate) mod valid {
                     let t_layer_exec = Instant::now();
                     // Deterministically prefetch authority/account state and warm the first
                     // instruction chunk for each overlay to reduce merge stalls.
-                    let mut accounts_to_prefetch: BTreeSet<AccountId> = BTreeSet::new();
+                    let mut accounts_to_prefetch: BTreeSet<ScopedAccountId> = BTreeSet::new();
                     for entry in &prepared {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
@@ -8933,7 +8876,7 @@ pub(crate) mod valid {
             block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
+            genesis_account: &ScopedAccountId,
             time_source: &TimeSource,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
@@ -14576,11 +14519,11 @@ mod tests {
         // Predefined world state
         let genesis_correct_key = KeyPair::random();
         let genesis_wrong_key = KeyPair::random();
-        let genesis_correct_account_id = AccountId::new(
+        let genesis_correct_account_id = ScopedAccountId::new(
             GENESIS_DOMAIN_ID.clone(),
             genesis_correct_key.public_key().clone(),
         );
-        let genesis_wrong_account_id = AccountId::new(
+        let genesis_wrong_account_id = ScopedAccountId::new(
             GENESIS_DOMAIN_ID.clone(),
             genesis_wrong_key.public_key().clone(),
         );
@@ -14650,13 +14593,13 @@ mod tests {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
         let genesis_key_pair = KeyPair::random();
-        let genesis_account_id = AccountId::new(
+        let genesis_account_id = ScopedAccountId::new(
             GENESIS_DOMAIN_ID.clone(),
             genesis_key_pair.public_key().clone(),
         );
         let alice_key_pair = KeyPair::random();
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("Valid domain id");
-        let alice_account_id = AccountId::new(
+        let alice_account_id = ScopedAccountId::new(
             wonderland_domain_id.clone(),
             alice_key_pair.public_key().clone(),
         );

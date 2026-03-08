@@ -28,7 +28,7 @@ translator: manual
 
 - `Name` — מזהה טקסטואלי מאומת. חוקים: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. דומיין: `{ id, logo, metadata, owned_by }`. Builder: ‏`NewDomain`. קוד: `crates/iroha_data_model/src/domain.rs`.
-- `AccountId` — הכתובת הקנונית נוצרת ע"י `AccountAddress` (קודק IH58 / תצוגת סורא הדחוסה `sora…` / hex). IH58 הוא הפורמט המועדף, ו־`sora…` הוא אפשרות שנייה ייעודית ל‑Sora. מחרוזות `alias@domain` נשמרות ככינויי ניתוב בלבד. Torii מנרמל קלטים דרך `AccountAddress::parse_encoded` כך שהמטא־דאטה נשמר בפורמט הקנוני. חשבון: `{ id, metadata }`. קוד: `crates/iroha_data_model/src/account.rs`.
+- `AccountId` — הכתובת הקנונית נוצרת ע"י `AccountAddress` (קודק IH58 / תצוגת סורא הדחוסה `sora…` / hex). IH58 הוא הפורמט המועדף, ו־`sora…` הוא אפשרות שנייה ייעודית ל‑Sora. מחרוזות `alias` (rejected legacy form) נשמרות ככינויי ניתוב בלבד. Torii מנרמל קלטים דרך `AccountAddress::parse_encoded` כך שהמטא־דאטה נשמר בפורמט הקנוני. חשבון: `{ id, metadata }`. קוד: `crates/iroha_data_model/src/account.rs`.
 - `AssetDefinitionId` — `asset#domain`. הגדרה: `{ id, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId` — `nft$domain`. ‏NFT: ‏`{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.

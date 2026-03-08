@@ -1,36 +1,5 @@
 import Foundation
 
-/// Legacy account literal kinds retained for compatibility with existing resolver APIs.
-/// Strict account-id parsing no longer accepts these literal forms at runtime.
-public enum OfflineAccountResolutionKind: String {
-    case uaid
-    case opaque
-}
-
-/// Legacy resolver hook retained for source compatibility.
-/// Strict offline account-id encoding no longer consults this resolver.
-public typealias OfflineAccountResolver = (OfflineAccountResolutionKind, String) throws -> String?
-
-/// Global registry for offline account ID resolution.
-public enum OfflineAccountResolvers {
-    private static let resolverQueue = DispatchQueue(label: "org.hyperledger.iroha.offline.account-resolver")
-    /// Access is synchronized through `resolverQueue`.
-    private static nonisolated(unsafe) var resolver: OfflineAccountResolver?
-
-    /// Register a resolver (or clear by passing `nil`) for compatibility with older call sites.
-    /// Strict offline account-id encoding does not consult this resolver.
-    public static func setAccountResolver(_ newResolver: OfflineAccountResolver?) {
-        resolverQueue.sync {
-            resolver = newResolver
-        }
-    }
-
-    static func resolve(_ kind: OfflineAccountResolutionKind, value: String) throws -> String? {
-        let current = resolverQueue.sync { resolver }
-        return try current?(kind, value)
-    }
-}
-
 public enum OfflineNoritoError: Error, LocalizedError {
     case invalidHex(String)
     case invalidLength(String)
@@ -107,11 +76,6 @@ enum OfflineNorito {
     private static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
     private static let defaultNetworkPrefix: UInt16 = 0x02F1
-    private static let fallbackDomainCandidates = [
-        "sora",
-        "wonderland",
-        "treasury",
-    ]
 
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 0)
@@ -126,12 +90,15 @@ enum OfflineNorito {
     }
 
     static func encodeAccountId(_ value: String) throws -> Data {
-        let parts = try resolveAccountId(value)
+        let canonical = try canonicalizeEncodedAccountId(value)
+        let (address, _) = try AccountAddress.parseEncoded(
+            canonical,
+            expectedPrefix: defaultNetworkPrefix
+        )
         var writer = OfflineNoritoWriter()
-        let domainPayload = try encodeDomainId(parts.domainLabel)
+        let domainPayload = try encodeDomainId(AccountAddress.defaultDomainName)
         writer.writeField(domainPayload)
-        let controllerPayload = try parts.address.noritoAccountControllerPayload()
-        writer.writeField(controllerPayload)
+        writer.writeField(try address.noritoAccountControllerPayload())
         return writer.data
     }
 
@@ -320,12 +287,7 @@ enum OfflineNorito {
         return writer.data
     }
 
-    private struct ResolvedAccountId {
-        let address: AccountAddress
-        let domainLabel: String
-    }
-
-    private static func resolveAccountId(_ value: String) throws -> ResolvedAccountId {
+    private static func canonicalizeEncodedAccountId(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OfflineNoritoError.invalidAccountId(value)
@@ -345,10 +307,7 @@ enum OfflineNorito {
         } catch {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        guard let domain = resolveDomain(from: address) else {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        return ResolvedAccountId(address: address, domainLabel: domain)
+        return try address.toIH58(networkPrefix: defaultNetworkPrefix)
     }
 
     private static func decodeNoritoAssetIdLiteral(_ raw: String) throws -> Data {
@@ -369,179 +328,14 @@ enum OfflineNorito {
               let decoded = Data(hexString: hex) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        return decoded
-    }
-
-    private static func parseAccountId(_ value: String) throws -> (String, String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidAccountId(value)
-        }
-        if trimmed != value {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        if trimmed.contains("#") || trimmed.contains("$") {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2 else {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        let addressPart = String(parts[0])
-        let domainPart = String(parts[1])
-        guard !addressPart.isEmpty, !domainPart.isEmpty else {
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        return (addressPart, domainPart)
-    }
-
-    private static func canonicalizeAccountLiteral(_ raw: String,
-                                                   kind: OfflineAccountResolutionKind) throws -> String {
-        switch kind {
-        case .uaid:
-            return try canonicalizeUaidLiteral(raw)
-        case .opaque:
-            return try canonicalizeOpaqueLiteral(raw)
-        }
-    }
-
-    private static func canonicalizeUaidLiteral(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 5 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let rawHex = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard rawHex.count == 64 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
-        guard allHex else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let lastChar = rawHex.lowercased().suffix(1)
-        guard ["1", "3", "5", "7", "9", "b", "d", "f"].contains(String(lastChar)) else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        return "uaid:\(rawHex.lowercased())"
-    }
-
-    private static func canonicalizeOpaqueLiteral(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 7 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let rawHex = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard rawHex.count == 64 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
-        guard allHex else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        return "opaque:\(rawHex.lowercased())"
-    }
-
-    private static func algorithmLabel(_ algorithm: SigningAlgorithm) -> String {
-        switch algorithm {
-        case .ed25519:
-            return "ed25519"
-        case .secp256k1:
-            return "secp256k1"
-        case .mlDsa:
-            return "ml-dsa"
-        case .sm2:
-            return "sm2"
-        }
-    }
-
-    private static func resolveDomain(from address: AccountAddress) -> String? {
-        if address.matchesDomainLabel(AccountAddress.defaultDomainName) {
-            return AccountAddress.defaultDomainName
-        }
-        for candidate in fallbackDomainCandidates {
-            if address.matchesDomainLabel(candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
-    private static func parsePublicKeyMultihash(_ value: String,
-                                                raw: String) throws -> (
-        functionCode: UInt64,
-        algorithm: SigningAlgorithm,
-        publicKey: Data
-    )? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        var rawHex = trimmed
-        var prefixedAlgorithm: SigningAlgorithm?
-        if let separator = trimmed.firstIndex(of: ":") {
-            let prefix = String(trimmed[..<separator])
-            guard let parsed = parseAlgorithmPrefix(prefix) else {
-                throw OfflineNoritoError.invalidAccountId(raw)
-            }
-            prefixedAlgorithm = parsed
-            rawHex = String(trimmed[trimmed.index(after: separator)...])
-            guard !rawHex.isEmpty else {
-                throw OfflineNoritoError.invalidAccountId(raw)
-            }
-        }
-        guard let bytes = Data(hexString: rawHex),
-              let decoded = decodePublicKeyMultihash(bytes) else {
-            if prefixedAlgorithm != nil {
-                throw OfflineNoritoError.invalidAccountId(raw)
-            }
-            return nil
-        }
-        if let prefixedAlgorithm, prefixedAlgorithm != decoded.algorithm {
-            throw OfflineNoritoError.invalidAccountId(raw)
+        if decoded.count > 40,
+           decoded[0] == 0x4E, // N
+           decoded[1] == 0x52, // R
+           decoded[2] == 0x54, // T
+           decoded[3] == 0x30 { // 0
+            return Data(decoded.dropFirst(40))
         }
         return decoded
-    }
-
-    private static func decodePublicKeyMultihash(_ bytes: Data) -> (
-        functionCode: UInt64,
-        algorithm: SigningAlgorithm,
-        publicKey: Data
-    )? {
-        let raw = [UInt8](bytes)
-        guard let (functionCode, functionEnd) = decodeVarint(raw, startIndex: 0),
-              let (length, lengthEnd) = decodeVarint(raw, startIndex: functionEnd),
-              lengthEnd <= raw.count else {
-            return nil
-        }
-        let payload = Data(raw[lengthEnd...])
-        guard payload.count == Int(length),
-              let algorithm = signingAlgorithm(multihashCode: functionCode) else {
-            return nil
-        }
-        return (functionCode, algorithm, payload)
-    }
-
-    private static func decodeVarint(_ bytes: [UInt8], startIndex: Int) -> (UInt64, Int)? {
-        var value: UInt64 = 0
-        var shift: UInt64 = 0
-        var index = startIndex
-        while index < bytes.count {
-            let byte = bytes[index]
-            let chunk = UInt64(byte & 0x7F)
-            if shift >= 64 {
-                return nil
-            }
-            value |= chunk << shift
-            index += 1
-            if (byte & 0x80) == 0 {
-                return (value, index)
-            }
-            shift += 7
-        }
-        return nil
     }
 
     private static func encodeVarint(_ value: UInt64) -> [UInt8] {

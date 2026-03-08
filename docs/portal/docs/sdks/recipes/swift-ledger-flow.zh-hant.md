@@ -118,6 +118,6 @@ struct LedgerFlow {
 ## 5. 驗證奇偶性
 
 - 通過 `iroha --config defaults/client.toml transaction get --hash <hash>` 檢查交易。
-- 將持有量與 `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` 進行比較。
+- 將持有量與 `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` 進行比較。
 - 將此配方與 Rust/Python/JavaScript 相結合以確認每個 SDK
   為演示流程生成相同的哈希值。

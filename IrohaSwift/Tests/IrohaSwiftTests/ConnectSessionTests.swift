@@ -49,8 +49,7 @@ final class ConnectSessionTests: XCTestCase {
             while stub.pendingReceives.isEmpty {
                 try await Task.sleep(nanoseconds: 1_000_000)
             }
-            let accountID = AccountId.make(publicKey: Data(repeating: 0x11, count: 32),
-                                            domain: "wonderland")
+            let accountID = AccountId.make(publicKey: Data(repeating: 0x11, count: 32))
             let approve = ConnectApprove(walletPublicKey: Data(repeating: 0xBB, count: 32),
                                          accountID: accountID,
                                          permissions: nil,
@@ -69,8 +68,7 @@ final class ConnectSessionTests: XCTestCase {
 
         let control = try await session.nextControlFrame()
         if case .approve(let approve) = control {
-            XCTAssertEqual(approve.accountID, AccountId.make(publicKey: Data(repeating: 0x11, count: 32),
-                                                             domain: "wonderland"))
+            XCTAssertEqual(approve.accountID, AccountId.make(publicKey: Data(repeating: 0x11, count: 32)))
         } else {
             XCTFail("expected approve frame")
         }

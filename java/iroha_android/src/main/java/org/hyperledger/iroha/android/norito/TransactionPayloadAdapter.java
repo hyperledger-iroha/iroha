@@ -147,16 +147,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static final class AccountIdAdapter implements TypeAdapter<String> {
-    private static final long SINGLE_CONTROLLER_TAG = 0L;
-    private static final long MULTISIG_CONTROLLER_TAG = 1L;
-    private static final TypeAdapter<ControllerPayload> CONTROLLER_ADAPTER = new AccountControllerAdapter();
-    private static final TypeAdapter<AccountAddress.MultisigPolicyPayload> MULTISIG_POLICY_ADAPTER =
-        new MultisigPolicyAdapter();
-    private static final TypeAdapter<AccountAddress.MultisigMemberPayload> MULTISIG_MEMBER_ADAPTER =
-        new MultisigMemberAdapter();
-    private static final TypeAdapter<List<AccountAddress.MultisigMemberPayload>> MULTISIG_MEMBER_LIST_ADAPTER =
-        NoritoAdapters.sequence(MULTISIG_MEMBER_ADAPTER);
-
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
       STRING_ADAPTER.encode(encoder, normalizeAuthority(value));
@@ -170,57 +160,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     private static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        return decodeAccountIdStruct(payload, flags, flagsHint);
-      } catch (final IllegalArgumentException ex) {
-        final NoritoDecoder stringDecoder = new NoritoDecoder(payload, flags, flagsHint);
-        final String literal = STRING_ADAPTER.decode(stringDecoder);
-        if (stringDecoder.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after authority payload");
-        }
-        return normalizeAuthority(literal);
+      final NoritoDecoder stringDecoder = new NoritoDecoder(payload, flags, flagsHint);
+      final String literal = STRING_ADAPTER.decode(stringDecoder);
+      if (stringDecoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after authority payload");
       }
-    }
-
-    private static String decodeAccountIdStruct(
-        final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        return decodeAccountIdSized(payload, flags, flagsHint);
-      } catch (final IllegalArgumentException ex) {
-        return decodeAccountIdLegacy(payload, flags, flagsHint);
-      }
-    }
-
-    private static String decodeAccountIdSized(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-      final String domain = decodeSizedField(decoder, DOMAIN_ID_ADAPTER);
-      final ControllerPayload controller = decodeSizedField(decoder, CONTROLLER_ADAPTER);
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AccountId payload");
-      }
-      return renderAuthority(controller);
-    }
-
-    private static String decodeAccountIdLegacy(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-      final String domain = STRING_ADAPTER.decode(decoder);
-      final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
-      final ControllerPayload controller;
-      if (controllerTag == SINGLE_CONTROLLER_TAG) {
-        final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
-        controller = ControllerPayload.single(publicKeyLiteral);
-      } else if (controllerTag == MULTISIG_CONTROLLER_TAG) {
-        final AccountAddress.MultisigPolicyPayload policy = MULTISIG_POLICY_ADAPTER.decode(decoder);
-        controller = ControllerPayload.multisig(policy);
-      } else {
-        throw new IllegalArgumentException("Unsupported AccountController tag: " + controllerTag);
-      }
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AccountId payload");
-      }
-      return renderAuthority(controller);
+      return normalizeAuthority(literal);
     }
 
     private static String normalizeAuthority(final String authority) {
@@ -235,167 +180,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         return AccountIdLiteral.extractIh58Address(trimmed);
       } catch (final IllegalArgumentException ex) {
         throw new IllegalArgumentException("authority identifier must be IH58 or sora-encoded", ex);
-      }
-    }
-
-    private static String renderAuthority(final ControllerPayload controller) {
-      if (controller.isSingle()) {
-        final String publicKeyLiteral = controller.publicKeyLiteral();
-        final PublicKeyCodec.PublicKeyPayload payload =
-            PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
-        if (payload != null) {
-          final String ih58 = toIh58(payload);
-          if (ih58 != null) {
-            return ih58;
-          }
-        }
-        throw new IllegalArgumentException("Unsupported legacy authority key payload");
-      }
-      return toMultisigIh58(controller.multisigPolicy());
-    }
-
-    private static final class ControllerPayload {
-      private final String publicKeyLiteral;
-      private final AccountAddress.MultisigPolicyPayload multisigPolicy;
-
-      private ControllerPayload(
-          final String publicKeyLiteral,
-          final AccountAddress.MultisigPolicyPayload multisigPolicy) {
-        this.publicKeyLiteral = publicKeyLiteral;
-        this.multisigPolicy = multisigPolicy;
-      }
-
-      private static ControllerPayload single(final String publicKeyLiteral) {
-        if (publicKeyLiteral == null || publicKeyLiteral.isBlank()) {
-          throw new IllegalArgumentException("public key literal must not be blank");
-        }
-        return new ControllerPayload(publicKeyLiteral.trim(), null);
-      }
-
-      private static ControllerPayload multisig(
-          final AccountAddress.MultisigPolicyPayload multisigPolicy) {
-        if (multisigPolicy == null) {
-          throw new IllegalArgumentException("multisig policy must not be null");
-        }
-        return new ControllerPayload(null, multisigPolicy);
-      }
-
-      private boolean isSingle() {
-        return multisigPolicy == null;
-      }
-
-      private String publicKeyLiteral() {
-        return publicKeyLiteral;
-      }
-
-      private AccountAddress.MultisigPolicyPayload multisigPolicy() {
-        return multisigPolicy;
-      }
-    }
-
-    private static final class AccountControllerAdapter implements TypeAdapter<ControllerPayload> {
-      @Override
-      public void encode(final NoritoEncoder encoder, final ControllerPayload value) {
-        if (value == null) {
-          throw new IllegalArgumentException("AccountController payload must not be null");
-        }
-        if (value.isSingle()) {
-          ENUM_TAG_ADAPTER.encode(encoder, SINGLE_CONTROLLER_TAG);
-          encodeSizedField(encoder, STRING_ADAPTER, value.publicKeyLiteral());
-          return;
-        }
-        ENUM_TAG_ADAPTER.encode(encoder, MULTISIG_CONTROLLER_TAG);
-        encodeSizedField(encoder, MULTISIG_POLICY_ADAPTER, value.multisigPolicy());
-      }
-
-      @Override
-      public ControllerPayload decode(final NoritoDecoder decoder) {
-        final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
-        final ControllerPayload controller;
-        if (controllerTag == SINGLE_CONTROLLER_TAG) {
-          final String publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER);
-          controller = ControllerPayload.single(publicKeyLiteral);
-        } else if (controllerTag == MULTISIG_CONTROLLER_TAG) {
-          final AccountAddress.MultisigPolicyPayload policy =
-              decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER);
-          controller = ControllerPayload.multisig(policy);
-        } else {
-          throw new IllegalArgumentException("Unsupported AccountController tag: " + controllerTag);
-        }
-        if (decoder.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after AccountController payload");
-        }
-        return controller;
-      }
-    }
-
-    private static final class MultisigPolicyAdapter
-        implements TypeAdapter<AccountAddress.MultisigPolicyPayload> {
-      @Override
-      public void encode(
-          final NoritoEncoder encoder, final AccountAddress.MultisigPolicyPayload value) {
-        UINT8_ADAPTER.encode(encoder, (long) value.version());
-        UINT16_ADAPTER.encode(encoder, (long) value.threshold());
-        MULTISIG_MEMBER_LIST_ADAPTER.encode(encoder, value.members());
-      }
-
-      @Override
-      public AccountAddress.MultisigPolicyPayload decode(final NoritoDecoder decoder) {
-        final int version = Math.toIntExact(UINT8_ADAPTER.decode(decoder));
-        final int threshold = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
-        final List<AccountAddress.MultisigMemberPayload> members =
-            MULTISIG_MEMBER_LIST_ADAPTER.decode(decoder);
-        return AccountAddress.MultisigPolicyPayload.of(version, threshold, members);
-      }
-    }
-
-    private static final class MultisigMemberAdapter
-        implements TypeAdapter<AccountAddress.MultisigMemberPayload> {
-      @Override
-      public void encode(
-          final NoritoEncoder encoder, final AccountAddress.MultisigMemberPayload value) {
-        final String publicKey =
-            PublicKeyCodec.encodePublicKeyMultihash(value.curveId(), value.publicKey());
-        STRING_ADAPTER.encode(encoder, publicKey);
-        UINT16_ADAPTER.encode(encoder, (long) value.weight());
-      }
-
-      @Override
-      public AccountAddress.MultisigMemberPayload decode(final NoritoDecoder decoder) {
-        final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
-        final int weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
-        final PublicKeyCodec.PublicKeyPayload payload =
-            PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
-        if (payload == null) {
-          throw new IllegalArgumentException("Invalid multisig member public key");
-        }
-        return AccountAddress.MultisigMemberPayload.of(
-            payload.curveId(), weight, payload.keyBytes());
-      }
-    }
-
-    private static String toIh58(final PublicKeyCodec.PublicKeyPayload payload) {
-      final String algorithm = PublicKeyCodec.algorithmForCurveId(payload.curveId());
-      if (algorithm == null) {
-        return null;
-      }
-      try {
-        final AccountAddress address =
-            AccountAddress.fromAccount(
-                AccountAddress.DEFAULT_DOMAIN_NAME, payload.keyBytes(), algorithm);
-        return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
-      } catch (final AccountAddress.AccountAddressException ex) {
-        return null;
-      }
-    }
-
-    private static String toMultisigIh58(final AccountAddress.MultisigPolicyPayload policy) {
-      try {
-        final AccountAddress address =
-            AccountAddress.fromMultisigPolicy(AccountAddress.DEFAULT_DOMAIN_NAME, policy);
-        return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
-      } catch (final AccountAddress.AccountAddressException ex) {
-        throw new IllegalArgumentException("Invalid multisig policy for AccountId", ex);
       }
     }
   }

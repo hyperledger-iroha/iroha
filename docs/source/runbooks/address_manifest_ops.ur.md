@@ -129,8 +129,8 @@ address-manifest-<REVISION>/
 2. **Canonical payloads نکالیں۔** ہر alias کے لیے یہ چلائیں:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **مینی فیسٹ انٹری ڈرافٹ۔** JSON ریکارڈ اس طرح شامل کریں:

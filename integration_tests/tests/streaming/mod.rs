@@ -287,7 +287,7 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
     };
     let ticket = StreamingTicket {
         ticket_id: fill_hash(0x44),
-        owner: "viewer@stream.test".into(),
+        owner: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
         dsid: 42,
         lane_id: 7,
         capabilities,

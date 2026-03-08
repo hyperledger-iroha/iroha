@@ -613,11 +613,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static String decodeAuthorityField(final byte[] payload, final String field) {
-    try {
-      return decodeAccountIdStruct(payload, field);
-    } catch (final IllegalArgumentException ex) {
-      return decodeFieldPayload(payload, STRING_ADAPTER, field);
-    }
+    return decodeFieldPayload(payload, STRING_ADAPTER, field);
   }
 
   private static String decodeAccountIdStruct(final byte[] payload, final String field) {
@@ -770,7 +766,7 @@ public final class TransactionFixtureManifestTests {
       return null;
     }
     try {
-      final AccountAddress address = AccountAddress.fromAccount(domain, payload.keyBytes, algorithm);
+      final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes, algorithm);
       return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       return null;
@@ -1307,9 +1303,8 @@ public final class TransactionFixtureManifestTests {
     if (trimmed.isEmpty()) {
       return trimmed;
     }
-    final int atIndex = trimmed.lastIndexOf('@');
-    if (atIndex > 0) {
-      return trimmed.substring(0, atIndex);
+    if (trimmed.indexOf('@') >= 0) {
+      throw new IllegalStateException("authority must not include @domain suffix");
     }
     return trimmed;
   }

@@ -3582,7 +3582,10 @@ mod tests {
         let private_key =
             parse_private_key(signing.as_bytes()).expect("ed25519 private key parses");
         let public_key = PublicKey::from(private_key.clone());
-        let authority = format!("{}@wonderland", public_key);
+        let authority_domain: DomainId = "default".parse().expect("default domain");
+        let authority = AccountId::new(authority_domain, public_key.clone())
+            .canonical_ih58()
+            .expect("canonical IH58 authority");
 
         let mut builder =
             TransactionBuilder::new("test-chain", &authority).expect("builder constructs");

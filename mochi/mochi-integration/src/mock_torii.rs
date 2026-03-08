@@ -234,7 +234,9 @@ impl Default for MockToriiData {
                 manifest_required: true,
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
-                validator_ids: vec!["alice@test".to_owned()],
+                validator_ids: vec![
+                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
                 runtime_upgrade: Some(SumeragiRuntimeUpgradeHook {

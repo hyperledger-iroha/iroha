@@ -3469,14 +3469,7 @@ pub unsafe extern "C" fn connect_norito_decode_control_approve_account_json(
             }) => account_id,
             _ => return -3,
         };
-        let (name, domain) = match acct.rsplit_once('@') {
-            Some((n, d)) => (n.to_string(), d.to_string()),
-            None => (acct.clone(), String::new()),
-        };
-        let payload = json_object([
-            ("name", ::norito::json!(name.clone())),
-            ("domain", ::norito::json!(domain.clone())),
-        ]);
+        let payload = json_object([("account_id", ::norito::json!(acct.clone()))]);
         let s = match norito::json::to_vec(&payload) {
             Ok(v) => v,
             Err(_) => return -4,

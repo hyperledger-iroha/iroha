@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
 | -------- | ------- | ------- |
 | `label` | ہاں | مطلوبہ لیبل (مخلوط کیس کو قبول کرتا ہے ؛ نورم V1 اور UTS-46 کے مطابق ٹول پرنٹس)۔ |
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
-| `owner` | ہاں | AccountId string (IH58 literal; optional @domain hint) of the registration owner. |
+| `owner` | ہاں | AccountId string (domainless encoded literal; no @domain suffix) of the registration owner. |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
 | `payment_asset_id` | ہاں | تصفیہ کی اصل (جیسے `xor#sora`)۔ |
 | `payment_gross` / `payment_net` | ہاں | کارڈنلٹی کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |

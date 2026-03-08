@@ -32,17 +32,17 @@ final class ToriiOfflineListParamsTests: XCTestCase {
 
     func testAccountFiltersAreIncluded() throws {
         let params = ToriiOfflineListParams(
-            controllerId: " alice@wonderland ",
-            receiverId: "bob@wonderland",
-            depositAccountId: "  carol@wonderland ",
-            assetId: " usd##alice@wonderland "
+            controllerId: " 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn ",
+            receiverId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            depositAccountId: "  6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw ",
+            assetId: " norito:4e52543000000001 "
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
-        XCTAssertEqual(map["controller_id"], "alice@wonderland")
-        XCTAssertEqual(map["receiver_id"], "bob@wonderland")
-        XCTAssertEqual(map["deposit_account_id"], "carol@wonderland")
-        XCTAssertEqual(map["asset_id"], "usd##alice@wonderland")
+        XCTAssertEqual(map["controller_id"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(map["receiver_id"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+        XCTAssertEqual(map["deposit_account_id"], "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        XCTAssertEqual(map["asset_id"], "norito:4e52543000000001")
     }
 
     func testOnlyMissingVerdictFlag() throws {
@@ -85,15 +85,15 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         {
           "items": [{
             "verdict_id_hex": "aa",
-            "issuer_id": "operator@test",
-            "issuer_display": "operator@test",
+            "issuer_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "issuer_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
             "revoked_at_ms": 123,
             "reason": "device_compromised",
             "note": "lost device",
             "metadata": { "ticket": "INC-1" },
             "record": {
               "verdict_id_hex": "aa",
-              "issuer_id": "operator@test",
+              "issuer_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "revoked_at_ms": 123,
               "reason": "device_compromised",
               "note": "lost device",
@@ -109,7 +109,7 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             return XCTFail("expected revocation entry")
         }
         XCTAssertEqual(entry.verdictIdHex, "aa")
-        XCTAssertEqual(entry.issuerId, "operator@test")
+        XCTAssertEqual(entry.issuerId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(entry.reason, "device_compromised")
         XCTAssertEqual(entry.note, "lost device")
         if case let .object(meta)? = entry.metadata {
@@ -169,13 +169,13 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         {
           "items": [{
             "bundle_id_hex": "aa",
-            "controller_id": "alice@wonderland",
-            "controller_display": "alice@wonderland",
-            "receiver_id": "bob@wonderland",
-            "receiver_display": "bob@wonderland",
-            "deposit_account_id": "carol@wonderland",
-            "deposit_account_display": "carol@wonderland",
-            "asset_id": "rose#wonderland",
+            "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "receiver_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "receiver_display": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "deposit_account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            "deposit_account_display": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            "asset_id": "norito:4e52543000000001",
             "receipt_count": 1,
             "total_amount": "10",
             "claimed_delta": "10",
@@ -206,31 +206,31 @@ final class ToriiOfflineListParamsTests: XCTestCase {
 
     func testOfflineReceiptListParamsQueryItems() throws {
         let params = ToriiOfflineReceiptListParams(
-            filter: "{\"op\":\"eq\",\"args\":[\"asset_id\",\"rose#wonderland\"]}",
+            filter: "{\"op\":\"eq\",\"args\":[\"asset_id\",\"norito:4e52543000000001\"]}",
             limit: 20,
             offset: 5,
             sort: "recorded_at_ms:desc",
             addressFormat: "compressed",
-            controllerId: " alice@wonderland ",
-            receiverId: "bob@wonderland",
+            controllerId: " 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn ",
+            receiverId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             bundleIdHex: "0xDEADBEEF",
             certificateIdHex: "AAFF",
             invoiceId: "inv-1",
-            assetId: "rose#wonderland"
+            assetId: "norito:4e52543000000001"
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
-        XCTAssertEqual(map["filter"], "{\"op\":\"eq\",\"args\":[\"asset_id\",\"rose#wonderland\"]}")
+        XCTAssertEqual(map["filter"], "{\"op\":\"eq\",\"args\":[\"asset_id\",\"norito:4e52543000000001\"]}")
         XCTAssertEqual(map["limit"], "20")
         XCTAssertEqual(map["offset"], "5")
         XCTAssertEqual(map["sort"], "recorded_at_ms:desc")
         XCTAssertEqual(map["address_format"], "compressed")
-        XCTAssertEqual(map["controller_id"], "alice@wonderland")
-        XCTAssertEqual(map["receiver_id"], "bob@wonderland")
+        XCTAssertEqual(map["controller_id"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(map["receiver_id"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
         XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
         XCTAssertEqual(map["certificate_id_hex"], "aaff")
         XCTAssertEqual(map["invoice_id"], "inv-1")
-        XCTAssertEqual(map["asset_id"], "rose#wonderland")
+        XCTAssertEqual(map["asset_id"], "norito:4e52543000000001")
     }
 
     func testQueryEnvelopeEncodesPaginationAndSort() throws {

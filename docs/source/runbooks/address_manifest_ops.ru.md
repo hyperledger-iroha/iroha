@@ -131,8 +131,8 @@ address-manifest-<REVISION>/
 2. **Вывести канонические payload.** Для каждого alias выполните:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Черновик записи манифеста.** Добавьте JSON‑запись вида:

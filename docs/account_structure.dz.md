@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## བརྒྱུད༌སྐུལ
 
-གྱང་ཁོག་དང་ རིམ་སྒྲིག་ལག་ཆ་ཚུ་ ད་རེས་ `alias@domain` འགྲུལ་ལམ་གཞན་ལུ་བརྟེན་ཏེ་ཨིན། ཨ་ནཱི
+གྱང་ཁོག་དང་ རིམ་སྒྲིག་ལག་ཆ་ཚུ་ ད་རེས་ `alias@domain` (rejected legacy form) འགྲུལ་ལམ་གཞན་ལུ་བརྟེན་ཏེ་ཨིན། ཨ་ནཱི
 སྐྱོན་ཆེ་ཤོས་གཉིས་ཡོད།
 
 1. **ཡོངས་འབྲེལ་བཱའིན་ཌིང་མེད།** ཡིག་རྒྱུན་འདི་ལུ་ ཅེག་སམ་ཡང་ན་ རིམ་སྒྲིག་སྔོན་སྒྲིག་མེདཔ་ལས་ ལག་ལེན་པ་ཚུ་ལུ་ ལག་ལེན་པ་ཚུ་ལུ་
@@ -74,12 +74,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -368,7 +364,7 @@ I18NI000000334X) གཤམ་གསལ་གྱི་མགྱོགས་དྲ
 
 འ་ནི་ཡིག་རྒྱུན་ཚུ་ སི་ཨེལ་ཨའི་ (`iroha tools address convert`) གིས་ བཏོན་ཡོད་མི་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
 ལན་ཚུ་ (`address_format=ih58|compressed`) དང་ ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་ དེ་ལས་ ཡུ་ཨེགསི་འདྲ་བཤུས་/སྦྱར།
-flows of the of the proben ལ་བརྟེན་ཐུབ། ཁྱོད་ལུ་གསལ་ཏོག་ཏོ་སྦེ་ རའུ་ཊིང་བརྡ་སྟོན་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ `<address>@<domain>` སྦྱར་དགོ། རྗེས་འཇུག་འདི་ ཁྲིམས་ལུགས་ཨའུཊི་པུཊི་གི་ཆ་ཤས་ཅིག་མེན།
+flows of the of the proben ལ་བརྟེན་ཐུབ། ཁྱོད་ལུ་གསལ་ཏོག་ཏོ་སྦེ་ རའུ་ཊིང་བརྡ་སྟོན་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ `<address>@<domain>` (rejected legacy form) སྦྱར་དགོ། རྗེས་འཇུག་འདི་ ཁྲིམས་ལུགས་ཨའུཊི་པུཊི་གི་ཆ་ཤས་ཅིག་མེན།
 
 #### ༢.༦ ཕན་ཚུན་འབྲེལ་བའི་དོན་ལུ་ ཚིག་དོན་གྱི་མིང་གཞན་ (འཆར་གཞི་བཟོ་ཡོདཔ་)
 
@@ -665,7 +661,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ཞུ་བ་འབད་བའི་སྐབས་ སོ་ར་རྐྱངམ་ཅིག་བསྡམ་བཞག་ཡོད་པའི་ཡིག་འབྲུ་འདི་རྐྱངམ་ཅིག་ བཏོནམ་ཨིན།
   `--format compressed` ཡང་ན་ JSON བཅུད་དོན་ཐབས་ལམ་། བརྡ་བཀོད་ཀྱིས་ སྔོན་འཇུག་གི་རེ་བ་ཚུ་གུ་ བརྟན་བཞུགས་འབདཝ་ཨིན།
   དབྱེ་དཔྱད་འབད་ཡོད་པའི་མངའ་ཁོངས་ (I18NI0000042X in JSON ནང་) དང་ `legacy  suffix` དར་ཆ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
-  བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ཨེན་ཀོ་ཌིང་འདི་ `<address>@<domain>` སྦེ་ལོག་སྟེ་རྩེད་དོ་ཡོདཔ་ལས་ གསལ་སྟོན་འདི་ བརྟན་ཤུགས་སྦེ་རང་ ལུས་དོ་ཡོདཔ་ཨིན།
+  བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ཨེན་ཀོ་ཌིང་འདི་ `<address>@<domain>` (rejected legacy form) སྦེ་ལོག་སྟེ་རྩེད་དོ་ཡོདཔ་ལས་ གསལ་སྟོན་འདི་ བརྟན་ཤུགས་སྦེ་རང་ ལུས་དོ་ཡོདཔ་ཨིན།
 - **Wallet/འཚོལ་ཞིབ་པ་ UX:** [ཁ་བྱང་བཀྲམ་སྟོན་ལམ་སྟོན་](I18NU0000071X) ལུ་རྗེས་སུ་འབྲང་།
   ADDR-6—འདྲ་བཤུས་གཉིས་ཀྱི་ཨེབ་རྟ་ཚུ་བྱིན་ཏེ་ IH58 འདི་ QR pappabased སྦེ་བཞག་ཞིནམ་ལས་ ཉེན་བརྡ་འབད།
   ལག་ལེན་པ་ཚུ་གིས་ `sora…` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།

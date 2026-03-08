@@ -16,7 +16,7 @@
    (`@domain` لاحقہ کے بغیر)۔ کینونیکل hex صرف ڈی بگنگ کے لیے ہے (`0x...`).
 2. **قابلِ قبول ان پٹس:** پارسرز کو IH58 (ترجیحی)، `sora` compressed، اور کینونیکل hex
    (صرف `0x...`؛ بغیر prefix کے hex کو مسترد کریں) قبول کرنا چاہیے۔ ان پٹس میں
-   routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` aliases
+   routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` (rejected legacy form) aliases
    کے لیے resolver درکار ہے۔ 
 3. **Resolvers:** selector-free domainless IH58/sora parsing configured default domain
    label پر direct bind کرتی ہے؛ domain-selector resolver canonical flows میں required نہیں۔

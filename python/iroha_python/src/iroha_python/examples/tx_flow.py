@@ -52,10 +52,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build and optionally submit a sample transaction")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080", help="Torii base URL")
     parser.add_argument("--chain-id", default="dev-chain", help="Target chain id")
-    parser.add_argument("--authority", required=True, help="Signing account id (e.g. alice@test)")
+    parser.add_argument(
+        "--authority",
+        required=True,
+        help="Signing account id (IH58 preferred, encoded-only; e.g. 6cmzPVPX4PK3...)",
+    )
     parser.add_argument("--private-key-hex", required=True, help="Hex-encoded Ed25519 private key")
     parser.add_argument("--domain-id", default="playground", help="Domain id to register")
-    parser.add_argument("--account-id", default="alice@playground", help="Account id to register")
+    parser.add_argument(
+        "--account-id",
+        default="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        help="Account id to register (IH58 preferred, encoded-only)",
+    )
     parser.add_argument(
         "--asset-definition-id",
         default="demo#playground",
@@ -63,8 +71,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--asset-id",
-        default="demo#playground#alice",
-        help="Asset id to mint into",
+        default="norito:<asset-id-hex>",
+        help="Asset id to mint into (encoded-only, norito:<hex>)",
     )
     parser.add_argument("--quantity", default="10", help="Quantity for the mint instruction")
     parser.add_argument("--burn-quantity", help="Optional quantity to burn after minting")

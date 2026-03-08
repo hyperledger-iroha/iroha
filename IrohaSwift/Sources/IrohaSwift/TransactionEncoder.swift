@@ -98,9 +98,8 @@ struct TransactionInputValidator {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
         do {
-            let parsed = try AccountAddress.parseEncoded(trimmed,
-                                                     expectedPrefix: AccountId.defaultNetworkPrefix)
-            return try parsed.0.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+            let (address, _) = try AccountAddress.parseEncoded(trimmed, expectedPrefix: nil)
+            return try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
         } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }

@@ -135,6 +135,6 @@ ih58... now holds:
 - `iroha --config defaults/client.toml transaction get --hash <hash>` ကိုသုံးပါ။
   SDK တင်သွင်းသည့် အရောင်းအ၀ယ်များကို စစ်ဆေးပါ။
 - `iroha --config defaults/client.toml asset list all --table` ဖြင့် အပြန်အလှန်စစ်ဆေးသော လက်ကျန်ငွေ
-  သို့မဟုတ် `asset list filter '{"id":"coffee#wonderland##<account>"}'`။
+  သို့မဟုတ် `asset list filter '{"id":"norito:4e52543000000002"}'`။
 - မျက်နှာပြင်နှစ်ခုလုံးမှထုတ်လုပ်ကြောင်းအတည်ပြုရန် CLI လမ်းညွှန်ချက်မှတူညီသောစီးဆင်းမှုကိုပြန်လုပ်ပါ။
   တူညီသော Norito ပေးချေမှုများနှင့် ငွေပေးငွေယူ အခြေအနေများ။

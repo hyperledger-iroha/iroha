@@ -5,7 +5,7 @@ import { ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
 import { ValidationError, ValidationErrorCode } from "../src/index.js";
 
 const BASE_URL = "http://localhost:8080";
-const FIXTURE_ACCOUNT_ID = `uaid:${"ab".repeat(32)}`;
+const FIXTURE_ACCOUNT_ID = "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {
   const headerMap = new Map();

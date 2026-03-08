@@ -59,7 +59,7 @@ public final class DefaultOkHttpWiringTests {
               {
                 "uaid": "%s",
                 "dataspaces": [
-                  {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["user@test"]}
+                  {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"]}
                 ]
               }
               """,

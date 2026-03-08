@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestLifecycle;
@@ -52,9 +54,10 @@ public final class UaidJsonParser {
                 accountItems.get(j),
                 "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "]");
         final String accountId =
-            asString(
-                account.get("account_id"),
-                "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].account_id");
+            AccountIdLiteral.extractIh58Address(
+                asString(
+                    account.get("account_id"),
+                    "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].account_id"));
         final String label = asOptionalString(account.get("label"));
         final List<Object> assetItems =
             asArrayOrEmpty(
@@ -66,14 +69,18 @@ public final class UaidJsonParser {
               expectObject(
                   assetItems.get(k),
                   "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "]");
-          assets.add(
-              new UaidPortfolioAsset(
+          final String assetId =
+              AssetIdLiteral.normalizeEncoded(
                   asString(
                       asset.get("asset_id"),
                       "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_id"),
-                  asString(
-                      asset.get("asset_definition_id"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_definition_id"),
+                  "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_id");
+          assets.add(
+              new UaidPortfolioAsset(
+                  assetId,
+                      asString(
+                          asset.get("asset_definition_id"),
+                          "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_definition_id"),
                   asString(
                       asset.get("quantity"),
                       "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].quantity")));
@@ -103,8 +110,13 @@ public final class UaidJsonParser {
       final List<String> accounts =
           asStringList(
               entry.get("accounts"), "uaid bindings.dataspaces[" + i + "].accounts");
+      final List<String> normalizedAccounts = new ArrayList<>(accounts.size());
+      for (final String accountId : accounts) {
+        normalizedAccounts.add(AccountIdLiteral.extractIh58Address(accountId));
+      }
       dataspaces.add(
-          new UaidBindingsResponse.UaidBindingsDataspace(dataspaceId, dataspaceAlias, accounts));
+          new UaidBindingsResponse.UaidBindingsDataspace(
+              dataspaceId, dataspaceAlias, List.copyOf(normalizedAccounts)));
     }
     return new UaidBindingsResponse(uaid, dataspaces);
   }
@@ -155,12 +167,22 @@ public final class UaidJsonParser {
       final List<String> accounts =
           asStringList(
               entry.get("accounts"), "uaid manifests.manifests[" + i + "].accounts");
+      final List<String> normalizedAccounts = new ArrayList<>(accounts.size());
+      for (final String accountId : accounts) {
+        normalizedAccounts.add(AccountIdLiteral.extractIh58Address(accountId));
+      }
       final String manifestJson =
           JsonEncoder.encode(
               expectObject(entry.get("manifest"), "uaid manifests.manifests[" + i + "].manifest"));
       manifests.add(
           new UaidManifestRecord(
-              dataspaceId, alias, manifestHash, status, lifecycle, accounts, manifestJson));
+              dataspaceId,
+              alias,
+              manifestHash,
+              status,
+              lifecycle,
+              List.copyOf(normalizedAccounts),
+              manifestJson));
     }
     return new UaidManifestsResponse(uaid, total, manifests);
   }

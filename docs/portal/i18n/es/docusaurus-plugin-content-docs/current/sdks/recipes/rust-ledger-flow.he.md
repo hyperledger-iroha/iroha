@@ -133,5 +133,5 @@ Si la definición del activo ya existe, la llamada de registro devuelve `Validat
 ## Verifica hashes y paridad
 
 - Usa `iroha --config defaults/client.toml transaction get --hash <hash>` para inspeccionar las transacciones que envió el SDK.
-- Contrasta los saldos con `iroha --config defaults/client.toml asset list all --table` o `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Contrasta los saldos con `iroha --config defaults/client.toml asset list all --table` o `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Repite el mismo flujo desde el recorrido de la CLI para confirmar que ambas superficies producen los mismos payloads Norito y estados de transacción.

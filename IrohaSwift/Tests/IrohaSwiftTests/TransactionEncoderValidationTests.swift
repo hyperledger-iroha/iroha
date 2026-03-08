@@ -4,16 +4,14 @@ import XCTest
 
 private func canonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
-    let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                 publicKey: keypair.publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
     return ih58
 }
 
 private func noncanonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
-    let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                 publicKey: keypair.publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     let canonicalHex = try address.canonicalHex()
     return canonicalHex
 }
@@ -22,7 +20,7 @@ private func noncanonicalOwnerLiteral() throws -> String {
 private func canonicalAuthorityLiteral(from signingKey: SigningKey,
                                        domain: String = AccountAddress.defaultDomainName) throws -> String {
     let publicKey = try signingKey.publicKey()
-    let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey)
+    let address = try AccountAddress.fromAccount(publicKey: publicKey)
     let ih58 = try address.toIH58(networkPrefix: 0x02F1)
     return ih58
 }
@@ -50,8 +48,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testSetMetadataRejectsEncodedAuthorityWithDomainSuffix() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
-        let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
-                                                     publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let ih58 = try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
         let authority = "\(ih58)@wonderland"
         let value = try NoritoJSON(["profile": "demo"])

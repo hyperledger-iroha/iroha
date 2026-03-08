@@ -187,5 +187,5 @@ public final class LedgerFlow {
 ## 5. אימות תאימות
 
 - בדקו את ה-hashים של העסקאות באמצעות `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- שלפו יתרות עם ה-CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- שלפו יתרות עם ה-CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`).
 - השוו את התוצאות עם המתכונים של Rust/Python/JavaScript/Swift כדי לוודא שכל SDK מפיק payloads Norito זהים לזרימת הדמו.

@@ -82,9 +82,9 @@ Les helpers avec pagination (par ex. `list_accounts_typed`) renvoient un objet c
 Les helpers d’inventaire de compte acceptent un filtre `asset_id` optionnel lorsque vous ne ciblez qu’un actif précis :
 
 ```python
-asset_id = "rose#wonderland#alice@test"
-assets = client.list_account_assets("alice@test", asset_id=asset_id, limit=5)
-txs = client.list_account_transactions("alice@test", asset_id=asset_id, limit=5)
+asset_id = "norito:4e52543000000001"
+assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
 holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
@@ -111,7 +111,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
     private_key="operator-private-key",
 )
 print("registered", top_up.registration.certificate_id_hex)
@@ -123,7 +123,7 @@ Pour les renouvellements, appelez `top_up_offline_allowance_renewal` avec l’ID
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
     private_key="operator-private-key",
 )
 print("renewed", renewed.registration.certificate_id_hex)

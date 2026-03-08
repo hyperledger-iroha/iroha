@@ -6393,7 +6393,10 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert("required".into(), Value::Bool(true));
     param.insert(
         "description".into(),
-        Value::String("Relay account identifier (e.g., `relay@kaigi`).".to_owned()),
+        Value::String(
+            "Relay account identifier encoded as IH58 (preferred) or compressed sora literal."
+                .to_owned(),
+        ),
     );
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));

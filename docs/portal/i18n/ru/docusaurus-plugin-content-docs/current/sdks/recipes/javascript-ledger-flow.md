@@ -49,9 +49,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -76,5 +76,5 @@ for (const asset of balances.items) {
 ## Проверьте паритет
 
 - Получите детали транзакции через `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Сверьте балансы с `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Сверьте балансы с `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - Сравните полученный хеш с рецептами Rust и Python, чтобы подтвердить паритет SDK.

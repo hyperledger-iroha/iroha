@@ -116,6 +116,6 @@ struct LedgerFlow {
 ## 5. Pariteti yoxlayın
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` vasitəsilə əməliyyatları yoxlayın.
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ilə holdinqləri müqayisə edin.
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` ilə holdinqləri müqayisə edin.
 - Hər SDK-nı təsdiqləmək üçün bu resepti Rust/Python/JavaScript reseptləri ilə birləşdirin
   demo axını üçün eyni hashları istehsal edir.

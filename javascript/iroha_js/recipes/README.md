@@ -222,7 +222,7 @@ Run with:
 npm install
 TORII_URL=http://localhost:8080 \
 ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
-NFT_ID=nft#wonderland#unique \
+NFT_ID=norito:4e52543000000002 \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
 node ./recipes/assets_iterators.mjs
@@ -232,7 +232,7 @@ Environment variables:
 
 - `TORII_URL` — Torii endpoint (defaults to `http://localhost:8080`).
 - `ACCOUNT_ID` — account literal for asset iteration.
-- `NFT_ID` — optional NFT id to filter on (exact match).
+- `NFT_ID` — optional encoded NFT id (`norito:<hex>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).

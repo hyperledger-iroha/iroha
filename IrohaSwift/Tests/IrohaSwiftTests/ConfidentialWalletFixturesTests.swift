@@ -74,7 +74,7 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
     private static func buildShieldEnvelope() throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
         let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey, domain: fixtureDomain)
+        let authority = AccountId.make(publicKey: publicKey)
         let payload = try ConfidentialEncryptedPayload(
             ephemeralPublicKey: Data(repeating: 0x01, count: 32),
             nonce: Data(repeating: 0x02, count: 24),
@@ -100,7 +100,7 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
     private static func buildUnshieldEnvelope() throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
         let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey, domain: fixtureDomain)
+        let authority = AccountId.make(publicKey: publicKey)
         let proof = try makeProofAttachment(name: "vk_unshield")
         let request = try UnshieldRequest(
             chainId: fixtureChainId,
@@ -123,7 +123,7 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
     private static func buildZkTransferEnvelope() throws -> SignedTransactionEnvelope {
         let signingKey = try makeFixtureSigningKey()
         let publicKey = try signingKey.publicKey()
-        let authority = AccountId.make(publicKey: publicKey, domain: fixtureDomain)
+        let authority = AccountId.make(publicKey: publicKey)
         let proof = try makeProofAttachment(name: "vk_transfer")
         let request = try ZkTransferRequest(
             chainId: fixtureChainId,

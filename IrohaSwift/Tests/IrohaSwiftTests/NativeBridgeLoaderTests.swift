@@ -157,7 +157,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 7, count: 32))
-        let authority = AccountId.make(publicKey: keypair.publicKey, domain: "default")
+        let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
                                       assetDefinitionId: "xor#test",

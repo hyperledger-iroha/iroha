@@ -184,5 +184,5 @@ public final class LedgerFlow {
 ## 5. Паритетийг шалгана уу
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>`-ээр дамжуулан гүйлгээний хэшийг шалгана уу.
-- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ашиглан үлдэгдлийг татах.
+- CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) ашиглан үлдэгдлийг татах.
 - Үр дүнг Rust/Python/JavaScript/Swift жортой харьцуулж, SDK бүр демо урсгалын хувьд ижил Norito ачааллыг гаргадаг эсэхийг шалгаарай.

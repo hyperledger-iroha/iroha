@@ -135,6 +135,6 @@ ih58... now holds:
 - `iroha --config defaults/client.toml transaction get --hash <hash>` ይጠቀሙ
   ኤስዲኬ ያቀረበውን ግብይቶች ይፈትሹ።
 - ሂሳቦችን ከ `iroha --config defaults/client.toml asset list all --table` ጋር ያረጋግጡ
-  ወይም `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+  ወይም `asset list filter '{"id":"norito:4e52543000000002"}'`.
 - የሁለቱም ንጣፎች ምርትን ለማረጋገጥ ከCLI መራመጃ ተመሳሳይ ፍሰት ይድገሙ
   ተመሳሳይ የ Norito ጭነት እና የግብይት ሁኔታዎች።

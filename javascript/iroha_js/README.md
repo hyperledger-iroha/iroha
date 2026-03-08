@@ -245,7 +245,8 @@ const newAccountIdInput =
   "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
-const roseAssetId = normalizeAssetId(`rose##${authorityInput}`);
+const roseAssetId = normalizeAssetId("norito:<hex-encoded-rose-asset-id>");
+const lilyAssetId = normalizeAssetId("norito:<hex-encoded-lily-asset-id>");
 // Normalise human-supplied identifiers once and reuse the canonical forms below.
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
@@ -465,7 +466,7 @@ const registerAccount = buildRegisterAccountInstruction({
   accountId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  sourceAssetId: "norito:01020304deadbeef",
   destinationAccountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
   quantity: "5",
 });
@@ -611,7 +612,7 @@ const domainAndMintTx = buildRegisterDomainAndMintTransaction({
   domain: { domainId: "garden_of_live_flowers", metadata: { key: "value" } },
   mints: [
     { assetId: roseAssetId, quantity: "5" },
-    { assetId: normalizeAssetId(`lily##${authorityInput}`), quantity: "2" },
+    { assetId: normalizeAssetId("norito:01020304feedface"), quantity: "2" },
   ],
   privateKey,
 });
@@ -654,7 +655,7 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
       quantity: "3",
     },
     {
-      assetId: `rose#wonderland#${authority}`,
+      assetId: roseAssetId,
       quantity: "1",
     },
   ],
@@ -674,7 +675,7 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
       quantity: "8",
     },
     {
-      assetId: `lily#wonderland#${authority}`,
+      assetId: lilyAssetId,
       quantity: "5",
     },
   ],
@@ -684,7 +685,7 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
       destinationAccountId: authority,
     },
     {
-      sourceAssetId: `lily#wonderland#${authority}`,
+      sourceAssetId: lilyAssetId,
       quantity: "3",
       destinationAccountId: newAccountId,
     },
@@ -864,7 +865,7 @@ pinned to the configured base.
   JavaScript floating-point pitfalls; the builders accept `string | number |
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
-- Keep asset IDs fully qualified (`rose##6cmz…`) when chaining mint
+- Keep asset IDs encoded (`norito:<hex>`) when chaining mint
   and transfer steps. The helpers do not guess missing suffixes, ensuring all
   peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -1612,7 +1613,7 @@ relays.items.forEach((relay) => {
   console.log(`${relay.relay_id} (${relay.domain}) status=${relay.status ?? "unknown"}`);
 });
 
-const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "relay@kaigi");
+const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
 if (detail?.metrics) {
   console.log(`${detail.metrics.domain} registrations=${detail.metrics.registrations_total}`);
 }
@@ -2381,7 +2382,7 @@ const { signedTransaction } = buildTransaction({
   authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+      assetId: "norito:01020304deadbeef",
       quantity: "10",
     }),
   ],
@@ -3175,17 +3176,17 @@ const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
 const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 3,
-  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  assetId: "norito:01020304deadbeef",
 });
 console.log("alice balances", balances.items);
 const holders = await torii.listAssetHolders("rose#wonderland", {
   limit: 3,
-  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  assetId: "norito:01020304deadbeef",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const history = await torii.listAccountTransactions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 2,
-  assetId: "rose##6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  assetId: "norito:01020304deadbeef",
 });
 console.log(
   "recent hashes",
@@ -3229,7 +3230,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=art#wonderland
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and their query/iterator variants) now accept canonical, IH58 (preferred), or compressed (`sora`, second-best) literals and automatically percent-encode them when constructing `/v1/accounts/{account_id}/…` routes, so SDK callers can forward whatever selector they surface in wallets without hand-escaping.
+> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only encoded account IDs (IH58 preferred, compressed `sora…` accepted). Domain-suffixed and legacy compatibility literals are rejected.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3241,7 +3242,7 @@ const registration = await torii.registerSnsName({
   selector: { suffix_id: 1, label: "demo" },
   owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   payment: {
-    asset_id: "xor#sora",
+    asset_id: "norito:<hex-encoded-asset-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
@@ -3562,7 +3563,7 @@ const timeAction = buildTimeTriggerAction({
   authority,
   instructions: [
     buildMintAssetInstruction({
-      assetId: "rose##6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+      assetId: "norito:01020304cafebabe",
       quantity: "250",
     }),
   ],

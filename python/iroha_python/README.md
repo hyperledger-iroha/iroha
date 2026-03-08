@@ -77,7 +77,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     private_key="operator-private-key",
 )
 print("certificate id", top_up.registration.certificate_id_hex)
@@ -90,7 +90,7 @@ For renewals, call `top_up_offline_allowance_renewal` with the current
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     private_key="operator-private-key",
 )
 print("renewed", renewed.registration.certificate_id_hex)
@@ -145,7 +145,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="provider-token")
 
 usage_plan = {
-    "provider": "aws@commerce",
+    "provider": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
     "billing": {
         "cadence": {
             "kind": "monthly_calendar",
@@ -167,14 +167,14 @@ usage_plan = {
 }
 
 client.create_subscription_plan(
-    authority="aws@commerce",
+    authority="3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
     private_key="provider-private-key-hex",
     plan_id="aws_compute#commerce",
     plan=usage_plan,
 )
 
 subscription = client.create_subscription(
-    authority="alice@users",
+    authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     private_key="subscriber-private-key-hex",
     subscription_id="sub-001",
     plan_id="aws_compute#commerce",
@@ -182,7 +182,7 @@ subscription = client.create_subscription(
 
 client.record_subscription_usage(
     "sub-001",
-    authority="aws@commerce",
+    authority="3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
     private_key="provider-private-key-hex",
     unit_key="compute_ms",
     delta="3600000",
@@ -190,7 +190,7 @@ client.record_subscription_usage(
 
 client.charge_subscription_now(
     "sub-001",
-    authority="aws@commerce",
+    authority="3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
     private_key="provider-private-key-hex",
 )
 ```
@@ -298,12 +298,12 @@ print(params.block_time_ms, params.next_mode)
 # Manage triggers
 trigger_payload = {
     "id": "notify-admins",
-    "action": {"Mint": {"asset_id": "alert#system", "value": 1}},
-    "authority": "admin@system",
+    "action": {"Mint": {"asset_id": "norito:<alert-asset-id-hex>", "value": 1}},
+    "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     "filter": {"ByTime": {"schedule_ms": 60_000}},
 }
 client.register_trigger(trigger_payload)
-for row in client.query_triggers(filter={"authority": "admin@system"})["items"]:
+for row in client.query_triggers(filter={"authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"})["items"]:
     print("Trigger row", row)
 client.delete_trigger("notify-admins")
 
@@ -327,17 +327,17 @@ for provider in ingestion.providers:
 
 # Account listings
 assets = client.list_account_assets(
-    "alice@test",
+    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     limit=10,
-    asset_id="rose#wonderland#alice@test",
+    asset_id="norito:<asset-id-hex>",
 )
 txs = client.list_account_transactions(
-    "alice@test",
+    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     limit=5,
-    asset_id="rose#wonderland#alice@test",
+    asset_id="norito:<asset-id-hex>",
 )
 query_txs = client.query_account_transactions(
-    "alice@test",
+    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     filter={"status": {"Eq": "Committed"}},
     sort={"timestamp": "DESC"},
     limit=3,
@@ -370,18 +370,18 @@ Build transactions with ergonomic helpers that wrap the low-level `Instruction` 
 ```python
 from iroha_python import TransactionConfig, TransactionDraft, Ed25519KeyPair
 
-config = TransactionConfig(chain_id="dev-chain", authority="alice@test", ttl_ms=120_000)
+config = TransactionConfig(chain_id="dev-chain", authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", ttl_ms=120_000)
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
-     .register_account("alice@test", metadata={"role": "admin"}) \
+     .register_account("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", metadata={"role": "admin"}) \
      .register_asset_definition_numeric(
         "rose#wonderland",
-        owner="alice@test",
+        owner="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
-     .mint_asset_numeric("rose#wonderland#alice@test", 10)
+     .mint_asset_numeric("norito:<asset-id-hex>", 10)
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope = draft.sign_with_keypair(pair)
@@ -394,9 +394,9 @@ Apply metadata updates or transfer ownership without dropping to raw Norito:
 
 ```python
 draft.set_account_key_value("nickname", "Queen Alice")
-draft.transfer_domain("wonderland", destination="bob@test")
-draft.transfer_asset_definition("rose#wonderland", destination="bob@test")
-draft.transfer_nft("nft#wonderland", destination="bob@test")
+draft.transfer_domain("wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+draft.transfer_asset_definition("rose#wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+draft.transfer_nft("nft#wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
 ```
 
 ### Repo settlement helpers
@@ -416,8 +416,8 @@ governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="alice@test",
-    counterparty="bob@test",
+    initiator="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    counterparty="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -426,8 +426,8 @@ draft.repo_initiate(
 )
 draft.repo_unwind(
     agreement_id="daily_repo",
-    initiator="alice@test",
-    counterparty="bob@test",
+    initiator="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    counterparty="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     cash_leg=cash,
     collateral_leg=collateral,
     settlement_timestamp_ms=1_704_086_400_000,
@@ -466,15 +466,15 @@ from iroha_python import (
 delivery_leg = SettlementLeg(
     asset_definition_id="bond#wonderland",
     quantity="10",
-    from_account="alice@test",
-    to_account="bob@test",
+    from_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    to_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     metadata={"isin": "ABC123"},
 )
 payment_leg = SettlementLeg(
     asset_definition_id="usd#wonderland",
     quantity="1000",
-    from_account="bob@test",
-    to_account="alice@test",
+    from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+    to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
 )
 plan = SettlementPlan(
     order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY,
@@ -492,8 +492,8 @@ draft.settlement_dvp(
 counter_leg = SettlementLeg(
     asset_definition_id="eur#wonderland",
     quantity="900",
-    from_account="bob@test",
-    to_account="alice@test",
+    from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+    to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
 )
 draft.settlement_pvp(
     settlement_id="trade_pvp",
@@ -640,7 +640,7 @@ preimage = build_connect_approve_preimage(
     sid=b"\xAA" * 32,
     app_public_key=b"\xBB" * 32,
     wallet_public_key=b"\xCC" * 32,
-    account_id="wallet@test",
+    account_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
     proof=ConnectSignInProof(
         domain="example.org",
@@ -745,7 +745,7 @@ print("Protected namespaces:", protected)
 
 # VRF helpers (Torii must be built with `gov_vrf`)
 client.derive_governance_council_vrf(
-    {"committee_size": 21, "candidates": [{"account_id": "validator@test", "variant": "Normal"}]}
+    {"committee_size": 21, "candidates": [{"account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF", "variant": "Normal"}]}
 )
 ```
 
@@ -901,7 +901,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 uaid_literal = "aabb" * 16  # raw hex (LSB=1) accepted; helper normalises to `uaid:<hex>`
 
-portfolio = client.get_uaid_portfolio_typed(uaid_literal, asset_id="cash#global::holder@global")
+portfolio = client.get_uaid_portfolio_typed(uaid_literal, asset_id="norito:<portfolio-asset-id-hex>")
 print("UAID", portfolio.uaid, "positions", portfolio.total_positions)
 for dataspace in portfolio.dataspaces:
     for account in dataspace.accounts:
@@ -924,7 +924,7 @@ for record in manifests.manifests:
 # Publish or revoke capability manifests directly from Python.
 client.publish_space_directory_manifest(
     {
-        "authority": "ops@cbdc",
+        "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         "privateKeyHex": "ed0123...",
         "manifest": manifest_payload,  # matches AssetPermissionManifest JSON
         "reason": "CBDC onboarding wave",
@@ -932,7 +932,7 @@ client.publish_space_directory_manifest(
 )
 client.revoke_space_directory_manifest(
     {
-        "authority": "ops@cbdc",
+        "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         "privateKeyBytes": bytes.fromhex("11" * 32),
         "uaid": uaid_literal,
         "dataspace": 11,
@@ -958,10 +958,10 @@ trigger_id = "hourly-reward"
 # 1) Build the instruction with the high-level helper.
 register = Instruction.register_time_trigger(
     trigger_id=trigger_id,
-    authority="admin@system",
+    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     action=Instruction.mint_asset(
-        asset_id="reward#treasury",
-        account_id="operator@system",
+        asset_id="norito:<reward-asset-id-hex>",
+        account_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
         value=1,
     ),
     interval_ms=3_600_000,
@@ -971,7 +971,7 @@ register = Instruction.register_time_trigger(
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
     chain_id="local",
-    authority="admin@system",
+    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     private_key="ed25519:...",
     instructions=[register],
     wait=True,
@@ -988,7 +988,7 @@ for event in client.stream_trigger_events(trigger_id=trigger_id, resume=True):
     break  # demonstration
 
 # 5) Query triggers with pagination helpers.
-page = client.query_triggers(filter={"authority": "admin@system"}, limit=10)
+page = client.query_triggers(filter={"authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}, limit=10)
 for item in page["items"]:
     print(item["id"])
 

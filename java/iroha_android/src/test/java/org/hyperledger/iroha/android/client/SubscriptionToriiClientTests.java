@@ -75,7 +75,7 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptionPlans(
                 SubscriptionPlanListParams.builder()
-                    .provider("aws@commerce")
+                    .provider("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
                     .limit(10L)
                     .offset(5L)
                     .build())
@@ -91,7 +91,8 @@ public final class SubscriptionToriiClientTests {
     assert billForMap.containsKey("value") : "bill_for value missing";
     assert billForMap.get("value") == null : "bill_for value should be null";
     final String query = executor.lastRequest.uri().getRawQuery();
-    assert query.contains("provider=aws%40commerce") : "provider query missing";
+    assert query.contains("provider=6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+        : "provider query missing";
     assert query.contains("limit=10") : "limit query missing";
     assert query.contains("offset=5") : "offset query missing";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
@@ -118,7 +119,7 @@ public final class SubscriptionToriiClientTests {
         client
             .createSubscriptionPlan(
                 SubscriptionPlanCreateRequest.builder()
-                    .authority("aws@commerce")
+                    .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
                     .privateKey("deadbeef")
                     .planId("aws_compute#commerce")
                     .plan(plan)
@@ -127,7 +128,7 @@ public final class SubscriptionToriiClientTests {
     assert response.ok() : "plan create should be ok";
     assert "aws_compute#commerce".equals(response.planId()) : "plan id mismatch";
     final Map<String, Object> body = parseBody(executor.lastBody);
-    assert "aws@commerce".equals(body.get("authority")) : "authority mismatch";
+    assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".equals(body.get("authority")) : "authority mismatch";
     assert "deadbeef".equals(body.get("private_key")) : "private key mismatch";
     assert "aws_compute#commerce".equals(body.get("plan_id")) : "plan id missing";
     assert body.get("plan") instanceof Map : "plan missing";
@@ -136,7 +137,7 @@ public final class SubscriptionToriiClientTests {
   private static void planJsonBuilderParses() {
     final SubscriptionPlanCreateRequest request =
         SubscriptionPlanCreateRequest.builder()
-            .authority("aws@commerce")
+            .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .privateKey("deadbeef")
             .planId("aws_compute#commerce")
             .planJson("{\"kind\":\"fixed\",\"bill_for\":{\"value\":null}}")
@@ -176,8 +177,8 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptions(
                 SubscriptionListParams.builder()
-                    .ownedBy("alice@wonderland")
-                    .provider("aws@commerce")
+                    .ownedBy("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+                    .provider("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
                     .status(SubscriptionStatus.ACTIVE)
                     .limit(10L)
                     .offset(0L)
@@ -198,8 +199,10 @@ public final class SubscriptionToriiClientTests {
     assert billForMap.containsKey("value") : "invoice bill_for value missing";
     assert billForMap.get("value") == null : "invoice bill_for value should be null";
     final String query = executor.lastRequest.uri().getRawQuery();
-    assert query.contains("owned_by=alice%40wonderland") : "owned_by query missing";
-    assert query.contains("provider=aws%40commerce") : "provider query missing";
+    assert query.contains("owned_by=6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+        : "owned_by query missing";
+    assert query.contains("provider=6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+        : "provider query missing";
     assert query.contains("status=active") : "status query missing";
     assert query.contains("limit=10") : "limit query missing";
     assert query.contains("offset=0") : "offset query missing";
@@ -228,7 +231,7 @@ public final class SubscriptionToriiClientTests {
         client
             .createSubscription(
                 SubscriptionCreateRequest.builder()
-                    .authority("alice@wonderland")
+                    .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
                     .privateKey("deadbeef")
                     .subscriptionId("sub-1$subscriptions")
                     .planId("aws_compute#commerce")
@@ -241,7 +244,7 @@ public final class SubscriptionToriiClientTests {
     assert response.ok() : "subscription create should be ok";
     assert response.firstChargeMs() == 1_700_000_000_000L : "first_charge_ms mismatch";
     final Map<String, Object> body = parseBody(executor.lastBody);
-    assert "alice@wonderland".equals(body.get("authority")) : "authority mismatch";
+    assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".equals(body.get("authority")) : "authority mismatch";
     assert "deadbeef".equals(body.get("private_key")) : "private key mismatch";
     assert "sub-1$subscriptions".equals(body.get("subscription_id"))
         : "subscription id mismatch";
@@ -314,12 +317,12 @@ public final class SubscriptionToriiClientTests {
     final String subscriptionId = "sub-1$subscriptions";
     final SubscriptionActionRequest baseRequest =
         SubscriptionActionRequest.builder()
-            .authority("alice@wonderland")
+            .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .privateKey("deadbeef")
             .build();
     final SubscriptionActionRequest chargeRequest =
         SubscriptionActionRequest.builder()
-            .authority("alice@wonderland")
+            .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .privateKey("deadbeef")
             .chargeAtMs(1_700_000_000_000L)
             .build();
@@ -334,7 +337,7 @@ public final class SubscriptionToriiClientTests {
         .recordSubscriptionUsage(
             subscriptionId,
             SubscriptionUsageRequest.builder()
-                .authority("alice@wonderland")
+                .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
                 .privateKey("deadbeef")
                 .unitKey("compute_ms")
                 .delta("3600000")
@@ -344,7 +347,7 @@ public final class SubscriptionToriiClientTests {
     final String encodedId = urlEncode(subscriptionId);
     final Map<String, Object> pauseBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/pause"));
-    assert pauseBody.get("authority").equals("alice@wonderland") : "pause authority missing";
+    assert pauseBody.get("authority").equals("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp") : "pause authority missing";
     assert pauseBody.get("private_key").equals("deadbeef") : "pause private key missing";
     assert !pauseBody.containsKey("charge_at_ms") : "pause should not set charge_at_ms";
     final Map<String, Object> resumeBody =
@@ -352,10 +355,10 @@ public final class SubscriptionToriiClientTests {
     assert resumeBody.containsKey("charge_at_ms") : "resume charge_at_ms missing";
     final Map<String, Object> cancelBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/cancel"));
-    assert cancelBody.get("authority").equals("alice@wonderland") : "cancel authority missing";
+    assert cancelBody.get("authority").equals("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp") : "cancel authority missing";
     final Map<String, Object> keepBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/keep"));
-    assert keepBody.get("authority").equals("alice@wonderland") : "keep authority missing";
+    assert keepBody.get("authority").equals("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp") : "keep authority missing";
     final Map<String, Object> chargeBody =
         parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/charge-now"));
     assert chargeBody.containsKey("charge_at_ms") : "charge-now charge_at_ms missing";
@@ -379,7 +382,7 @@ public final class SubscriptionToriiClientTests {
   private static void usageRequestRejectsInvalidDelta() {
     try {
       SubscriptionUsageRequest.builder()
-          .authority("alice@wonderland")
+          .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
           .privateKey("deadbeef")
           .unitKey("compute_ms")
           .delta("-1")
@@ -390,7 +393,7 @@ public final class SubscriptionToriiClientTests {
     }
     try {
       SubscriptionUsageRequest.builder()
-          .authority("alice@wonderland")
+          .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
           .privateKey("deadbeef")
           .unitKey("compute_ms")
           .delta("invalid")
@@ -401,7 +404,7 @@ public final class SubscriptionToriiClientTests {
     }
     final SubscriptionUsageRequest request =
         SubscriptionUsageRequest.builder()
-            .authority("alice@wonderland")
+            .authority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
             .privateKey("deadbeef")
             .unitKey("compute_ms")
             .delta("12.5")

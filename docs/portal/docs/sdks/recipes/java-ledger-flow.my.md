@@ -184,5 +184,5 @@ public final class LedgerFlow {
 ## 5. တန်းတူညီမျှမှုကို အတည်ပြုပါ။
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` မှတစ်ဆင့် ငွေပေးငွေယူ hashe များကို စစ်ဆေးပါ။
-- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ဖြင့် လက်ကျန်ငွေများကို ရယူပါ။
+- CLI (`asset list filter '{"id":"norito:4e52543000000002"}'`) ဖြင့် လက်ကျန်ငွေများကို ရယူပါ။
 - SDKတိုင်းသည် ဒီမိုစီးဆင်းမှုအတွက် ထပ်တူကျသော Norito payloads ထုတ်ပေးကြောင်းသေချာစေရန် Rust/Python/JavaScript/Swift ချက်ပြုတ်နည်းများနှင့် ရလဒ်များကို နှိုင်းယှဉ်ပါ။

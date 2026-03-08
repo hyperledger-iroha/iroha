@@ -44,7 +44,7 @@ use iroha::{
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::PrivateKey;
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_data_model::query::{
     CommittedTxFilters,
@@ -57,9 +57,7 @@ use iroha_executor_data_model::permission::{
     asset::CanTransferAssetWithDefinition, asset_definition::CanRegisterAssetDefinition,
 };
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
-use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::json::Value as JsonValue;
 use tokio::{
     task::spawn_blocking,
@@ -118,13 +116,17 @@ fn soak_iterations() -> usize {
     )
 }
 
-fn localnet_builder() -> NetworkBuilder {
+fn cross_dataspace_gas_account_id() -> AccountId {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
-    let gas_account_str = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    )
-    .to_string();
+    let gas_keypair = KeyPair::from_seed(
+        b"integration_tests::nexus::cross_dataspace_localnet::gas_account".to_vec(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(ivm_domain, gas_keypair.public_key().clone())
+}
+
+fn localnet_builder() -> NetworkBuilder {
+    let gas_account_str = cross_dataspace_gas_account_id().to_string();
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -326,12 +328,9 @@ fn npos_multilane_genesis_post_topology_transactions(
         topology.len()
     );
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = AccountId::new(
-        ivm_domain.clone(),
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let gas_account_id = cross_dataspace_gas_account_id();
+    let ivm_domain = gas_account_id.domain().clone();
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),

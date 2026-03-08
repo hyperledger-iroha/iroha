@@ -19,7 +19,7 @@
 
 ## الدافع
 
-تعتمد المحافظ والأدوات خارج السلسلة على الأسماء المستعارة للتوجيه الخام `alias@domain` اليوم. هذا
+تعتمد المحافظ والأدوات خارج السلسلة على الأسماء المستعارة للتوجيه الخام `alias@domain` (rejected legacy form) اليوم. هذا
 له عيبان رئيسيان:
 
 1. **لا يوجد ربط بالشبكة.** لا تحتوي السلسلة على مجموع اختباري أو بادئة سلسلة، لذا فإن المستخدمين
@@ -62,12 +62,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -309,7 +305,7 @@ tag-specific payload, then move on to the controller bytes.
 - المواد الرئيسية كبيرة الحجم أو المشوهة ترفع `KeyPayloadTooLong` أو `InvalidPublicKey`.
 - وحدات تحكم Multisig التي يتجاوز عددها 255 عضوًا ترفع `MultisigMemberOverflow`.
 - تحويلات IME/NFKC: يمكن تسوية Sora kana بنصف العرض إلى أشكال العرض الكامل الخاصة بها دون كسر فك التشفير، ولكن يجب أن يظل ASCII `sora` وأرقام/حروف IH58 ASCII. سطح حراس كامل العرض أو مطوي على الحالة `ERR_MISSING_COMPRESSED_SENTINEL`، وترفع حمولات ASCII كاملة العرض `ERR_INVALID_COMPRESSED_CHAR`، وتظهر حالات عدم تطابق المجموع الاختباري كـ `ERR_CHECKSUM_MISMATCH`. تغطي اختبارات الخصائص في `crates/iroha_data_model/src/account/address.rs` هذه المسارات حتى تتمكن مجموعات SDK والمحافظ من الاعتماد على حالات الفشل الحتمية.
-- يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات IH58 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
+- يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` (rejected legacy form) بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات IH58 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
 - حمولات المحدد المحلي التي يقل حجمها عن 12 بايت `ERR_LOCAL8_DEPRECATED`، مع الحفاظ على التحويل الثابت من ملخصات Local‑8 القديمة.
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -358,7 +354,7 @@ tag-specific payload, then move on to the controller bytes.
 
 تتطابق هذه السلاسل مع تلك الصادرة عن واجهة سطر الأوامر (`iroha tools address convert`)، Torii
 الاستجابات (`address_format=ih58|compressed`)، ومساعدي SDK، لذا قم بنسخ/لصق تجربة المستخدم
-التدفقات يمكن الاعتماد عليها حرفيا. قم بإلحاق `<address>@<domain>` فقط عندما تحتاج إلى تلميح توجيه صريح؛ اللاحقة ليست جزءًا من الإخراج الأساسي.
+التدفقات يمكن الاعتماد عليها حرفيا. قم بإلحاق `<address>@<domain>` (rejected legacy form) فقط عندما تحتاج إلى تلميح توجيه صريح؛ اللاحقة ليست جزءًا من الإخراج الأساسي.
 
 #### 2.6 الأسماء المستعارة النصية لقابلية التشغيل البيني (مخطط لها)
 
@@ -586,7 +582,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
    تقبل واجهة سطر الأوامر IH58، `sora…`، والقيم الأساسية `0x…`؛ إلحاق
    `@<domain>` فقط عندما تحتاج إلى الاحتفاظ بملصق للبيانات.
    يعرض ملخص JSON هذا النطاق عبر الحقل `input_domain`، و
-   `legacy  suffix` يعيد تشغيل الترميز المحول كـ `<address>@<domain>` لـ
+   `legacy  suffix` يعيد تشغيل الترميز المحول كـ `<address>@<domain>` (rejected legacy form) لـ
    الاختلافات الواضحة (هذه اللاحقة عبارة عن بيانات وصفية، وليست معرف حساب أساسي).
    لاستخدام الصادرات الموجهة نحو الخط الجديد
    `iroha tools address normalize --input <file> legacy-selector input mode` لتحويل الكتلة المحلية
@@ -617,7 +613,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   تم وضع علامة واضحة على أنها بيانات تعريف وصفية قد تتغير، في حين أن IH58 هو
   عنوان مستقر.
 - **تحديد الإدخال الأساسي:** تقبل Torii وSDKs IH58 (المفضل)/sora (ثاني أفضل)/0x
-  العناوين بالإضافة إلى `alias@domain` و `uaid:…` و
+  العناوين بالإضافة إلى `alias@domain` (rejected legacy form) و `uaid:…` و
   نماذج `opaque:…`، ثم قم بتحويلها إلى IH58 للإخراج. لا يوجد
   تبديل الوضع الصارم؛ يجب أن تظل معرفات الهاتف/البريد الإلكتروني الأولية خارج دفتر الأستاذ
   عبر UAID/تعيينات غير شفافة.
@@ -655,11 +651,11 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   تبقى التعيينات العمل في المستقبل).
 - **أدوات CLI:** توفير سير عمل محدد للمشغل عبر `iroha tools address convert`
   (راجع `crates/iroha_cli/src/address.rs`)، الذي يقبل IH58/`sora…`/`0x…` الحروف و
-  تسميات `<address>@<domain>` اختيارية، افتراضيًا لإخراج IH58 باستخدام بادئة Sora Nexus (`753`)،
+  تسميات `<address>@<domain>` (rejected legacy form) اختيارية، افتراضيًا لإخراج IH58 باستخدام بادئة Sora Nexus (`753`)،
   ويصدر فقط الأبجدية المضغوطة الخاصة بـ Sora فقط عندما يطلبها المشغلون صراحةً
   `--format compressed` أو وضع ملخص JSON. يفرض الأمر توقعات البادئة على
   التحليل، ويسجل المجال المقدم (`input_domain` في JSON)، والعلامة `legacy  suffix`
-  يعيد تشغيل الترميز المحول كـ `<address>@<domain>` بحيث تظل الفروق الواضحة مريحة.
+  يعيد تشغيل الترميز المحول كـ `<address>@<domain>` (rejected legacy form) بحيث تظل الفروق الواضحة مريحة.
 - **Wallet/explorer UX:** اتبع [إرشادات عرض العنوان](source/sns/address_display_guidelines.md)
   يتم شحنه مع ADDR-6 - قم بتوفير أزرار النسخ المزدوجة، واحتفظ بـ IH58 كحمولة QR، وقم بالتحذير
   المستخدمين أن النموذج `sora…` المضغوط هو Sora فقط وهو عرضة لإعادة كتابة IME.

@@ -1923,7 +1923,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
@@ -1935,7 +1935,7 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_accepts_alias_and_compressed_filter_literals),
+        stringify!(accounts_query_rejects_alias_and_accepts_compressed_filter_literals),
     )
     .await?
     else {
@@ -1959,34 +1959,48 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         .to_compressed_sora()
         .expect("compressed address encoding");
 
-    for literal in [alias_literal, compressed_literal] {
-        let body = format!(
-            r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-        );
-        let resp = http
-            .post(url.clone())
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(body)
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        assert!(
-            status.is_success(),
-            "alias/compressed literal should be accepted, got {status} body={body}"
-        );
-        let parsed: norito::json::Value = norito::json::from_str(&body)?;
-        let ids = extract_account_ids(&parsed);
-        assert!(
-            ids.iter().any(|id| id == &expected),
-            "literal {literal} should resolve to {expected}, got {ids:?}"
-        );
-        assert!(
-            ids.iter().all(|id| !id.contains('@')),
-            "response should return canonical IH58 ids, got {ids:?}"
-        );
-    }
+    let alias_body = format!(
+        r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+    );
+    let alias_resp = http
+        .post(url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(alias_body)
+        .send()
+        .await?;
+    assert_eq!(
+        alias_resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "alias literal should be rejected"
+    );
+
+    let body = format!(
+        r#"{{"filter":{{"op":"eq","args":["id","{compressed_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+    );
+    let resp = http
+        .post(url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(body)
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
+    assert!(
+        status.is_success(),
+        "compressed literal should be accepted, got {status} body={body}"
+    );
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
+    let ids = extract_account_ids(&parsed);
+    assert!(
+        ids.iter().any(|id| id == &expected),
+        "compressed literal should resolve to {expected}, got {ids:?}"
+    );
+    assert!(
+        ids.iter().all(|id| !id.contains('@')),
+        "response should return canonical IH58 ids, got {ids:?}"
+    );
 
     Ok(())
 }

@@ -31,7 +31,7 @@ yoldaş alətlər. O, təmin edir:
 
 ## Motivasiya
 
-Pul kisələri və zəncirdənkənar alətlər bu gün xam `alias@domain` marşrutlaşdırma ləqəblərinə əsaslanır. Bu
+Pul kisələri və zəncirdənkənar alətlər bu gün xam `alias@domain` (rejected legacy form) marşrutlaşdırma ləqəblərinə əsaslanır. Bu
 iki əsas çatışmazlıq var:
 
 1. **Şəbəkə bağlaması yoxdur.** Sətirdə yoxlama məbləği və ya zəncir prefiksi yoxdur, ona görə də istifadəçilər
@@ -74,12 +74,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -321,7 +317,7 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - Böyük ölçülü və ya qüsurlu əsas material `KeyPayloadTooLong` və ya `InvalidPublicKey`-i qaldırır.
 - 255 üzvdən çox olan Multisig nəzarətçiləri `MultisigMemberOverflow`-i qaldırır.
 - IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və IH58 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
-- Torii və `address@domain` ləqəblərinin SDK təhlili indi IH58 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
+- Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi IH58 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
 - `ERR_LOCAL8_DEPRECATED` səthi 12 baytdan qısa olan yerli selektorun faydalı yükləri köhnə Local‑8 həzmlərindən sərt kəsimi qoruyur.
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -368,7 +364,7 @@ hər kanonik yük üçün ardıcıl mətn formaları. Seçilmiş qurğular
 
 Bu sətirlər CLI (`iroha tools address convert`), Torii tərəfindən buraxılanlara uyğundur
 cavablar (`address_format=ih58|compressed`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
-axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
+axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` (rejected legacy form) əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
 
 #### 2.6 Qarşılıqlı fəaliyyət üçün mətn ləqəbləri (planlaşdırılmış)
 
@@ -594,7 +590,7 @@ audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
    CLI IH58, `sora…` və kanonik `0x…` literallarını qəbul edir; əlavə edin
    `@<domain>` yalnız manifestlər üçün etiket saxlamaq lazım olduqda.
    JSON xülasəsi həmin domeni `input_domain` sahəsi vasitəsilə göstərir və
-   `legacy  suffix` çevrilmiş kodlaşdırmanı `<address>@<domain>` kimi təkrarlayır.
+   `legacy  suffix` çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır.
    manifest fərqləri (bu şəkilçi kanonik hesab identifikatoru deyil, metadatadır).
    Yeni sətir yönümlü ixrac üçün istifadə edin
    Kütləvi çevirmək üçün `iroha tools address normalize --input <file> legacy-selector input mode` Yerli
@@ -625,7 +621,7 @@ onların dəyişmə biletləri.
   aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, IH58 isə
   sabit ünvan.
 - **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar IH58 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
-  ünvanlar üstəgəl `alias@domain`, `uaid:…` və
+  ünvanlar üstəgəl `alias@domain` (rejected legacy form), `uaid:…` və
   `opaque:…` formalaşdırır, sonra çıxış üçün IH58-ə kanonikləşir. yoxdur
   ciddi rejimdə keçid; xam telefon/e-poçt identifikatorları kitabdan kənar saxlanılmalıdır
   UAID/şəffaf xəritələr vasitəsilə.
@@ -661,11 +657,11 @@ onların dəyişmə biletləri.
   Xəritəçəkmələr gələcək iş olaraq qalır).
 - **CLI alətləri:** `iroha tools address convert` vasitəsilə deterministik operator iş axını təmin edin
   (bax `crates/iroha_cli/src/address.rs`), IH58/`sora…`/`0x…` hərfi və
-  isteğe bağlı `<address>@<domain>` etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək IH58 çıxışı,
+  isteğe bağlı `<address>@<domain>` (rejected legacy form) etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək IH58 çıxışı,
   və yalnız operatorlar bunu açıq şəkildə tələb etdikdə yalnız Sora sıxılmış əlifbasını yayır
   `--format compressed` və ya JSON xülasə rejimi. Komanda prefiks gözləntilərini tətbiq edir
   təhlil edir, təmin edilmiş domeni (JSON-da `input_domain`) və `legacy  suffix` bayrağını qeyd edir
-  çevrilmiş kodlaşdırmanı `<address>@<domain>` kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
+  çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
 - **Wallet/explorer UX:** [ünvan göstərmə qaydalarına] əməl edin (source/sns/address_display_guidelines.md)
   ADDR-6 ilə göndərilir - ikili nüsxə düymələri təklif edin, IH58-i QR yükü kimi saxlayın və xəbərdarlıq edin
   istifadəçilər sıxılmış `sora…` formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.

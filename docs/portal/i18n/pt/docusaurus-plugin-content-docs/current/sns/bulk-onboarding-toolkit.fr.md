@@ -36,7 +36,7 @@ O analisador exige a seguinte linha de texto (a ordem é flexível):
 |--------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalize de acordo com Norm v1 e UTS-46). |
 | `suffix_id` | Oui | Identificador numérico do sufixo (decimal ou `0x` hex). |
-| `owner` | Oui | Cadeia AccountId (literal IH58; dica opcional @domain) para o proprietário do registro. |
+| `owner` | Oui | Cadeia AccountId (literal AccountId codificado (IH58 preferido, compressed aceito; sem sufixo @domain)) para o proprietário do registro. |
 | `term_years` | Oui | Nível `1..=255`. |
 | `payment_asset_id` | Oui | Ato de liquidação (por exemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites nativos do ativo. |

@@ -146,10 +146,10 @@ final class PendingTransactionQueueTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let transfer = TransferRequest(chainId: "chain",
-                                       authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                        assetDefinitionId: "rose#wonderland",
                                        quantity: "1",
-                                       destination: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
                                        ttlMs: nil)
         do {
@@ -177,10 +177,10 @@ final class PendingTransactionQueueTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let transfer = TransferRequest(chainId: "chain",
-                                       authority: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                        assetDefinitionId: "rose#wonderland",
                                        quantity: "1",
-                                       destination: AccountId.make(publicKey: keypair.publicKey, domain: "wonderland"),
+                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
                                        ttlMs: nil)
         try await sdk.submit(transfer: transfer, keypair: keypair)

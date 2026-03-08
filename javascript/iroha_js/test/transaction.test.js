@@ -22,8 +22,14 @@ const AUTHORITY_ID_RAW =
 const AUTHORITY_ID = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
 const AUTHORITY_ID_INPUT = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
-const ASSET_ID = `rose##${AUTHORITY_ID}`;
-const ASSET_ID_INPUT = `rose##${AUTHORITY_ID_INPUT}`;
+const CANONICAL_ASSET_ID_INPUT =
+  "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
+const SECOND_CANONICAL_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace(
+  "6165e1e191d7b79c",
+  "7165e1e191d7b79c",
+);
+const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
+const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const NEW_ACCOUNT_ID_RAW =
   "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
 const NEW_ACCOUNT_ID = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
@@ -380,7 +386,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
         transfers: [
           { quantity: "5", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}##${NEW_ACCOUNT_ID_INPUT}`,
+            sourceAssetId: SECOND_CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
             destinationAccountId: NEW_ACCOUNT_ID_INPUT,
           },
@@ -406,7 +412,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "1",
         destination: NEW_ACCOUNT_ID,
       },
@@ -499,7 +505,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         domain: { domainId: "garden_of_live_flowers" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "3" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -514,7 +520,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.deepEqual(instructions[2], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
+        destination: CANONICAL_ASSET_ID_INPUT,
         object: "1",
       },
     },
@@ -705,7 +711,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         },
         mint: {
           accountId: NEW_ACCOUNT_ID_INPUT,
-          assetId: `${ASSET_DEFINITION_ID_INPUT}##${NEW_ACCOUNT_ID_INPUT}`,
+          assetId: SECOND_CANONICAL_ASSET_ID_INPUT,
           quantity: "9",
         },
         privateKey: PRIVATE_KEY,
@@ -736,7 +742,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     Mint: {
       Asset: {
         object: "9",
-        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -761,7 +767,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "2" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "2" },
         ],
         privateKey: PRIVATE_KEY,
       }),
@@ -773,7 +779,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "4",
-        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -781,7 +787,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     Mint: {
       Asset: {
         object: "2",
-        destination: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
+        destination: CANONICAL_ASSET_ID_INPUT,
       },
     },
   });
@@ -865,7 +871,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[1], {
     Mint: {
       Asset: {
-        destination: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        destination: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "5",
       },
     },
@@ -873,7 +879,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   assert.deepEqual(instructions[2], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "2",
         destination: AUTHORITY_ID,
       },
@@ -904,12 +910,12 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
-          { assetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`, quantity: "1" },
+          { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
         ],
         transfers: [
           { quantity: "4", destinationAccountId: AUTHORITY_ID_INPUT },
           {
-            sourceAssetId: `${ASSET_DEFINITION_ID_INPUT}##${AUTHORITY_ID_INPUT}`,
+            sourceAssetId: CANONICAL_ASSET_ID_INPUT,
             destinationAccountId: secondAccountIdInput,
             quantity: "1",
           },
@@ -923,7 +929,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[3], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}##${NEW_ACCOUNT_ID}`,
+        source: SECOND_CANONICAL_ASSET_ID_INPUT,
         object: "4",
         destination: AUTHORITY_ID,
       },
@@ -932,7 +938,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   assert.deepEqual(instructions[4], {
     Transfer: {
       Asset: {
-        source: `${ASSET_DEFINITION_ID}##${AUTHORITY_ID}`,
+        source: CANONICAL_ASSET_ID_INPUT,
         object: "1",
         destination: secondAccountId,
       },

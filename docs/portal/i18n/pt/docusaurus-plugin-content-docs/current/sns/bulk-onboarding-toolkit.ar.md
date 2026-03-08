@@ -34,7 +34,7 @@ cargas úteis são usadas para carregar cargas úteis.
 |----|-------|-------|
 | `label` | Não | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norma v1 e UTS-46). |
 | `suffix_id` | Não | O valor é o mesmo (hex e `0x`). |
-| `owner` | Não | O AccountId (literal IH58; dica opcional @domain) é definido como AccountId. |
+| `owner` | Não | O AccountId (literal AccountId codificado (IH58 preferido, compressed aceito; sem sufixo @domain)) é definido como AccountId. |
 | `term_years` | Não | Eu usei `1..=255`. |
 | `payment_asset_id` | Não | Verifique o valor (como `xor#sora`). |
 | `payment_gross` / `payment_net` | Não | Verifique se o seu dispositivo está funcionando corretamente. |

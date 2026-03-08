@@ -128,7 +128,7 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
 UaidPortfolioQuery portfolioQuery =
-    UaidPortfolioQuery.builder().setAssetId("cash#global::holder@global").build();
+    UaidPortfolioQuery.builder().setAssetId("norito:01020304deadbeef").build();
 UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
     String alias = ds.dataspaceAlias();

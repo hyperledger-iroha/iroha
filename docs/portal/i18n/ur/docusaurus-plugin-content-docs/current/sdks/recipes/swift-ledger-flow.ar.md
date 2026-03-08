@@ -127,5 +127,5 @@ struct LedgerFlow {
 ## 5. تحقّق من التكافؤ
 
 - عاين المعاملات عبر `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- قارن الحيازات باستخدام `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- قارن الحيازات باستخدام `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - ادمج هذه الوصفة مع وصفات Rust/Python/JavaScript لتأكيد أن كل SDK ينتج التجزئات نفسها لتدفق العرض التجريبي.

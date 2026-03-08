@@ -52,9 +52,9 @@ const tx = buildTransaction({
   authority: adminAccount,
   instructions: [
     {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
-    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
-      asset: {id: `coffee#wonderland##${adminAccount}`},
+      asset: {id: `norito:4e52543000000002`},
       destination: receiverAccount,
       value: {quantity: '50'},
     }},
@@ -81,5 +81,5 @@ for (const asset of balances.items) {
 ## ተመሳሳይነት ያረጋግጡ
 
 - የግብይቱን ዝርዝሮች በ `iroha --config defaults/client.toml transaction get --hash <hash>` በኩል ያግኙ።
-- ሂሳቦችን ከ `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ጋር ያረጋግጡ።
+- ሂሳቦችን ከ `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` ጋር ያረጋግጡ።
 - የኤስዲኬን እኩልነት ለማረጋገጥ የወጣውን ሃሽ ከ Rust እና Python አዘገጃጀት ጋር ያወዳድሩ።

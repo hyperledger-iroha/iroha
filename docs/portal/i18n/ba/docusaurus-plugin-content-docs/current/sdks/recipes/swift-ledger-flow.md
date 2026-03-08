@@ -116,6 +116,6 @@ struct LedgerFlow {
 ## 5. Паритетты раҫлау
 
 - `iroha --config defaults/client.toml transaction get --hash <hash>` аша операцияларҙы тикшерергә.
-- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` менән сағыштырыу.
+- `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'` менән сағыштырыу.
 - Был рецепт менән берләштереү өсөн тут/Python/JavaScript уларҙы раҫлау өсөн һәр SDK .
   демо ағымы өсөн бер үк хеш етештерә.

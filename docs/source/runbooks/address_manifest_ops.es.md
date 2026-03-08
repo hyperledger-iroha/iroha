@@ -133,8 +133,8 @@ Campos de encabezado de `manifest.json`:
 2. **Derivar payloads canónicos.** Para cada alias a actualizar, ejecute:
 
    ```bash
-   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .input_domain' /tmp/alias.json
+   iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
+   jq '.canonical_hex, .ih58' /tmp/alias.json
    ```
 
 3. **Borrador de entrada de manifiesto.** Agregue un registro JSON como:

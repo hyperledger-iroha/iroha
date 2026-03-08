@@ -113,6 +113,6 @@ struct LedgerFlow {
 ## 5. אימות תאימות
 
 - עיינו בעסקאות באמצעות `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- השוו אחזקות עם `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- השוו אחזקות עם `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
 - שלבו את המתכון הזה עם מתכוני Rust/Python/JavaScript כדי לוודא שכל SDK מפיק את אותם האשים עבור זרימת הדמו.
 

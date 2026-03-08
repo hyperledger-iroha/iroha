@@ -92,15 +92,6 @@ public final class AccountAddress {
     return Arrays.copyOf(canonicalBytes, canonicalBytes.length);
   }
 
-  /**
-   * Retained for API compatibility. Canonical payloads are now selector-free and this helper is a no-op.
-   */
-  public AccountAddress rebasedFromDefaultDomain(final String domainLabel) throws AccountAddressException {
-    Objects.requireNonNull(domainLabel, "domainLabel must not be null");
-    parseCanonical(canonicalBytes);
-    return this;
-  }
-
   public String canonicalHex() {
     return "0x" + bytesToHex(canonicalBytes);
   }
@@ -160,9 +151,9 @@ public final class AccountAddress {
   }
 
   public static AccountAddress fromAccount(
-      final String domain,
       final byte[] publicKey,
       final String algorithm) throws AccountAddressException {
+    Objects.requireNonNull(publicKey, "publicKey must not be null");
     if (publicKey.length > 0xFF) {
       throw new AccountAddressException(
           AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG, "key payload too long: " + publicKey.length);
@@ -171,12 +162,6 @@ public final class AccountAddress {
 
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(header);
-    // Canonical payloads are globally scoped and no longer encode domain selectors.
-    if (domain == null) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.INVALID_LENGTH, "domain must not be null");
-    }
-
     out.write(0x00);
     out.write(curveIdForAlgorithm(algorithm));
     out.write(publicKey.length);
@@ -189,11 +174,7 @@ public final class AccountAddress {
    * Constructs a multisig account address from the provided policy payload.
    */
   public static AccountAddress fromMultisigPolicy(
-      final String domain,
       final MultisigPolicyPayload policy) throws AccountAddressException {
-    if (domain == null || domain.isBlank()) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "domain must not be blank");
-    }
     if (policy == null) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "multisig policy must not be null");
     }
@@ -359,7 +340,6 @@ public final class AccountAddress {
     INVALID_HEX_ADDRESS("ERR_INVALID_HEX_ADDRESS"),
     UNEXPECTED_NETWORK_PREFIX("ERR_UNEXPECTED_NETWORK_PREFIX"),
     UNKNOWN_ADDRESS_CLASS("ERR_UNKNOWN_ADDRESS_CLASS"),
-    UNKNOWN_DOMAIN_TAG("ERR_UNKNOWN_DOMAIN_TAG"),
     UNEXPECTED_EXTENSION_FLAG("ERR_UNEXPECTED_EXTENSION_FLAG"),
     UNKNOWN_CONTROLLER_TAG("ERR_UNKNOWN_CONTROLLER_TAG"),
     UNKNOWN_CURVE("ERR_UNKNOWN_CURVE"),
@@ -528,31 +508,11 @@ public final class AccountAddress {
     }
     final byte header = canonical[0];
     decodeHeader(header);
-    AccountAddressException canonicalError = null;
-    try {
-      final ParsedController parsed = parseControllerAt(canonical, 1);
-      if (parsed.cursor == canonical.length) {
-        return;
-      }
-      canonicalError =
-          new AccountAddressException(
-              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-              "unexpected trailing bytes in canonical payload");
-    } catch (final AccountAddressException ex) {
-      canonicalError = ex;
-    }
-
-    // Backward compatibility: legacy payloads may include explicit domain selector bytes.
-    try {
-      final LegacyDomainDecode legacyDomain = decodeLegacyDomainAt(canonical, 1);
-      final ParsedController parsed = parseControllerAt(canonical, legacyDomain.cursor);
-      if (parsed.cursor != canonical.length) {
-        throw new AccountAddressException(
-            AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-            "unexpected trailing bytes in canonical payload");
-      }
-    } catch (final AccountAddressException ex) {
-      throw canonicalError != null ? canonicalError : ex;
+    final ParsedController parsed = parseControllerAt(canonical, 1);
+    if (parsed.cursor != canonical.length) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+          "unexpected trailing bytes in canonical payload");
     }
   }
 
@@ -564,32 +524,13 @@ public final class AccountAddress {
     final byte header = canonical[0];
     decodeHeader(header);
 
-    AccountAddressException canonicalError = null;
-    try {
-      final ParsedController parsed = parseControllerAt(canonical, 1);
-      if (parsed.cursor == canonical.length) {
-        return Optional.ofNullable(parsed.singleKey);
-      }
-      canonicalError =
-          new AccountAddressException(
-              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-              "unexpected trailing bytes in canonical payload");
-    } catch (final AccountAddressException ex) {
-      canonicalError = ex;
+    final ParsedController parsed = parseControllerAt(canonical, 1);
+    if (parsed.cursor != canonical.length) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+          "unexpected trailing bytes in canonical payload");
     }
-
-    try {
-      final LegacyDomainDecode legacyDomain = decodeLegacyDomainAt(canonical, 1);
-      final ParsedController parsed = parseControllerAt(canonical, legacyDomain.cursor);
-      if (parsed.cursor != canonical.length) {
-        throw new AccountAddressException(
-            AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-            "unexpected trailing bytes in canonical payload");
-      }
-      return Optional.ofNullable(parsed.singleKey);
-    } catch (final AccountAddressException ex) {
-      throw canonicalError != null ? canonicalError : ex;
-    }
+    return Optional.ofNullable(parsed.singleKey);
   }
 
   private static Optional<MultisigPolicyPayload> extractMultisigPayload(final byte[] canonical)
@@ -600,32 +541,13 @@ public final class AccountAddress {
     final byte header = canonical[0];
     decodeHeader(header);
 
-    AccountAddressException canonicalError = null;
-    try {
-      final ParsedController parsed = parseControllerAt(canonical, 1);
-      if (parsed.cursor == canonical.length) {
-        return Optional.ofNullable(parsed.multisigPolicy);
-      }
-      canonicalError =
-          new AccountAddressException(
-              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-              "unexpected trailing bytes in canonical payload");
-    } catch (final AccountAddressException ex) {
-      canonicalError = ex;
+    final ParsedController parsed = parseControllerAt(canonical, 1);
+    if (parsed.cursor != canonical.length) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+          "unexpected trailing bytes in canonical payload");
     }
-
-    try {
-      final LegacyDomainDecode legacyDomain = decodeLegacyDomainAt(canonical, 1);
-      final ParsedController parsed = parseControllerAt(canonical, legacyDomain.cursor);
-      if (parsed.cursor != canonical.length) {
-        throw new AccountAddressException(
-            AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-            "unexpected trailing bytes in canonical payload");
-      }
-      return Optional.ofNullable(parsed.multisigPolicy);
-    } catch (final AccountAddressException ex) {
-      throw canonicalError != null ? canonicalError : ex;
-    }
+    return Optional.ofNullable(parsed.multisigPolicy);
   }
 
   private static ParsedController parseControllerAt(final byte[] canonical, int cursor)
@@ -713,33 +635,6 @@ public final class AccountAddress {
     }
   }
 
-  private static LegacyDomainDecode decodeLegacyDomainAt(final byte[] canonical, int cursor)
-      throws AccountAddressException {
-    if (cursor >= canonical.length) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
-    }
-
-    final int domainTag = canonical[cursor++] & 0xFF;
-    switch (domainTag) {
-      case 0x00:
-        return new LegacyDomainDecode(domainTag, cursor);
-      case 0x01:
-        if (cursor + 12 > canonical.length) {
-          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
-        }
-        return new LegacyDomainDecode(domainTag, cursor + 12);
-      case 0x02:
-        if (cursor + 4 > canonical.length) {
-          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
-        }
-        return new LegacyDomainDecode(domainTag, cursor + 4);
-      default:
-        throw new AccountAddressException(
-            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG,
-            "unknown domain selector tag: " + domainTag);
-    }
-  }
-
   private static final class ParsedController {
     final int tag;
     final int cursor;
@@ -763,16 +658,6 @@ public final class AccountAddress {
 
     static ParsedController multisig(final int cursor, final MultisigPolicyPayload payload) {
       return new ParsedController(0x01, cursor, null, payload);
-    }
-  }
-
-  private static final class LegacyDomainDecode {
-    final int tag;
-    final int cursor;
-
-    private LegacyDomainDecode(final int tag, final int cursor) {
-      this.tag = tag;
-      this.cursor = cursor;
     }
   }
 

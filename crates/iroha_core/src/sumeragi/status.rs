@@ -8915,16 +8915,16 @@ mod tests {
         super::reset_nexus_economics_for_tests();
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
-            payer_id: "alice@test".to_owned(),
+            payer_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
             amount: 10,
             asset_id: "xor#sora".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
-            payer_id: "sponsor@test".to_owned(),
+            payer_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id: "sponsor@test".to_owned(),
-            authority_id: "payer@test".to_owned(),
+            sponsor_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
+            authority_id: "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".to_owned(),
         });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
@@ -8934,7 +8934,9 @@ mod tests {
         assert_eq!(snap.last_payer, Some(super::NexusFeePayer::Sponsor));
         assert_eq!(
             snap.last_error.as_deref(),
-            Some("sponsor not authorized for authority payer@test")
+            Some(
+                "sponsor not authorized for authority 6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+            )
         );
     }
 

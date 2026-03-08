@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## Մոտիվացիա
 
-Դրամապանակներն ու շղթայից դուրս գործիքավորումն այսօր հիմնված են չմշակված `alias@domain` երթուղային այլանունների վրա: Սա
+Դրամապանակներն ու շղթայից դուրս գործիքավորումն այսօր հիմնված են չմշակված `alias@domain` (rejected legacy form) երթուղային այլանունների վրա: Սա
 ունի երկու հիմնական թերություն.
 
 1. **Ցանցային կապ չկա:** Տողը չունի ստուգիչ գումար կամ շղթայի նախածանց, ուստի օգտվողները
@@ -74,12 +74,8 @@ AccountId {
 
 Display: canonical IH58 literal (no `@domain` suffix)
 Parse accepts:
-- IH58 (preferred), `sora` compressed, or canonical hex (`0x...`) inputs, with
-  optional `@<domain>` suffixes for explicit routing hints.
-- `<label>@<domain>` aliases resolved through the account-alias resolver
-  (Torii installs one; plain data-model parsing requires a resolver to be set).
-- `<alias>@<domain>` for domain-scoped alias routing; account IDs themselves are canonical encoded literals (IH58 or compressed).
-- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
@@ -319,7 +315,7 @@ Multisig-ի քաղաքականությունը նաև բացահայտում է 
 - Չափազանց մեծ կամ սխալ ձևավորված հիմնական նյութը բարձրացնում է `KeyPayloadTooLong` կամ `InvalidPublicKey`:
 - Multisig կարգավորիչները, որոնք գերազանցում են 255 անդամները, բարձրացնում են `MultisigMemberOverflow`:
 - IME/NFKC փոխարկումներ. կիսալայնությամբ Sora kana-ն կարող է նորմալացվել իրենց ամբողջ լայնության ձևերին՝ առանց վերծանման խախտելու, սակայն ASCII `sora` պահակային և IH58 թվանշանները/տառերը ՊԵՏՔ Է մնան ASCII: Ամբողջ լայնությամբ կամ պատյանով ծալված պահապանների մակերեսը `ERR_MISSING_COMPRESSED_SENTINEL`, ամբողջ լայնությամբ ASCII օգտակար բեռները բարձրացնում են `ERR_INVALID_COMPRESSED_CHAR`, իսկ ստուգիչ գումարի անհամապատասխանությունները՝ որպես `ERR_CHECKSUM_MISMATCH`: `crates/iroha_data_model/src/account/address.rs`-ի սեփականության թեստերը ծածկում են այս ուղիները, որպեսզի SDK-ները և դրամապանակները կարողանան հիմնվել որոշիչ ձախողումների վրա:
-- Torii և `address@domain` փոխանունների Torii և SDK վերլուծությունը այժմ թողարկում են նույն `ERR_*` կոդերը, երբ IH58 (նախընտրելի)/sora (երկրորդ լավագույն) մուտքերը ձախողվում են, նախքան կեղծանունը կարող է կրկնել տիրույթի սխալները, ստուգել տիրույթի պատճառները (օր. առանց արձակ տողերից գուշակելու.
+- Torii և `address@domain` (rejected legacy form) փոխանունների Torii և SDK վերլուծությունը այժմ թողարկում են նույն `ERR_*` կոդերը, երբ IH58 (նախընտրելի)/sora (երկրորդ լավագույն) մուտքերը ձախողվում են, նախքան կեղծանունը կարող է կրկնել տիրույթի սխալները, ստուգել տիրույթի պատճառները (օր. առանց արձակ տողերից գուշակելու.
 - `ERR_LOCAL8_DEPRECATED` 12 բայթից ավելի կարճ տեղային ընտրիչով օգտակար բեռներ՝ պահպանելով հին Local‑8 մարսողությունների կոշտ անջատումը:
 - Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
 
@@ -366,7 +362,7 @@ Sora Nexus ցանցերը կանխադրված են `chain_discriminant = 0x02F1
 
 Այս տողերը համընկնում են CLI-ի (`iroha tools address convert`), Torii-ի թողարկված տողերի հետ
 պատասխաններ (`address_format=ih58|compressed`) և SDK օգնականներ, այնպես որ UX պատճենեք/տեղադրեք
-հոսքերը կարող են բառացիորեն հենվել դրանց վրա: Կցել `<address>@<domain>` միայն այն դեպքում, երբ ձեզ անհրաժեշտ է հստակ երթուղային հուշում. վերջածանցը կանոնական ելքի մաս չէ։
+հոսքերը կարող են բառացիորեն հենվել դրանց վրա: Կցել `<address>@<domain>` (rejected legacy form) միայն այն դեպքում, երբ ձեզ անհրաժեշտ է հստակ երթուղային հուշում. վերջածանցը կանոնական ելքի մաս չէ։
 
 #### 2.6 Փոխգործունակության տեքստային այլանուններ (պլանավորված)
 
@@ -592,7 +588,7 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
    CLI-ն ընդունում է IH58, `sora…` և կանոնական `0x…` տառեր; կցել
    `@<domain>` միայն այն դեպքում, երբ անհրաժեշտ է պահպանել պիտակը մանիֆեստների համար:
    JSON ամփոփագիրը հայտնվում է այդ տիրույթում `input_domain` դաշտի միջոցով և
-   `legacy  suffix`-ը վերարտադրում է փոխարկված կոդավորումը որպես `<address>@<domain>`
+   `legacy  suffix`-ը վերարտադրում է փոխարկված կոդավորումը որպես `<address>@<domain>` (rejected legacy form)
    manifest diffs (այս վերջածանցը մետատվյալ է, այլ ոչ թե կանոնական հաշվի ID):
    Նոր գծի վրա ուղղված արտահանման համար օգտագործեք
    `iroha tools address normalize --input <file> legacy-selector input mode` տեղական զանգվածային փոխակերպման համար
@@ -623,7 +619,7 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   հստակ նշված է որպես նկարագրական մետատվյալներ, որոնք կարող են փոխվել, մինչդեռ IH58-ը այն է
   կայուն հասցե.
 - **Մուտքի կանոնականացում.** Torii և SDK-ներն ընդունում են IH58 (նախընտրելի)/sora (երկրորդ լավագույն)/0x
-  հասցեները գումարած `alias@domain`, `uaid:…` և
+  հասցեները գումարած `alias@domain` (rejected legacy form), `uaid:…` և
   `opaque:…` ձևավորվում է, այնուհետև ելքի համար կանոնականացվում է IH58-ին: Չկա
   խիստ ռեժիմի անջատում; չմշակված հեռախոսի/էլփոստի նույնացուցիչները պետք է պահվեն մատյանից դուրս
   UAID/անթափանց քարտեզագրումների միջոցով:
@@ -659,11 +655,11 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   քարտեզագրումները մնում են ապագա աշխատանք):
 - **CLI գործիքավորում. ** Տրամադրեք օպերատորի դետերմինիստական աշխատանքային հոսք `iroha tools address convert`-ի միջոցով
   (տես `crates/iroha_cli/src/address.rs`), որն ընդունում է IH58/`sora…`/`0x…` բառացի և
-  կամընտիր `<address>@<domain>` պիտակներ, կանխադրված է IH58 ելքը՝ օգտագործելով Sora Nexus նախածանցը (`753`),
+  կամընտիր `<address>@<domain>` (rejected legacy form) պիտակներ, կանխադրված է IH58 ելքը՝ օգտագործելով Sora Nexus նախածանցը (`753`),
   և արտանետում է միայն Sora-ի սեղմված այբուբենը, երբ օպերատորները բացահայտորեն պահանջում են այն
   `--format compressed` կամ JSON ամփոփման ռեժիմ: Հրամանն կիրառում է նախածանցի ակնկալիքները
   վերլուծել, գրանցել տրամադրված տիրույթը (`input_domain` JSON-ում) և `legacy  suffix` դրոշակը
-  վերարտադրում է փոխարկված կոդավորումը որպես `<address>@<domain>`, այնպես որ ակնհայտ տարբերությունները մնում են էրգոնոմիկ:
+  վերարտադրում է փոխարկված կոդավորումը որպես `<address>@<domain>` (rejected legacy form), այնպես որ ակնհայտ տարբերությունները մնում են էրգոնոմիկ:
 - ** Wallet/explorer UX:** Հետևեք [հասցեի ցուցադրման ուղեցույցներին] (source/sns/address_display_guidelines.md)
   առաքված ADDR-6-ով. առաջարկեք կրկնակի պատճենման կոճակներ, պահեք IH58-ը որպես QR օգտակար բեռ և զգուշացրեք
   օգտվողներ, որոնց սեղմված `sora…` ձևը միայն Sora-ի համար է և ենթակա է IME-ի վերաշարադրումների:

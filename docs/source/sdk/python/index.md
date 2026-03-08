@@ -70,10 +70,10 @@ transactions, and asset holder listings without building a full query envelope:
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-asset_id = "rose#wonderland#alice@test"
+asset_id = "norito:4e52543000000001"
 
-assets = client.list_account_assets("alice@test", asset_id=asset_id, limit=10)
-txs = client.list_account_transactions("alice@test", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=10)
+txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
 holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
@@ -103,7 +103,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
     private_key="operator-private-key",
 )
 print(top_up.registration.certificate_id_hex)
@@ -116,7 +116,7 @@ For renewals, use `top_up_offline_allowance_renewal` with the existing
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="treasury@wonderland",
+    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
     private_key="operator-private-key",
 )
 print(renewed.registration.certificate_id_hex)
