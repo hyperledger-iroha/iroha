@@ -6,7 +6,7 @@ use iroha_data_model::{
         SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
     },
     isi::{
-        error::InstructionExecutionError,
+        error::{InstructionExecutionError, InvalidParameterError},
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
             RevokeSpaceDirectoryManifest,
@@ -28,6 +28,7 @@ impl Execute for PublishSpaceDirectoryManifest {
     ) -> Result<(), Error> {
         let manifest = self.manifest;
         let dataspace = manifest.dataspace;
+        ensure_known_dataspace(state_transaction, dataspace)?;
         if !has_publish_permission(state_transaction, authority, dataspace) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
@@ -71,6 +72,7 @@ impl Execute for ExpireSpaceDirectoryManifest {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let dataspace = self.dataspace;
+        ensure_known_dataspace(state_transaction, dataspace)?;
         if !has_publish_permission(state_transaction, authority, dataspace) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
@@ -100,6 +102,7 @@ impl Execute for RevokeSpaceDirectoryManifest {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let dataspace = self.dataspace;
+        ensure_known_dataspace(state_transaction, dataspace)?;
         if !has_publish_permission(state_transaction, authority, dataspace) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanPublishSpaceDirectoryManifest".into(),
@@ -175,6 +178,29 @@ fn upsert_manifest(
         .insert(uaid, set);
 }
 
+fn ensure_known_dataspace(
+    state_transaction: &StateTransaction<'_, '_>,
+    dataspace: DataSpaceId,
+) -> Result<(), Error> {
+    if state_transaction
+        .nexus
+        .dataspace_catalog
+        .entries()
+        .iter()
+        .any(|entry| entry.id == dataspace)
+    {
+        return Ok(());
+    }
+
+    Err(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
+            "unknown dataspace id {}",
+            dataspace.as_u64()
+        )))
+        .into(),
+    )
+}
+
 fn has_publish_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -225,6 +251,7 @@ fn permissions_allow_manifest<'a>(
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::isi::error::InvalidParameterError;
     use iroha_data_model::{
         account::NewAccount,
         block::BlockHeader,
@@ -234,7 +261,7 @@ mod tests {
             data::{DataEvent, space_directory::SpaceDirectoryEvent},
         },
         metadata::Metadata,
-        nexus::{AssetPermissionManifest, ManifestVersion},
+        nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceMetadata, ManifestVersion},
         permission::Permissions,
         prelude::Register,
     };
@@ -289,12 +316,27 @@ mod tests {
         state.world.domains.insert(id.clone(), domain);
     }
 
+    fn seed_dataspace_catalog(state: &mut State, dataspace: DataSpaceId) {
+        let mut entries = state.nexus.read().dataspace_catalog.entries().to_vec();
+        if entries.iter().all(|entry| entry.id != dataspace) {
+            entries.push(DataSpaceMetadata {
+                id: dataspace,
+                alias: format!("dataspace_{}", dataspace.as_u64()),
+                description: None,
+                fault_tolerance: 1,
+            });
+        }
+        state.nexus.write().dataspace_catalog =
+            DataSpaceCatalog::new(entries).expect("dataspace catalog");
+    }
+
     #[test]
     fn publish_manifest_requires_permission() {
-        let state = test_state();
+        let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::perm"));
         let dataspace = DataSpaceId::new(11);
+        seed_dataspace_catalog(&mut state, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 1);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -317,6 +359,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::publish"));
         let dataspace = DataSpaceId::new(42);
+        seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
         let manifest = sample_manifest(uaid, dataspace, 5);
 
@@ -358,6 +401,7 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let dataspace = DataSpaceId::new(7);
+        seed_dataspace_catalog(&mut state, dataspace);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rotate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
@@ -425,6 +469,7 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let dataspace = DataSpaceId::new(17);
+        seed_dataspace_catalog(&mut state, dataspace);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::activate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
@@ -488,6 +533,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::revoke"));
         let dataspace = DataSpaceId::new(55);
+        seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
         let domain_id: DomainId = "spaces.revoke".parse().expect("domain id");
@@ -578,6 +624,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::expire"));
         let dataspace = DataSpaceId::new(88);
+        seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
         let domain_id: DomainId = "spaces.expire".parse().expect("domain id");
@@ -652,5 +699,111 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn publish_manifest_rejects_unknown_dataspace() {
+        let mut state = test_state();
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+
+        let authority = (*ALICE_ID).clone();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-publish"));
+        let dataspace = DataSpaceId::new(404);
+        grant_manifest_permission(&mut state.world, &authority, dataspace);
+        let manifest = sample_manifest(uaid, dataspace, 1);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = PublishSpaceDirectoryManifest { manifest }
+            .execute(&authority, &mut tx)
+            .expect_err("unknown dataspace should be rejected");
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("unknown dataspace id"),
+            "error should mention unknown dataspace: {message}"
+        );
+    }
+
+    #[test]
+    fn revoke_manifest_rejects_unknown_dataspace() {
+        let mut state = test_state();
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+
+        let authority = (*ALICE_ID).clone();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-revoke"));
+        let dataspace = DataSpaceId::new(405);
+        grant_manifest_permission(&mut state.world, &authority, dataspace);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = RevokeSpaceDirectoryManifest {
+            uaid,
+            dataspace,
+            revoked_epoch: 5,
+            reason: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("unknown dataspace should be rejected");
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("unknown dataspace id"),
+            "error should mention unknown dataspace: {message}"
+        );
+    }
+
+    #[test]
+    fn expire_manifest_rejects_unknown_dataspace() {
+        let mut state = test_state();
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+
+        let authority = (*ALICE_ID).clone();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::unknown-expire"));
+        let dataspace = DataSpaceId::new(406);
+        grant_manifest_permission(&mut state.world, &authority, dataspace);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = ExpireSpaceDirectoryManifest {
+            uaid,
+            dataspace,
+            expired_epoch: 7,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("unknown dataspace should be rejected");
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("unknown dataspace id"),
+            "error should mention unknown dataspace: {message}"
+        );
     }
 }

@@ -84,7 +84,7 @@ fn account_definition_test() -> Result<(), Error> {
         .canonical_ih58()
         .expect("Single-key account IDs can be rendered as IH58");
     let account_id = AccountId::parse_encoded(&canonical_account_id)
-        .map(|parsed| parsed.into_account_id())
+        .map(iroha::account_address::ParsedAccountId::into_account_id)
         .expect("Valid, because the IH58 payload was generated from a valid AccountId");
 
     // Check that two ways to define an account match

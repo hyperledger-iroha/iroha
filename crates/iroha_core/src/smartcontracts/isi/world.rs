@@ -33,6 +33,7 @@ pub mod isi {
             CanUnregisterAssetDefinition,
         },
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
+        governance::CanRecordCitizenService,
         nexus::CanUseFeeSponsor,
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         trigger::CanRegisterTrigger,
@@ -3965,6 +3966,10 @@ pub mod isi {
                 .unwrap_or_default();
             for trigger_id in trigger_ids {
                 if state_transaction.world.triggers.remove(&trigger_id) {
+                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                        state_transaction,
+                        &trigger_id,
+                    );
                     state_transaction
                         .world
                         .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
@@ -10095,7 +10100,107 @@ pub mod isi {
         }
     }
 
-    fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
+    fn resolve_config_account_literal(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        field_path: &'static str,
+    ) -> Result<AccountId, Error> {
+        let parsed = AccountId::parse_encoded(raw)
+            .ok()
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id);
+
+        let resolve_for = |candidate: &AccountId| -> Result<AccountId, Error> {
+            let subject_accounts: BTreeSet<AccountId> = world
+                .accounts_for_subject_iter(&candidate.subject_id())
+                .map(|entry| entry.id().clone())
+                .collect();
+
+            if subject_accounts.is_empty() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "invalid {field_path} account literal `{raw}`: not resolvable to a unique active scoped account"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            if subject_accounts.len() == 1 {
+                return Ok(subject_accounts
+                    .into_iter()
+                    .next()
+                    .expect("single-item set must contain one account"));
+            }
+
+            if subject_accounts.contains(candidate) {
+                return Ok(candidate.clone());
+            }
+
+            Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid {field_path} account literal `{raw}`: ambiguous across multiple active scoped accounts"
+                )
+                .into(),
+            )
+            .into())
+        };
+
+        if let Some(resolved) = crate::block::parse_account_literal_with_world(world, raw) {
+            return resolve_for(&resolved);
+        }
+
+        if let Some(parsed) = parsed {
+            return resolve_for(&parsed);
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("invalid {field_path} account literal `{raw}`: expected account identifier")
+                .into(),
+        )
+        .into())
+    }
+
+    fn config_account_matches(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        account_id: &AccountId,
+        field_path: &'static str,
+    ) -> Result<bool, Error> {
+        let configured = resolve_config_account_literal(world, raw, field_path)?;
+        Ok(configured == *account_id)
+    }
+
+    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
+        raw.parse().ok()
+    }
+
+    fn is_domain_account_associated(
+        account_id: &AccountId,
+        domain_id: &DomainId,
+        removed_subject_domain_counts: &BTreeMap<
+            iroha_data_model::account::AccountSubjectId,
+            usize,
+        >,
+    ) -> bool {
+        if account_id.domain() == domain_id {
+            return true;
+        }
+
+        // Fallback for legacy/normalized literals is only safe when the
+        // subject is scoped to a single domain in current world state.
+        removed_subject_domain_counts
+            .get(&account_id.subject_id())
+            .is_some_and(|count| *count == 1)
+    }
+
+    fn is_permission_domain_associated(
+        permission: &Permission,
+        domain_id: &DomainId,
+        removed_subject_domain_counts: &BTreeMap<
+            iroha_data_model::account::AccountSubjectId,
+            usize,
+        >,
+    ) -> bool {
         if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
             return &permission.domain == domain_id;
         }
@@ -10128,22 +10233,42 @@ pub mod isi {
         }
         if let Ok(permission) = CanMintAsset::try_from(permission) {
             return permission.asset.definition().domain() == domain_id
-                || permission.asset.account().domain() == domain_id;
+                || is_domain_account_associated(
+                    permission.asset.account(),
+                    domain_id,
+                    removed_subject_domain_counts,
+                );
         }
         if let Ok(permission) = CanBurnAsset::try_from(permission) {
             return permission.asset.definition().domain() == domain_id
-                || permission.asset.account().domain() == domain_id;
+                || is_domain_account_associated(
+                    permission.asset.account(),
+                    domain_id,
+                    removed_subject_domain_counts,
+                );
         }
         if let Ok(permission) = CanTransferAsset::try_from(permission) {
             return permission.asset.definition().domain() == domain_id
-                || permission.asset.account().domain() == domain_id;
+                || is_domain_account_associated(
+                    permission.asset.account(),
+                    domain_id,
+                    removed_subject_domain_counts,
+                );
         }
         if let Ok(permission) = CanModifyAssetMetadata::try_from(permission) {
             return permission.asset.definition().domain() == domain_id
-                || permission.asset.account().domain() == domain_id;
+                || is_domain_account_associated(
+                    permission.asset.account(),
+                    domain_id,
+                    removed_subject_domain_counts,
+                );
         }
         if let Ok(permission) = CanUseFeeSponsor::try_from(permission) {
-            return permission.sponsor.domain() == domain_id;
+            return is_domain_account_associated(
+                &permission.sponsor,
+                domain_id,
+                removed_subject_domain_counts,
+            );
         }
         if let Ok(permission) = CanRegisterNft::try_from(permission) {
             return &permission.domain == domain_id;
@@ -10158,13 +10283,32 @@ pub mod isi {
             return permission.nft.domain() == domain_id;
         }
         if let Ok(permission) = CanUnregisterAccount::try_from(permission) {
-            return permission.account.domain() == domain_id;
+            return is_domain_account_associated(
+                &permission.account,
+                domain_id,
+                removed_subject_domain_counts,
+            );
         }
         if let Ok(permission) = CanModifyAccountMetadata::try_from(permission) {
-            return permission.account.domain() == domain_id;
+            return is_domain_account_associated(
+                &permission.account,
+                domain_id,
+                removed_subject_domain_counts,
+            );
         }
         if let Ok(permission) = CanRegisterTrigger::try_from(permission) {
-            return permission.authority.domain() == domain_id;
+            return is_domain_account_associated(
+                &permission.authority,
+                domain_id,
+                removed_subject_domain_counts,
+            );
+        }
+        if let Ok(permission) = CanRecordCitizenService::try_from(permission) {
+            return is_domain_account_associated(
+                &permission.owner,
+                domain_id,
+                removed_subject_domain_counts,
+            );
         }
 
         false
@@ -10174,6 +10318,24 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
     ) {
+        let removed_subjects: BTreeSet<iroha_data_model::account::AccountSubjectId> =
+            state_transaction
+                .world
+                .accounts_in_domain_iter(domain_id)
+                .map(|account| account.id().subject_id())
+                .collect();
+        let subject_domains = state_transaction.world.account_subject_domains.view();
+        let removed_subject_domain_counts: BTreeMap<
+            iroha_data_model::account::AccountSubjectId,
+            usize,
+        > = removed_subjects
+            .into_iter()
+            .map(|subject| {
+                let domain_count = subject_domains.get(&subject).map_or(1, BTreeSet::len);
+                (subject, domain_count)
+            })
+            .collect();
+
         let account_ids: Vec<AccountId> = state_transaction
             .world
             .account_permissions
@@ -10187,9 +10349,13 @@ pub mod isi {
                 .account_permissions
                 .get(&account_id)
                 .is_some_and(|permissions| {
-                    permissions
-                        .iter()
-                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                    permissions.iter().any(|permission| {
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            &removed_subject_domain_counts,
+                        )
+                    })
                 });
             if !should_remove {
                 continue;
@@ -10200,8 +10366,13 @@ pub mod isi {
                 .account_permissions
                 .get_mut(&account_id)
             {
-                permissions
-                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                permissions.retain(|permission| {
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        &removed_subject_domain_counts,
+                    )
+                });
                 permissions.is_empty()
             } else {
                 false
@@ -10230,8 +10401,13 @@ pub mod isi {
                 .roles
                 .get(&role_id)
                 .is_some_and(|role| {
-                    role.permissions()
-                        .any(|permission| is_permission_domain_associated(permission, domain_id))
+                    role.permissions().any(|permission| {
+                        is_permission_domain_associated(
+                            permission,
+                            domain_id,
+                            &removed_subject_domain_counts,
+                        )
+                    })
                 });
             if !should_remove {
                 continue;
@@ -10240,8 +10416,13 @@ pub mod isi {
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
 
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-                role.permissions
-                    .retain(|permission| !is_permission_domain_associated(permission, domain_id));
+                role.permissions.retain(|permission| {
+                    !is_permission_domain_associated(
+                        permission,
+                        domain_id,
+                        &removed_subject_domain_counts,
+                    )
+                });
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
@@ -10261,6 +10442,69 @@ pub mod isi {
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
 
+            let remove_accounts: Vec<AccountId> = state_transaction
+                .world
+                .accounts_in_domain_iter(&domain_id)
+                .map(|account| account.id().clone())
+                .collect();
+            let account_set: BTreeSet<AccountId> = remove_accounts.iter().cloned().collect();
+            let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
+                .world
+                .asset_definitions_in_domain_iter(&domain_id)
+                .map(|ad| ad.id().clone())
+                .collect();
+            let remove_asset_definition_set: BTreeSet<AssetDefinitionId> =
+                remove_asset_definitions.iter().cloned().collect();
+
+            for account in &remove_accounts {
+                let nexus_fee_sink_matches = config_account_matches(
+                    &state_transaction.world,
+                    &state_transaction.nexus.fees.fee_sink_account_id,
+                    account,
+                    "nexus.fees.fee_sink_account_id",
+                )?;
+                let nexus_stake_escrow_matches = config_account_matches(
+                    &state_transaction.world,
+                    &state_transaction.nexus.staking.stake_escrow_account_id,
+                    account,
+                    "nexus.staking.stake_escrow_account_id",
+                )?;
+                let nexus_slash_sink_matches = config_account_matches(
+                    &state_transaction.world,
+                    &state_transaction.nexus.staking.slash_sink_account_id,
+                    account,
+                    "nexus.staking.slash_sink_account_id",
+                )?;
+
+                if nexus_fee_sink_matches {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as nexus fee sink account (`nexus.fees.fee_sink_account_id`); update nexus config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if nexus_stake_escrow_matches {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as nexus staking escrow account (`nexus.staking.stake_escrow_account_id`); update nexus config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if nexus_slash_sink_matches {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as nexus staking slash sink account (`nexus.staking.slash_sink_account_id`); update nexus config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+
             remove_domain_associated_permissions(state_transaction, &domain_id);
 
             state_transaction
@@ -10273,12 +10517,12 @@ pub mod isi {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .for_each(|trigger_id| {
-                    state_transaction
-                        .world
-                        .triggers
-                        .remove(&trigger_id)
-                        .then_some(())
-                        .expect("should succeed")
+                    let removed = state_transaction.world.triggers.remove(&trigger_id);
+                    removed.then_some(()).expect("should succeed");
+                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                        state_transaction,
+                        &trigger_id,
+                    );
                 });
 
             state_transaction
@@ -10303,20 +10547,6 @@ pub mod isi {
                 state_transaction.world.domain_endorsements.remove(hash);
             }
 
-            let remove_accounts: Vec<AccountId> = state_transaction
-                .world
-                .accounts_in_domain_iter(&domain_id)
-                .map(|account| account.id().clone())
-                .collect();
-            let account_set: BTreeSet<AccountId> = remove_accounts.iter().cloned().collect();
-            let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
-                .world
-                .asset_definitions_in_domain_iter(&domain_id)
-                .map(|ad| ad.id().clone())
-                .collect();
-            let remove_asset_definition_set: BTreeSet<AssetDefinitionId> =
-                remove_asset_definitions.iter().cloned().collect();
-
             let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
                 .nfts
@@ -10329,6 +10559,10 @@ pub mod isi {
             }
 
             for nft_id in remove_nfts {
+                crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
+                    state_transaction,
+                    &nft_id,
+                );
                 state_transaction.world.nfts.remove(nft_id.clone());
                 state_transaction
                     .world
@@ -11200,6 +11434,28 @@ pub mod isi {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
                             "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as oracle dispute bond asset definition (`oracle.economics.dispute_bond_asset`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
+                    .is_some_and(|configured| &configured == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as nexus fee asset definition (`nexus.fees.fee_asset_id`); update nexus config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
+                    .is_some_and(|configured| &configured == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as nexus staking asset definition (`nexus.staking.stake_asset_id`); update nexus config first"
                         )
                         .into(),
                     )
@@ -13019,6 +13275,348 @@ pub mod isi {
         }
 
         #[test]
+        fn unregister_domain_rejects_when_member_account_is_nexus_fee_sink_account() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            let guard_domain: DomainId = "guard.world".parse().expect("domain id parses");
+            Register::domain(Domain::new(guard_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard domain");
+            let (guard_account_id, _) = gen_account_in(&guard_domain);
+            Register::account(Account::new(guard_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard account");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.nexus.fees.fee_sink_account_id = account_id.to_string();
+            stx.nexus.staking.stake_escrow_account_id = guard_account_id.to_string();
+            stx.nexus.staking.slash_sink_account_id = guard_account_id.to_string();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject nexus fee sink account removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("nexus fee sink account"),
+                "error should explain nexus fee-sink conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_allows_when_nexus_fee_sink_account_is_same_subject_other_domain() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let mut remove_domain: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(remove_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let keypair = KeyPair::random();
+            let controller = keypair.public_key().clone();
+            let sink_domain = AccountId::parse_encoded(
+                &AccountId::new(
+                    "probe.world".parse().expect("domain id parses"),
+                    controller.clone(),
+                )
+                .to_string(),
+            )
+            .expect("encoded account literal should parse")
+            .into_account_id()
+            .domain()
+            .clone();
+            if remove_domain == sink_domain {
+                remove_domain = "cleanup-alt.world".parse().expect("domain id parses");
+                Register::domain(Domain::new(remove_domain.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("register cleanup-alt domain");
+            }
+            Register::domain(Domain::new(sink_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sink domain");
+
+            let remove_account_id = AccountId::new(remove_domain.clone(), controller.clone());
+            let sink_account_id = AccountId::new(sink_domain, controller);
+
+            Register::account(Account::new(remove_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain account");
+            Register::account(Account::new(sink_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sink account");
+            stx.nexus.fees.fee_sink_account_id = sink_account_id.to_string();
+            stx.nexus.staking.stake_escrow_account_id = sink_account_id.to_string();
+            stx.nexus.staking.slash_sink_account_id = sink_account_id.to_string();
+
+            Unregister::domain(remove_domain.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("cross-domain same-subject account must not block domain unregister");
+            assert!(
+                stx.world.domains.get(&remove_domain).is_none(),
+                "cleanup domain should be deleted"
+            );
+            assert!(
+                stx.world.accounts.get(&sink_account_id).is_some(),
+                "configured sink account should remain"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_nexus_fee_sink_literal_is_invalid() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("invalid nexus fee sink literal must fail closed");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("invalid nexus.fees.fee_sink_account_id account literal"),
+                "error should explain invalid nexus fee-sink literal: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_nexus_fee_sink_literal_is_ambiguous_across_same_subject_domains()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let keypair = KeyPair::random();
+            let controller = keypair.public_key().clone();
+            let default_domain = AccountId::parse_encoded(
+                &AccountId::new(
+                    "probe.world".parse().expect("domain id parses"),
+                    controller.clone(),
+                )
+                .to_string(),
+            )
+            .expect("encoded account literal should parse")
+            .into_account_id()
+            .domain()
+            .clone();
+            let mut remove_domain: DomainId = "cleanup.world".parse().expect("domain id parses");
+            if remove_domain == default_domain {
+                remove_domain = "cleanup-alt.world".parse().expect("domain id parses");
+            }
+            let mut sink_domain: DomainId = "sink.world".parse().expect("domain id parses");
+            if sink_domain == default_domain || sink_domain == remove_domain {
+                sink_domain = "sink-alt.world".parse().expect("domain id parses");
+            }
+
+            Register::domain(Domain::new(remove_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(sink_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sink domain");
+
+            let remove_account_id = AccountId::new(remove_domain.clone(), controller.clone());
+            let sink_account_id = AccountId::new(sink_domain, controller.clone());
+            let ambiguous_literal = AccountId::new(
+                "ambiguous.world".parse().expect("domain id parses"),
+                controller,
+            )
+            .to_string();
+
+            Register::account(Account::new(remove_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain account");
+            Register::account(Account::new(sink_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sink account");
+            let permission: Permission =
+                iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+                    account: remove_account_id.clone(),
+                }
+                .into();
+            Grant::account_permission(permission.clone(), sink_account_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant cross-domain permission");
+            stx.nexus.fees.fee_sink_account_id = ambiguous_literal;
+
+            let err = Unregister::domain(remove_domain.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ambiguous nexus fee sink literal must fail closed");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("ambiguous across multiple active scoped accounts"),
+                "error should explain ambiguous nexus fee-sink literal: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&remove_domain).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&sink_account_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "permissions should not be pruned when fail-closed checks reject early"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_nexus_staking_escrow_account() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            let guard_domain: DomainId = "guard.world".parse().expect("domain id parses");
+            Register::domain(Domain::new(guard_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard domain");
+            let (guard_account_id, _) = gen_account_in(&guard_domain);
+            Register::account(Account::new(guard_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard account");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.nexus.fees.fee_sink_account_id = guard_account_id.to_string();
+            stx.nexus.staking.stake_escrow_account_id = account_id.to_string();
+            stx.nexus.staking.slash_sink_account_id = guard_account_id.to_string();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject nexus staking escrow account removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("nexus staking escrow account"),
+                "error should explain nexus staking-escrow conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_nexus_staking_slash_sink_account() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            let guard_domain: DomainId = "guard.world".parse().expect("domain id parses");
+            Register::domain(Domain::new(guard_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard domain");
+            let (guard_account_id, _) = gen_account_in(&guard_domain);
+            Register::account(Account::new(guard_account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register guard account");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.nexus.fees.fee_sink_account_id = guard_account_id.to_string();
+            stx.nexus.staking.stake_escrow_account_id = guard_account_id.to_string();
+            stx.nexus.staking.slash_sink_account_id = account_id.to_string();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject nexus staking slash sink account removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("nexus staking slash sink account"),
+                "error should explain nexus staking slash-sink conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
         fn unregister_domain_rejects_when_member_account_is_content_publish_allow_account() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -13723,6 +14321,86 @@ pub mod isi {
             );
             assert!(
                 stx.world.asset_definitions.get(&reward_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_nexus_fee_asset() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let fee_def = AssetDefinitionId::new(domain_id.clone(), "nexusfee".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(fee_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.nexus.fees.fee_asset_id = fee_def.to_string();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject nexus fee asset-definition removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("nexus fee asset definition"),
+                "error should explain nexus fee-asset conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&fee_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_nexus_staking_asset() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let stake_def = AssetDefinitionId::new(domain_id.clone(), "stake".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(stake_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.nexus.staking.stake_asset_id = stake_def.to_string();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject nexus staking asset-definition removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("nexus staking asset definition"),
+                "error should explain nexus staking-asset conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&stake_def).is_some(),
                 "asset definition should remain after rejected unregister"
             );
         }
@@ -14764,6 +15442,369 @@ pub mod isi {
                     .get(&bob_id)
                     .is_some_and(|perms| perms.contains(&permission)),
                 "bob permission should be removed"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                !role.permissions().any(|perm| perm == &permission),
+                "role permission should be removed"
+            );
+            assert!(
+                !role.permission_epochs().contains_key(&permission),
+                "permission epochs should be pruned"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_account_target_permissions_from_accounts_and_roles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (target_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(target_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let owner_domain = ALICE_ID.domain().clone();
+            let (holder_id, _) = gen_account_in(&owner_domain);
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
+
+            let permission: Permission = CanModifyAccountMetadata {
+                account: target_id.clone(),
+            }
+            .into();
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to holder");
+
+            let role_id: RoleId = "ACCOUNT_SCOPE_ADMIN".parse().expect("role id parses");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to role");
+            Grant::account_role(role_id.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to holder");
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder should have permission before unregister"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should include permission before unregister"
+            );
+
+            Unregister::domain(domain_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                !stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder permission should be removed"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                !role.permissions().any(|perm| perm == &permission),
+                "role permission should be removed"
+            );
+            assert!(
+                !role.permission_epochs().contains_key(&permission),
+                "permission epochs should be pruned"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_citizen_service_permissions_from_accounts_and_roles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (target_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(target_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let owner_domain = ALICE_ID.domain().clone();
+            let (holder_id, _) = gen_account_in(&owner_domain);
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
+
+            let permission: Permission =
+                iroha_executor_data_model::permission::governance::CanRecordCitizenService {
+                    owner: target_id.clone(),
+                }
+                .into();
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to holder");
+
+            let role_id: RoleId = "CITIZEN_SERVICE_ADMIN".parse().expect("role id parses");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to role");
+            Grant::account_role(role_id.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to holder");
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder should have permission before unregister"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should include permission before unregister"
+            );
+
+            Unregister::domain(domain_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                !stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder permission should be removed"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                !role.permissions().any(|perm| perm == &permission),
+                "role permission should be removed"
+            );
+            assert!(
+                !role.permission_epochs().contains_key(&permission),
+                "permission epochs should be pruned"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_preserves_other_domain_permissions_for_same_subject() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let retained_domain_id: DomainId = "retained.world".parse().expect("domain id parses");
+            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(retained_domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register retained domain");
+            Register::domain(Domain::new(holder_domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder domain");
+
+            let keypair = KeyPair::random();
+            let target_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+            Register::account(Account::new(target_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let retained_id =
+                AccountId::new(retained_domain_id.clone(), keypair.public_key().clone());
+            Register::account(Account::new(retained_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register retained account");
+
+            let (holder_id, _) = gen_account_in(&holder_domain_id);
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
+
+            let permission: Permission = CanModifyAccountMetadata {
+                account: retained_id.clone(),
+            }
+            .into();
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to holder");
+
+            let role_id: RoleId = "CROSS_DOMAIN_KEEP".parse().expect("role id parses");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant account-target permission to role");
+            Grant::account_role(role_id.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to holder");
+
+            Unregister::domain(domain_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister cleanup domain");
+
+            assert!(
+                stx.world.domains.get(&retained_domain_id).is_some(),
+                "retained domain should remain"
+            );
+            assert!(
+                stx.world.accounts.get(&retained_id).is_some(),
+                "retained account should remain"
+            );
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder permission for retained account should stay"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role permission for retained account should stay"
+            );
+            assert!(
+                role.permission_epochs().contains_key(&permission),
+                "permission epoch should stay for retained permission"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_foreign_nft_permissions_from_accounts_and_roles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let foreign_domain_id: DomainId = "foreign.world".parse().expect("domain id parses");
+            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(foreign_domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign domain");
+            Register::domain(Domain::new(holder_domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder domain");
+
+            let (target_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(target_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let (holder_id, _) = gen_account_in(&holder_domain_id);
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
+
+            let nft_id = NftId::new(foreign_domain_id, "phoenix".parse().unwrap());
+            let nft = Nft {
+                id: nft_id.clone(),
+                content: Metadata::default(),
+                owned_by: target_id.clone(),
+            };
+            let (nft_id, nft_value) = nft.into_key_value();
+            stx.world.nfts.insert(nft_id.clone(), nft_value);
+
+            let permission: Permission =
+                iroha_executor_data_model::permission::nft::CanTransferNft {
+                    nft: nft_id.clone(),
+                }
+                .into();
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant nft-target permission to holder");
+
+            let role_id: RoleId = "NFT_SCOPE_ADMIN".parse().expect("role id parses");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant nft-target permission to role");
+            Grant::account_role(role_id.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant role to holder");
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder should have permission before unregister"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should include permission before unregister"
+            );
+
+            Unregister::domain(domain_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                stx.world.nfts.get(&nft_id).is_none(),
+                "foreign-domain NFT owned by removed account should be removed"
+            );
+            assert!(
+                !stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder permission should be removed"
             );
             let role = stx.world.roles.get(&role_id).expect("role should exist");
             assert!(

@@ -99,6 +99,26 @@ fn runtime_registration_builder() -> NetworkBuilder {
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
+            let mut ds_benchmark = Table::new();
+            ds_benchmark.insert(
+                "alias".into(),
+                TomlValue::String("runtime-benchmark".to_owned()),
+            );
+            ds_benchmark.insert(
+                "id".into(),
+                TomlValue::Integer(
+                    i64::try_from(BENCH_MANIFEST_DATASPACE.as_u64())
+                        .expect("benchmark dataspace id fits i64"),
+                ),
+            );
+            ds_benchmark.insert(
+                "description".into(),
+                TomlValue::String(
+                    "runtime benchmark dataspace for manifest publish/revoke metrics".to_owned(),
+                ),
+            );
+            ds_benchmark.insert("fault_tolerance".into(), TomlValue::Integer(1));
+
             let mut routing_policy = Table::new();
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
@@ -128,7 +148,10 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 )
                 .write(
                     ["nexus", "dataspace_catalog"],
-                    TomlValue::Array(vec![TomlValue::Table(ds_nexus)]),
+                    TomlValue::Array(vec![
+                        TomlValue::Table(ds_nexus),
+                        TomlValue::Table(ds_benchmark),
+                    ]),
                 )
                 .write(
                     ["nexus", "routing_policy"],

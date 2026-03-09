@@ -468,8 +468,12 @@ fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Inst
 }
 
 fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
-    err.chain()
-        .any(|cause| cause.to_string().contains("ALREADY_ENQUEUED"))
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("ALREADY_ENQUEUED")
+            || text.contains("ALREADY_COMMITTED")
+            || text.to_ascii_lowercase().contains("already committed")
+    })
 }
 
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
@@ -1703,12 +1707,12 @@ mod tests {
     }
 
     #[test]
-    fn submit_acceptance_uses_enqueued_duplicate_only() {
+    fn submit_acceptance_accepts_enqueued_or_committed_duplicate() {
         let enqueued = eyre!("PRTRY:ALREADY_ENQUEUED");
         assert!(is_submission_accepted_duplicate(&enqueued));
 
         let committed = eyre!("transaction already committed to the blockchain");
-        assert!(!is_submission_accepted_duplicate(&committed));
+        assert!(is_submission_accepted_duplicate(&committed));
     }
 
     #[test]

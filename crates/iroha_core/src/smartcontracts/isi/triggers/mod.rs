@@ -91,6 +91,118 @@ pub mod isi {
         Ok(())
     }
 
+    fn is_permission_trigger_associated(
+        permission: &iroha_data_model::permission::Permission,
+        trigger_id: &TriggerId,
+    ) -> bool {
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(
+                permission,
+            )
+        {
+            return &permission.trigger == trigger_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanModifyTrigger::try_from(permission)
+        {
+            return &permission.trigger == trigger_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanExecuteTrigger::try_from(permission)
+        {
+            return &permission.trigger == trigger_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata::try_from(
+                permission,
+            )
+        {
+            return &permission.trigger == trigger_id;
+        }
+
+        false
+    }
+
+    pub(crate) fn remove_trigger_associated_permissions(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        trigger_id: &TriggerId,
+    ) {
+        let account_ids: Vec<AccountId> = state_transaction
+            .world
+            .account_permissions
+            .iter()
+            .map(|(holder, _)| holder.clone())
+            .collect();
+
+        for holder in account_ids {
+            let should_remove = state_transaction
+                .world
+                .account_permissions
+                .get(&holder)
+                .is_some_and(|permissions| {
+                    permissions
+                        .iter()
+                        .any(|permission| is_permission_trigger_associated(permission, trigger_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let remove_entry = if let Some(permissions) =
+                state_transaction.world.account_permissions.get_mut(&holder)
+            {
+                permissions
+                    .retain(|permission| !is_permission_trigger_associated(permission, trigger_id));
+                permissions.is_empty()
+            } else {
+                false
+            };
+
+            if remove_entry {
+                state_transaction
+                    .world
+                    .account_permissions
+                    .remove(holder.clone());
+            }
+
+            state_transaction.invalidate_permission_cache_for_account(&holder);
+        }
+
+        let role_ids: Vec<RoleId> = state_transaction
+            .world
+            .roles
+            .iter()
+            .map(|(role_id, _)| role_id.clone())
+            .collect();
+
+        for role_id in role_ids {
+            let should_remove = state_transaction
+                .world
+                .roles
+                .get(&role_id)
+                .is_some_and(|role| {
+                    role.permissions()
+                        .any(|permission| is_permission_trigger_associated(permission, trigger_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let impacted_accounts = state_transaction.accounts_with_role(&role_id);
+
+            if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+                role.permissions
+                    .retain(|permission| !is_permission_trigger_associated(permission, trigger_id));
+                role.permission_epochs
+                    .retain(|permission, _| role.permissions.contains(permission));
+            }
+
+            if !impacted_accounts.is_empty() {
+                state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn register_trigger_internal(
         authority: &AccountId,
@@ -264,8 +376,8 @@ pub mod isi {
         ) -> Result<(), Error> {
             let trigger_id = self.object().clone();
 
-            let triggers = &mut state_transaction.world.triggers;
-            if triggers.remove(&trigger_id) {
+            if state_transaction.world.triggers.remove(&trigger_id) {
+                remove_trigger_associated_permissions(state_transaction, &trigger_id);
                 state_transaction
                     .world
                     .emit_events(Some(TriggerEvent::Deleted(trigger_id)));
@@ -326,17 +438,23 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger = self.destination().clone();
-            let triggers = &mut state_transaction.world.triggers;
-            triggers.mod_repeats(&trigger, |n| {
-                n.checked_sub(*self.object())
-                    .ok_or(super::set::RepeatsOverflowError)
-            })?;
-            // Remove triggers that reached zero repeats immediately to avoid latent state
-            let should_remove = triggers
-                .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
-                .unwrap_or(false);
-            if should_remove {
-                let _ = triggers.remove(&trigger);
+            let mut removed = false;
+            {
+                let triggers = &mut state_transaction.world.triggers;
+                triggers.mod_repeats(&trigger, |n| {
+                    n.checked_sub(*self.object())
+                        .ok_or(super::set::RepeatsOverflowError)
+                })?;
+                // Remove triggers that reached zero repeats immediately to avoid latent state
+                let should_remove = triggers
+                    .inspect_by_id(&trigger, |action| action.repeats().is_depleted())
+                    .unwrap_or(false);
+                if should_remove {
+                    removed = triggers.remove(&trigger);
+                }
+            }
+            if removed {
+                remove_trigger_associated_permissions(state_transaction, &trigger);
             }
             state_transaction
                 .world
@@ -697,9 +815,12 @@ mod tests {
         isi::error::{InstructionExecutionError, InvalidParameterError},
         name::Name,
         parameter::{CustomParameter, CustomParameterId, Parameter},
+        permission::Permission,
+        role::{Role, RoleId},
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
@@ -840,6 +961,104 @@ mod tests {
         let exec = ExecuteTrigger::new(trig_id);
         exec.execute(&BOB_ID, &mut stx2)
             .expect("bob should be permitted to execute trigger");
+    }
+
+    #[test]
+    fn unregister_trigger_removes_associated_permissions_from_accounts_and_roles() {
+        use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
+        use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("nonzero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        stx._curr_block
+            .set_height(NonZeroU64::new(2).expect("nonzero"));
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register alice");
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register bob");
+        let bob_id = (*BOB_ID).clone();
+
+        let trig_id: TriggerId = "perm_cleanup".parse().expect("trigger id");
+        let trig = Trigger::new(
+            trig_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
+            ),
+        );
+        Register::trigger(trig)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register trigger");
+
+        let permission: Permission = CanExecuteTrigger {
+            trigger: trig_id.clone(),
+        }
+        .into();
+        Grant::account_permission(permission.clone(), bob_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant account permission");
+
+        let role_id: RoleId = "TRIGGER_CLEANUP".parse().expect("role id");
+        Register::role(Role::new(role_id.clone(), bob_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register role");
+        Grant::role_permission(permission.clone(), role_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant role permission");
+
+        assert!(
+            stx.world
+                .account_permissions
+                .get(&bob_id)
+                .is_some_and(|perms| perms.contains(&permission)),
+            "bob should have direct permission before unregister"
+        );
+        let role = stx.world.roles.get(&role_id).expect("role should exist");
+        assert!(
+            role.permissions().any(|perm| perm == &permission),
+            "role should include permission before unregister"
+        );
+
+        Unregister::trigger(trig_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("unregister trigger");
+
+        assert!(
+            !stx.world
+                .account_permissions
+                .get(&bob_id)
+                .is_some_and(|perms| perms.contains(&permission)),
+            "bob direct permission should be removed"
+        );
+        let role = stx.world.roles.get(&role_id).expect("role should exist");
+        assert!(
+            !role.permissions().any(|perm| perm == &permission),
+            "role permission should be removed"
+        );
+        assert!(
+            !role.permission_epochs().contains_key(&permission),
+            "permission epoch should be pruned"
+        );
     }
 
     #[test]
