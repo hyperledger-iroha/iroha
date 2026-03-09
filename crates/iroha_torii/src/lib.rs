@@ -7247,7 +7247,6 @@ async fn handler_soracloud_status(
         "quorum_rejected",
         "protected_namespace_rejected",
         "runtime_hook_rejected",
-        "uaid_not_bound",
     ]
     .into_iter()
     .map(|reason| {
@@ -20849,7 +20848,6 @@ impl Error {
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
-            queue::Error::UaidNotBound { .. } => StatusCode::FORBIDDEN,
         }
     }
 
@@ -20887,10 +20885,6 @@ impl Error {
             queue::Error::LanePrivacyProofRejected { .. } => (
                 "queue_lane_privacy_proof_rejected",
                 "lane privacy proof rejected the transaction",
-            ),
-            queue::Error::UaidNotBound { .. } => (
-                "queue_uaid_binding_missing",
-                "authority UAID is not bound to the target dataspace",
             ),
         }
     }
@@ -20987,13 +20981,6 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::LanePrivacyProofRejected { alias, reason } => (
             "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
             format!("lane privacy proof rejected transaction for alias '{alias}': {reason}"),
-        ),
-        queue::Error::UaidNotBound { uaid, dataspace } => (
-            "PRTRY:QUEUE_UAID_NOT_BOUND",
-            format!(
-                "UAID {uaid} is not bound to dataspace {}",
-                dataspace.as_u64()
-            ),
         ),
     }
 }

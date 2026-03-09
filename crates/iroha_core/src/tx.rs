@@ -47,6 +47,10 @@ use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
     interlane::verify_lane_privacy_proofs,
+    nexus::space_directory::{
+        LaneIdentityMetadataError,
+        extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
+    },
     queue::evaluate_policy_with_catalog,
     smartcontracts::ivm::cache::IvmCache,
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
@@ -2698,80 +2702,17 @@ fn extract_lane_identity_metadata(
     dataspace_id: NexusDataSpaceId,
     lane_alias: &str,
 ) -> Result<(Option<UniversalAccountId>, Vec<String>), TransactionRejectionReason> {
-    let account_entry = match world.account(authority) {
-        Ok(entry) => entry,
-        Err(_) => return Ok((None, Vec::new())),
-    };
-    let Some(uaid) = account_entry.value().uaid().copied() else {
-        return Ok((None, Vec::new()));
-    };
-
-    let bindings = world.uaid_dataspaces().get(&uaid).ok_or_else(|| {
-        reject_lane_policy(
-            lane_alias,
-            format!(
-                "account {authority} carries UAID {uaid} but has no Space Directory bindings for dataspace {}",
-                dataspace_id.as_u64()
-            ),
-        )
-    })?;
-
-    let is_bound = bindings
-        .iter()
-        .any(|(dataspace, accounts)| *dataspace == dataspace_id && accounts.contains(authority));
-    if !is_bound {
-        return Err(reject_lane_policy(
-            lane_alias,
-            format!(
-                "account {authority} is not bound to dataspace {} for UAID {uaid}",
-                dataspace_id.as_u64()
-            ),
-        ));
-    }
-
-    let manifest_set = world
-        .space_directory_manifests()
-        .get(&uaid)
-        .ok_or_else(|| {
-            reject_lane_policy(
+    extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(
+        |err| match err {
+            LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => reject_lane_policy(
                 lane_alias,
                 format!(
-                    "UAID {uaid} has no manifest registry for dataspace {}",
-                    dataspace_id.as_u64()
+                    "UAID {uaid} manifest for dataspace {} is not active",
+                    dataspace.as_u64()
                 ),
-            )
-        })?;
-    let record = manifest_set.get(&dataspace_id).ok_or_else(|| {
-        reject_lane_policy(
-            lane_alias,
-            format!(
-                "UAID {uaid} is missing a manifest for dataspace {}",
-                dataspace_id.as_u64()
             ),
-        )
-    })?;
-
-    if !record.is_active() {
-        return Err(reject_lane_policy(
-            lane_alias,
-            format!(
-                "UAID {uaid} manifest for dataspace {} is not active",
-                dataspace_id.as_u64()
-            ),
-        ));
-    }
-
-    let mut tags = BTreeSet::new();
-    for entry in &record.manifest.entries {
-        if let Some(note) = &entry.notes {
-            let trimmed = note.trim();
-            if !trimmed.is_empty() {
-                tags.insert(trimmed.to_string());
-            }
-        }
-    }
-
-    Ok((Some(uaid), tags.into_iter().collect()))
+        },
+    )
 }
 
 fn enforce_lane_policies(
@@ -3696,10 +3637,11 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AuditControls, DataSpaceCatalog, DataSpaceId as TestDataSpaceId, JurisdictionSet,
-            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId as TestLaneId,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog,
+            DataSpaceId as TestDataSpaceId, JurisdictionSet, LaneCompliancePolicy,
+            LaneCompliancePolicyId, LaneComplianceRule, LaneId as TestLaneId,
             LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile,
-            LaneVisibility, ParticipantSelector,
+            LaneVisibility, ManifestVersion, ParticipantSelector,
         },
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
@@ -3725,6 +3667,7 @@ pub mod tests {
             GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
         },
         kura::Kura,
+        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, StateBlock, StateReadOnly, World},
@@ -3735,6 +3678,78 @@ pub mod tests {
             lane_id: TestLaneId::SINGLE,
             dataspace_id: TestDataSpaceId::GLOBAL,
             dataspace_catalog: catalog,
+        }
+    }
+
+    fn world_with_uaid_account(
+        uaid: UniversalAccountId,
+        dataspace: TestDataSpaceId,
+        with_manifest: bool,
+        manifest_active: bool,
+    ) -> (World, AccountId) {
+        let (authority, _) = gen_account_in("wonderland");
+        let domain = Domain::new(authority.domain().clone()).build(&authority);
+        let account = Account::new(authority.clone())
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let mut world = World::with([domain], [account], []);
+
+        if with_manifest {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::V1,
+                uaid,
+                dataspace,
+                issued_ms: 1,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            if !manifest_active {
+                record.lifecycle.mark_expired(2);
+            }
+
+            let mut set = SpaceDirectoryManifestSet::default();
+            set.upsert(record);
+            world.space_directory_manifests.insert(uaid, set);
+        }
+
+        (world, authority)
+    }
+
+    #[test]
+    fn lane_identity_allows_global_uaid_without_dataspace_manifest() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-no-manifest"));
+        let dataspace = TestDataSpaceId::new(7);
+        let (world, authority) = world_with_uaid_account(uaid, dataspace, false, true);
+        let world_view = world.view();
+
+        let (observed, tags) =
+            super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
+                .expect("global UAID routing should not require dataspace manifest");
+        assert_eq!(observed, Some(uaid));
+        assert!(tags.is_empty(), "no manifest tags expected");
+    }
+
+    #[test]
+    fn lane_identity_rejects_inactive_target_manifest() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-inactive-manifest"));
+        let dataspace = TestDataSpaceId::new(9);
+        let (world, authority) = world_with_uaid_account(uaid, dataspace, true, false);
+        let world_view = world.view();
+
+        let err =
+            super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
+                .expect_err("inactive target manifest must be rejected");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("not active"),
+                    "expected inactive-manifest rejection message, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
     }
 

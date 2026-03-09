@@ -8,7 +8,6 @@ use iroha_data_model::{
     prelude::*,
     query::error::FindError,
 };
-use iroha_logger::prelude::*;
 use iroha_telemetry::metrics;
 
 use super::prelude::*;
@@ -978,30 +977,7 @@ pub mod query {
                 .world()
                 .asset_definitions_iter()
                 .filter(move |&asset_definition| filter.applies(asset_definition))
-                .map(|asset_definition| {
-                    // Ensure `total_quantity` reflects current state even if storage was not incrementally updated.
-                    let mut ad = asset_definition.clone();
-                    match state_ro.world().asset_total_amount(ad.id()) {
-                        Ok(total) => {
-                            debug!(
-                                target: "iroha::state::asset_totals",
-                                "FindAssetsDefinitions recomputed total for {} as {}",
-                                ad.id(),
-                                total
-                            );
-                            ad.total_quantity = total;
-                        }
-                        Err(error) => {
-                            debug!(
-                                target: "iroha::state::asset_totals",
-                                "FindAssetsDefinitions failed to recompute total for {}: {}",
-                                ad.id(),
-                                error
-                            );
-                        }
-                    }
-                    ad
-                }))
+                .cloned())
         }
     }
 

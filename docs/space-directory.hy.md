@@ -306,11 +306,11 @@ change state or new UAID accounts appear.
 > UAIDs were recovered and is guarded by a regression test so future schema
 > tweaks keep the behavior deterministic.【crates/iroha_core/src/state.rs:5990】【crates/iroha_core/src/state.rs:2555】
 
-**Admission enforcement.** Transactions signed by UAID-backed accounts now fail
-queue admission when the target dataspace lacks an active Space Directory
-binding. The queue surfaces the deterministic `UaidNotBound` rejection and
-Torii maps it to the `queue_uaid_binding_missing` response code so ops can
-collect evidence from the API without bespoke parsing.【crates/iroha_core/src/queue.rs:1127】【crates/iroha_torii/src/lib.rs:12168】
+**Admission enforcement.** Transactions signed by UAID-backed accounts are
+routed using global UAID lookup. If a Space Directory manifest exists for the
+target dataspace it must be active; missing target-dataspace manifests do not
+trigger a binding-specific rejection. Inactive manifests are rejected through
+the standard `LaneComplianceDenied` path with a deterministic reason string.
 
 ### Manifest introspection API
 
