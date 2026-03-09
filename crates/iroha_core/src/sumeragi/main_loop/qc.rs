@@ -1712,7 +1712,25 @@ impl Actor {
                 .filter(|(due, _, _)| *due)
                 .map(|(_, height, view)| (height, view));
             if let Some((height, view)) = view_change_due {
-                if height != self.active_consensus_round_height() {
+                let committed_height = self.committed_height_snapshot();
+                let contiguous_frontier_height = committed_height.saturating_add(1);
+                if height > contiguous_frontier_height {
+                    let requested = self.request_range_pull_from_anchor(
+                        contiguous_frontier_height,
+                        "missing_block_non_contiguous_dwell",
+                        now,
+                    );
+                    progress |= requested;
+                    debug!(
+                        height,
+                        view,
+                        contiguous_frontier_height,
+                        dwell_ms,
+                        attempts,
+                        requested,
+                        "missing block dwell exceeded view-change window for non-contiguous height; suppressing view change and reanchoring catch-up"
+                    );
+                } else if height != self.active_consensus_round_height() {
                     debug!(
                         height,
                         view,
@@ -2885,13 +2903,10 @@ impl Actor {
             |key, signer_count| {
                 let (phase, block_hash, height, view, epoch) = key;
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                let mut commit_roster = self.roster_for_vote_with_mode_observing_sidecar(
-                    block_hash,
-                    height,
-                    view,
-                    consensus_mode,
-                    "qc_rebuild_cached_votes",
-                );
+                // QC rebuild is a replay path over cached local votes. It must not drive sidecar
+                // mismatch observation/quarantine for uncommitted competing branches.
+                let mut commit_roster =
+                    self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
                 if commit_roster.is_empty() && !commit_topology.is_empty() {
                     commit_roster = commit_topology.to_vec();
                 }

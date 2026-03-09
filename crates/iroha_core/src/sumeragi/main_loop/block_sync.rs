@@ -12,6 +12,14 @@ use super::locked_qc::qc_extends_locked_with_lookup;
 use super::message::FetchPendingBlockPriority;
 use super::*;
 
+fn allow_uncertified_block_sync_roster(
+    block_height: u64,
+    local_height: u64,
+    requested_missing_block: bool,
+) -> bool {
+    block_height == local_height.saturating_add(1) || requested_missing_block
+}
+
 impl Actor {
     pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
         matches!(
@@ -1716,18 +1724,11 @@ impl Actor {
         );
         // Allow next-height block sync updates without roster artifacts; missing-block requests
         // already opt into the uncertified path.
-        let allow_uncertified = match consensus_mode {
-            ConsensusMode::Permissioned => {
-                block_height == local_height.saturating_add(1)
-                    || requested_missing_block
-                    || has_commit_votes
-            }
-            ConsensusMode::Npos => {
-                block_height == local_height.saturating_add(1)
-                    || requested_missing_block
-                    || has_commit_votes
-            }
-        };
+        let allow_uncertified = allow_uncertified_block_sync_roster(
+            block_height,
+            local_height,
+            requested_missing_block,
+        );
         let selection_start = Instant::now();
         let selection = if let Some(selection) = persisted_roster {
             Some(selection)
@@ -2594,18 +2595,6 @@ impl Actor {
                 super::status::ConsensusMessageReason::QuorumMissing,
             );
             return Ok(());
-        } else if requested_missing_block
-            && block_signer_count < commit_quorum
-            && !qc_evidence_present
-        {
-            info!(
-                hash = ?block_hash,
-                height = block_height,
-                view = block_view,
-                signatures = block_signer_count,
-                commit_quorum,
-                "applying block sync update below commit quorum to satisfy missing-block request"
-            );
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_qc.is_some()
@@ -4054,5 +4043,21 @@ impl Actor {
             );
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod allow_uncertified_block_sync_roster_tests {
+    use super::allow_uncertified_block_sync_roster;
+
+    #[test]
+    fn allows_next_height_without_explicit_request() {
+        assert!(allow_uncertified_block_sync_roster(11, 10, false));
+        assert!(!allow_uncertified_block_sync_roster(12, 10, false));
+    }
+
+    #[test]
+    fn allows_any_height_when_missing_block_is_requested() {
+        assert!(allow_uncertified_block_sync_roster(25, 10, true));
     }
 }

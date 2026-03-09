@@ -1,6 +1,37 @@
 # Status
 
 Last update: 2026-03-08
+- Latest sync (2026-03-08 deterministic soak-stability follow-up in Izanami):
+  - Implemented in:
+    - `crates/izanami/src/instructions.rs`
+    - `crates/izanami/src/chaos.rs`
+  - Changes:
+    - replaced Nexus gas/sink account use of `SAMPLE_GENESIS_ACCOUNT_KEYPAIR` with deterministic Izanami-local identity (`nexus_gas_account_id()`),
+    - wired deterministic account-id overrides into NPoS network builder config (`pipeline.gas.tech_account_id`, `nexus.fees.fee_sink_account_id`, `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`) to prevent genesis/config drift,
+    - expanded shared-host stable soak profile gating to permissioned long runs (`stable`, `faulty=0`, `peers>=4`, `duration>=3600s`) so both modes get the same conservative floor,
+    - relaxed strict-progress timeout failure policy so strict stalls only fail when lagging peers exceed BFT tolerated failures; tolerated stalls now continue with quorum progress and throttled diagnostics.
+  - Validation commands (current tree):
+    - `cargo fmt --all --check` (ok)
+    - `cargo test -p izanami shared_host_stable_soak_profile_applies_to_permissioned_long_run -- --nocapture` (ok)
+    - `cargo test -p izanami strict_progress_timeout_enforcement_respects_bft_tolerance -- --nocapture` (ok)
+    - `cargo test -p izanami make_network_builder_injects_npos_parameters -- --nocapture` (ok)
+    - `cargo test -p izanami nexus_staking_genesis_registers_fee_sink_and_validators -- --nocapture` (ok)
+- Latest sync (2026-03-08 roster-unavailability FSM state collapse pass):
+  - Implemented in:
+    - `crates/iroha_core/src/sumeragi/main_loop.rs`
+    - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - Changes:
+    - further simplified roster recovery state space by removing `AcquireDependencies`; FSM now keeps only `Steady`, `ReelectRoster`, `WaitCandidates`, `RotateView`,
+    - converted dependency reacquire handling into stateless side-effects (`request_missing_block_for_highest_qc_force`, `request_range_pull_from_anchor`) instead of a dedicated state,
+    - reduced recovery event alphabet to `RosterUnavailable`, `CandidatesAvailable`, `CandidatesEmpty`, `RoundAdvanced`,
+    - preserved one-attempt-per-key election safety and explicit non-hanging consumed-attempt behavior (`ReelectRoster -> RotateView`) to guarantee finite progression,
+    - made `handle_roster_unavailable_recovery(...)` report handled progress even in empty `WaitCandidates` windows so callers do not spin on false no-progress signals while the FSM intentionally waits.
+  - Validation commands (current tree):
+    - `cargo fmt --all` (ok)
+    - `cargo test -p iroha_core --lib roster_recovery_ -- --nocapture` (ok; 2 passed)
+    - `cargo test -p iroha_core --lib roster_unavailable_recovery_ -- --nocapture` (ok; 3 passed)
+    - `cargo test -p iroha_core --lib deterministic_roster_election_is_order_invariant_for_permissioned_and_npos -- --nocapture` (ok)
+    - `cargo test -p iroha_core --lib roster_unavailability_candidate_source_matches_consensus_mode -- --nocapture` (ok)
 - Latest sync (2026-03-08 roster-unavailability FSM simplification + hang fix):
   - Implemented in:
     - `crates/iroha_core/src/sumeragi/main_loop.rs`

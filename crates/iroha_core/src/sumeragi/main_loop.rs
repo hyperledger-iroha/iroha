@@ -3115,34 +3115,19 @@ fn plan_missing_block_fetch_with_mode(
 
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn block_sync_quorum_available(
-    block_signers: usize,
+    _block_signers: usize,
     _commit_quorum: usize,
     signature_quorum_met: bool,
     qc_evidence_present: bool,
     commit_cert_present: bool,
     checkpoint_present: bool,
-    missing_block_requested: bool,
-    block_height: u64,
-    local_height: u64,
+    _missing_block_requested: bool,
+    _block_height: u64,
+    _local_height: u64,
 ) -> bool {
-    // Require commit evidence unless we explicitly requested this missing payload.
-    if commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present {
-        return true;
-    }
-
-    if block_signers == 0 {
-        return missing_block_requested;
-    }
-
-    if !missing_block_requested {
-        return false;
-    }
-
-    // For recovery we can request payloads far ahead of the local tip (for example after
-    // prolonged lag). Keep accepting sparse signatures for explicitly requested hashes so the
-    // FSM can hydrate pending payloads and converge back to the canonical chain.
-    let _ = (block_height, local_height);
-    true
+    // Missing-block requests must not bypass quorum checks. Apply block-sync payloads only when
+    // commit evidence or signature quorum is available.
+    commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present
 }
 
 fn block_sync_commit_cert_present(
@@ -3854,7 +3839,13 @@ impl Actor {
         {
             // Deterministic fence: when committed-edge sidecar metadata is already conflicting,
             // avoid repeatedly chasing contiguous parent hashes from future-gap branches.
-            // Let bounded committed-edge conflict recovery drive reanchor/targeted fetch.
+            // Reanchor contiguous range pull instead of issuing another direct parent fetch.
+            let now = Instant::now();
+            let requested_pull = self.request_range_pull_from_anchor(
+                frontier_height,
+                "committed_edge_sidecar_conflict_reanchor",
+                now,
+            );
             self.note_sidecar_mismatch(
                 local_height,
                 canonical_committed_hash,
@@ -3871,8 +3862,9 @@ impl Actor {
                 missing_parent = %target_parent_hash,
                 committed_hash = %canonical_committed_hash,
                 sidecar_committed_hash = %sidecar_committed_hash,
+                requested_pull,
                 trigger,
-                "suppressing contiguous missing-parent fetch while committed-edge sidecar conflict is unresolved"
+                "suppressing contiguous missing-parent fetch while committed-edge sidecar conflict is unresolved and reanchoring range pull"
             );
             return;
         }
@@ -3973,6 +3965,13 @@ impl Actor {
         let now = Instant::now();
         let signers = BTreeSet::new();
         let view_change_window = if gap == 1 { Some(retry_window) } else { None };
+        // Contiguous missing parents are consensus-critical; background priority suppresses
+        // hard-cap escalation and can trap recovery in deterministic reanchor loops.
+        let missing_priority = if gap == 1 {
+            MissingBlockPriority::Consensus
+        } else {
+            MissingBlockPriority::Background
+        };
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let decision = plan_missing_block_fetch(
             &mut requests,
@@ -3980,7 +3979,7 @@ impl Actor {
             parent_height,
             block_view,
             crate::sumeragi::consensus::Phase::Commit,
-            MissingBlockPriority::Background,
+            missing_priority,
             &signers,
             &topology,
             now,
@@ -4049,7 +4048,7 @@ impl Actor {
                     target_parent_hash,
                     parent_height,
                     block_view,
-                    MissingBlockPriority::Background,
+                    missing_priority,
                     &targets,
                 );
                 info!(
@@ -5413,7 +5412,6 @@ const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RosterRecoveryState {
     Steady,
-    AcquireDependencies,
     ReelectRoster,
     WaitCandidates,
     RotateView,
@@ -5423,7 +5421,6 @@ impl RosterRecoveryState {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Steady => "steady",
-            Self::AcquireDependencies => "acquire_dependencies",
             Self::ReelectRoster => "reelect_roster",
             Self::WaitCandidates => "wait_candidates",
             Self::RotateView => "rotate_view",
@@ -5433,9 +5430,6 @@ impl RosterRecoveryState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RosterRecoveryEvent {
-    DependencyMissing,
-    DependencyResolved,
-    DependencyTimeout,
     RosterUnavailable,
     CandidatesAvailable,
     CandidatesEmpty,
@@ -5444,10 +5438,7 @@ enum RosterRecoveryEvent {
 
 impl RosterRecoveryEvent {
     #[cfg(test)]
-    const ALL: [Self; 7] = [
-        Self::DependencyMissing,
-        Self::DependencyResolved,
-        Self::DependencyTimeout,
+    const ALL: [Self; 4] = [
         Self::RosterUnavailable,
         Self::CandidatesAvailable,
         Self::CandidatesEmpty,
@@ -5460,19 +5451,7 @@ fn step_roster_recovery_state(
     event: RosterRecoveryEvent,
 ) -> RosterRecoveryState {
     match (state, event) {
-        (RosterRecoveryState::Steady, RosterRecoveryEvent::DependencyMissing) => {
-            RosterRecoveryState::AcquireDependencies
-        }
         (RosterRecoveryState::Steady, RosterRecoveryEvent::RosterUnavailable) => {
-            RosterRecoveryState::ReelectRoster
-        }
-        (RosterRecoveryState::AcquireDependencies, RosterRecoveryEvent::DependencyResolved) => {
-            RosterRecoveryState::Steady
-        }
-        (RosterRecoveryState::AcquireDependencies, RosterRecoveryEvent::DependencyTimeout) => {
-            RosterRecoveryState::RotateView
-        }
-        (RosterRecoveryState::AcquireDependencies, RosterRecoveryEvent::RosterUnavailable) => {
             RosterRecoveryState::ReelectRoster
         }
         (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesAvailable) => {
@@ -5480,6 +5459,9 @@ fn step_roster_recovery_state(
         }
         (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesEmpty) => {
             RosterRecoveryState::WaitCandidates
+        }
+        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::RoundAdvanced) => {
+            RosterRecoveryState::Steady
         }
         (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::CandidatesAvailable) => {
             RosterRecoveryState::ReelectRoster
@@ -5528,8 +5510,6 @@ struct RosterRecoveryEntry {
     state_entered_at: Instant,
     last_attempt: Instant,
     last_view: u64,
-    dependency_requested_at: Option<Instant>,
-    last_observed_dependency_seq: u64,
     election_attempts: BTreeSet<RosterElectionAttemptKey>,
     dwell_ms: BTreeMap<&'static str, u64>,
 }
@@ -8242,6 +8222,7 @@ fn persisted_roster_for_block(
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
         ConsensusMode::Npos => NPOS_TAG,
     };
+    let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
     let mut selection_cache = selection_cache;
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
         let key_view = block_view.unwrap_or(snapshot.commit_qc.view);
@@ -8292,7 +8273,10 @@ fn persisted_roster_for_block(
         );
     }
 
-    if allow_sidecar && let Some(meta) = kura.read_roster_metadata(block_height) {
+    if allow_sidecar
+        && block_height <= committed_height
+        && let Some(meta) = kura.read_roster_metadata(block_height)
+    {
         if meta.block_hash != block_hash {
             if let Some(suppressed_since_last) =
                 allow_roster_sidecar_mismatch_warning(block_height, block_hash, meta.block_hash)
@@ -16920,48 +16904,6 @@ impl Actor {
             .max(Duration::from_millis(1))
     }
 
-    fn has_consensus_state_at_or_above_height(&self, height: u64) -> bool {
-        self.pending
-            .pending_blocks
-            .values()
-            .any(|pending| pending.height >= height)
-            || self
-                .pending
-                .missing_block_requests
-                .values()
-                .any(|request| request.height >= height)
-            || self
-                .deferred_block_sync_updates
-                .keys()
-                .any(|(entry_height, _, _)| *entry_height >= height)
-            || self
-                .deferred_missing_payload_qcs
-                .keys()
-                .any(|(_, _, entry_height, _, _)| *entry_height >= height)
-            || self
-                .deferred_qcs
-                .keys()
-                .any(|(_, _, entry_height, _, _)| *entry_height >= height)
-            || self
-                .known_block_qc_work
-                .keys()
-                .any(|(_, _, entry_height, _, _)| *entry_height >= height)
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .hints
-                .keys()
-                .any(|(entry_height, _)| *entry_height >= height)
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .proposals
-                .keys()
-                .any(|(entry_height, _)| *entry_height >= height)
-    }
-
     fn has_contiguous_frontier_pressure(&self, local_height: u64) -> bool {
         let frontier_height = local_height.saturating_add(1);
         self.pending
@@ -16976,7 +16918,6 @@ impl Actor {
                 .any(|entry| entry.qc.height >= frontier_height)
             || self.sidecar_quarantined_for_height(local_height)
             || self.sidecar_quarantined_for_height(frontier_height)
-            || self.has_consensus_state_at_or_above_height(frontier_height)
     }
 
     fn frontier_catchup_target_height(&self, local_height: u64) -> Option<u64> {
@@ -17584,6 +17525,12 @@ impl Actor {
         active_height: u64,
         committed_height: u64,
     ) -> Option<u64> {
+        let contiguous_frontier = committed_height.saturating_add(1);
+        if active_height > contiguous_frontier
+            && self.frontier_catchup_has_unresolved_dependency(contiguous_frontier)
+        {
+            return Some(contiguous_frontier);
+        }
         let mut dependency_height = self
             .missing_qc_height_has_unresolved_dependency_at_height(active_height)
             .then_some(active_height);
@@ -18514,6 +18461,7 @@ impl Actor {
         height: u64,
         tier: RangePullCandidateTier,
     ) -> Vec<PeerId> {
+        let local_peer_id = self.common_config.peer.id();
         let mut targets = match tier {
             RangePullCandidateTier::VoteRoster => {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -18529,6 +18477,7 @@ impl Actor {
                 .map(|peer| peer.id().clone())
                 .collect(),
         };
+        targets.retain(|peer| peer != local_peer_id);
         targets.sort_by(|lhs, rhs| {
             lhs.public_key()
                 .cmp(rhs.public_key())
@@ -19424,6 +19373,9 @@ impl Actor {
         let view_change_already_triggered =
             request_progress.is_some_and(|(_, _, triggered, _)| triggered);
         let can_trigger_view_change = request_progress.is_some_and(|(_, _, _, allowed)| allowed);
+        let committed_height = self.committed_height_snapshot();
+        let contiguous_frontier_height = committed_height.saturating_add(1);
+        let height_is_contiguous = height <= contiguous_frontier_height;
         let active_height = self.active_consensus_round_height();
         let height_is_active = height == active_height;
 
@@ -19519,8 +19471,13 @@ impl Actor {
         } else {
             "missing_block_hash_miss_streak"
         };
+        let range_pull_height = if height_is_contiguous {
+            height
+        } else {
+            contiguous_frontier_height
+        };
         let mut inflight = self.request_range_pull_from_anchor_with_tier(
-            height,
+            range_pull_height,
             escalation_reason,
             now,
             Some(budget.range_pull.candidate_tier),
@@ -19540,7 +19497,7 @@ impl Actor {
             budget.range_pull.candidate_tier = next_tier;
             super::status::inc_blocksync_range_pull_candidate_exhausted();
             inflight = self.request_range_pull_from_anchor_with_tier(
-                height,
+                range_pull_height,
                 escalation_reason,
                 now,
                 Some(next_tier),
@@ -19575,6 +19532,16 @@ impl Actor {
                 attempts = budget.attempts,
                 dwell_ms = dwell.as_millis(),
                 "suppressing missing-block hard-cap view change for non-active round height"
+            );
+        } else if hard_cap_due && !height_is_contiguous {
+            debug!(
+                height,
+                view,
+                contiguous_frontier_height,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "suppressing missing-block hard-cap view change for non-contiguous frontier height"
             );
         } else if hard_cap_due
             && !defer_hard_cap_escalation
@@ -20012,7 +19979,53 @@ impl Actor {
                 .keys()
                 .any(|(height, _)| *height > prune_threshold);
         if !has_far_future_state {
-            return false;
+            // Even without far-future residue, a same-height frontier dependency can stall
+            // indefinitely under repeated view churn. Reset stale same-height consensus state
+            // deterministically once per stall window and re-anchor pull from committed edge.
+            let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
+                self.prune_consensus_state_for_missing_block_height(frontier_height);
+            if missing_removed > 0 {
+                super::status::inc_missing_request_pruned_stale_height(
+                    u64::try_from(missing_removed).unwrap_or(u64::MAX),
+                );
+                self.update_missing_block_gauges();
+            }
+            let evicted_total = pending_removed
+                .saturating_add(hints_removed)
+                .saturating_add(proposals_removed)
+                .saturating_add(seen_removed);
+            if evicted_total > 0 {
+                super::status::inc_pending_queue_evictions_total(
+                    u64::try_from(evicted_total).unwrap_or(u64::MAX),
+                );
+            }
+            self.clear_missing_block_recovery_for_height(frontier_height, now);
+
+            let mut requested_pull =
+                self.request_range_pull_from_anchor(frontier_height, "frontier_stall_reset", now);
+            if !requested_pull {
+                requested_pull = self.request_range_pull_from_anchor(
+                    frontier_height,
+                    "frontier_stall_reset_fallback",
+                    now,
+                );
+            }
+            if evicted_total == 0 && missing_removed == 0 && !requested_pull {
+                return false;
+            }
+            warn!(
+                committed_height,
+                frontier_height,
+                stalled_frontier_requests,
+                pending_removed,
+                missing_removed,
+                hints_removed,
+                proposals_removed,
+                seen_removed,
+                requested_pull,
+                "deterministic frontier-stall recovery reset cleared same-height consensus state"
+            );
+            return true;
         }
 
         let (
@@ -20041,8 +20054,17 @@ impl Actor {
                 u64::try_from(evicted_total).unwrap_or(u64::MAX),
             );
         }
-        let requested_pull =
+        let mut requested_pull =
             self.request_range_pull_from_anchor(frontier_height, "frontier_stall_reset", now);
+        if !requested_pull {
+            // Retry once with a fallback reason that bypasses canonical-frontier window gating so
+            // stalled frontier recovery can still request an anchor pull.
+            requested_pull = self.request_range_pull_from_anchor(
+                frontier_height,
+                "frontier_stall_reset_fallback",
+                now,
+            );
+        }
         if evicted_total == 0 && missing_removed == 0 && !requested_pull {
             return false;
         }
@@ -21328,7 +21350,11 @@ impl Actor {
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
         let world = self.state.world_view();
-        let live_height = height.max(1);
+        // A lagging node can observe recovery hints for heights beyond its committed world.
+        // Clamp live-key filtering to the local committed horizon to avoid deterministic
+        // false-empty candidate sets that would keep WaitCandidates parked indefinitely.
+        let committed_height = self.committed_height_snapshot();
+        let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
         let candidates = match consensus_mode {
             ConsensusMode::Npos => roster::stake_active_validator_roster_from_world(&world),
@@ -21487,7 +21513,6 @@ impl Actor {
         };
         let baseline_roster_len = initial_roster.len().max(1);
 
-        let dependency_seq = self.dependency_event_seq;
         let mut entry = self.consensus_recovery.remove(&key).unwrap_or_else(|| {
             self.note_consensus_recovery_state_transition(RosterRecoveryState::Steady);
             RosterRecoveryEntry {
@@ -21496,32 +21521,30 @@ impl Actor {
                 state_entered_at: now,
                 last_attempt: now,
                 last_view: view,
-                dependency_requested_at: None,
-                last_observed_dependency_seq: dependency_seq,
                 election_attempts: BTreeSet::new(),
                 dwell_ms: BTreeMap::new(),
             }
         });
+        let previous_observed_view = entry.last_view;
         entry.last_attempt = now;
         entry.last_view = entry.last_view.max(canonical_view);
-        let dependency_missing = self.proposal_gated_by_missing_dependencies(height);
-        if dependency_missing {
+        if self
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|tracked| tracked > previous_observed_view)
+        {
             let _ = self.transition_roster_recovery_state(
                 &mut entry,
-                RosterRecoveryEvent::DependencyMissing,
+                RosterRecoveryEvent::RoundAdvanced,
                 now,
             );
         }
-
-        if matches!(entry.state, RosterRecoveryState::AcquireDependencies)
-            && dependency_seq > entry.last_observed_dependency_seq
-        {
-            entry.last_observed_dependency_seq = dependency_seq;
-            let _ = self.transition_roster_recovery_state(
-                &mut entry,
-                RosterRecoveryEvent::DependencyResolved,
-                now,
-            );
+        let dependency_missing = self.proposal_gated_by_missing_dependencies(height);
+        if dependency_missing {
+            if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+                self.request_missing_block_for_highest_qc_force(highest, reason);
+            }
+            let _ = self.request_range_pull_from_anchor(height, reason, now);
         }
 
         let wait_window = self.commit_quorum_timeout().max(Duration::from_millis(1));
@@ -21534,22 +21557,7 @@ impl Actor {
                 now,
             );
         }
-        if matches!(entry.state, RosterRecoveryState::AcquireDependencies) {
-            let requested_at = entry.dependency_requested_at.unwrap_or(now);
-            if !roster_unavailable_window_elapsed
-                && now.saturating_duration_since(requested_at) >= wait_window
-            {
-                let _ = self.transition_roster_recovery_state(
-                    &mut entry,
-                    RosterRecoveryEvent::DependencyTimeout,
-                    now,
-                );
-            } else {
-                entry.dependency_requested_at = Some(requested_at);
-            }
-        }
 
-        let mut handled = false;
         let mut should_rotate = false;
         let attempt_key = RosterElectionAttemptKey {
             height,
@@ -21558,21 +21566,8 @@ impl Actor {
         };
 
         match entry.state {
-            RosterRecoveryState::Steady => {
-                handled = true;
-            }
-            RosterRecoveryState::AcquireDependencies => {
-                handled = true;
-                if entry.dependency_requested_at.is_none() {
-                    entry.dependency_requested_at = Some(now);
-                }
-                if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-                    self.request_missing_block_for_highest_qc_force(highest, reason);
-                }
-                let _ = self.request_range_pull_from_anchor(height, reason, now);
-            }
+            RosterRecoveryState::Steady => {}
             RosterRecoveryState::ReelectRoster => {
-                handled = true;
                 let candidates =
                     self.roster_unavailability_candidate_roster(height, consensus_mode);
                 if candidates.is_empty() {
@@ -21644,41 +21639,28 @@ impl Actor {
                         );
                         should_rotate = true;
                     }
-                } else {
-                    // Election for this deterministic key is already consumed; rotate to
-                    // guarantee progress and avoid hanging in `ReelectRoster`.
-                    let _ = self.transition_roster_recovery_state(
-                        &mut entry,
-                        RosterRecoveryEvent::CandidatesAvailable,
-                        now,
-                    );
-                    should_rotate = true;
                 }
             }
             RosterRecoveryState::WaitCandidates => {
                 let candidates =
                     self.roster_unavailability_candidate_roster(height, consensus_mode);
-                if candidates.is_empty() {
-                    handled = false;
-                } else {
+                if !candidates.is_empty() {
                     let _ = self.transition_roster_recovery_state(
                         &mut entry,
                         RosterRecoveryEvent::CandidatesAvailable,
                         now,
                     );
-                    handled = true;
                 }
                 if self
                     .phase_tracker
                     .current_view(height)
-                    .is_some_and(|tracked| tracked > canonical_view)
+                    .is_some_and(|tracked| tracked > previous_observed_view)
                 {
                     let _ = self.transition_roster_recovery_state(
                         &mut entry,
                         RosterRecoveryEvent::RoundAdvanced,
                         now,
                     );
-                    handled = true;
                 }
             }
             RosterRecoveryState::RotateView => {
@@ -21739,7 +21721,7 @@ impl Actor {
         }
 
         self.consensus_recovery.insert(key, entry);
-        handled
+        true
     }
 
     fn backpressure_override_due(&self, now: Instant) -> bool {
@@ -23968,13 +23950,14 @@ pub(super) fn commit_quorum_timeout_from_durations(
         return block_time.max(Duration::from_millis(1));
     }
 
-    // DA runs need additional slack for payload dissemination; non-DA keeps a floor
-    // to avoid overly aggressive view-change churn on small pipelines.
+    // DA runs need additional slack for payload dissemination. For non-DA we follow
+    // effective block/commit timing directly; fixed 2s floors cap throughput in
+    // fast local/soak pipelines and mask real pacing behavior.
     let base = if da_enabled {
         let commit_window = saturating_mul_duration(commit_time, 3);
         block_time.saturating_add(commit_window)
     } else {
-        block_time.max(commit_time).max(Duration::from_secs(2))
+        block_time.max(commit_time)
     };
     let base = if da_enabled {
         saturating_mul_duration(base, da_quorum_timeout_multiplier.max(1))

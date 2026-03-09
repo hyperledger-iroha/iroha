@@ -85,7 +85,9 @@ fn retransmit_target_limit(target_count: usize, pressure_score: u8) -> usize {
         return 0;
     }
     if pressure_score >= 6 {
-        return 0;
+        // Keep a deterministic liveness floor under heavy pressure: never fully disable
+        // retransmit fanout when there are known missing targets.
+        return 1;
     }
     if pressure_score >= 4 {
         return target_count.div_ceil(4).max(1);
@@ -1239,7 +1241,6 @@ impl Actor {
             true,
         );
         let mut block_sync = false;
-        let mut forced_hintless_block_sync = false;
         if !drop_pending && !retransmit_targets.is_empty() {
             let mut update = block_sync_update_with_certified_roster(
                 &pending.block,
@@ -1268,36 +1269,19 @@ impl Actor {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    // Keep commit-recovery on BlockSyncUpdate when commit evidence exists even if
-                    // the roster proof bundle is unavailable.
-                    let hintless_forced =
-                        commit_votes > 0 && self.trim_block_sync_update_for_frame_cap(&mut update);
-                    if hintless_forced {
-                        self.broadcast_block_sync_update(update, &retransmit_targets);
-                        block_sync = true;
-                        forced_hintless_block_sync = true;
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            commit_votes,
-                            targets = retransmit_targets.len(),
-                            "roster proof unavailable for block sync update; forcing hintless BlockSyncUpdate retransmit to active targets"
-                        );
-                    } else {
-                        self.note_round_recovery_bundle_source(
-                            height,
-                            super::RoundRecoveryBundleSource::RosterProofFallback,
-                            now,
-                        );
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            targets = retransmit_targets.len(),
-                            "roster proof unavailable for block sync update; falling back to BlockCreated retransmit"
-                        );
-                    }
+                    self.note_round_recovery_bundle_source(
+                        height,
+                        super::RoundRecoveryBundleSource::RosterProofFallback,
+                        now,
+                    );
+                    warn!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        commit_votes,
+                        targets = retransmit_targets.len(),
+                        "roster proof unavailable for block sync update; falling back to BlockCreated retransmit"
+                    );
                 }
             } else {
                 debug!(
@@ -1315,14 +1299,6 @@ impl Actor {
         let block = if drop_pending {
             false
         } else if retransmit_targets.is_empty() {
-            false
-        } else if forced_hintless_block_sync {
-            debug!(
-                height,
-                view,
-                block = %block_hash,
-                "skipping BlockCreated payload rebroadcast after forced hintless BlockSyncUpdate retransmit"
-            );
             false
         } else {
             let cooldown = self.payload_rebroadcast_cooldown();
@@ -1465,7 +1441,7 @@ mod tests {
         assert_eq!(retransmit_target_limit(target_count, 0), target_count);
         assert_eq!(retransmit_target_limit(target_count, 2), 6);
         assert_eq!(retransmit_target_limit(target_count, 4), 3);
-        assert_eq!(retransmit_target_limit(target_count, 6), 0);
+        assert_eq!(retransmit_target_limit(target_count, 6), 1);
 
         assert_eq!(retransmit_cooldown_multiplier(0), 1);
         assert_eq!(retransmit_cooldown_multiplier(2), 2);

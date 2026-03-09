@@ -71,7 +71,6 @@ use iroha_executor_data_model::permission::{
     },
     trigger::CanRegisterTrigger,
 };
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},
@@ -239,6 +238,16 @@ fn peer_keypair(index: usize) -> KeyPair {
     KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
 }
 
+fn nexus_gas_keypair() -> KeyPair {
+    KeyPair::from_seed(b"izanami::nexus::gas-account".to_vec(), Algorithm::Ed25519)
+}
+
+/// Deterministic gas/sink account used by Izanami Nexus profiles.
+pub(crate) fn nexus_gas_account_id() -> ScopedAccountId {
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    ScopedAccountId::new(ivm_domain, nexus_gas_keypair().public_key().clone())
+}
+
 /// Prepared chaos state with pre-built genesis instructions.
 #[derive(Debug)]
 pub struct PreparedChaos {
@@ -374,10 +383,7 @@ pub fn prepare_state(
         let ivm_domain: DomainId = "ivm"
             .parse()
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
-        let gas_account_id = ScopedAccountId::new(
-            ivm_domain.clone(),
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-        );
+        let gas_account_id = nexus_gas_account_id();
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
@@ -2967,6 +2973,19 @@ mod tests {
         assert!(
             !setup.validator_accounts.is_empty(),
             "validator accounts should be provisioned"
+        );
+        assert_eq!(
+            setup.fee_sink,
+            nexus_gas_account_id(),
+            "nexus staking setup should use deterministic Izanami gas account"
+        );
+        assert_eq!(
+            setup.stake_escrow, setup.fee_sink,
+            "stake escrow should follow the deterministic gas account"
+        );
+        assert_eq!(
+            setup.slash_sink, setup.fee_sink,
+            "slash sink should follow the deterministic gas account"
         );
 
         let expected_label = AccountLabel::new(
