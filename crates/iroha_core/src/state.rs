@@ -109,8 +109,10 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
-    asset_definition::CanRegisterAssetDefinition, nft::CanModifyNftMetadata,
-    sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
+    asset_definition::CanRegisterAssetDefinition,
+    nft::{CanModifyNftMetadata, CanTransferNft},
+    sorafs::CanOperateSorafsRepair,
+    trigger::CanExecuteTrigger,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::{
@@ -2277,6 +2279,23 @@ impl WorldTransaction<'_, '_> {
         let removed = self.assets.remove(asset_id.clone());
         self.asset_metadata.remove(asset_id.clone());
         removed
+    }
+
+    /// Remove an asset entry, metadata and decrement the owning definition's tracked total.
+    ///
+    /// # Errors
+    /// Returns an error when the persisted definition total cannot be decremented.
+    pub(crate) fn remove_asset_and_metadata_with_total(
+        &mut self,
+        asset_id: &AssetId,
+    ) -> Result<Option<AssetValue>, Error> {
+        let Some(value) = self.assets.get(asset_id).cloned() else {
+            self.asset_metadata.remove(asset_id.clone());
+            return Ok(None);
+        };
+        let amount = value.clone().into_inner();
+        self.decrease_asset_total_amount(asset_id.definition(), &amount)?;
+        Ok(self.remove_asset_and_metadata(asset_id))
     }
 }
 
@@ -8162,6 +8181,136 @@ impl DetachedStateTransactionDelta {
         };
 
         Ok(&transferred_domain_owner == authority)
+    }
+
+    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
+    pub(crate) fn can_transfer_asset_definition(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        transfer: &iroha_data_model::isi::Transfer<
+            iroha_data_model::account::Account,
+            iroha_data_model::asset::AssetDefinitionId,
+            iroha_data_model::account::Account,
+        >,
+    ) -> Result<bool, ValidationFail> {
+        if transfer.source() == authority {
+            return Ok(true);
+        }
+
+        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(transfer.source().domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+        if &source_domain_owner == authority {
+            return Ok(true);
+        }
+
+        let definition_domain_owner =
+            match self.domain_owner_transfer.get(transfer.object().domain()) {
+                Some((_, to)) => to.clone(),
+                None => world
+                    .domain(transfer.object().domain())
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+            };
+        Ok(&definition_domain_owner == authority)
+    }
+
+    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
+    pub(crate) fn can_transfer_nft(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        transfer: &iroha_data_model::isi::Transfer<
+            iroha_data_model::account::Account,
+            iroha_data_model::nft::NftId,
+            iroha_data_model::account::Account,
+        >,
+    ) -> Result<bool, ValidationFail> {
+        if transfer.source() == authority {
+            return Ok(true);
+        }
+
+        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(transfer.source().domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+        if &source_domain_owner == authority {
+            return Ok(true);
+        }
+
+        let nft_domain_owner = match self.domain_owner_transfer.get(transfer.object().domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(transfer.object().domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+        if &nft_domain_owner == authority {
+            return Ok(true);
+        }
+
+        let target_perm: Permission = CanTransferNft {
+            nft: transfer.object().clone(),
+        }
+        .into();
+        let direct_op = self
+            .perm_ops
+            .get(&(authority.clone(), target_perm.clone()))
+            .copied();
+        match direct_op {
+            Some(PermissionDeltaOp::Grant) => return Ok(true),
+            Some(PermissionDeltaOp::Revoke) => {}
+            None => {
+                let permissions = world
+                    .account_permissions_iter(authority)
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+                if permissions.into_iter().any(|perm| perm == &target_perm) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        for ((acc, role), op) in &self.role_ops {
+            if acc != authority {
+                continue;
+            }
+            match op {
+                RoleDeltaOp::Grant => {
+                    roles.insert(role.clone());
+                }
+                RoleDeltaOp::Revoke => {
+                    roles.remove(role);
+                }
+            }
+        }
+
+        for role in roles {
+            match self
+                .role_perm_ops
+                .get(&(role.clone(), target_perm.clone()))
+                .copied()
+            {
+                Some(PermissionDeltaOp::Grant) => return Ok(true),
+                Some(PermissionDeltaOp::Revoke) => continue,
+                None => {}
+            }
+            if let Some(role_def) = world.roles().get(&role)
+                && role_def.permissions.iter().any(|perm| perm == &target_perm)
+            {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     /// Record a parameter update to be applied at merge.
@@ -15910,6 +16059,78 @@ impl State {
         let previous_lane_config = self.nexus.read().lane_config.clone();
         self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
         *self.nexus.write() = nexus;
+
+        // Drop emergency override entries that target dataspaces no longer present
+        // in the active catalog to avoid stale cross-dataspace references.
+        let stale_overrides: Vec<DataSpaceId> = self
+            .world
+            .lane_relay_emergency_validators
+            .view()
+            .iter()
+            .filter_map(|(dataspace_id, _)| {
+                (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
+            })
+            .collect();
+        if !stale_overrides.is_empty() {
+            let mut tx = self.world.lane_relay_emergency_validators.block();
+            for dataspace_id in stale_overrides {
+                tx.remove(dataspace_id);
+            }
+            tx.commit();
+        }
+
+        // Drop UAID dataspace bindings that point to removed catalog entries.
+        // This keeps derived UAID->dataspace/account links consistent with the
+        // active dataspace catalog after runtime config updates.
+        let stale_uaids: Vec<UniversalAccountId> = self
+            .world
+            .uaid_dataspaces
+            .view()
+            .iter()
+            .filter_map(|(uaid, bindings)| {
+                bindings
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(*uaid)
+            })
+            .collect();
+        if !stale_uaids.is_empty() {
+            let mut tx = self.world.uaid_dataspaces.block();
+            for uaid in stale_uaids {
+                let Some(mut bindings) = tx.get(&uaid).cloned() else {
+                    continue;
+                };
+                if !bindings.retain_dataspaces(&dataspace_ids) {
+                    continue;
+                }
+                if bindings.is_empty() {
+                    tx.remove(uaid);
+                } else {
+                    tx.insert(uaid, bindings);
+                }
+            }
+            tx.commit();
+        }
+
+        // Drop AXT policy entries targeting removed dataspaces so runtime policy
+        // caches cannot retain stale dataspace references across nexus updates.
+        let stale_axt_policies: Vec<DataSpaceId> = self
+            .world
+            .axt_policies
+            .view()
+            .iter()
+            .filter_map(|(dataspace_id, _)| {
+                (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
+            })
+            .collect();
+        if !stale_axt_policies.is_empty() {
+            let mut tx = self.world.axt_policies.block();
+            for dataspace_id in stale_axt_policies {
+                tx.remove(dataspace_id);
+            }
+            tx.commit();
+        }
+
         self.nexus_storage_budget_last_check_height
             .store(0, Ordering::Relaxed);
         let _ = self.refresh_axt_policies_from_directory();
@@ -16375,6 +16596,19 @@ impl State {
     /// Update governance settings (default VKs and policy tunables) using loaded configuration.
     pub fn set_gov(&mut self, gov: iroha_config::parameters::actual::Governance) {
         for (provider, owner) in &gov.sorafs_provider_owners {
+            let owner_exists = {
+                let accounts = self.world.accounts.view();
+                accounts.get(owner).is_some()
+            };
+            if !owner_exists {
+                iroha_logger::warn!(
+                    provider = %hex::encode(provider.as_bytes()),
+                    owner = %owner,
+                    "skipping SoraFS provider binding from configuration because owner account does not exist"
+                );
+                continue;
+            }
+
             let existing = self.world.provider_owners.view().get(provider).cloned();
             match existing {
                 Some(existing_owner) if existing_owner != *owner => {
@@ -25081,12 +25315,23 @@ mod tests {
     fn set_gov_seeds_sorafs_provider_permissions() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), Arc::clone(&kura), query_handle);
 
         let provider_id = ProviderId::new([9_u8; 32]);
         let keypair = KeyPair::random();
         let domain_id: DomainId = "providers".parse().expect("domain id");
         let owner_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let owner_domain = iroha_data_model::domain::Domain {
+            id: owner_id.domain().clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner_id.clone(),
+        };
+        let owner_account = Account::new(owner_id.clone()).build(&owner_id);
+        let mut state = State::new(
+            World::with([owner_domain], [owner_account], []),
+            Arc::clone(&kura),
+            query_handle,
+        );
 
         let mut gov = iroha_config::parameters::actual::Governance::default();
         gov.sorafs_provider_owners
@@ -25103,6 +25348,44 @@ mod tests {
                 .get(&owner_id)
                 .is_some_and(|perms| perms.contains(&expected)),
             "expected owner permission to be seeded"
+        );
+    }
+
+    #[test]
+    fn set_gov_skips_sorafs_provider_owner_without_account() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), Arc::clone(&kura), query_handle);
+
+        let provider_id = ProviderId::new([7_u8; 32]);
+        let keypair = KeyPair::random();
+        let missing_owner = AccountId::new(
+            "providers".parse().expect("domain id"),
+            keypair.public_key().clone(),
+        );
+
+        let mut gov = iroha_config::parameters::actual::Governance::default();
+        gov.sorafs_provider_owners
+            .insert(provider_id, missing_owner.clone());
+        state.set_gov(gov);
+
+        assert!(
+            state
+                .world
+                .provider_owners
+                .view()
+                .get(&provider_id)
+                .is_none(),
+            "provider owner should not be inserted when account is missing"
+        );
+        assert!(
+            state
+                .world
+                .account_permissions
+                .view()
+                .get(&missing_owner)
+                .is_none(),
+            "no permissions should be seeded for missing account"
         );
     }
 
@@ -25653,6 +25936,294 @@ mod tests {
             LaneLifecycleError::UnknownDataspace(id) if id == DataSpaceId::new(7)
         ));
         assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
+    }
+
+    #[test]
+    fn set_nexus_prunes_lane_relay_emergency_overrides_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut wb = state.world.block();
+        wb.lane_relay_emergency_validators.insert(
+            removed,
+            LaneRelayEmergencyValidatorSet {
+                validators: vec![ALICE_ID.clone()],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            },
+        );
+        wb.commit();
+        assert!(
+            state
+                .world
+                .lane_relay_emergency_validators
+                .view()
+                .get(&removed)
+                .is_some(),
+            "test setup should install removed-dataspace override"
+        );
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        assert!(
+            state
+                .world
+                .lane_relay_emergency_validators
+                .view()
+                .get(&removed)
+                .is_none(),
+            "removed dataspace override must be pruned by set_nexus"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_uaid_bindings_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding"));
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(retained, ALICE_ID.clone());
+        bindings.bind_account(removed, ALICE_ID.clone());
+
+        let mut wb = state.world.block();
+        wb.uaid_dataspaces.insert(uaid, bindings);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let binding_view = state.world.uaid_dataspaces.view();
+        let retained_bindings = binding_view
+            .get(&uaid)
+            .expect("uaid binding should remain for retained dataspace");
+        assert!(
+            retained_bindings
+                .iter()
+                .all(|(dataspace_id, _)| *dataspace_id == retained),
+            "all stale dataspaces should be pruned from uaid bindings"
+        );
+    }
+
+    #[test]
+    fn set_nexus_removes_uaid_binding_when_all_dataspaces_are_pruned() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding-only"));
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(removed, ALICE_ID.clone());
+
+        let mut wb = state.world.block();
+        wb.uaid_dataspaces.insert(uaid, bindings);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        assert!(
+            state.world.uaid_dataspaces.view().get(&uaid).is_none(),
+            "uaid binding should be removed when all dataspaces become stale"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_axt_policies_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut wb = state.world.block();
+        wb.axt_policies.insert(
+            retained,
+            AxtPolicyEntry {
+                manifest_root: [0xAA; 32],
+                target_lane: LaneId::SINGLE,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            },
+        );
+        wb.axt_policies.insert(
+            removed,
+            AxtPolicyEntry {
+                manifest_root: [0xBB; 32],
+                target_lane: LaneId::SINGLE,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            },
+        );
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let policy_view = state.world.axt_policies.view();
+        assert!(
+            policy_view.get(&retained).is_some(),
+            "retained dataspace policy should remain"
+        );
+        assert!(
+            policy_view.get(&removed).is_none(),
+            "removed dataspace policy must be pruned by set_nexus"
+        );
     }
 
     #[test]
@@ -32086,6 +32657,174 @@ mod tests {
     }
 
     #[test]
+    fn detached_can_transfer_asset_definition_denies_non_owner() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id =
+            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+
+        let world = World::with(
+            [alice_domain, users_domain, definition_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+        );
+        let view = world.view();
+        let transfer =
+            iroha_data_model::isi::Transfer::asset_definition(user1, asset_definition_id, user2);
+        let delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "authority that owns neither source account/domain nor definition domain must be denied"
+        );
+    }
+
+    #[test]
+    fn detached_can_transfer_asset_definition_considers_pending_domain_transfers() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id =
+            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+
+        let world = World::with(
+            [
+                alice_domain,
+                users_domain.clone(),
+                definition_domain.clone(),
+            ],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+        );
+        let view = world.view();
+        let transfer = iroha_data_model::isi::Transfer::asset_definition(
+            user1.clone(),
+            asset_definition_id,
+            user2,
+        );
+        let mut delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "baseline should deny authority before pending owner updates"
+        );
+
+        delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
+        assert!(
+            delta
+                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "pending source-domain transfer should authorize subsequent transfer"
+        );
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.transfer_domain(definition_domain_id, user1, ALICE_ID.clone());
+        assert!(
+            delta
+                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "pending definition-domain transfer should authorize subsequent transfer"
+        );
+    }
+
+    #[test]
+    fn detached_can_transfer_nft_denies_non_owner() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
+
+        let world = World::with_assets(
+            [alice_domain, users_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+            [],
+            [nft],
+        );
+        let view = world.view();
+        let transfer = iroha_data_model::isi::Transfer::nft(user1, nft_id, user2);
+        let delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_nft(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "authority that owns neither source account/domain nor nft domain must be denied"
+        );
+    }
+
+    #[test]
+    fn detached_can_transfer_nft_considers_pending_domain_transfers() {
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
+
+        let world = World::with_assets(
+            [alice_domain, users_domain.clone()],
+            [alice_account, user1_account, user2_account],
+            [],
+            [],
+            [nft],
+        );
+        let view = world.view();
+        let transfer = iroha_data_model::isi::Transfer::nft(user1.clone(), nft_id, user2);
+        let mut delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_transfer_nft(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "baseline should deny authority before pending owner updates"
+        );
+
+        delta.transfer_domain(users_domain_id, user1, ALICE_ID.clone());
+        assert!(
+            delta
+                .can_transfer_nft(&view, &ALICE_ID, &transfer)
+                .expect("permission check"),
+            "pending source-domain transfer should authorize subsequent transfer"
+        );
+    }
+
+    #[test]
     fn detached_can_modify_account_metadata_respects_role_permission_ops() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
@@ -32347,6 +33086,98 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn remove_asset_and_metadata_with_total_decrements_definition_total() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
+
+        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        Mint::asset_numeric(5_u32, asset_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("mint tracked balance");
+        stx.world.asset_metadata.insert(
+            asset_id.clone(),
+            iroha_data_model::metadata::Metadata::default(),
+        );
+
+        let removed = stx
+            .world
+            .remove_asset_and_metadata_with_total(&asset_id)
+            .expect("remove succeeds");
+        assert!(removed.is_some(), "asset should be removed");
+        assert!(stx.world.assets.get(&asset_id).is_none(), "asset removed");
+        assert!(
+            stx.world.asset_metadata.get(&asset_id).is_none(),
+            "asset metadata removed"
+        );
+        assert_eq!(
+            stx.world
+                .asset_definition(&asset_def_id)
+                .expect("definition exists")
+                .total_quantity(),
+            &Numeric::zero(),
+            "tracked total should be decremented"
+        );
+    }
+
+    #[test]
+    fn remove_asset_and_metadata_with_total_cleans_orphan_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
+
+        let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+        stx.world.asset_metadata.insert(
+            asset_id.clone(),
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        assert!(stx.world.assets.get(&asset_id).is_none(), "no asset stored");
+
+        let removed = stx
+            .world
+            .remove_asset_and_metadata_with_total(&asset_id)
+            .expect("orphan cleanup succeeds");
+        assert!(removed.is_none(), "missing asset should return None");
+        assert!(
+            stx.world.asset_metadata.get(&asset_id).is_none(),
+            "orphan metadata removed"
+        );
     }
 
     #[allow(clippy::too_many_lines)]

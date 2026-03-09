@@ -14,7 +14,67 @@ use iroha_data_model::{
     nexus::{AssetPermissionManifest, DataSpaceId, UniversalAccountId},
 };
 use iroha_schema::IntoSchema;
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
+
+use crate::state::WorldReadOnly;
+
+/// Lane identity extraction failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneIdentityMetadataError {
+    /// A UAID record exists for the target dataspace but its manifest is inactive.
+    InactiveManifest {
+        /// Account UAID.
+        uaid: UniversalAccountId,
+        /// Routed dataspace.
+        dataspace: DataSpaceId,
+    },
+}
+
+/// Extract lane identity metadata (UAID + capability tags) for transaction admission.
+///
+/// The lookup is global by account UAID:
+/// - if no account or no UAID exists, returns `(None, [])`
+/// - if the UAID has an active manifest for the target dataspace, returns tags from manifest notes
+/// - if the UAID has no manifest for the target dataspace, returns `(Some(uaid), [])`
+/// - if the target manifest exists but is inactive, returns [`LaneIdentityMetadataError`]
+pub fn extract_lane_identity_metadata(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    dataspace_id: DataSpaceId,
+) -> Result<(Option<UniversalAccountId>, Vec<String>), LaneIdentityMetadataError> {
+    let account_entry = match world.account(authority) {
+        Ok(entry) => entry,
+        Err(_) => return Ok((None, Vec::new())),
+    };
+    let Some(uaid) = account_entry.value().uaid().copied() else {
+        return Ok((None, Vec::new()));
+    };
+
+    if let Some(manifest_set) = world.space_directory_manifests().get(&uaid)
+        && let Some(record) = manifest_set.get(&dataspace_id)
+    {
+        if !record.is_active() {
+            return Err(LaneIdentityMetadataError::InactiveManifest {
+                uaid,
+                dataspace: dataspace_id,
+            });
+        }
+
+        let mut tags = BTreeSet::new();
+        for entry in &record.manifest.entries {
+            if let Some(note) = &entry.notes {
+                let trimmed = note.trim();
+                if !trimmed.is_empty() {
+                    tags.insert(trimmed.to_string());
+                }
+            }
+        }
+        return Ok((Some(uaid), tags.into_iter().collect()));
+    }
+
+    Ok((Some(uaid), Vec::new()))
+}
 
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -91,6 +151,16 @@ impl UaidDataspaceBindings {
             self.entries.remove(dataspace);
         }
         emptied
+    }
+
+    /// Retain only bindings for dataspaces included in `allowed`.
+    ///
+    /// Returns `true` when at least one dataspace binding was removed.
+    pub fn retain_dataspaces(&mut self, allowed: &BTreeSet<DataSpaceId>) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|dataspace, _accounts| allowed.contains(dataspace));
+        self.entries.len() != before
     }
 }
 
@@ -226,10 +296,13 @@ impl SpaceDirectoryManifestSet {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::Hash;
     use iroha_data_model::nexus::ManifestVersion;
+    use iroha_data_model::{account::Account, domain::Domain, prelude::*};
     use iroha_test_samples::gen_account_in;
 
     use super::*;
+    use crate::state::World;
 
     fn sample_manifest(dataspace: u32) -> AssetPermissionManifest {
         AssetPermissionManifest {
@@ -284,5 +357,72 @@ mod tests {
         bindings.bind_account(dataspace, account_id.clone());
         assert!(bindings.is_bound_to(dataspace, &account_id));
         assert!(!bindings.is_bound_to(DataSpaceId::new(8), &account_id));
+    }
+
+    fn world_with_uaid(
+        uaid: UniversalAccountId,
+        dataspace: DataSpaceId,
+        with_manifest: bool,
+        manifest_active: bool,
+    ) -> (World, AccountId) {
+        let (authority, _) = gen_account_in("wonderland");
+        let domain = Domain::new(authority.domain().clone()).build(&authority);
+        let account = Account::new(authority.clone())
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let mut world = World::with([domain], [account], []);
+
+        if with_manifest {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::V1,
+                uaid,
+                dataspace,
+                issued_ms: 1,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            if !manifest_active {
+                record.lifecycle.mark_expired(2);
+            }
+            let mut set = SpaceDirectoryManifestSet::default();
+            set.upsert(record);
+            world.space_directory_manifests.insert(uaid, set);
+        }
+
+        (world, authority)
+    }
+
+    #[test]
+    fn lane_identity_metadata_allows_missing_target_manifest() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-missing"));
+        let dataspace = DataSpaceId::new(17);
+        let (world, authority) = world_with_uaid(uaid, dataspace, false, true);
+        let world_view = world.view();
+
+        let (observed, tags) = extract_lane_identity_metadata(&world_view, &authority, dataspace)
+            .expect("missing target manifest should be accepted");
+        assert_eq!(observed, Some(uaid));
+        assert!(
+            tags.is_empty(),
+            "missing manifest yields no capability tags"
+        );
+    }
+
+    #[test]
+    fn lane_identity_metadata_rejects_inactive_target_manifest() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-inactive"));
+        let dataspace = DataSpaceId::new(23);
+        let (world, authority) = world_with_uaid(uaid, dataspace, true, false);
+        let world_view = world.view();
+
+        let err = extract_lane_identity_metadata(&world_view, &authority, dataspace)
+            .expect_err("inactive target manifest must be rejected");
+        assert_eq!(
+            err,
+            LaneIdentityMetadataError::InactiveManifest { uaid, dataspace }
+        );
     }
 }

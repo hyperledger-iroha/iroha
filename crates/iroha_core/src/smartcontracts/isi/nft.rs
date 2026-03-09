@@ -9,7 +9,9 @@ use super::prelude::*;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use iroha_data_model::{IntoKeyValue, isi::error::RepetitionError, query::error::FindError};
+    use iroha_data_model::{
+        IntoKeyValue, isi::error::RepetitionError, permission::Permission, query::error::FindError,
+    };
     use iroha_telemetry::metrics;
 
     use super::*;
@@ -150,6 +152,41 @@ pub mod isi {
             state_transaction.world.account(&source)?;
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;
+            let authority_is_source_owner = authority == &source
+                || state_transaction.world.domain(source.domain())?.owned_by() == authority;
+            let authority_is_nft_domain_owner =
+                state_transaction.world.domain(object.domain())?.owned_by() == authority;
+            let required_permission: Permission =
+                iroha_executor_data_model::permission::nft::CanTransferNft {
+                    nft: object.clone(),
+                }
+                .into();
+            let authority_has_transfer_permission = state_transaction
+                .world
+                .account_permissions_iter(authority)?
+                .into_iter()
+                .any(|permission| permission == &required_permission)
+                || state_transaction
+                    .world
+                    .account_roles_iter(authority)
+                    .any(|role_id| {
+                        state_transaction
+                            .world
+                            .roles
+                            .get(role_id)
+                            .is_some_and(|role| {
+                                role.permissions()
+                                    .any(|permission| permission == &required_permission)
+                            })
+                    });
+            if !(authority_is_source_owner
+                || authority_is_nft_domain_owner
+                || authority_has_transfer_permission)
+            {
+                return Err(Error::InvariantViolation(
+                    "Can't transfer NFT of another account".to_owned().into(),
+                ));
+            }
 
             let nft = state_transaction.world.nft_mut(&object)?;
 
@@ -243,6 +280,111 @@ pub mod isi {
             assert!(
                 matches!(err, Error::Find(FindError::Domain(ref id)) if id == nft_id.domain()),
                 "expected missing-domain error, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn transfer_nft_rejects_authority_without_ownership() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let users_domain: DomainId = "users".parse().expect("domain id");
+            let user1 = AccountId::new(
+                users_domain.clone(),
+                iroha_crypto::KeyPair::random().into_parts().0,
+            );
+            let user2 = AccountId::new(
+                users_domain.clone(),
+                iroha_crypto::KeyPair::random().into_parts().0,
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register alice domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register alice account");
+
+            Register::domain(Domain::new(users_domain.clone()))
+                .execute(&user1, &mut stx)
+                .expect("register users domain");
+            Register::account(Account::new(user1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user1 account");
+            Register::account(Account::new(user2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user2 account");
+
+            let nft_id: NftId = "ticket$users".parse().expect("nft id");
+            Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
+                .execute(&user1, &mut stx)
+                .expect("register nft");
+
+            let err = Transfer::nft(user1, nft_id.clone(), user2)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("authority without ownership must not transfer nft");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("Can't transfer NFT of another account"),
+                "unexpected error: {err_string}"
+            );
+        }
+
+        #[test]
+        fn transfer_nft_allows_nft_domain_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let users_domain: DomainId = "users".parse().expect("domain id");
+            let user1 = AccountId::new(
+                users_domain.clone(),
+                iroha_crypto::KeyPair::random().into_parts().0,
+            );
+            let user2 = AccountId::new(
+                users_domain.clone(),
+                iroha_crypto::KeyPair::random().into_parts().0,
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register alice domain");
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register alice account");
+
+            Register::domain(Domain::new(users_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register users domain");
+            Register::account(Account::new(user1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user1 account");
+            Register::account(Account::new(user2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user2 account");
+
+            let nft_id: NftId = "ticket$users".parse().expect("nft id");
+            Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
+                .execute(&user1, &mut stx)
+                .expect("register nft");
+
+            Transfer::nft(user1, nft_id.clone(), user2.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("nft-domain owner should be allowed to transfer");
+
+            let nft = stx.world.nft(&nft_id).expect("nft remains after transfer");
+            assert_eq!(
+                nft.owned_by, user2,
+                "destination should own transferred nft"
             );
         }
     }

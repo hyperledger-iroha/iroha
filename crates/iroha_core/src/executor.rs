@@ -2183,6 +2183,24 @@ impl Executor {
                 "Can't transfer domain of another account".to_owned(),
             ));
         }
+        if let Some(transfer_asset_definition) = extract_transfer_asset_definition(&instruction)
+            && !can_transfer_asset_definition(
+                &state_transaction.world,
+                authority,
+                &transfer_asset_definition,
+            )?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer asset definition of another account".to_owned(),
+            ));
+        }
+        if let Some(transfer_nft) = extract_transfer_nft(&instruction)
+            && !can_transfer_nft(&state_transaction.world, authority, &transfer_nft)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer NFT of another account".to_owned(),
+            ));
+        }
 
         if !is_genesis
             && let Some(transfer_asset) = extract_transfer_asset(&instruction)
@@ -3355,6 +3373,60 @@ fn extract_transfer_domain(
     .flatten()
 }
 
+fn extract_transfer_asset_definition(
+    instruction: &InstructionBox,
+) -> Option<Transfer<Account, AssetDefinitionId, Account>> {
+    let instr_any = instruction.as_any();
+    if let Some(transfer) =
+        instr_any.downcast_ref::<Transfer<Account, AssetDefinitionId, Account>>()
+    {
+        return Some(transfer.clone());
+    }
+    if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
+        return match transfer_box {
+            TransferBox::AssetDefinition(transfer) => Some(transfer.clone()),
+            _ => None,
+        };
+    }
+    if !instruction.id().contains("AssetDefinition") {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Transfer::<Account, AssetDefinitionId, Account>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+
+fn extract_transfer_nft(
+    instruction: &InstructionBox,
+) -> Option<Transfer<Account, iroha_data_model::NftId, Account>> {
+    let instr_any = instruction.as_any();
+    if let Some(transfer) =
+        instr_any.downcast_ref::<Transfer<Account, iroha_data_model::NftId, Account>>()
+    {
+        return Some(transfer.clone());
+    }
+    if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
+        return match transfer_box {
+            TransferBox::Nft(transfer) => Some(transfer.clone()),
+            _ => None,
+        };
+    }
+    if !instruction.id().contains("Nft") {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Transfer::<Account, iroha_data_model::NftId, Account>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+
 fn authority_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -3427,6 +3499,62 @@ fn can_transfer_domain(
         .map(|domain| domain.owned_by().clone())
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     Ok(&transferred_domain_owner == authority)
+}
+
+fn can_transfer_asset_definition(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    transfer: &Transfer<Account, AssetDefinitionId, Account>,
+) -> Result<bool, ValidationFail> {
+    if transfer.source() == authority {
+        return Ok(true);
+    }
+
+    let source_domain_owner = world
+        .domain(transfer.source().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &source_domain_owner == authority {
+        return Ok(true);
+    }
+
+    let definition_domain_owner = world
+        .domain(transfer.object().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    Ok(&definition_domain_owner == authority)
+}
+
+fn can_transfer_nft(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    transfer: &Transfer<Account, iroha_data_model::NftId, Account>,
+) -> Result<bool, ValidationFail> {
+    if transfer.source() == authority {
+        return Ok(true);
+    }
+
+    let source_domain_owner = world
+        .domain(transfer.source().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &source_domain_owner == authority {
+        return Ok(true);
+    }
+
+    let nft_domain_owner = world
+        .domain(transfer.object().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &nft_domain_owner == authority {
+        return Ok(true);
+    }
+
+    let required: Permission = executor_permission::nft::CanTransferNft {
+        nft: transfer.object().clone(),
+    }
+    .into();
+    authority_has_permission(world, authority, &required)
 }
 
 fn can_transfer_asset(
@@ -4363,6 +4491,232 @@ mod tests {
                 "initial executor should deny asset transfer without owner signature, got: {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_asset_definition_without_ownership() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
+            .parse()
+            .expect("asset definition");
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+
+        let world = World::with(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::asset_definition(
+            user1.clone(),
+            asset_definition_id.clone(),
+            user2.clone(),
+        ));
+        let transfer = extract_transfer_asset_definition(&instruction)
+            .expect("expected to extract asset-definition transfer from instruction");
+
+        let mut stx = block.transaction();
+        let allowed = can_transfer_asset_definition(&stx.world, &alice_id, &transfer)
+            .expect("asset-definition transfer permission check");
+        assert!(
+            !allowed,
+            "alice should not be allowed to transfer user1-owned asset definition"
+        );
+        let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("Can't transfer asset definition"),
+                "unexpected rejection message: {msg}"
+            ),
+            other => panic!(
+                "initial executor should deny asset-definition transfer from another account, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn initial_executor_allows_transfer_asset_definition_by_definition_domain_owner() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&alice_id);
+        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+
+        let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
+            .parse()
+            .expect("asset definition");
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+
+        let world = World::with(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let instruction = InstructionBox::from(Transfer::asset_definition(
+            user1.clone(),
+            asset_definition_id.clone(),
+            user2.clone(),
+        ));
+        let transfer = extract_transfer_asset_definition(&instruction)
+            .expect("expected to extract asset-definition transfer from instruction");
+
+        let mut stx = block.transaction();
+        let allowed = can_transfer_asset_definition(&stx.world, &alice_id, &transfer)
+            .expect("asset-definition transfer permission check");
+        assert!(
+            allowed,
+            "definition-domain owner should be allowed to transfer ownership"
+        );
+        let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
+        assert!(res.is_ok(), "expected transfer to succeed, got {res:?}");
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_nft_without_ownership() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
+
+        let world = World::with_assets(
+            [alice_domain, users_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+            [],
+            [nft],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction =
+            InstructionBox::from(Transfer::nft(user1.clone(), nft_id.clone(), user2.clone()));
+        let transfer = extract_transfer_nft(&instruction)
+            .expect("expected to extract nft transfer from instruction");
+
+        let mut stx = block.transaction();
+        let allowed = can_transfer_nft(&stx.world, &alice_id, &transfer)
+            .expect("nft transfer permission check");
+        assert!(
+            !allowed,
+            "alice should not be allowed to transfer user1-owned nft"
+        );
+        let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("Can't transfer NFT"),
+                "unexpected rejection message: {msg}"
+            ),
+            other => panic!(
+                "initial executor should deny nft transfer from another account, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn initial_executor_allows_transfer_nft_by_nft_domain_owner() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
+        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
+
+        let world = World::with_assets(
+            [alice_domain, users_domain],
+            [alice_account, user1_account, user2_account],
+            [],
+            [],
+            [nft],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let instruction =
+            InstructionBox::from(Transfer::nft(user1.clone(), nft_id.clone(), user2.clone()));
+        let transfer = extract_transfer_nft(&instruction)
+            .expect("expected to extract nft transfer from instruction");
+
+        let mut stx = block.transaction();
+        let allowed = can_transfer_nft(&stx.world, &alice_id, &transfer)
+            .expect("nft transfer permission check");
+        assert!(
+            allowed,
+            "nft-domain owner should be allowed to transfer ownership"
+        );
+        let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
+        assert!(res.is_ok(), "expected transfer to succeed, got {res:?}");
     }
 
     #[test]

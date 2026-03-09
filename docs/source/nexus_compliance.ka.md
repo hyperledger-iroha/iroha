@@ -131,9 +131,7 @@ fetch artefacts (signed policy blob + reviewer attestations).
    - Every transaction entering the `/v1/pipeline` queue is tagged with
      `LaneComplianceContext` (participant ids, UAID, dataspace manifest metadata, policy id, and the
      latest `LanePrivacyRegistry` snapshot described in `crates/iroha_core/src/interlane/mod.rs`).  
-   - UAID-carrying authorities must have an active Space Directory manifest for
-     the routed dataspace; Torii rejects transactions when the UAID is not bound
-     to that dataspace before any policy rules are evaluated.  
+   - UAID-carrying authorities are resolved globally by account UAID. If a Space Directory manifest exists for the routed dataspace, it must be active; missing target-dataspace manifests do not block admission before any policy rules are evaluated.  
    - The `compliance::Engine` evaluates `deny` rules, then `allow` rules, and
      finally enforces transfer limits. Failing transactions return a typed error
      (`ERR_LANE_COMPLIANCE_DENIED`) with reason + policy id for audit trails.
