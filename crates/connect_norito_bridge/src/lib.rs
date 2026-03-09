@@ -58,11 +58,12 @@ use iroha_data_model::{
         OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
         OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
-        OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
-        OfflineFastpqSumProof, OfflinePlatformProof, OfflineProofBlindingSeed,
-        OfflineProofRequestCounter, OfflineProofRequestReplay, OfflineProofRequestSum,
-        OfflineReceiptChallengePreimage, OfflineSpendReceipt, OfflineSpendReceiptPayload,
-        PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
+        OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineBuildClaim, OfflineBuildClaimPlatform,
+        OfflineFastpqCounterProof, OfflineFastpqReplayProof, OfflineFastpqSumProof,
+        OfflinePlatformProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
+        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
+        OfflineSpendReceipt, OfflineSpendReceiptPayload, PoseidonDigest, chain_bound_receipt_hash,
+        compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
@@ -1004,6 +1005,42 @@ fn encode_offline_spend_receipt_payload(
     };
 
     to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_offline_build_claim_payload(
+    claim_id_hex: String,
+    platform: String,
+    app_id: String,
+    build_number: u64,
+    issued_at_ms: u64,
+    expires_at_ms: u64,
+    lineage_scope: String,
+    nonce_hex: String,
+) -> BridgeResult<Vec<u8>> {
+    let claim_id = Hash::from_str(&claim_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
+    let nonce = Hash::from_str(&nonce_hex).map_err(|_| BridgeError::OfflineNonce)?;
+    let platform = match platform.as_str() {
+        "Android" => OfflineBuildClaimPlatform::Android,
+        "Apple" => OfflineBuildClaimPlatform::Apple,
+        _ => return Err(BridgeError::OfflineSerialize),
+    };
+
+    let claim = OfflineBuildClaim {
+        claim_id,
+        platform,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage_scope,
+        nonce,
+        operator_signature: Signature::from_bytes(&[0; 64]),
+    };
+
+    claim
+        .signing_bytes()
+        .map_err(|_| BridgeError::OfflineSerialize)
 }
 
 fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
@@ -9700,6 +9737,60 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineBuildClaimPayloadEncoder_nativeEncode(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    claim_id_hex: jni::objects::JString<'_>,
+    platform: jni::objects::JString<'_>,
+    app_id: jni::objects::JString<'_>,
+    build_number: jni::sys::jlong,
+    issued_at_ms: jni::sys::jlong,
+    expires_at_ms: jni::sys::jlong,
+    lineage_scope: jni::objects::JString<'_>,
+    nonce_hex: jni::objects::JString<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let claim_id = jstring_to_string(&mut env, claim_id_hex)?;
+        let platform_str = jstring_to_string(&mut env, platform)?;
+        let app = jstring_to_string(&mut env, app_id)?;
+        let scope = jstring_to_string(&mut env, lineage_scope)?;
+        let nonce = jstring_to_string(&mut env, nonce_hex)?;
+
+        let bytes = encode_offline_build_claim_payload(
+            claim_id,
+            platform_str,
+            app,
+            build_number as u64,
+            issued_at_ms as u64,
+            expires_at_ms as u64,
+            scope,
+            nonce,
+        )
+        .map_err(|e| format!("encode error: {}", e.code()))?;
+
+        let array = env
+            .byte_array_from_slice(&bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(array.into_raw())
+    })();
+
+    match result {
+        Ok(array) => array,
+        Err(msg) => {
+            throw_java_illegal_argument(&mut env, msg);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -12578,6 +12669,42 @@ mod sorafs_tests {
         assert_eq!(
             native_bytes, jni_bytes,
             "JNI encoding must match native signing_bytes"
+        );
+    }
+
+    #[test]
+    fn encode_offline_build_claim_payload_matches_native() {
+        use iroha_data_model::offline::{OfflineBuildClaim, OfflineBuildClaimPlatform};
+
+        let claim = OfflineBuildClaim {
+            claim_id: Hash::new(b"test-claim-id"),
+            platform: OfflineBuildClaimPlatform::Android,
+            app_id: "jp.co.soramitsu.cbdc.pkr".to_owned(),
+            build_number: 42,
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_700_086_400_000,
+            lineage_scope: "test-scope".to_owned(),
+            nonce: Hash::new(b"test-nonce"),
+            operator_signature: Signature::from_bytes(&[0; 64]),
+        };
+
+        let native_bytes = claim.signing_bytes().expect("signing bytes");
+
+        let jni_bytes = encode_offline_build_claim_payload(
+            hex::encode(claim.claim_id.as_ref()),
+            "Android".to_owned(),
+            claim.app_id.clone(),
+            claim.build_number,
+            claim.issued_at_ms,
+            claim.expires_at_ms,
+            claim.lineage_scope.clone(),
+            hex::encode(claim.nonce.as_ref()),
+        )
+        .expect("jni encode");
+
+        assert_eq!(
+            jni_bytes, native_bytes,
+            "JNI encoding must match native signing_bytes()"
         );
     }
 }

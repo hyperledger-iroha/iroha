@@ -973,8 +973,8 @@ pub mod genesis_instructions_json {
         account.canonical_ih58().ok()
     }
 
-    fn asset_literal(asset: &AssetId) -> Option<String> {
-        Some(asset.canonical_encoded())
+    fn asset_literal(asset: &AssetId) -> String {
+        asset.canonical_encoded()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1014,7 +1014,7 @@ pub mod genesis_instructions_json {
                         "object".to_string(),
                         Value::String(mint_asset.object().to_string()),
                     );
-                    let destination = asset_literal(mint_asset.destination())?;
+                    let destination = asset_literal(mint_asset.destination());
                     fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Mint", "Asset", Value::Object(fields)))
                 }

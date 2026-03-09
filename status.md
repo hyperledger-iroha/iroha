@@ -10,6 +10,121 @@ Last updated: 2026-03-09
   - `../pk-deploy/scripts/deploy-sbp-aed-pkr-interceptor.sh` no longer performs prior-layout trigger cleanup loops.
 - Wallet docs describe only current QR modes in neutral terms.
 
+## 2026-03-09 Build-Claim JNI Encoder Parity for Android Offline Flow
+- Added missing build-claim JNI bridge export in:
+  - `crates/connect_norito_bridge/src/lib.rs`
+  - `Java_org_hyperledger_iroha_android_offline_OfflineBuildClaimPayloadEncoder_nativeEncode`
+- Added Rust-side build-claim payload encoder helper and parity regression:
+  - `encode_offline_build_claim_payload(...)`
+  - `encode_offline_build_claim_payload_matches_native`
+- Added Android wrapper API and harness regression:
+  - `java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBuildClaimPayloadEncoder.java`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineBuildClaimPayloadEncoderTest.java`
+  - registered test main in `java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java`
+- Applied follow-up lint-only cleanup discovered during workspace `clippy -D warnings` execution:
+  - `crates/iroha_genesis/src/lib.rs`
+  - `crates/iroha/examples/tutorial.rs`
+  - `crates/iroha_js_host/src/lib.rs`
+  - `crates/iroha_data_model/tests/id_of_constructors.rs`
+  - `crates/iroha_data_model/tests/offline_fixtures.rs`
+  - `crates/iroha_data_model/tests/query_json_envelope.rs`
+  - `crates/iroha_data_model/src/offline/poseidon.rs`
+  - `crates/iroha_test_network/src/config.rs`
+  - `xtask/src/norito_rpc.rs`
+- Java encoder behavior:
+  - normalizes platform aliases (`ios`/`apple` -> `Apple`, `android` -> `Android`)
+  - validates hash inputs through `OfflineHashLiteral.parseHex(...)`
+  - rejects negative numeric timestamps/build number
+  - coerces null/blank `lineageScope` to empty string before JNI call
+- Native-required Android harness fixture alignment:
+  - switched offline receipt/spend JNI tests to canonical encoded `AssetId` fixtures (`norito:<hex>`) and valid IH58 account literals:
+    - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java`
+    - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoderTest.java`
+  - ensured build-claim nonce fixture satisfies hash LSB policy:
+    - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineBuildClaimPayloadEncoderTest.java`
+
+### Validation Matrix (Build-Claim JNI Encoder Parity)
+- `cargo fmt --all`
+- `cargo test -p connect_norito_bridge encode_offline_build_claim_payload_matches_native -- --nocapture`
+- `cargo test -p connect_norito_bridge encode_offline_spend_receipt_payload_matches_native -- --nocapture`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineBuildClaimPayloadEncoderTest`
+- `cargo test -p connect_norito_bridge -- --nocapture`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineBuildClaimPayloadEncoderTest,org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoderTest`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --rerun-tasks -Dandroid.test.mains=org.hyperledger.iroha.android.offline.OfflineBuildClaimPayloadEncoderTest,org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoderTest`
+- `cargo build --workspace`
+- `cargo check -p iroha --example tutorial`
+- `cargo test -p iroha_data_model --test id_of_constructors --no-run`
+- `cargo test -p iroha_data_model --test offline_fixtures --no-run`
+- `cargo test -p iroha_data_model --test query_json_envelope --no-run`
+- `cargo test -p iroha_js_host --lib --no-run`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cd java/iroha_android && ANDROID_HARNESS_MAINS='org.hyperledger.iroha.android.offline.OfflineBuildClaimPayloadEncoderTest,org.hyperledger.iroha.android.offline.OfflineReceiptChallengeTest,org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoderTest,org.hyperledger.iroha.android.offline.OfflineWalletTest,org.hyperledger.iroha.android.client.OfflineToriiClientTests' IROHA_NATIVE_REQUIRED=1 IROHA_NATIVE_LIBRARY_PATH=/Users/takemiyamakoto/dev/iroha/target/debug JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --rerun-tasks --tests org.hyperledger.iroha.android.GradleHarnessTests`
+- `cargo test --workspace` (long run; observed failure in `extra_functional::unstable_network::unstable_network_5_peers_1_fault`)
+- `cargo test -p integration_tests unstable_network_5_peers_1_fault -- --nocapture` (pass on focused rerun; flake root-cause follow-up documented below)
+
+## 2026-03-09 Unstable Network Retry-Flake Hardening
+- Closed the `unstable_network_5_peers_1_fault` retry gap that could consume full retry windows even after tx commit:
+  - `integration_tests/tests/extra_functional/unstable_network.rs`
+  - `is_submission_accepted_duplicate(...)` now accepts both enqueue and committed duplicate responses (`ALREADY_ENQUEUED` / `ALREADY_COMMITTED` and lowercase committed text), avoiding false retry loops after successful commit.
+- Updated regression in the same module:
+  - `submit_acceptance_accepts_enqueued_or_committed_duplicate`
+- Operational cleanup during investigation:
+  - removed orphaned `iroha3d` test-network processes left by an interrupted prior run before revalidation.
+
+### Validation Matrix (Unstable Network Retry-Flake Hardening)
+- `cargo test -p integration_tests --test mod submit_acceptance_accepts_enqueued_or_committed_duplicate -- --nocapture`
+- `cargo test -p integration_tests --test mod unstable_network_5_peers_1_fault -- --nocapture` (pass, ~47.76s)
+- `cargo test -p integration_tests --test mod unstable_network_5_peers_1_fault -- --nocapture` (pass, ~46.92s)
+
+## 2026-03-09 Nexus Unregister Fail-Closed Account Literal Resolution
+- Hardened Nexus account-config unregister guards to fail closed for account literals in:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+- `nexus.fees.fee_sink_account_id`, `nexus.staking.stake_escrow_account_id`, and
+  `nexus.staking.slash_sink_account_id` now resolve against active world subject membership and return
+  `InvariantViolation` when the literal is invalid, ambiguous across same-subject multi-domain accounts,
+  or otherwise not resolvable to a unique active scoped account.
+- Kept exact-scoped matching semantics for multi-domain subjects:
+  - cross-domain same-subject accounts are not overblocked unless the literal resolves to that exact scoped account.
+- `Unregister<Account>` now resolves all three Nexus account literals fail-closed before match/no-match decisions.
+- `Unregister<Domain>` now runs fail-closed Nexus account checks for all domain member accounts before any state mutation path.
+- Added regressions:
+  - `unregister_account_rejects_when_nexus_fee_sink_literal_is_ambiguous_across_same_subject_domains`
+  - `unregister_domain_rejects_when_nexus_fee_sink_literal_is_ambiguous_across_same_subject_domains`
+  - `unregister_account_rejects_when_nexus_fee_sink_literal_is_invalid`
+  - `unregister_domain_rejects_when_nexus_fee_sink_literal_is_invalid`
+- Extended unregister semantics docs with explicit fail-closed behavior for invalid/ambiguous/non-resolvable
+  Nexus account literals:
+  - `docs/source/data_model_and_isi_spec.md`
+
+### Validation Matrix (Nexus Unregister Fail-Closed Account Literal Resolution)
+- `cargo test -p iroha_core --lib unregister_account_allows_when_nexus_fee_sink_account_is_same_subject_other_domain -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_allows_when_nexus_fee_sink_account_is_same_subject_other_domain -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_account_is_nexus_ -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_is_nexus_ -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_nexus_fee_sink_literal_is_ambiguous_across_same_subject_domains -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_nexus_fee_sink_literal_is_ambiguous_across_same_subject_domains -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_nexus_fee_sink_literal_is_invalid -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_nexus_fee_sink_literal_is_invalid -- --nocapture`
+- `cargo check -p iroha_core`
+
+## 2026-03-09 SNS Registrar JSON Error Handling and Owner Identity Assertions
+- Hardened SNS client response handling in `crates/iroha/src/sns.rs`:
+  - status code is validated before JSON decoding for all SNS endpoints
+  - non-success responses now include contextual HTTP status/body diagnostics through `ResponseReport`
+- Restored AccountAddress JSON roundtrip compatibility for canonical hex literals in:
+  - `crates/iroha_data_model/src/account/address.rs`
+  - `JsonDeserialize for AccountAddress` now falls back to canonical-hex decoding when encoded-address parsing reports `UnsupportedAddressFormat`
+- Updated SNS integration ownership assertions to compare controller identity instead of strict scoped-domain equality:
+  - `integration_tests/tests/sns.rs`
+  - aligns expectations with domainless IH58 owner literals used by SNS JSON payloads
+
+### Validation Matrix (SNS Registrar JSON Error Handling and Owner Identity Assertions)
+- `cargo test -p integration_tests --test sns -- --nocapture`
+- `cargo test -p iroha --lib ensure_status_reports_text_body_when_status_mismatches -- --nocapture`
+- `cargo test -p iroha_data_model --lib account_address_json_roundtrip_supports_canonical_hex_literals -- --nocapture`
+- `cargo fmt --all`
+
 ## 2026-03-08 Norito Instruction Fixture Refresh
 - Refreshed stale fixture payloads in `fixtures/norito_instructions` to match current canonical Rust Norito encoding for:
   - `burn_asset_numeric.json`
@@ -37,6 +152,45 @@ Last updated: 2026-03-09
 - `cargo fmt --all`
 - `cargo test -p iroha_core --lib unregister_account_rejects_when_account_has_oracle_feed_history_state -- --nocapture`
 - `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_has_oracle_feed_history_state -- --nocapture`
+- `cargo check -p iroha_core`
+
+## 2026-03-09 Nexus Config Unregister Guard Hardening
+- Closed remaining account/asset-definition unregister guard gaps for Nexus config references:
+  - `Unregister<Account>` now rejects removal when account matches:
+    - `nexus.fees.fee_sink_account_id`
+    - `nexus.staking.stake_escrow_account_id`
+    - `nexus.staking.slash_sink_account_id`
+  - `Unregister<AssetDefinition>` now rejects removal when definition matches:
+    - `nexus.fees.fee_asset_id`
+    - `nexus.staking.stake_asset_id`
+  - `Unregister<Domain>` now applies both guard sets to member-account and domain-asset-definition teardown.
+- Hardened Nexus account-reference matching to avoid false positives across multi-domain subjects:
+  - account guard matching now resolves config literals against world state and compares exact scoped account IDs (instead of subject-only matching), so removing domain-B account no longer fails when Nexus config resolves to domain-A account with the same controller.
+  - files:
+    - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+- Added regressions:
+  - `unregister_account_rejects_when_account_is_nexus_fee_sink_account`
+  - `unregister_account_rejects_when_account_is_nexus_staking_escrow_account`
+  - `unregister_account_rejects_when_account_is_nexus_staking_slash_sink_account`
+  - `unregister_asset_definition_rejects_when_definition_is_nexus_fee_asset`
+  - `unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset`
+  - `unregister_domain_rejects_when_member_account_is_nexus_fee_sink_account`
+  - `unregister_domain_rejects_when_member_account_is_nexus_staking_escrow_account`
+  - `unregister_domain_rejects_when_member_account_is_nexus_staking_slash_sink_account`
+  - `unregister_domain_rejects_when_domain_asset_definition_is_nexus_fee_asset`
+  - `unregister_domain_rejects_when_domain_asset_definition_is_nexus_staking_asset`
+  - `unregister_account_allows_when_nexus_fee_sink_account_is_same_subject_other_domain`
+  - `unregister_domain_allows_when_nexus_fee_sink_account_is_same_subject_other_domain`
+- Updated unregister spec wording to include Nexus config account/asset-definition references:
+  - `docs/source/data_model_and_isi_spec.md`
+
+### Validation Matrix (Nexus Config Unregister Guard Hardening)
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_account_is_nexus_ -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_is_nexus_ -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_account_allows_when_nexus_fee_sink_account_is_same_subject_other_domain -- --nocapture`
+- `cargo test -p iroha_core --lib unregister_domain_allows_when_nexus_fee_sink_account_is_same_subject_other_domain -- --nocapture`
+- `cargo fmt --all`
 - `cargo check -p iroha_core`
 
 ## 2026-03-08 Data Model Consistency Sweep (Account/Domain/Dataspace/Asset)
@@ -651,4 +805,76 @@ Last updated: 2026-03-09
 - `cargo fmt --all` (pass)
 - `cargo test -p iroha_core --lib unregister_account_rejects_when_account_is_configured_sorafs_provider_owner -- --nocapture` (pass)
 - `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_is_configured_sorafs_provider_owner -- --nocapture` (pass)
+- `cargo check -p iroha_core` (pass)
+
+## 2026-03-09 Permission Referential Cleanup Hardening (Unregister Paths)
+- Closed remaining permission-orphan gaps when unregistering accounts/domains/assets/NFTs/triggers:
+  - `Unregister<Account>` now prunes account-/role-scoped permissions by exact scoped-account identity, with a subject-based fallback only when the subject is single-domain; this preserves cross-domain permissions for shared subjects while still cleaning normalized legacy literals.
+  - `Unregister<Domain>` now prunes account-/role-scoped permissions targeting accounts in the removed domain, with the same single-domain subject fallback for normalized legacy literals (and without cross-domain over-pruning for shared subjects).
+  - `Unregister<AssetDefinition>` now prunes account-/role-scoped permissions that reference the removed asset definition and asset-instance-scoped permissions anchored to that definition.
+  - `Unregister<Nft>` now prunes account-/role-scoped permissions that reference the removed NFT.
+  - `Unregister<Trigger>` now prunes account-/role-scoped permissions that reference the removed trigger.
+  - `Unregister<Account>` and `Unregister<Domain>` now also prune account-/role-scoped NFT-target permissions for NFTs deleted transitively because they are owned by removed accounts (including NFTs in foreign domains).
+  - `Unregister<Account>` and `Unregister<Domain>` now also prune governance account-target permissions `CanRecordCitizenService{owner: ...}` when the referenced owner account is removed (including subject-equivalent account literals).
+  - Detached merge (`DetachedStateTransactionDelta::merge_into`) now also prunes account-/role-scoped NFT-target permissions when applying queued NFT deletions, keeping detached and sequential execution semantics aligned.
+  - `State::set_nexus` now also prunes account-/role-scoped dataspace-target permissions `CanPublishSpaceDirectoryManifest{dataspace: ...}` when dataspaces are removed from the active Nexus dataspace catalog.
+  - `State::set_nexus` now prunes stale dataspace entries from `space_directory_manifests`, so removed dataspaces cannot be rehydrated into UAID dataspace bindings by later manifest lifecycle updates.
+  - `State::set_nexus` now prunes stale dataspace entries from `axt_replay_ledger`, so replay-state records cannot retain removed-dataspace references after catalog updates.
+  - Lane-scoped relay/DA caches (`lane_relays`, `da_commitments`, `da_confidential_compute`, `da_pin_intents`) are now pruned when a lane is retired or reassigned to a different dataspace (same lane id, new `dataspace_id`) in both `State::set_nexus(...)` and lane lifecycle application.
+  - Space Directory manifest ISIs (`PublishSpaceDirectoryManifest`, `RevokeSpaceDirectoryManifest`, `ExpireSpaceDirectoryManifest`) now reject unknown dataspace IDs by validating against the active `nexus.dataspace_catalog` before permission/lifecycle mutation.
+  - Trigger deletions that happen transitively during `Unregister<Account>`, `Unregister<Domain>`, contract-instance deactivation, and repeat-depletion cleanup now invoke the same trigger-permission pruning path.
+- Files updated:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/nft.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `crates/iroha_core/src/state.rs`
+  - `docs/source/data_model_and_isi_spec.md`
+- Added regressions:
+  - `unregister_account_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_account_target_permissions_from_accounts_and_roles`
+  - `unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_foreign_nft_permissions_from_accounts_and_roles`
+  - `delta_merge_unregister_nft_prunes_associated_permissions`
+  - `unregister_account_removes_citizen_service_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_citizen_service_permissions_from_accounts_and_roles`
+  - `unregister_account_preserves_other_domain_permissions_for_same_subject`
+  - `unregister_domain_preserves_other_domain_permissions_for_same_subject`
+  - `set_nexus_prunes_manifest_permissions_for_removed_dataspaces`
+  - `set_nexus_prunes_space_directory_manifests_for_removed_dataspaces`
+  - `set_nexus_prunes_axt_replay_entries_for_removed_dataspaces`
+  - `set_nexus_prunes_lane_state_when_lane_dataspace_changes`
+  - `apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes`
+  - `publish_manifest_rejects_unknown_dataspace`
+  - `revoke_manifest_rejects_unknown_dataspace`
+  - `expire_manifest_rejects_unknown_dataspace`
+  - `unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_nft_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_trigger_removes_associated_permissions_from_accounts_and_roles`
+
+### Validation Matrix (Permission Referential Cleanup)
+- `cargo test -p iroha_core --lib unregister_trigger_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib by_call_trigger_is_pruned_after_manual_execution` (pass)
+- `cargo test -p iroha_core --lib active_trigger_ids_excludes_depleted_after_burn` (pass)
+- `cargo test -p iroha_core --lib unregister_nft_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_account_has_oracle_feed_history_state` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_has_oracle_feed_history_state` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_account_target_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_foreign_nft_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib delta_merge_unregister_nft_prunes_associated_permissions` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_citizen_service_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_citizen_service_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_preserves_other_domain_permissions_for_same_subject` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_preserves_other_domain_permissions_for_same_subject` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_` (pass)
+- `cargo test -p iroha_core --lib lane_dataspace_changes -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib apply_lane_lifecycle_retire_prunes_lane_relays -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_manifest_permissions_for_removed_dataspaces` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_space_directory_manifests_for_removed_dataspaces` (pass)
+- `cargo test -p iroha_core --lib space_directory` (pass)
+- `cargo fmt --all` (pass)
 - `cargo check -p iroha_core` (pass)

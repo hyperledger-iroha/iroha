@@ -8665,6 +8665,9 @@ impl DetachedStateTransactionDelta {
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Created(nft))));
             }
             for id in self.nft_delete {
+                crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
+                    &mut stx, &id,
+                );
                 let _ = stx.world.nfts.remove(id.clone()).ok_or_else(|| {
                     iroha_data_model::ValidationFail::NotPermitted(format!("NFT not found: {id}"))
                 })?;
@@ -16057,8 +16060,17 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let previous_lane_config = self.nexus.read().lane_config.clone();
+        let lanes_to_prune = lanes_requiring_state_prune(&previous_lane_config, &nexus.lane_config);
         self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
         *self.nexus.write() = nexus;
+        if !lanes_to_prune.is_empty() {
+            self.lane_relays.write().prune_lanes(&lanes_to_prune);
+            self.da_commitments.write().prune_lanes(&lanes_to_prune);
+            self.da_confidential_compute
+                .write()
+                .prune_lanes(&lanes_to_prune);
+            self.da_pin_intents.write().prune_lanes(&lanes_to_prune);
+        }
 
         // Drop emergency override entries that target dataspaces no longer present
         // in the active catalog to avoid stale cross-dataspace references.
@@ -16112,6 +16124,44 @@ impl State {
             tx.commit();
         }
 
+        // Drop Space Directory manifest entries targeting removed dataspaces so
+        // stale manifest records cannot rehydrate removed dataspace bindings.
+        let stale_manifest_uaids: Vec<UniversalAccountId> = self
+            .world
+            .space_directory_manifests
+            .view()
+            .iter()
+            .filter_map(|(uaid, manifests)| {
+                manifests
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(*uaid)
+            })
+            .collect();
+        if !stale_manifest_uaids.is_empty() {
+            let mut tx = self.world.space_directory_manifests.block();
+            for uaid in stale_manifest_uaids {
+                let Some(mut manifests) = tx.get(&uaid).cloned() else {
+                    continue;
+                };
+                let stale_dataspaces: Vec<DataSpaceId> = manifests
+                    .iter()
+                    .filter_map(|(dataspace_id, _)| {
+                        (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
+                    })
+                    .collect();
+                for dataspace_id in stale_dataspaces {
+                    manifests.remove(&dataspace_id);
+                }
+                if manifests.is_empty() {
+                    tx.remove(uaid);
+                } else {
+                    tx.insert(uaid, manifests);
+                }
+            }
+            tx.commit();
+        }
+
         // Drop AXT policy entries targeting removed dataspaces so runtime policy
         // caches cannot retain stale dataspace references across nexus updates.
         let stale_axt_policies: Vec<DataSpaceId> = self
@@ -16127,6 +16177,88 @@ impl State {
             let mut tx = self.world.axt_policies.block();
             for dataspace_id in stale_axt_policies {
                 tx.remove(dataspace_id);
+            }
+            tx.commit();
+        }
+
+        // Drop replay-ledger entries bound to removed dataspaces so replay
+        // state cannot retain stale dataspace references after catalog updates.
+        let stale_replay_keys: Vec<AxtHandleReplayKey> = self
+            .world
+            .axt_replay_ledger
+            .view()
+            .iter()
+            .filter_map(|(key, entry)| (!dataspace_ids.contains(&entry.dataspace)).then_some(*key))
+            .collect();
+        if !stale_replay_keys.is_empty() {
+            let mut tx = self.world.axt_replay_ledger.block();
+            for key in stale_replay_keys {
+                tx.remove(key);
+            }
+            tx.commit();
+        }
+
+        // Drop account/role permissions targeting removed dataspaces so
+        // permission payload references do not outlive catalog entries.
+        let is_stale_dataspace_permission = |permission: &Permission| {
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest::try_from(
+                    permission,
+                )
+            {
+                return !dataspace_ids.contains(&permission.dataspace);
+            }
+
+            false
+        };
+        let stale_permission_holders: Vec<AccountId> = self
+            .world
+            .account_permissions
+            .view()
+            .iter()
+            .filter_map(|(holder, permissions)| {
+                permissions
+                    .iter()
+                    .any(is_stale_dataspace_permission)
+                    .then_some(holder.clone())
+            })
+            .collect();
+        if !stale_permission_holders.is_empty() {
+            let mut tx = self.world.account_permissions.block();
+            for holder in stale_permission_holders {
+                let remove_entry = if let Some(permissions) = tx.get_mut(&holder) {
+                    permissions.retain(|permission| !is_stale_dataspace_permission(permission));
+                    permissions.is_empty()
+                } else {
+                    false
+                };
+                if remove_entry {
+                    tx.remove(holder);
+                }
+            }
+            tx.commit();
+        }
+
+        let stale_roles: Vec<RoleId> = self
+            .world
+            .roles
+            .view()
+            .iter()
+            .filter_map(|(role_id, role)| {
+                role.permissions()
+                    .any(is_stale_dataspace_permission)
+                    .then_some(role_id.clone())
+            })
+            .collect();
+        if !stale_roles.is_empty() {
+            let mut tx = self.world.roles.block();
+            for role_id in stale_roles {
+                if let Some(role) = tx.get_mut(&role_id) {
+                    role.permissions
+                        .retain(|permission| !is_stale_dataspace_permission(permission));
+                    role.permission_epochs
+                        .retain(|permission, _| role.permissions.contains(permission));
+                }
             }
             tx.commit();
         }
@@ -16166,12 +16298,12 @@ impl State {
         refresh_axt_policies: bool,
     ) -> core::result::Result<(), LaneLifecycleError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        let retired_lanes = {
+        let lanes_to_prune = {
             let view_lock_wait_start = Instant::now();
             let _view_lock = self.view_lock.write();
             let view_lock_wait = view_lock_wait_start.elapsed();
             let view_lock_hold_start = Instant::now();
-            let (updated_catalog, previous_lane_config, updated_lane_config, retired_lanes) = {
+            let (updated_catalog, previous_lane_config, updated_lane_config, lanes_to_prune) = {
                 let nexus = self.nexus.read();
                 if !nexus.enabled {
                     return Err(LaneLifecycleError::NexusDisabled);
@@ -16192,17 +16324,13 @@ impl State {
                 let previous_lane_config = nexus.lane_config.clone();
                 let updated_lane_config =
                     iroha_config::parameters::actual::LaneConfig::from_catalog(&updated_catalog);
-                let retired_lanes: BTreeSet<_> = previous_lane_config
-                    .entries()
-                    .iter()
-                    .filter(|entry| updated_lane_config.entry(entry.lane_id).is_none())
-                    .map(|entry| entry.lane_id)
-                    .collect();
+                let lanes_to_prune =
+                    lanes_requiring_state_prune(&previous_lane_config, &updated_lane_config);
                 (
                     updated_catalog,
                     previous_lane_config,
                     updated_lane_config,
-                    retired_lanes,
+                    lanes_to_prune,
                 )
             };
 
@@ -16213,13 +16341,13 @@ impl State {
                 nexus.lane_config = updated_lane_config;
             }
 
-            if !retired_lanes.is_empty() {
-                self.lane_relays.write().prune_lanes(&retired_lanes);
-                self.da_commitments.write().prune_lanes(&retired_lanes);
+            if !lanes_to_prune.is_empty() {
+                self.lane_relays.write().prune_lanes(&lanes_to_prune);
+                self.da_commitments.write().prune_lanes(&lanes_to_prune);
                 self.da_confidential_compute
                     .write()
-                    .prune_lanes(&retired_lanes);
-                self.da_pin_intents.write().prune_lanes(&retired_lanes);
+                    .prune_lanes(&lanes_to_prune);
+                self.da_pin_intents.write().prune_lanes(&lanes_to_prune);
             }
             let view_lock_hold = view_lock_hold_start.elapsed();
             if view_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
@@ -16231,9 +16359,9 @@ impl State {
                     "state view_lock write held (lane lifecycle)"
                 );
             }
-            retired_lanes
+            lanes_to_prune
         };
-        let _ = retired_lanes;
+        let _ = lanes_to_prune;
         if refresh_axt_policies {
             let _ = self.refresh_axt_policies_from_directory();
         }
@@ -16746,6 +16874,21 @@ struct LaneTopologyDiff<'a> {
         &'a iroha_config::parameters::actual::LaneConfigEntry,
         &'a iroha_config::parameters::actual::LaneConfigEntry,
     )>,
+}
+
+fn lanes_requiring_state_prune(
+    previous: &iroha_config::parameters::actual::LaneConfig,
+    current: &iroha_config::parameters::actual::LaneConfig,
+) -> BTreeSet<LaneId> {
+    previous
+        .entries()
+        .iter()
+        .filter_map(|entry| match current.entry(entry.lane_id) {
+            None => Some(entry.lane_id),
+            Some(updated) if updated.dataspace_id != entry.dataspace_id => Some(entry.lane_id),
+            _ => None,
+        })
+        .collect()
 }
 
 fn lane_topology_diff<'a>(
@@ -22661,7 +22804,11 @@ impl StateTransaction<'_, '_> {
                     trigger_id = %id,
                     "by-call trigger is depleted; removing"
                 );
-                let _ = self.world.triggers.remove(id);
+                if self.world.triggers.remove(id) {
+                    crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                        self, id,
+                    );
+                }
                 return Err(
                     ValidationFail::from(Error::from(FindError::Trigger(id.clone()))).into(),
                 );
@@ -22728,7 +22875,11 @@ impl StateTransaction<'_, '_> {
                         trigger_id = %trg_id,
                         "data trigger missing while executing trigger events"
                     );
-                    let _ = self.world.triggers.remove(&trg_id);
+                    if self.world.triggers.remove(&trg_id) {
+                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                            self, &trg_id,
+                        );
+                    }
                     continue;
                 };
 
@@ -22737,7 +22888,11 @@ impl StateTransaction<'_, '_> {
                         trigger_id = %trg_id,
                         "data trigger is depleted while executing trigger events; removing"
                     );
-                    let _ = self.world.triggers.remove(&trg_id);
+                    if self.world.triggers.remove(&trg_id) {
+                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                            self, &trg_id,
+                        );
+                    }
                     continue;
                 }
                 if !trigger_is_enabled(action.metadata()) {
@@ -23001,7 +23156,11 @@ impl StateTransaction<'_, '_> {
                         ?blob_hash,
                         "missing trigger bytecode; dropping trigger"
                     );
-                    self.world.triggers.remove(id);
+                    if self.world.triggers.remove(id) {
+                        crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                            self, id,
+                        );
+                    }
                     (
                         Ok(Self::execution_step_from_executable(executable)),
                         Some(TriggerCompletedOutcome::Failure(
@@ -26223,6 +26382,614 @@ mod tests {
         assert!(
             policy_view.get(&removed).is_none(),
             "removed dataspace policy must be pruned by set_nexus"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_axt_replay_entries_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let retained_key = AxtHandleReplayKey::from_parts([0x11; 32], 1, 1, LaneId::SINGLE);
+        let removed_key = AxtHandleReplayKey::from_parts([0x22; 32], 1, 2, LaneId::SINGLE);
+        let mut wb = state.world.block();
+        wb.axt_replay_ledger.insert(
+            retained_key,
+            AxtReplayRecord {
+                dataspace: retained,
+                used_slot: 1,
+                retain_until_slot: 10,
+            },
+        );
+        wb.axt_replay_ledger.insert(
+            removed_key,
+            AxtReplayRecord {
+                dataspace: removed,
+                used_slot: 1,
+                retain_until_slot: 10,
+            },
+        );
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let replay_view = state.world.axt_replay_ledger.view();
+        assert!(
+            replay_view.get(&retained_key).is_some(),
+            "retained dataspace replay entry should remain"
+        );
+        assert!(
+            replay_view.get(&removed_key).is_none(),
+            "removed dataspace replay entry must be pruned by set_nexus"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_manifest_permissions_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let stale_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest {
+                dataspace: removed,
+            }
+            .into();
+        let retained_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest {
+                dataspace: retained,
+            }
+            .into();
+        let holder = ALICE_ID.clone();
+        let role_id: RoleId = "dataspace_manifest_cleanup".parse().expect("role id");
+
+        let mut wb = state.world.block();
+        wb.account_permissions.insert(
+            holder.clone(),
+            BTreeSet::from([stale_permission.clone(), retained_permission.clone()]),
+        );
+        wb.roles.insert(
+            role_id.clone(),
+            Role {
+                id: role_id.clone(),
+                permissions: BTreeSet::from([
+                    stale_permission.clone(),
+                    retained_permission.clone(),
+                ]),
+                permission_epochs: BTreeMap::from([
+                    (stale_permission.clone(), 1),
+                    (retained_permission.clone(), 1),
+                ]),
+            },
+        );
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let account_permissions_view = state.world.account_permissions.view();
+        let account_permissions = account_permissions_view
+            .get(&holder)
+            .expect("holder permissions should remain");
+        assert!(
+            account_permissions.contains(&retained_permission),
+            "retained dataspace permission should remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_permission),
+            "removed dataspace permission must be pruned from account"
+        );
+
+        let roles_view = state.world.roles.view();
+        let role = roles_view.get(&role_id).expect("role should remain");
+        assert!(
+            role.permissions()
+                .any(|permission| permission == &retained_permission),
+            "retained dataspace permission should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_permission),
+            "removed dataspace permission must be pruned from role"
+        );
+        assert!(
+            role.permission_epochs().contains_key(&retained_permission),
+            "retained permission epoch should remain"
+        );
+        assert!(
+            !role.permission_epochs().contains_key(&stale_permission),
+            "stale permission epoch should be pruned"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_space_directory_manifests_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let uaid_mixed = UniversalAccountId::from_hash(Hash::new(b"uaid::mixed-manifests"));
+        let uaid_stale_only =
+            UniversalAccountId::from_hash(Hash::new(b"uaid::stale-only-manifests"));
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "legacy".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let manifest_record = |uaid: UniversalAccountId, dataspace: DataSpaceId| {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::V1,
+                uaid,
+                dataspace,
+                issued_ms: 1,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            record
+        };
+
+        let mut mixed_set = SpaceDirectoryManifestSet::default();
+        mixed_set.upsert(manifest_record(uaid_mixed, retained));
+        mixed_set.upsert(manifest_record(uaid_mixed, removed));
+
+        let mut stale_only_set = SpaceDirectoryManifestSet::default();
+        stale_only_set.upsert(manifest_record(uaid_stale_only, removed));
+
+        let mut wb = state.world.block();
+        wb.space_directory_manifests.insert(uaid_mixed, mixed_set);
+        wb.space_directory_manifests
+            .insert(uaid_stale_only, stale_only_set);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let manifests_view = state.world.space_directory_manifests.view();
+        let mixed = manifests_view
+            .get(&uaid_mixed)
+            .expect("mixed manifest set should remain for retained dataspace");
+        assert!(
+            mixed.get(&retained).is_some(),
+            "retained dataspace manifest should remain"
+        );
+        assert!(
+            mixed.get(&removed).is_none(),
+            "removed dataspace manifest should be pruned"
+        );
+        assert!(
+            manifests_view.get(&uaid_stale_only).is_none(),
+            "manifest set should be removed when all dataspaces are stale"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let migrated = DataSpaceId::new(9);
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
+                .expect("lane catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: migrated,
+                    alias: "migrated".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        {
+            let mut relays = state.lane_relays.write();
+            let _ = relays
+                .insert(sample_lane_relay_envelope(
+                    1,
+                    LaneId::new(0),
+                    &signers,
+                    vec![0b0000_0001],
+                ))
+                .expect("lane relay stored");
+        }
+        {
+            let mut commitments = state.da_commitments.write();
+            let record = DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                0,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                Some(KzgCommitment::new([0xDD; 48])),
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xEE; 32]),
+                Signature::from_bytes(&[0x11; 64]),
+            );
+            commitments.insert(
+                &record,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 0,
+                },
+            );
+            state.da_confidential_compute.write().insert(
+                &record,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 1,
+                },
+                &ConfidentialComputePolicy::new(
+                    ConfidentialComputeMechanism::Encryption,
+                    7,
+                    Vec::new(),
+                ),
+            );
+        }
+        {
+            let mut intents = state.da_pin_intents.write();
+            let mut intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0x44; 32]),
+                ManifestDigest::new([0x55; 32]),
+            );
+            intent.alias = Some("lane0-reassign".to_string());
+            intents.insert(
+                intent,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 2,
+                },
+            );
+        }
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(
+                nonzero!(1_u32),
+                vec![LaneConfig {
+                    id: LaneId::new(0),
+                    dataspace_id: migrated,
+                    alias: "lane0-migrated".to_string(),
+                    ..LaneConfig::default()
+                }],
+            )
+            .expect("lane catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: migrated,
+                    alias: "migrated".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "lane relays should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_commitments
+                .read()
+                .get_by_lane_epoch_sequence(0, 1, 0)
+                .is_none(),
+            "lane commitments should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_confidential_compute
+                .read()
+                .get_by_lane_epoch_sequence(0, 1, 0)
+                .is_none(),
+            "lane confidential receipts should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_pin_intents
+                .read()
+                .get_by_alias("lane0-reassign")
+                .is_none(),
+            "lane pin intents should be pruned when lane dataspace changes"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let migrated = DataSpaceId::new(11);
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
+                .expect("lane catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: migrated,
+                    alias: "migrated".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let signers = [&validator_keypair];
+        {
+            let mut relays = state.lane_relays.write();
+            let _ = relays
+                .insert(sample_lane_relay_envelope(
+                    1,
+                    LaneId::new(0),
+                    &signers,
+                    vec![0b0000_0001],
+                ))
+                .expect("lane relay stored");
+        }
+        {
+            let mut commitments = state.da_commitments.write();
+            let record = DaCommitmentRecord::new(
+                LaneId::new(0),
+                1,
+                0,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                Some(KzgCommitment::new([0xDD; 48])),
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xEE; 32]),
+                Signature::from_bytes(&[0x11; 64]),
+            );
+            commitments.insert(
+                &record,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 0,
+                },
+            );
+            state.da_confidential_compute.write().insert(
+                &record,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 1,
+                },
+                &ConfidentialComputePolicy::new(
+                    ConfidentialComputeMechanism::Encryption,
+                    7,
+                    Vec::new(),
+                ),
+            );
+        }
+        {
+            let mut intents = state.da_pin_intents.write();
+            let mut intent = DaPinIntent::new(
+                LaneId::new(0),
+                1,
+                1,
+                StorageTicketId::new([0x44; 32]),
+                ManifestDigest::new([0x55; 32]),
+            );
+            intent.alias = Some("lane0-lifecycle-reassign".to_string());
+            intents.insert(
+                intent,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: 2,
+                },
+            );
+        }
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(0),
+                dataspace_id: migrated,
+                alias: "lane0-migrated".to_string(),
+                ..LaneConfig::default()
+            }],
+            retire: vec![LaneId::new(0)],
+        };
+        state
+            .apply_lane_lifecycle(&plan)
+            .expect("apply lane lifecycle reassign");
+
+        let nexus_snapshot = state.nexus_snapshot();
+        let lane_entry = nexus_snapshot
+            .lane_config
+            .entry(LaneId::new(0))
+            .expect("lane must remain after reassign");
+        assert_eq!(lane_entry.dataspace_id, migrated);
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "lane relays should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_commitments
+                .read()
+                .get_by_lane_epoch_sequence(0, 1, 0)
+                .is_none(),
+            "lane commitments should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_confidential_compute
+                .read()
+                .get_by_lane_epoch_sequence(0, 1, 0)
+                .is_none(),
+            "lane confidential receipts should be pruned when lane dataspace changes"
+        );
+        assert!(
+            state
+                .da_pin_intents
+                .read()
+                .get_by_alias("lane0-lifecycle-reassign")
+                .is_none(),
+            "lane pin intents should be pruned when lane dataspace changes"
         );
     }
 
@@ -36200,6 +36967,106 @@ mod tests {
             .get(&rid)
             .expect("role remains present");
         assert_eq!(stored_role.permission_epoch(&perm), Some(expected_epoch));
+    }
+
+    #[test]
+    fn delta_merge_unregister_nft_prunes_associated_permissions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+
+        let holder_domain_id: DomainId = "holders".parse().unwrap();
+        let nft_domain_id: DomainId = "nfts".parse().unwrap();
+        let holder_id = AccountId::new(holder_domain_id.clone(), KeyPair::random().into_parts().0);
+        let nft_id: NftId = "ticket$nfts".parse().unwrap();
+        let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
+        let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
+            nft: nft_id.clone(),
+        }
+        .into();
+
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(holder_domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(nft_domain_id))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
+            let (id, value) = nft.into_key_value();
+            stx.world.nfts.insert(id, value);
+
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder should have nft permission before merge"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should have nft permission before merge"
+            );
+
+            stx.apply();
+        }
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.unregister_nft(nft_id.clone());
+        let _ = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect("merge ok");
+
+        assert!(
+            state_block.world.nfts.get(&nft_id).is_none(),
+            "nft should be removed by detached merge"
+        );
+        assert!(
+            !state_block
+                .world
+                .account_permissions
+                .get(&holder_id)
+                .is_some_and(|perms| perms.contains(&permission)),
+            "holder nft permission should be removed by detached merge"
+        );
+        let role = state_block
+            .world
+            .roles
+            .get(&role_id)
+            .expect("role should exist");
+        assert!(
+            !role.permissions().any(|perm| perm == &permission),
+            "role nft permission should be removed by detached merge"
+        );
+        assert!(
+            !role.permission_epochs().contains_key(&permission),
+            "role permission epochs should be pruned by detached merge"
+        );
     }
 
     #[test]

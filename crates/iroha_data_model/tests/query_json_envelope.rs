@@ -16,7 +16,7 @@ mod json_envelope {
 
     fn parse_authority(literal: &str) -> AccountId {
         AccountId::parse_encoded(literal)
-            .map(|parsed| parsed.into_account_id())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("authority")
     }
 

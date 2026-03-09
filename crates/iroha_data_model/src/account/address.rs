@@ -703,7 +703,21 @@ impl JsonSerialize for AccountAddress {
 impl JsonDeserialize for AccountAddress {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let literal = parser.parse_string()?;
-        AccountAddress::from_str(&literal).map_err(|err| json::Error::Message(err.to_string()))
+        match AccountAddress::from_str(&literal) {
+            Ok(address) => Ok(address),
+            Err(AccountAddressError::UnsupportedAddressFormat) => {
+                let canonical_hex = literal
+                    .strip_prefix("0x")
+                    .or_else(|| literal.strip_prefix("0X"))
+                    .unwrap_or(&literal);
+                let canonical_bytes = hex::decode(canonical_hex).map_err(|_| {
+                    json::Error::Message(AccountAddressError::InvalidHexAddress.to_string())
+                })?;
+                AccountAddress::from_canonical_bytes(&canonical_bytes)
+                    .map_err(|err| json::Error::Message(err.to_string()))
+            }
+            Err(err) => Err(json::Error::Message(err.to_string())),
+        }
     }
 }
 
@@ -1674,6 +1688,17 @@ mod tests {
     fn account_address_for_seed(seed: u8) -> AccountAddress {
         let account = AccountId::new(default_domain_id(), ed25519_pk_with(seed));
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn account_address_json_roundtrip_supports_canonical_hex_literals() {
+        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("account address");
+        let json_literal = norito::json::to_json(&address).expect("serialize account address");
+        let decoded: AccountAddress =
+            norito::json::from_str(&json_literal).expect("deserialize account address");
+        assert_eq!(decoded, address);
     }
 
     fn nfkc_like_payload(compressed: &str) -> String {

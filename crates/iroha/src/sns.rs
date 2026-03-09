@@ -5,16 +5,31 @@ use norito::json::Value;
 use url::Url;
 
 use crate::{
-    client::{Client, join_torii_url},
+    client::{Client, ResponseReport, join_torii_url},
     data_model::sns::{
         FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
         RegisterNameResponseV1, RenewNameRequestV1, SuffixPolicyV1, TransferNameRequestV1,
         UpdateControllersRequestV1,
     },
-    http::{Method as HttpMethod, RequestBuilder},
+    http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
 
 const APPLICATION_JSON: &str = "application/json";
+
+fn ensure_status(
+    response: &Response<Vec<u8>>,
+    expected: StatusCode,
+    context: &str,
+) -> eyre::Result<()> {
+    if response.status() == expected {
+        return Ok(());
+    }
+    let message = format!("{context}; expected HTTP status {expected}");
+    let report = match ResponseReport::with_msg(message, response) {
+        Ok(report) | Err(report) => report.0,
+    };
+    Err(report)
+}
 
 /// Typed helper exposed by [`Client::sns()`].
 pub struct SnsApi<'a> {
@@ -38,9 +53,15 @@ impl<'a> SnsApi<'a> {
             .client
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::CREATED,
+            "unexpected SNS register response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -60,6 +81,7 @@ impl<'a> SnsApi<'a> {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()?;
+        ensure_status(&response, StatusCode::OK, "unexpected SNS policy response")?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -77,6 +99,11 @@ impl<'a> SnsApi<'a> {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS registration lookup response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -97,6 +124,7 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(&response, StatusCode::OK, "unexpected SNS renew response")?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -121,6 +149,11 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS transfer response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -145,6 +178,11 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS controller update response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -165,6 +203,7 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(&response, StatusCode::OK, "unexpected SNS freeze response")?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -185,6 +224,11 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS unfreeze response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -208,6 +252,11 @@ impl<'a> SnsApi<'a> {
             .body(body)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS governance case create response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 
@@ -226,6 +275,11 @@ impl<'a> SnsApi<'a> {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()?;
+        ensure_status(
+            &response,
+            StatusCode::OK,
+            "unexpected SNS governance case export response",
+        )?;
         Ok(norito::json::from_slice(response.body())?)
     }
 }
@@ -262,5 +316,41 @@ impl CaseExportQuery<'_> {
                 qp.append_pair("limit", &limit.to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! SNS client helper tests.
+
+    use super::*;
+
+    fn response_with_status(status: StatusCode, body: &[u8]) -> Response<Vec<u8>> {
+        Response::builder()
+            .status(status)
+            .body(body.to_vec())
+            .expect("response build")
+    }
+
+    #[test]
+    fn ensure_status_accepts_expected_status_code() {
+        let response = response_with_status(StatusCode::OK, br#"{"ok":true}"#);
+        ensure_status(&response, StatusCode::OK, "status check").expect("status must pass");
+    }
+
+    #[test]
+    fn ensure_status_reports_text_body_when_status_mismatches() {
+        let response = response_with_status(StatusCode::BAD_REQUEST, b"invalid JSON body");
+        let err = ensure_status(&response, StatusCode::CREATED, "register")
+            .expect_err("mismatched status must fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("register"),
+            "expected context in error message, got: {message}"
+        );
+        assert!(
+            message.contains("invalid JSON body"),
+            "expected response body in error message, got: {message}"
+        );
     }
 }

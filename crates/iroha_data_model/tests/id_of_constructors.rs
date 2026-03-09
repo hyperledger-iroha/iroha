@@ -56,7 +56,7 @@ fn account_id_of_matches_parse() {
     let kp = KeyPair::random();
     let via_of = AccountId::of(domain, kp.public_key().clone());
     let parsed = AccountId::parse_encoded(&via_of.to_string())
-        .map(|parsed| parsed.into_account_id())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("canonical AccountId literal parses");
 
     assert_eq!(parsed, via_of);

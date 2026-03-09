@@ -9449,7 +9449,7 @@ mod tests {
                         "metadata": norito_json!({
                             "topic": "status"
                         }),
-                        "scheduled_start_ms": 1700000000000_u64,
+                        "scheduled_start_ms": 1_700_000_000_000_u64,
                         "billing_account": billing_account,
                         "privacy_mode": norito_json!({
                             "mode": "ZkRosterV1",
@@ -9461,7 +9461,7 @@ mod tests {
                                 "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
                                 "weight": 5
                             })],
-                            "expiry_ms": 1700111000000_u64
+                            "expiry_ms": 1_700_111_000_000_u64
                         })
                     })
                 })
