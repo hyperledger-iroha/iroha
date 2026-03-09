@@ -16,12 +16,13 @@ use color_eyre::{
 };
 use iroha::client::Client;
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
+use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
     query::trigger::prelude::FindTriggers, trigger::action::Repeats,
 };
 use iroha_genesis::GenesisBlock;
-use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
     sync::{Notify, Semaphore},
@@ -94,37 +95,45 @@ const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 0;
 const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_PENDING_CAP: i64 = 8_192;
+const IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS: i64 = 250;
+const IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: i64 = 250;
 const IZANAMI_INGRESS_MAX_ATTEMPTS: usize = 3;
 const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
 const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
 const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
 const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
 const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
-const IZANAMI_INGRESS_QUEUE_PRESSURE_COOLDOWN_MAX_SHIFT: u32 = 4;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
-const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 4;
+const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 2;
 const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
-const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
+const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 2;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
+const IZANAMI_TELEMETRY_PROFILE: &str = "developer";
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 16;
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 60;
 const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
-const IZANAMI_SHARED_HOST_SOAK_TPS_CAP: f64 = 5.0;
-const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP: usize = 8;
+const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
+const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 8;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
-const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 600;
+const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 300;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 2;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 1_000;
+const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
+const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 500;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 4_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 2_500;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 4_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 0;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubmissionConfirmationMode {
+    BlockingApplied,
+    AcceptedByIngress,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RecoveryProfile {
@@ -677,28 +686,11 @@ impl EndpointHealthPool {
         if !failure_class.is_retryable() {
             return false;
         }
-        let failure_threshold = if matches!(failure_class, IngressFailureClass::QueuePressure) {
-            1
-        } else {
-            self.config.unhealthy_failure_threshold
-        };
+        let failure_threshold = self.config.unhealthy_failure_threshold;
         if state.consecutive_failures < failure_threshold {
             return false;
         }
-        let cooldown = if matches!(failure_class, IngressFailureClass::QueuePressure) {
-            let base = self
-                .config
-                .unhealthy_cooldown
-                .max(Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS));
-            let shift = state
-                .consecutive_queue_pressure_failures
-                .saturating_sub(1)
-                .min(IZANAMI_INGRESS_QUEUE_PRESSURE_COOLDOWN_MAX_SHIFT);
-            let multiplier = 1_u32.checked_shl(shift).unwrap_or(u32::MAX).max(1);
-            base.saturating_mul(multiplier)
-        } else {
-            self.config.unhealthy_cooldown
-        };
+        let cooldown = self.config.unhealthy_cooldown;
         let was_unhealthy = state.unhealthy_until.is_some_and(|until| now < until);
         let unhealthy_until = now.checked_add(cooldown).unwrap_or(now);
         state.unhealthy_until = Some(unhealthy_until);
@@ -843,10 +835,22 @@ fn ingress_error_message(error: &color_eyre::Report) -> String {
     format!("{error:#}").to_ascii_lowercase()
 }
 
+fn is_idempotent_duplicate_submission_message(message: &str) -> bool {
+    message.contains("repeated instruction")
+        || message.contains("repetition of")
+        || message.contains("already exists")
+}
+
+fn is_idempotent_duplicate_submission(error: &color_eyre::Report) -> bool {
+    let message = ingress_error_message(error);
+    is_idempotent_duplicate_submission_message(&message)
+}
+
 fn is_ingress_queue_pressure_message(message: &str) -> bool {
     message.contains("transaction queued for too long")
         || message.contains("status_timeout_ms")
         || message.contains("haven't got tx confirmation within")
+        || contains_http_429_status(message)
 }
 
 fn is_ingress_endpoint_backpressure_message(message: &str) -> bool {
@@ -932,10 +936,19 @@ where
     let mut endpoint_backpressure_retries = 0_u32;
     let max_endpoint_backpressure_retries = max_retry_attempts
         .saturating_mul(IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER)
-        .max(4);
+        .max(1);
     loop {
         match submit() {
             Ok(()) => return Ok(()),
+            Err(err) if is_idempotent_duplicate_submission(&err) => {
+                warn!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    ?err,
+                    "treating duplicate submission rejection as idempotent success"
+                );
+                return Ok(());
+            }
             Err(err) if is_ingress_queue_timeout_retryable(&err) => {
                 let error_message = ingress_error_message(&err);
                 let endpoint_backpressure =
@@ -997,6 +1010,13 @@ fn contains_http_5xx_status(message: &str) -> bool {
             || message.contains(&format!("http {code}"))
             || message.contains(&format!(" {code} "))
     })
+}
+
+fn contains_http_429_status(message: &str) -> bool {
+    message.contains("429 too many requests")
+        || message.contains("status code: 429")
+        || message.contains("status: 429")
+        || message.contains("http 429")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1102,8 +1122,24 @@ fn default_nexus_pipeline_time() -> Duration {
     Duration::from_millis(block_ms.saturating_add(commit_ms))
 }
 
+fn default_izanami_pipeline_time() -> Duration {
+    default_nexus_pipeline_time()
+}
+
+fn sumeragi_phase_operator_keypair() -> KeyPair {
+    Signatory::Peer.key_pair().clone()
+}
+
+fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
+    let mut params = SumeragiNposParameters::default();
+    params.max_validators = u32::try_from(peer_count.max(1)).unwrap_or(u32::MAX);
+    params
+}
+
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
-    is_shared_host_stable_recovery_run(config)
+    matches!(config.workload_profile, WorkloadProfile::Stable)
+        && config.faulty_peers == 0
+        && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
 }
 
@@ -1113,6 +1149,14 @@ fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
         && config.faulty_peers == 0
         && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
+}
+
+fn submission_confirmation_mode(config: &ChaosConfig) -> SubmissionConfirmationMode {
+    if matches!(config.workload_profile, WorkloadProfile::Stable) && config.faulty_peers == 0 {
+        SubmissionConfirmationMode::AcceptedByIngress
+    } else {
+        SubmissionConfirmationMode::BlockingApplied
+    }
 }
 
 fn recovery_profile_for(config: &ChaosConfig) -> RecoveryProfile {
@@ -1133,9 +1177,15 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     let original_progress_timeout = config.progress_timeout;
     let original_pipeline_time = config.pipeline_time;
 
-    // Keep the shared-host soak load shape fixed so pilot runs stay comparable.
-    config.tps = IZANAMI_SHARED_HOST_SOAK_TPS_CAP;
-    config.max_inflight = IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP;
+    // Preserve operator-selected stress settings while enforcing a minimum load floor
+    // for shared-host soaks so runs remain comparable at low load.
+    config.tps = config.tps.max(IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
+    // Keep enough in-flight room to sustain the configured TPS without permit starvation.
+    let inflight_floor_from_tps = usize::try_from((config.tps * 2.0).ceil() as u64).unwrap_or(1);
+    config.max_inflight = config
+        .max_inflight
+        .max(IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR)
+        .max(inflight_floor_from_tps.max(1));
     config.progress_timeout = config.progress_timeout.max(Duration::from_secs(
         IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS,
     ));
@@ -1179,20 +1229,41 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
     let recovery_profile = recovery_profile_for(config);
+    let phase_operator_keypair = sumeragi_phase_operator_keypair();
+    let torii_receipt_public_key = phase_operator_keypair.public_key().to_string();
+    let torii_receipt_private_key =
+        ExposedPrivateKey(phase_operator_keypair.private_key().clone()).to_string();
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed(instructions::IZANAMI_BASE_SEED);
     let pipeline_time = config
         .pipeline_time
-        .or_else(|| config.nexus.as_ref().map(|_| default_nexus_pipeline_time()));
-    builder = match pipeline_time {
-        Some(duration) => builder.with_pipeline_time(duration),
-        None => builder.with_default_pipeline_time(),
-    };
+        .unwrap_or_else(default_izanami_pipeline_time);
+    builder = builder.with_pipeline_time(pipeline_time);
     if let Some(profile) = &config.nexus {
         builder = builder
             .with_data_availability_enabled(profile.da_enabled)
             .with_config_table(profile.config_layer.clone());
+        let gas_account_id = instructions::nexus_gas_account_id().to_string();
+        builder = builder.with_config_layer(move |layer| {
+            layer
+                .write(
+                    ["pipeline", "gas", "tech_account_id"],
+                    gas_account_id.clone(),
+                )
+                .write(
+                    ["nexus", "fees", "fee_sink_account_id"],
+                    gas_account_id.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    gas_account_id.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    gas_account_id.clone(),
+                );
+        });
     }
     if config.nexus.is_some() {
         builder = builder.without_npos_genesis_bootstrap();
@@ -1233,8 +1304,9 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         injected.push(InstructionBox::from(SetParameter::new(
             Parameter::Sumeragi(SumeragiParameter::RedundantSendR(IZANAMI_REDUNDANT_SEND_R)),
         )));
+        let npos_params = izanami_npos_parameters(config.peer_count);
         injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
+            npos_params.into_custom_parameter(),
         ))));
         if !injected.is_empty() {
             if let Some(last_tx) = genesis.last_mut() {
@@ -1245,7 +1317,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         }
     }
     // Tune pipeline/validation throughput and raise payload/RBC budgets to keep long Izanami runs stable.
-    builder = builder.with_config_layer(|layer| {
+    builder = builder.with_config_layer(move |layer| {
         let as_i64 = |value: u64| -> i64 {
             i64::try_from(value).expect("NPoS timing fits into i64 milliseconds")
         };
@@ -1287,6 +1359,15 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 ["pipeline", "stateless_cache_cap"],
                 IZANAMI_PIPELINE_STATELESS_CACHE_CAP,
             )
+            .write(
+                ["torii", "receipt_public_key"],
+                torii_receipt_public_key.clone(),
+            )
+            .write(
+                ["torii", "receipt_private_key"],
+                torii_receipt_private_key.clone(),
+            )
+            .write(["telemetry_profile"], IZANAMI_TELEMETRY_PROFILE)
             .write(["kura", "fsync_mode"], IZANAMI_KURA_FSYNC_MODE.to_string())
             .write(
                 ["sumeragi", "advanced", "queues", "block_payload"],
@@ -1322,6 +1403,19 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "advanced", "worker", "validation_pending_cap"],
                 IZANAMI_VALIDATION_PENDING_CAP,
+            )
+            .write(
+                ["sumeragi", "advanced", "worker", "iteration_budget_cap_ms"],
+                IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS,
+            )
+            .write(
+                [
+                    "sumeragi",
+                    "advanced",
+                    "worker",
+                    "iteration_drain_budget_cap_ms",
+                ],
+                IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
             )
             .write(
                 [
@@ -1655,6 +1749,7 @@ impl IzanamiRunner {
             wait_for_target_blocks(
                 &self.peers,
                 target_blocks,
+                self.config.faulty_peers,
                 self.config.progress_interval,
                 self.config.progress_timeout,
                 self.config.latency_p95_threshold,
@@ -1681,6 +1776,12 @@ impl IzanamiRunner {
             run_control.stop();
         }
 
+        if run_error.is_some() {
+            // Cut off peer services first on fatal progress failure so blocking submitters
+            // terminate quickly instead of draining through long status timeouts.
+            self.network.shutdown().await;
+        }
+
         let shutdown_timeout = if run_error.is_some() {
             Duration::from_secs(IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS)
         } else {
@@ -1688,7 +1789,9 @@ impl IzanamiRunner {
         };
         await_worker_shutdown_with_timeout(load_handles, "load", shutdown_timeout).await;
         await_worker_shutdown_with_timeout(faulty_handles, "fault", shutdown_timeout).await;
-        self.network.shutdown().await;
+        if run_error.is_none() {
+            self.network.shutdown().await;
+        }
 
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
@@ -1787,6 +1890,7 @@ impl IzanamiRunner {
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
     ) -> Vec<JoinHandle<()>> {
+        let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
         let semaphore = Arc::new(Semaphore::new(self.config.max_inflight));
         let mut load_rng = rng.clone();
@@ -1856,6 +1960,7 @@ impl IzanamiRunner {
                     submit_plan(
                         &ingress_pool,
                         plan,
+                        submission_confirmation,
                         semaphore,
                         &metrics,
                         &submission_counter,
@@ -1885,6 +1990,13 @@ fn submission_backlog_limit(max_inflight: usize) -> usize {
         .saturating_mul(IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER)
 }
 
+const fn should_run_trigger_precheck(submission_confirmation: SubmissionConfirmationMode) -> bool {
+    matches!(
+        submission_confirmation,
+        SubmissionConfirmationMode::BlockingApplied
+    )
+}
+
 async fn wait_for_submission_capacity(
     submissions: &mut JoinSet<()>,
     backlog_limit: usize,
@@ -1908,9 +2020,12 @@ async fn wait_for_submission_capacity(
     true
 }
 
-fn tune_ingress_client(mut client: Client) -> Client {
+fn tune_ingress_client(mut client: Client, mode: SubmissionConfirmationMode) -> Client {
     client.torii_request_timeout = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
-    client.transaction_status_timeout = Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
+    if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
+        client.transaction_status_timeout =
+            Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
+    }
     client
 }
 
@@ -1970,6 +2085,10 @@ fn tolerated_peer_failures(peer_count: usize) -> usize {
     }
 }
 
+fn effective_tolerated_peer_failures(peer_count: usize, configured_faulty_peers: usize) -> usize {
+    tolerated_peer_failures(peer_count).min(configured_faulty_peers)
+}
+
 fn quorum_min_height_from_samples(mut heights: Vec<u64>) -> u64 {
     if heights.is_empty() {
         return 0;
@@ -2001,6 +2120,10 @@ fn strict_divergence_lagging_peer_count(
         .iter()
         .filter(|height| reference_height.saturating_sub(**height) > max_allowed_divergence)
         .count()
+}
+
+fn should_enforce_strict_progress_timeout(lagging_peers: usize, tolerated_failures: usize) -> bool {
+    lagging_peers > tolerated_failures
 }
 
 struct ProgressState {
@@ -2050,6 +2173,56 @@ struct BlockIntervalSummary {
     p50_ms: u64,
     p95_ms: u64,
     samples: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SumeragiPhaseSnapshot {
+    propose_ms: u64,
+    collect_da_ms: u64,
+    collect_prevote_ms: u64,
+    collect_precommit_ms: u64,
+    collect_aggregator_ms: u64,
+    commit_ms: u64,
+    pipeline_total_ms: u64,
+    pipeline_total_ema_ms: u64,
+}
+
+fn parse_sumeragi_phase_snapshot(value: norito::json::Value) -> Option<SumeragiPhaseSnapshot> {
+    let norito::json::Value::Object(root) = value else {
+        return None;
+    };
+    let ema = match root.get("ema_ms") {
+        Some(norito::json::Value::Object(ema)) => ema,
+        _ => return None,
+    };
+    Some(SumeragiPhaseSnapshot {
+        propose_ms: root.get("propose_ms")?.as_u64()?,
+        collect_da_ms: root.get("collect_da_ms")?.as_u64()?,
+        collect_prevote_ms: root.get("collect_prevote_ms")?.as_u64()?,
+        collect_precommit_ms: root.get("collect_precommit_ms")?.as_u64()?,
+        collect_aggregator_ms: root.get("collect_aggregator_ms")?.as_u64()?,
+        commit_ms: root.get("commit_ms")?.as_u64()?,
+        pipeline_total_ms: root.get("pipeline_total_ms")?.as_u64()?,
+        pipeline_total_ema_ms: ema.get("pipeline_total_ms")?.as_u64()?,
+    })
+}
+
+async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSnapshot, String> {
+    let peer = peers
+        .first()
+        .cloned()
+        .ok_or_else(|| "no peers available for phase sampling".to_owned())?;
+    spawn_blocking(move || {
+        let mut client = peer.client();
+        client.set_operator_key_pair(sumeragi_phase_operator_keypair());
+        let phases = client
+            .get_sumeragi_phases_json()
+            .map_err(|err| format!("failed to fetch sumeragi phases snapshot: {err}"))?;
+        parse_sumeragi_phase_snapshot(phases)
+            .ok_or_else(|| "phase payload missing expected fields".to_owned())
+    })
+    .await
+    .map_err(|err| format!("phase sampling task failed: {err}"))?
 }
 
 impl BlockIntervalTracker {
@@ -2138,6 +2311,7 @@ impl HeightDivergenceState {
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
+    configured_faulty_peers: usize,
     progress_interval: Duration,
     progress_timeout: Duration,
     latency_p95_threshold: Option<Duration>,
@@ -2147,10 +2321,12 @@ async fn wait_for_target_blocks(
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
     let mut strict_progress = ProgressState::new(start);
+    let mut strict_tolerated_stall_logged_at: Option<Instant> = None;
     let mut divergence = HeightDivergenceState::new();
     let mut block_intervals = BlockIntervalTracker::default();
     let mut strict_block_intervals = BlockIntervalTracker::default();
-    let tolerated_failures = tolerated_peer_failures(peers.len());
+    let tolerated_failures =
+        effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
     let strict_divergence_window =
         Duration::from_secs(IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS);
     loop {
@@ -2173,7 +2349,8 @@ async fn wait_for_target_blocks(
             strict_reference_height,
             IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS,
         );
-        let strict_guard_active = lagging_peers > tolerated_failures;
+        let strict_guard_active =
+            should_enforce_strict_progress_timeout(lagging_peers, tolerated_failures);
         if now >= run_control.deadline() {
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
@@ -2240,6 +2417,29 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
+                match sample_sumeragi_phases(peers).await {
+                    Ok(phases) => {
+                        info!(
+                            target: "izanami::progress",
+                            phase_propose_ms = phases.propose_ms,
+                            phase_collect_da_ms = phases.collect_da_ms,
+                            phase_collect_prevote_ms = phases.collect_prevote_ms,
+                            phase_collect_precommit_ms = phases.collect_precommit_ms,
+                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
+                            phase_commit_ms = phases.commit_ms,
+                            phase_pipeline_total_ms = phases.pipeline_total_ms,
+                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
+                            "sumeragi phase timing snapshot at target height"
+                        );
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "izanami::progress",
+                            error = %err,
+                            "sumeragi phase timing snapshot unavailable at target height"
+                        );
+                    }
+                }
                 if let Some(threshold) = latency_p95_threshold {
                     let threshold_ms = u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX);
                     if summary.p95_ms > threshold_ms {
@@ -2275,6 +2475,29 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
+                match sample_sumeragi_phases(peers).await {
+                    Ok(phases) => {
+                        info!(
+                            target: "izanami::progress",
+                            phase_propose_ms = phases.propose_ms,
+                            phase_collect_da_ms = phases.collect_da_ms,
+                            phase_collect_prevote_ms = phases.collect_prevote_ms,
+                            phase_collect_precommit_ms = phases.collect_precommit_ms,
+                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
+                            phase_commit_ms = phases.commit_ms,
+                            phase_pipeline_total_ms = phases.pipeline_total_ms,
+                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
+                            "sumeragi phase timing snapshot at target height"
+                        );
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "izanami::progress",
+                            error = %err,
+                            "sumeragi phase timing snapshot unavailable at target height"
+                        );
+                    }
+                }
             }
             return Ok(());
         }
@@ -2283,6 +2506,7 @@ async fn wait_for_target_blocks(
             let interval_ms = strict_block_intervals
                 .record(blocks_advanced, elapsed)
                 .unwrap_or_default();
+            strict_tolerated_stall_logged_at = None;
             info!(
                 target: "izanami::progress",
                 strict_min_height,
@@ -2292,14 +2516,67 @@ async fn wait_for_target_blocks(
                 "strict block height advanced"
             );
         } else if strict_progress.stalled(now, progress_timeout) {
-            return Err(eyre!(
-                "no strict block height progress for {:?} (strict min height {}, quorum min height {}, target {}, tolerated_failures {})",
-                progress_timeout,
-                strict_min_height,
-                min_height,
-                target_blocks,
-                tolerated_failures
-            ));
+            if strict_guard_active {
+                return Err(eyre!(
+                    "no strict block height progress for {:?} (strict min height {}, quorum min height {}, target {}, tolerated_failures {})",
+                    progress_timeout,
+                    strict_min_height,
+                    min_height,
+                    target_blocks,
+                    tolerated_failures
+                ));
+            }
+            let should_log = strict_tolerated_stall_logged_at.map_or(true, |last| {
+                now.saturating_duration_since(last) >= progress_interval
+            });
+            if should_log {
+                let lagging = sampled_heights
+                    .iter()
+                    .filter_map(|(peer_id, height)| {
+                        (strict_reference_height.saturating_sub(*height)
+                            > IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS)
+                            .then_some((peer_id.clone(), *height))
+                    })
+                    .collect::<Vec<_>>();
+                warn!(
+                    target: "izanami::progress",
+                    strict_min_height,
+                    quorum_min_height = min_height,
+                    strict_reference_height,
+                    lagging_peers,
+                    tolerated_failures,
+                    strict_timeout = ?progress_timeout,
+                    ?lagging,
+                    "strict block height is stalled past strict timeout but lagging peers remain within tolerated failures; continuing with quorum progress"
+                );
+                strict_tolerated_stall_logged_at = Some(now);
+            }
+        } else {
+            let should_log = strict_tolerated_stall_logged_at.map_or(true, |last| {
+                now.saturating_duration_since(last) >= progress_interval
+            });
+            if should_log && strict_progress.stalled(now, progress_interval) {
+                let lagging = sampled_heights
+                    .iter()
+                    .filter_map(|(peer_id, height)| {
+                        (strict_reference_height.saturating_sub(*height)
+                            > IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS)
+                            .then_some((peer_id.clone(), *height))
+                    })
+                    .collect::<Vec<_>>();
+                warn!(
+                    target: "izanami::progress",
+                    strict_min_height,
+                    quorum_min_height = min_height,
+                    strict_reference_height,
+                    lagging_peers,
+                    tolerated_failures,
+                    strict_timeout = ?progress_timeout,
+                    ?lagging,
+                    "strict block height is stalled but lagging peers remain within tolerated failures; continuing with quorum progress"
+                );
+                strict_tolerated_stall_logged_at = Some(now);
+            }
         }
 
         if let Some((blocks_advanced, elapsed)) = progress.update(now, min_height) {
@@ -2427,6 +2704,7 @@ fn record_plan_skip(
 async fn submit_plan(
     ingress_pool: &Arc<IngressEndpointPool>,
     plan: TransactionPlan,
+    submission_confirmation: SubmissionConfirmationMode,
     semaphore: Arc<Semaphore>,
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
@@ -2442,8 +2720,9 @@ async fn submit_plan(
     let workload = Arc::clone(workload);
     let burn_target = plan.burn_trigger_repetitions();
     let mint_target = plan.mint_trigger_repetitions();
+    let run_trigger_precheck = should_run_trigger_precheck(submission_confirmation);
 
-    if let Some((trigger_id, burn_amount)) = burn_target.clone() {
+    if run_trigger_precheck && let Some((trigger_id, burn_amount)) = burn_target.clone() {
         let precheck = evaluate_burn_precheck(
             query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
                 .await,
@@ -2492,7 +2771,7 @@ async fn submit_plan(
         }
     }
 
-    if let Some((trigger_id, _mint_amount)) = mint_target.clone() {
+    if run_trigger_precheck && let Some((trigger_id, _mint_amount)) = mint_target.clone() {
         let precheck = evaluate_mint_precheck(
             query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
                 .await,
@@ -2561,30 +2840,34 @@ async fn submit_plan(
                 Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
                 move || ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now()),
                 || {
-                    ingress_pool_for_submit.run_with_failover(
-                        "submit_all_blocking_with_metadata",
-                        |peer| {
-                            let client = tune_ingress_client(peer.client_for(
+                    ingress_pool_for_submit.run_with_failover("submit_transaction_plan", |peer| {
+                        let client = tune_ingress_client(
+                            peer.client_for(
                                 &signer_for_submit.id,
                                 signer_for_submit.key_pair.private_key().clone(),
-                            ));
-                            let metadata =
-                                submission_metadata(submission_counter_for_submit.as_ref());
-                            client
+                            ),
+                            submission_confirmation,
+                        );
+                        let metadata = submission_metadata(submission_counter_for_submit.as_ref());
+                        match submission_confirmation {
+                            SubmissionConfirmationMode::BlockingApplied => client
                                 .submit_all_blocking_with_metadata(
                                     instructions_for_submit.clone(),
                                     metadata,
                                 )
-                                .map(|_| ())
-                        },
-                    )
+                                .map(|_| ()),
+                            SubmissionConfirmationMode::AcceptedByIngress => client
+                                .submit_all_with_metadata(instructions_for_submit.clone(), metadata)
+                                .map(|_| ()),
+                        }
+                    })
                 },
             )
         },
     )
     .await;
     drop(permit);
-    if !succeeded {
+    if !succeeded && run_trigger_precheck {
         if let Some((trigger_id, _)) = mint_target {
             match query_trigger_repetitions_with_failover(
                 &ingress_pool,
@@ -2619,6 +2902,7 @@ async fn query_trigger_repetitions_with_failover(
         ingress_pool.run_with_failover("query_trigger_repetitions", |peer| {
             let client = tune_ingress_client(
                 peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                SubmissionConfirmationMode::AcceptedByIngress,
             );
             query_trigger_repetitions(&client, &trigger_id)
         })
@@ -3176,8 +3460,8 @@ mod tests {
             "shared-host soak should preserve canonical 5 TPS pacing"
         );
         assert!(
-            config.max_inflight <= IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP,
-            "shared-host soak should clamp max inflight"
+            config.max_inflight >= IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR,
+            "shared-host soak should enforce max-inflight floor"
         );
         assert!(
             config.progress_timeout
@@ -3231,6 +3515,46 @@ mod tests {
     }
 
     #[test]
+    fn shared_host_stable_soak_profile_applies_to_permissioned_long_run() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(2_000),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(21),
+            tps: 7.0,
+            max_inflight: 13,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        assert!(is_shared_host_stable_soak(&config));
+        apply_shared_host_stable_soak_profile(&mut config);
+        assert_eq!(
+            config.pipeline_time,
+            Some(Duration::from_millis(
+                IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS
+            )),
+            "permissioned long-run soak should use the same conservative pipeline floor"
+        );
+        assert_eq!(config.tps, 7.0);
+        assert_eq!(config.max_inflight, 14);
+        assert!(
+            config.progress_timeout
+                >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS)
+        );
+    }
+
+    #[test]
     fn shared_host_stable_soak_profile_pins_canonical_load_shape() {
         let mut config = ChaosConfig {
             allow_net: true,
@@ -3257,12 +3581,12 @@ mod tests {
         apply_shared_host_stable_soak_profile(&mut config);
 
         assert_eq!(
-            config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_CAP,
-            "shared-host soak should pin canonical TPS for deterministic pilots"
+            config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR,
+            "shared-host soak should enforce canonical minimum TPS for deterministic pilots"
         );
         assert_eq!(
-            config.max_inflight, IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_CAP,
-            "shared-host soak should pin canonical max_inflight baseline"
+            config.max_inflight, 10,
+            "shared-host soak should enforce max_inflight floor derived from canonical TPS floor"
         );
     }
 
@@ -3297,6 +3621,133 @@ mod tests {
         assert_eq!(config.progress_timeout, Duration::from_secs(300));
         assert_eq!(config.pipeline_time, None);
         assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
+    }
+
+    #[test]
+    fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_no_faults() {
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(5),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        assert_eq!(
+            submission_confirmation_mode(&config),
+            SubmissionConfirmationMode::AcceptedByIngress
+        );
+    }
+
+    #[test]
+    fn submission_confirmation_mode_keeps_blocking_confirmation_for_faulty_or_chaos_runs() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 1,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(5),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        assert_eq!(
+            submission_confirmation_mode(&config),
+            SubmissionConfirmationMode::BlockingApplied
+        );
+        config.faulty_peers = 0;
+        config.workload_profile = WorkloadProfile::Chaos;
+        assert_eq!(
+            submission_confirmation_mode(&config),
+            SubmissionConfirmationMode::BlockingApplied
+        );
+    }
+
+    #[test]
+    fn trigger_precheck_runs_only_for_blocking_confirmation() {
+        assert!(should_run_trigger_precheck(
+            SubmissionConfirmationMode::BlockingApplied
+        ));
+        assert!(!should_run_trigger_precheck(
+            SubmissionConfirmationMode::AcceptedByIngress
+        ));
+    }
+
+    #[test]
+    fn parse_sumeragi_phase_snapshot_extracts_expected_fields() {
+        let json = norito::json::from_str::<norito::json::Value>(
+            r#"{
+                "propose_ms": 11,
+                "collect_da_ms": 22,
+                "collect_prevote_ms": 33,
+                "collect_precommit_ms": 44,
+                "collect_aggregator_ms": 55,
+                "commit_ms": 66,
+                "pipeline_total_ms": 176,
+                "ema_ms": {
+                    "pipeline_total_ms": 123
+                }
+            }"#,
+        )
+        .expect("valid phase JSON");
+        let snapshot = parse_sumeragi_phase_snapshot(json).expect("phase snapshot should parse");
+        assert_eq!(
+            snapshot,
+            SumeragiPhaseSnapshot {
+                propose_ms: 11,
+                collect_da_ms: 22,
+                collect_prevote_ms: 33,
+                collect_precommit_ms: 44,
+                collect_aggregator_ms: 55,
+                commit_ms: 66,
+                pipeline_total_ms: 176,
+                pipeline_total_ema_ms: 123,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sumeragi_phase_snapshot_rejects_missing_ema() {
+        let json = norito::json::from_str::<norito::json::Value>(
+            r#"{
+                "propose_ms": 11,
+                "collect_da_ms": 22,
+                "collect_prevote_ms": 33,
+                "collect_precommit_ms": 44,
+                "collect_aggregator_ms": 55,
+                "commit_ms": 66,
+                "pipeline_total_ms": 176
+            }"#,
+        )
+        .expect("valid phase JSON");
+        assert!(
+            parse_sumeragi_phase_snapshot(json).is_none(),
+            "phase snapshot parser should reject incomplete payloads"
+        );
     }
 
     #[test]
@@ -3709,11 +4160,45 @@ mod tests {
     }
 
     #[test]
+    fn run_with_queue_timeout_retry_treats_duplicate_rejection_as_success() {
+        let attempts = AtomicU64::new(0);
+        let result = run_with_queue_timeout_retry_with_policy(
+            "retry_duplicate_idempotent",
+            2,
+            Duration::ZERO,
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                Err(eyre!(
+                    "Transaction rejected: Repetition of `Register` for id `chaos_nft_4$chaosnet`"
+                ))
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "duplicate register rejections should be treated as idempotent success"
+        );
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            1,
+            "idempotent duplicate should not trigger extra retries"
+        );
+    }
+
+    #[test]
     fn ingress_failover_marks_queue_timeout_retryable() {
         let err = eyre!("transaction queued for too long");
         assert!(
             is_ingress_failover_retryable(&err),
             "queue timeout errors should trigger endpoint failover"
+        );
+    }
+
+    #[test]
+    fn ingress_failover_marks_http_429_retryable() {
+        let err = eyre!("Failed to get pipeline transaction status: 429 Too Many Requests");
+        assert!(
+            is_ingress_failover_retryable(&err),
+            "HTTP 429 should be treated as queue-pressure backpressure"
         );
     }
 
@@ -3984,7 +4469,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_pressure_sticky_cooldown_blocks_early_reprobe() {
+    fn queue_pressure_sticky_cooldown_blocks_early_reprobe_after_threshold() {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
             vec![
@@ -4010,6 +4495,26 @@ mod tests {
         assert_eq!(
             first.expect("healthy alternate endpoint should succeed"),
             "ok"
+        );
+        assert!(
+            pool.endpoint_state(0).unhealthy_until.is_none(),
+            "first queue-pressure failure should not quarantine endpoint before threshold"
+        );
+        assert!(
+            !pool.mark_failure_at(
+                0,
+                start + Duration::from_millis(10),
+                IngressFailureClass::QueuePressure
+            ),
+            "second queue-pressure failure should still remain below threshold"
+        );
+        assert!(
+            pool.mark_failure_at(
+                0,
+                start + Duration::from_millis(20),
+                IngressFailureClass::QueuePressure
+            ),
+            "queue-pressure endpoint should become unhealthy once threshold is reached"
         );
 
         let mut attempts = Vec::new();
@@ -4037,8 +4542,8 @@ mod tests {
     }
 
     #[test]
-    fn ingress_queue_pressure_exponential_cooldown_blocks_early_reprobe() {
-        queue_pressure_sticky_cooldown_blocks_early_reprobe();
+    fn ingress_queue_pressure_cooldown_blocks_early_reprobe_once_threshold_reached() {
+        queue_pressure_sticky_cooldown_blocks_early_reprobe_after_threshold();
     }
 
     #[test]
@@ -4183,7 +4688,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_pool_queue_timeout_marks_unhealthy_on_first_failure() {
+    fn endpoint_pool_queue_timeout_respects_unhealthy_failure_threshold() {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
             vec!["http://127.0.0.1:31".to_string()],
@@ -4200,10 +4705,38 @@ mod tests {
             Err(eyre!("transaction queued for too long"))
         });
         assert!(result.is_err(), "queue-timeout failure should bubble up");
+        let state_after_first_failure = pool.endpoint_state(0);
+        assert!(
+            state_after_first_failure.unhealthy_until.is_none(),
+            "first queue-timeout failure should stay below unhealthy threshold"
+        );
+
+        let second_result: Result<()> =
+            pool.run_with_failover_at("submit", now + Duration::from_millis(10), |_idx, _| {
+                Err(eyre!("transaction queued for too long"))
+            });
+        assert!(
+            second_result.is_err(),
+            "second queue-timeout failure should still bubble up"
+        );
+        let state_after_second_failure = pool.endpoint_state(0);
+        assert!(
+            state_after_second_failure.unhealthy_until.is_none(),
+            "second queue-timeout failure should stay below unhealthy threshold"
+        );
+
+        let third_result: Result<()> =
+            pool.run_with_failover_at("submit", now + Duration::from_millis(20), |_idx, _| {
+                Err(eyre!("transaction queued for too long"))
+            });
+        assert!(
+            third_result.is_err(),
+            "third queue-timeout failure should bubble up"
+        );
         let state = pool.endpoint_state(0);
         assert!(
             state.unhealthy_until.is_some(),
-            "queue-timeout failure should mark endpoint unhealthy immediately"
+            "queue-timeout endpoint should become unhealthy after threshold failures"
         );
         assert_eq!(
             state.sticky_unhealthy_until, state.unhealthy_until,
@@ -4219,7 +4752,7 @@ mod tests {
             vec!["http://127.0.0.1:41".to_string()],
             IngressEndpointPoolConfig {
                 max_attempts: 1,
-                unhealthy_failure_threshold: 3,
+                unhealthy_failure_threshold: 1,
                 unhealthy_cooldown: Duration::from_secs(5),
                 reprobe_interval: Duration::from_millis(500),
             },
@@ -4266,13 +4799,13 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_pool_queue_timeout_cooldown_uses_status_timeout_floor() {
+    fn endpoint_pool_queue_timeout_cooldown_uses_configured_unhealthy_cooldown() {
         let ingress_stats = Arc::new(IngressStats::default());
         let pool = EndpointHealthPool::new(
             vec!["http://127.0.0.1:51".to_string()],
             IngressEndpointPoolConfig {
                 max_attempts: 1,
-                unhealthy_failure_threshold: 3,
+                unhealthy_failure_threshold: 1,
                 unhealthy_cooldown: Duration::from_secs(1),
                 reprobe_interval: Duration::from_millis(500),
             },
@@ -4288,9 +4821,12 @@ mod tests {
             .unhealthy_until
             .expect("queue-timeout failure should set unhealthy cooldown");
         assert!(
-            unhealthy_until.saturating_duration_since(start)
-                >= Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
-            "queue-timeout cooldown should honor transaction status-timeout floor"
+            unhealthy_until.saturating_duration_since(start) >= Duration::from_secs(1),
+            "queue-timeout cooldown should respect configured unhealthy cooldown"
+        );
+        assert!(
+            unhealthy_until.saturating_duration_since(start) < Duration::from_secs(2),
+            "queue-timeout cooldown should not be stretched to status-timeout floor"
         );
     }
 
@@ -4382,6 +4918,22 @@ mod tests {
     }
 
     #[test]
+    fn effective_tolerated_peer_failures_respects_configured_fault_budget() {
+        assert_eq!(effective_tolerated_peer_failures(4, 0), 0);
+        assert_eq!(effective_tolerated_peer_failures(4, 1), 1);
+        assert_eq!(
+            effective_tolerated_peer_failures(7, 1),
+            1,
+            "configured fault budget should clamp BFT tolerance"
+        );
+        assert_eq!(
+            effective_tolerated_peer_failures(7, 5),
+            2,
+            "configured budget above BFT window should keep protocol tolerance"
+        );
+    }
+
+    #[test]
     fn quorum_min_height_ignores_single_straggler() {
         assert_eq!(quorum_min_height_from_samples(vec![]), 0);
         assert_eq!(
@@ -4448,6 +5000,18 @@ mod tests {
         assert!(
             lagging_two > tolerated_peer_failures(heights_two_outliers.len()),
             "strict divergence guard should activate once outliers exceed tolerated failures"
+        );
+    }
+
+    #[test]
+    fn strict_progress_timeout_enforcement_respects_bft_tolerance() {
+        assert!(
+            !should_enforce_strict_progress_timeout(1, 1),
+            "a tolerated single outlier should not force strict-timeout failure"
+        );
+        assert!(
+            should_enforce_strict_progress_timeout(2, 1),
+            "strict-timeout should be enforced once lagging peers exceed BFT tolerance"
         );
     }
 
@@ -4643,6 +5207,7 @@ mod tests {
         wait_for_target_blocks(
             network.peers(),
             2,
+            0,
             Duration::from_millis(200),
             Duration::from_secs(5),
             None,
@@ -4935,6 +5500,19 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "advanced", "worker", "validation_pending_cap"]),
             Some(IZANAMI_VALIDATION_PENDING_CAP)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "advanced", "worker", "iteration_budget_cap_ms"]),
+            Some(IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS)
+        );
+        assert_eq!(
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "worker",
+                "iteration_drain_budget_cap_ms"
+            ]),
+            Some(IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS)
         );
         assert_eq!(
             lookup(&[
@@ -5262,13 +5840,94 @@ mod tests {
         );
         assert_eq!(params.sumeragi().block_time_ms(), expected.block_ms);
         assert_eq!(params.sumeragi().commit_time_ms(), expected.commit_time_ms);
-        assert!(
-            params
-                .custom()
-                .get(&SumeragiNposParameters::parameter_id())
-                .and_then(SumeragiNposParameters::from_custom_parameter)
-                .is_some()
+        let injected_npos_params = params
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("nexus runs should inject sumeragi_npos custom parameter");
+        assert_eq!(
+            injected_npos_params.max_validators(),
+            u32::try_from(config.peer_count).unwrap_or(u32::MAX),
+            "izanami should cap NPoS election set to active peer count in soak runs"
         );
+        let read_str = |layer: &Table, path: &[&str]| -> Option<String> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return value.as_str().map(ToString::to_string);
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
+        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let expected_gas_account = instructions::nexus_gas_account_id().to_string();
+        for path in [
+            &["pipeline", "gas", "tech_account_id"][..],
+            &["nexus", "fees", "fee_sink_account_id"][..],
+            &["nexus", "staking", "stake_escrow_account_id"][..],
+            &["nexus", "staking", "slash_sink_account_id"][..],
+        ] {
+            let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
+            assert_eq!(
+                actual.as_deref(),
+                Some(expected_gas_account.as_str()),
+                "config override for {:?} should use deterministic Izanami gas account",
+                path
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn make_network_builder_uses_fast_pipeline_default_without_nexus() -> Result<()> {
+        init_instruction_registry();
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(71),
+            tps: 1.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+        assert_eq!(network.pipeline_time(), default_izanami_pipeline_time());
         Ok(())
     }
 

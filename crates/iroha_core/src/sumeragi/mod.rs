@@ -10236,7 +10236,9 @@ const TIME_BUDGET_CAP_MS: u64 = 2_000;
 const IDLE_TICK_GAP_FLOOR_MS: u64 = 50;
 const BUSY_TICK_GAP_FLOOR_MS: u64 = 10;
 const BUSY_TICK_GAP_DIVISOR: u32 = 16;
-const IDLE_SHUTDOWN_POLL_MS: u64 = 1_000;
+// Keep idle poll cadence short so missed/coalesced wake signals do not introduce ~1s
+// reaction latency in steady-state consensus ticking.
+const IDLE_SHUTDOWN_POLL_MS: u64 = 100;
 const DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const RBC_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
