@@ -17,13 +17,11 @@ use crate::{
 
 const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
-const INVARIANT_DOMAIN_OWNER_MATCH: &str = "domain.owner_domain_matches";
 const INVARIANT_ACCOUNT_UNIQUE: &str = "account.unique_id";
 const INVARIANT_ACCOUNT_DOMAIN: &str = "account.domain_exists";
 const INVARIANT_ASSET_DEF_UNIQUE: &str = "asset_definition.unique_id";
 const INVARIANT_ASSET_DEF_DOMAIN: &str = "asset_definition.domain_exists";
 const INVARIANT_ASSET_DEF_OWNER_EXISTS: &str = "asset_definition.owner_exists";
-const INVARIANT_ASSET_DEF_OWNER_MATCH: &str = "asset_definition.owner_domain_matches";
 const INVARIANT_ASSET_DEF_TOTAL_MATCH: &str = "asset_definition.total_quantity_matches_assets";
 const INVARIANT_ASSET_UNIQUE: &str = "asset.unique_id";
 const INVARIANT_ASSET_ACCOUNT_EXISTS: &str = "asset.account_exists";
@@ -234,21 +232,6 @@ fn index_asset_definitions<'a>(
                 ),
             );
         }
-
-        if let Some(owner) = accounts.get(definition.owned_by()) {
-            if owner.id.domain() == id.domain() {
-                report.ok(INVARIANT_ASSET_DEF_OWNER_MATCH);
-            } else {
-                report.violation(
-                    INVARIANT_ASSET_DEF_OWNER_MATCH,
-                    format!(
-                        "asset definition `{id}` owner `{owner}` belongs to domain `{domain}`",
-                        owner = definition.owned_by(),
-                        domain = owner.id.domain()
-                    ),
-                );
-            }
-        }
     }
 
     index
@@ -339,20 +322,8 @@ fn verify_domain_owners<'a>(
     report: &mut VerificationReport,
 ) {
     for (id, domain) in domains {
-        if let Some(owner) = accounts.get(domain.owned_by()) {
+        if accounts.get(domain.owned_by()).is_some() {
             report.ok(INVARIANT_DOMAIN_OWNER_EXISTS);
-            if owner.id.domain() == id {
-                report.ok(INVARIANT_DOMAIN_OWNER_MATCH);
-            } else {
-                report.violation(
-                    INVARIANT_DOMAIN_OWNER_MATCH,
-                    format!(
-                        "domain `{id}` owner `{}` belongs to domain `{}`",
-                        domain.owned_by(),
-                        owner.id.domain()
-                    ),
-                );
-            }
         } else {
             report.violation(
                 INVARIANT_DOMAIN_OWNER_EXISTS,
@@ -525,5 +496,79 @@ mod tests {
         assert!(invariants.contains(&INVARIANT_ACCOUNT_DOMAIN));
         assert!(invariants.contains(&INVARIANT_ASSET_VALUE_SPEC));
         assert!(invariants.contains(&INVARIANT_ASSET_DEF_TOTAL_MATCH));
+    }
+
+    #[test]
+    fn cross_domain_owners_are_allowed_when_references_exist() {
+        let business_domain: DomainId = "business".parse().expect("valid domain id");
+        let owner_domain: DomainId = "owners".parse().expect("valid domain id");
+
+        let owner_keypair = KeyPair::random();
+        let owner_account_id =
+            AccountId::new(owner_domain.clone(), owner_keypair.public_key().clone());
+        let owner_domain_record = Domain {
+            id: owner_domain.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner_account_id.clone(),
+        };
+
+        let business_keypair = KeyPair::random();
+        let business_account_id = AccountId::new(
+            business_domain.clone(),
+            business_keypair.public_key().clone(),
+        );
+        let business_domain_record = Domain {
+            id: business_domain.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner_account_id.clone(),
+        };
+
+        let owner_account = Account {
+            id: owner_account_id.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let business_account = Account {
+            id: business_account_id.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+
+        let definition_id: AssetDefinitionId = "equity#business".parse().expect("asset definition");
+        let definition = AssetDefinition {
+            id: definition_id,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: owner_account_id,
+            total_quantity: Numeric::zero(),
+            confidential_policy: AssetConfidentialPolicy::default(),
+        };
+
+        let domains = vec![business_domain_record, owner_domain_record];
+        let accounts = vec![business_account, owner_account];
+        let definitions = vec![definition];
+        let assets = Vec::new();
+
+        let snapshot = WorldSnapshot {
+            domains: &domains,
+            accounts: &accounts,
+            asset_definitions: &definitions,
+            assets: &assets,
+        };
+
+        let report = snapshot.verify();
+        assert!(
+            report.is_success(),
+            "cross-domain ownership should be valid: {:?}",
+            report.violations()
+        );
     }
 }

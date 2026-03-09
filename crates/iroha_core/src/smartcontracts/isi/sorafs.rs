@@ -322,6 +322,8 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterProviderOwner {
             )));
         }
 
+        state_transaction.world.account(&self.owner)?;
+
         state_transaction
             .world
             .provider_owners
@@ -2096,6 +2098,7 @@ mod sorafs_tests {
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
         prelude::AccountId,
+        query::error::FindError,
         sorafs::{
             capacity::{
                 CapacityDisputeEvidence, CapacityDisputeId, CapacityDisputeRecord,
@@ -2219,6 +2222,24 @@ mod sorafs_tests {
             .world
             .account_permissions
             .insert(authority.clone(), perms);
+    }
+
+    fn ensure_registered_account(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) {
+        if stx.world.domains.get(account_id.domain()).is_none() {
+            Register::domain(iroha_data_model::domain::Domain::new(
+                account_id.domain().clone(),
+            ))
+            .execute(&alice(), stx)
+            .expect("register domain for account");
+        }
+        if stx.world.accounts.get(account_id).is_none() {
+            Register::account(iroha_data_model::account::Account::new(account_id.clone()))
+                .execute(&alice(), stx)
+                .expect("register account");
+        }
     }
 
     fn remove_permission(stx: &mut crate::state::StateTransaction<'_, '_>, name: &str) {
@@ -6320,6 +6341,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA1; 32]);
+        ensure_registered_account(&mut stx, &bob());
 
         RegisterProviderOwner {
             provider_id: provider,
@@ -6344,6 +6366,30 @@ mod sorafs_tests {
         assert!(
             perms.contains(&permission),
             "repair worker permission should be granted"
+        );
+    }
+
+    #[test]
+    fn register_provider_owner_rejects_missing_owner_account() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let provider = ProviderId::new([0xA5; 32]);
+        let missing_owner = AccountId::new(
+            "missing.world".parse().expect("domain"),
+            KeyPair::random().public_key().clone(),
+        );
+
+        let err = RegisterProviderOwner {
+            provider_id: provider,
+            owner: missing_owner.clone(),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("owner account must exist");
+
+        assert!(
+            matches!(err, InstructionExecutionError::Find(FindError::Account(ref id)) if *id == missing_owner),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -6380,6 +6426,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA3; 32]);
+        ensure_registered_account(&mut stx, &alice());
         RegisterProviderOwner {
             provider_id: provider,
             owner: alice(),

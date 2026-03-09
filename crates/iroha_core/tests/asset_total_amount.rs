@@ -133,3 +133,296 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     assert_eq!(manual_total, definition_total.clone());
     assert_eq!(manual_total, numeric!(70));
 }
+
+#[test]
+fn asset_totals_drop_when_unregistering_account() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let telemetry = StateTelemetry::default();
+    let state = State::new(
+        World::default(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        telemetry,
+    );
+
+    let header_1 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_1 = state.block(header_1);
+    let mut stx_1 = block_1.transaction();
+
+    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    Register::domain(Domain::new(domain_id.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register domain");
+
+    let (holder, _holder_key) = gen_account_in("wonderland");
+    Register::account(Account::new(holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register holder");
+
+    let definition_id: AssetDefinitionId = "account_drop#wonderland".parse().expect("asset def");
+    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register definition");
+
+    Mint::asset_numeric(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("mint holder balance");
+
+    stx_1.apply();
+    block_1.commit().expect("commit block 1");
+
+    let header_2 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_2 = state.block(header_2);
+    let mut stx_2 = block_2.transaction();
+    Unregister::account(holder.clone())
+        .execute(&ALICE_ID, &mut stx_2)
+        .expect("unregister account");
+    stx_2.apply();
+    block_2.commit().expect("commit block 2");
+
+    let view = state.view();
+    let definition = FindAssetsDefinitions::new()
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query definitions")
+        .find(|candidate| candidate.id() == &definition_id)
+        .expect("definition remains after account removal");
+    assert_eq!(definition.total_quantity(), &numeric!(0));
+
+    let manual_total = FindAssets::new()
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query assets")
+        .filter(|asset| asset.id().definition() == &definition_id)
+        .fold(Numeric::zero(), |acc, asset| {
+            acc.checked_add(asset.value().clone())
+                .expect("manual total should not overflow")
+        });
+    assert_eq!(manual_total, numeric!(0));
+}
+
+#[test]
+fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let telemetry = StateTelemetry::default();
+    let state = State::new(
+        World::default(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        telemetry,
+    );
+
+    let header_1 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_1 = state.block(header_1);
+    let mut stx_1 = block_1.transaction();
+
+    let source_domain: DomainId = "source".parse().expect("domain");
+    let foreign_domain: DomainId = "foreign".parse().expect("domain");
+    Register::domain(Domain::new(source_domain.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source domain");
+    Register::domain(Domain::new(foreign_domain.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign domain");
+
+    let (source_holder, _source_key) = gen_account_in("source");
+    let (foreign_holder, _foreign_key) = gen_account_in("foreign");
+    Register::account(Account::new(source_holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source holder");
+    Register::account(Account::new(foreign_holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign holder");
+
+    let definition_id: AssetDefinitionId = "domain_drop#source".parse().expect("asset def");
+    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source definition");
+
+    Mint::asset_numeric(
+        7_u32,
+        AssetId::new(definition_id.clone(), source_holder.clone()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("mint source holder");
+    Mint::asset_numeric(
+        33_u32,
+        AssetId::new(definition_id.clone(), foreign_holder.clone()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("mint foreign holder");
+
+    stx_1.apply();
+    block_1.commit().expect("commit block 1");
+
+    let header_2 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_2 = state.block(header_2);
+    let mut stx_2 = block_2.transaction();
+    Unregister::domain(foreign_domain.clone())
+        .execute(&ALICE_ID, &mut stx_2)
+        .expect("unregister foreign domain");
+    stx_2.apply();
+    block_2.commit().expect("commit block 2");
+
+    let view = state.view();
+    let definition = FindAssetsDefinitions::new()
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query definitions")
+        .find(|candidate| candidate.id() == &definition_id)
+        .expect("source definition should remain");
+    assert_eq!(definition.total_quantity(), &numeric!(7));
+
+    let manual_total = FindAssets::new()
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query assets")
+        .filter(|asset| asset.id().definition() == &definition_id)
+        .fold(Numeric::zero(), |acc, asset| {
+            acc.checked_add(asset.value().clone())
+                .expect("manual total should not overflow")
+        });
+    assert_eq!(manual_total, numeric!(7));
+
+    assert!(
+        FindAccounts::new()
+            .execute(CompoundPredicate::PASS, &view)
+            .expect("query accounts")
+            .all(|account| account.id() != &foreign_holder),
+        "foreign holder should be removed with its domain"
+    );
+}
+
+#[test]
+fn unregistering_definition_domain_cleans_foreign_assets() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let telemetry = StateTelemetry::default();
+    let state = State::new(
+        World::default(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        telemetry,
+    );
+
+    let header_1 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_1 = state.block(header_1);
+    let mut stx_1 = block_1.transaction();
+
+    let source_domain: DomainId = "source".parse().expect("domain");
+    let foreign_domain: DomainId = "foreign".parse().expect("domain");
+    Register::domain(Domain::new(source_domain.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source domain");
+    Register::domain(Domain::new(foreign_domain.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign domain");
+
+    let (source_holder, _source_key) = gen_account_in("source");
+    let (foreign_holder, _foreign_key) = gen_account_in("foreign");
+    Register::account(Account::new(source_holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source holder");
+    Register::account(Account::new(foreign_holder.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign holder");
+
+    let definition_id: AssetDefinitionId = "teardown#source".parse().expect("asset def");
+    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source definition");
+
+    Mint::asset_numeric(
+        4_u32,
+        AssetId::new(definition_id.clone(), source_holder.clone()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("mint source holder");
+    Mint::asset_numeric(
+        11_u32,
+        AssetId::new(definition_id.clone(), foreign_holder.clone()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("mint foreign holder");
+
+    stx_1.apply();
+    block_1.commit().expect("commit block 1");
+
+    let header_2 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block_2 = state.block(header_2);
+    let mut stx_2 = block_2.transaction();
+    Unregister::domain(source_domain.clone())
+        .execute(&ALICE_ID, &mut stx_2)
+        .expect("unregister source domain");
+    stx_2.apply();
+    block_2.commit().expect("commit block 2");
+
+    let view = state.view();
+    assert!(
+        FindAssetsDefinitions::new()
+            .execute(CompoundPredicate::PASS, &view)
+            .expect("query definitions")
+            .all(|definition| definition.id() != &definition_id),
+        "definition should be removed with its domain"
+    );
+    assert!(
+        FindAssets::new()
+            .execute(CompoundPredicate::PASS, &view)
+            .expect("query assets")
+            .all(|asset| asset.id().definition() != &definition_id),
+        "all assets from removed definition should be cleaned across domains"
+    );
+    assert!(
+        FindAccounts::new()
+            .execute(CompoundPredicate::PASS, &view)
+            .expect("query accounts")
+            .any(|account| account.id() == &foreign_holder),
+        "foreign domain accounts should remain when source domain is removed"
+    );
+}

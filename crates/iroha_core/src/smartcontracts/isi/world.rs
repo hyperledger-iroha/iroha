@@ -10309,6 +10309,13 @@ pub mod isi {
                 .map(|account| account.id().clone())
                 .collect();
             let account_set: BTreeSet<AccountId> = remove_accounts.iter().cloned().collect();
+            let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
+                .world
+                .asset_definitions_in_domain_iter(&domain_id)
+                .map(|ad| ad.id().clone())
+                .collect();
+            let remove_asset_definition_set: BTreeSet<AssetDefinitionId> =
+                remove_asset_definitions.iter().cloned().collect();
 
             let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
@@ -10328,6 +10335,752 @@ pub mod isi {
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
             for account in remove_accounts {
+                if let Some((foreign_domain_id, _)) = state_transaction
+                    .world
+                    .domains
+                    .iter()
+                    .find(|(id, domain)| *id != &domain_id && domain.owned_by() == &account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} owns foreign domain {foreign_domain_id}; transfer ownership first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((foreign_definition_id, _)) = state_transaction
+                    .world
+                    .asset_definitions
+                    .iter()
+                    .find(|(id, definition)| {
+                        id.domain() != &domain_id && definition.owned_by() == &account
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} owns foreign asset definition {foreign_definition_id}; transfer ownership first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.gov.bond_escrow_account {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as governance bond escrow account (`gov.bond_escrow_account`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.gov.citizenship_escrow_account {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as governance citizenship escrow account (`gov.citizenship_escrow_account`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.gov.slash_receiver_account {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as governance slash receiver account (`gov.slash_receiver_account`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account
+                    == state_transaction
+                        .gov
+                        .viral_incentives
+                        .incentive_pool_account
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as governance viral incentive pool account (`gov.viral_incentives.incentive_pool_account`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.gov.viral_incentives.escrow_account {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as governance viral escrow account (`gov.viral_incentives.escrow_account`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.oracle.economics.reward_pool {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as oracle reward pool account (`oracle.economics.reward_pool`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if account == state_transaction.oracle.economics.slash_receiver {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as oracle slash receiver account (`oracle.economics.slash_receiver`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((escrow_definition_id, _)) = state_transaction
+                    .settlement
+                    .offline
+                    .escrow_accounts
+                    .iter()
+                    .find(|(definition_id, escrow_account)| {
+                        *escrow_account == &account
+                            && state_transaction
+                                .world
+                                .asset_definitions
+                                .get(*definition_id)
+                                .is_some()
+                            && !remove_asset_definition_set.contains(*definition_id)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as offline escrow account for active asset definition {escrow_definition_id} outside the domain (`settlement.offline.escrow_accounts`); update settlement config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if state_transaction
+                    .content
+                    .publish_allow_accounts
+                    .iter()
+                    .any(|publisher| publisher == &account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as content publish allow-list account (`content.publish_allow_accounts`); update content config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if state_transaction
+                    .gov
+                    .sorafs_telemetry
+                    .submitters
+                    .iter()
+                    .any(|submitter| submitter == &account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as SoraFS telemetry submitter (`gov.sorafs_telemetry.submitters`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((provider_id, _)) = state_transaction
+                    .gov
+                    .sorafs_telemetry
+                    .per_provider_submitters
+                    .iter()
+                    .find(|(_, submitters)| {
+                        submitters.iter().any(|submitter| submitter == &account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as per-provider SoraFS telemetry submitter for provider {} (`gov.sorafs_telemetry.per_provider_submitters`); update governance config first",
+                            hex::encode(provider_id.as_bytes())
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((provider_id, _)) = state_transaction
+                    .gov
+                    .sorafs_provider_owners
+                    .iter()
+                    .find(|(_, owner)| *owner == &account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is configured as SoraFS provider owner for provider {} (`gov.sorafs_provider_owners`); update governance config first",
+                            hex::encode(provider_id.as_bytes())
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((provider_id, _)) = state_transaction
+                    .world
+                    .provider_owners
+                    .iter()
+                    .find(|(_, owner)| *owner == &account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} owns SoraFS provider {}; unregister or reassign provider owner first",
+                            hex::encode(provider_id.as_bytes())
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if state_transaction.world.citizens.get(&account).is_some() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has an active citizenship record; revoke citizenship first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, validator), _)) =
+                    state_transaction.world.public_lane_validators.iter().find(
+                        |((_, validator), record)| {
+                            validator == &account || record.stake_account == account
+                        },
+                    )
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active public-lane validator stake state (lane {lane_id}, validator {validator}); exit validator first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, validator, staker), _)) = state_transaction
+                    .world
+                    .public_lane_stake_shares
+                    .iter()
+                    .find(|((_, validator, staker), record)| {
+                        validator == &account
+                            || staker == &account
+                            || record.validator == account
+                            || record.staker == account
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active public-lane stake share state (lane {lane_id}, validator {validator}, staker {staker}); unbond first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, epoch), _)) = state_transaction
+                    .world
+                    .public_lane_rewards
+                    .iter()
+                    .find(|(_, record)| {
+                        record.asset.account() == &account
+                            || record.shares.iter().any(|share| share.account == account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active public-lane reward ledger state (lane {lane_id}, epoch {epoch}); settle or prune rewards first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+                    .world
+                    .public_lane_reward_claims
+                    .iter()
+                    .find(|((_, claimant, asset_id), _)| {
+                        claimant == &account || asset_id.account() == &account
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has pending public-lane reward claim state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((feed_id, _)) = state_transaction
+                    .world
+                    .oracle_feeds
+                    .iter()
+                    .find(|(_, feed)| feed.providers.iter().any(|provider| provider == &account))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle feed provider state (feed {feed_id}); update feed providers first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((change_id, _)) =
+                    state_transaction
+                        .world
+                        .oracle_changes
+                        .iter()
+                        .find(|(_, change)| {
+                            change.proposer == account
+                                || change
+                                    .feed
+                                    .providers
+                                    .iter()
+                                    .any(|provider| provider == &account)
+                                || change.stages.iter().any(|stage| {
+                                    stage.approvals.contains(&account)
+                                        || stage.rejections.contains(&account)
+                                })
+                        })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle governance state (change {change_id:?}); resolve or prune oracle change state first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((dispute_id, _)) = state_transaction
+                    .world
+                    .oracle_disputes
+                    .iter()
+                    .find(|(_, dispute)| dispute.challenger == account || dispute.target == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle dispute state (dispute {dispute_id:?}); resolve dispute first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((provider_key, _)) = state_transaction
+                    .world
+                    .oracle_provider_stats
+                    .iter()
+                    .find(|(provider_key, _)| provider_key.provider_id == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle provider stats state (feed {}); clear provider stats first",
+                            provider_key.feed_id
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((observation_key, _)) = state_transaction
+                    .world
+                    .oracle_observations
+                    .iter()
+                    .find(|(_, window)| window.observations.contains_key(&account))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle observation window state ({observation_key:?}); clear observation state first"
+                        )
+                        .into(),
+                        )
+                        .into());
+                }
+                if let Some((feed_id, _)) =
+                    state_transaction
+                        .world
+                        .oracle_history
+                        .iter()
+                        .find(|(_, history)| {
+                            history.iter().any(|record| {
+                                matches!(
+                                    &record.event.outcome,
+                                    iroha_data_model::oracle::FeedEventOutcome::Success(success)
+                                        if success
+                                            .entries
+                                            .iter()
+                                            .any(|entry| entry.oracle_id == account)
+                                )
+                            })
+                        })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active oracle feed history state (feed {feed_id}); retain provider account for oracle audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((agreement_id, _)) = state_transaction
+                    .world
+                    .repo_agreements
+                    .iter()
+                    .find(|(_, agreement)| {
+                        agreement.initiator == account
+                            || agreement.counterparty == account
+                            || agreement
+                                .custodian
+                                .as_ref()
+                                .is_some_and(|custodian| custodian == &account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active repo agreement state ({agreement_id}); close repo agreement first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((settlement_id, _)) = state_transaction
+                    .world
+                    .settlement_ledgers
+                    .iter()
+                    .find(|(_, ledger)| {
+                        ledger.entries.iter().any(|entry| {
+                            entry.authority == account
+                                || entry
+                                    .legs
+                                    .iter()
+                                    .any(|leg| leg.leg.from == account || leg.leg.to == account)
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active settlement ledger state ({settlement_id}); retain account for settlement audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((certificate_id, _)) = state_transaction
+                    .world
+                    .offline_allowances
+                    .iter()
+                    .find(|(_, record)| {
+                        record.certificate.controller == account
+                            || record.certificate.operator == account
+                            || record.certificate.allowance.asset.account() == &account
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((bundle_id, _)) = state_transaction
+                    .world
+                    .offline_to_online_transfers
+                    .iter()
+                    .find(|(_, record)| {
+                        record.controller == account
+                            || record.transfer.receiver == account
+                            || record.transfer.deposit_account == account
+                            || record.transfer.receipts.iter().any(|receipt| {
+                                receipt.from == account
+                                    || receipt.to == account
+                                    || receipt.asset.account() == &account
+                            })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
+                        )
+                        .into(),
+                        )
+                        .into());
+                }
+                if let Some((verdict_id, _)) = state_transaction
+                    .world
+                    .offline_verdict_revocations
+                    .iter()
+                    .find(|(_, record)| record.issuer == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active offline verdict revocation state (verdict {verdict_id}); retain account for revocation audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, record)| record.proposer == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active governance proposal state (proposal {}); retain proposer account for governance audit references",
+                            hex::encode(*proposal_id)
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_stage_approvals
+                    .iter()
+                    .find(|(_, approvals)| {
+                        approvals
+                            .stages
+                            .values()
+                            .any(|stage| stage.approvers.contains(&account))
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active governance stage approval state (referendum {referendum_id}); retain approver account for governance audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks
+                            .locks
+                            .iter()
+                            .any(|(owner, record)| owner == &account || record.owner == account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active governance lock state (referendum {referendum_id}); unlock governance bonds first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_slashes
+                    .iter()
+                    .find(|(_, slashes)| slashes.slashes.keys().any(|owner| owner == &account))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active governance slash ledger state (referendum {referendum_id}); retain account for governance audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((epoch, _)) =
+                    state_transaction.world.council.iter().find(|(_, term)| {
+                        term.members.contains(&account) || term.alternates.contains(&account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is present in governance council roster state (epoch {epoch}); rotate roster first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((epoch, _)) =
+                    state_transaction
+                        .world
+                        .parliament_bodies
+                        .iter()
+                        .find(|(_, bodies)| {
+                            bodies.rosters.values().any(|roster| {
+                                roster.members.contains(&account)
+                                    || roster.alternates.contains(&account)
+                            })
+                        })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is present in governance parliament roster state (epoch {epoch}); rotate roster first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((bundle_id, _)) = state_transaction
+                    .world
+                    .content_bundles
+                    .iter()
+                    .find(|(_, bundle)| bundle.created_by == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is referenced by content bundle state ({bundle_id}); retain account for content audit references"
+                        )
+                        .into(),
+                        )
+                        .into());
+                }
+                if let Some((upgrade_id, _)) = state_transaction
+                    .world
+                    .runtime_upgrades
+                    .iter()
+                    .find(|(_, record)| record.proposer == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active runtime upgrade proposal state (upgrade 0x{}); retain proposer account for governance audit references",
+                            hex::encode(upgrade_id.0)
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((binding_digest, _)) = state_transaction
+                    .world
+                    .twitter_bindings
+                    .iter()
+                    .find(|(_, record)| record.provider == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active twitter binding oracle provider state (binding {binding_digest}); revoke binding or rotate provider first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((binding_digest, _)) = state_transaction
+                    .world
+                    .viral_escrows
+                    .iter()
+                    .find(|(_, record)| record.sender == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active viral escrow state (binding {binding_digest}); settle escrow first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((digest, _)) = state_transaction
+                    .world
+                    .pin_manifests
+                    .iter()
+                    .find(|(_, record)| record.submitted_by == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active SoraFS pin manifest state (digest 0x{}); retain submitter account for storage audit references",
+                            hex::encode(digest.as_bytes())
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((alias_id, _)) = state_transaction
+                    .world
+                    .manifest_aliases
+                    .iter()
+                    .find(|(_, record)| record.bound_by == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active SoraFS manifest alias state (alias {}/{}) bound by this account; rotate alias binding first",
+                            alias_id.namespace, alias_id.name
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((order_id, _)) = state_transaction
+                    .world
+                    .replication_orders
+                    .iter()
+                    .find(|(_, record)| record.issued_by == account)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active SoraFS replication order state (order {}); retain issuer account for storage audit references",
+                            hex::encode(order_id.as_bytes())
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((ticket_id, record)) = state_transaction
+                    .world
+                    .da_pin_intents_by_ticket
+                    .iter()
+                    .find(|(_, record)| {
+                        record
+                            .intent
+                            .owner
+                            .as_ref()
+                            .is_some_and(|owner| owner == &account)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} has active DA pin intent owner state (ticket 0x{}, block {} index {}); clear DA pin intent ownership first",
+                            hex::encode(ticket_id.as_bytes()),
+                            record.location.block_height,
+                            record.location.index_in_bundle
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((dataspace_id, _)) = state_transaction
+                    .world
+                    .lane_relay_emergency_validators
+                    .iter()
+                    .find(|(_, set)| set.validators.iter().any(|validator| validator == &account))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is present in lane-relay emergency validator override state (dataspace {dataspace_id}); rotate emergency validators first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, proposal)| {
+                        proposal
+                            .parliament_snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| {
+                                snapshot.bodies.rosters.values().any(|roster| {
+                                    roster.members.contains(&account)
+                                        || roster.alternates.contains(&account)
+                                })
+                            })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account} is present in governance proposal parliament snapshot state (proposal {}); retain account for governance audit references",
+                            hex::encode(*proposal_id)
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+
                 state_transaction
                     .world
                     .account_permissions
@@ -10341,10 +11094,20 @@ pub mod isi {
                     .map(|ad| ad.id().clone())
                     .collect();
                 for asset_id in remove_assets {
-                    state_transaction.world.remove_asset_and_metadata(&asset_id);
+                    state_transaction
+                        .world
+                        .remove_asset_and_metadata_with_total(&asset_id)?;
                 }
 
                 state_transaction.world.tx_sequences.remove(account.clone());
+                state_transaction
+                    .world
+                    .offline_transfer_sender_index
+                    .remove(account.clone());
+                state_transaction
+                    .world
+                    .offline_transfer_receiver_index
+                    .remove(account.clone());
                 let removed = state_transaction.world.remove_account_with_links(&account);
                 let Some(account_value) = removed else {
                     iroha_logger::error!(
@@ -10373,6 +11136,215 @@ pub mod isi {
                 }
             }
 
+            for asset_definition_id in &remove_asset_definitions {
+                if asset_definition_id == &state_transaction.gov.voting_asset_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance voting asset definition (`gov.voting_asset_id`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id == &state_transaction.gov.citizenship_asset_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance citizenship asset definition (`gov.citizenship_asset_id`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id == &state_transaction.gov.parliament_eligibility_asset_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance parliament eligibility asset definition (`gov.parliament_eligibility_asset_id`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id
+                    == &state_transaction
+                        .gov
+                        .viral_incentives
+                        .reward_asset_definition_id
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance viral reward asset definition (`gov.viral_incentives.reward_asset_definition_id`); update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id == &state_transaction.oracle.economics.reward_asset {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as oracle reward asset definition (`oracle.economics.reward_asset`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id == &state_transaction.oracle.economics.slash_asset {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as oracle slash asset definition (`oracle.economics.slash_asset`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if asset_definition_id == &state_transaction.oracle.economics.dispute_bond_asset {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as oracle dispute bond asset definition (`oracle.economics.dispute_bond_asset`); update oracle config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if state_transaction
+                    .settlement
+                    .repo
+                    .eligible_collateral
+                    .iter()
+                    .any(|definition_id| definition_id == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as settlement repo eligible collateral (`settlement.repo.eligible_collateral`); update settlement config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((base_definition_id, _)) = state_transaction
+                    .settlement
+                    .repo
+                    .collateral_substitution_matrix
+                    .iter()
+                    .find(|(base_definition_id, substitutes)| {
+                        *base_definition_id == asset_definition_id
+                            || substitutes
+                                .iter()
+                                .any(|definition_id| definition_id == asset_definition_id)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured in settlement repo collateral substitution matrix (`settlement.repo.collateral_substitution_matrix`, base {base_definition_id}); update settlement config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((agreement_id, _)) = state_transaction
+                    .world
+                    .repo_agreements
+                    .iter()
+                    .find(|(_, agreement)| {
+                        agreement.cash_leg().asset_definition_id() == asset_definition_id
+                            || agreement.collateral_leg().asset_definition_id()
+                                == asset_definition_id
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is referenced by repo agreement state ({agreement_id}); retain asset definition for settlement audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((settlement_id, _)) = state_transaction
+                    .world
+                    .settlement_ledgers
+                    .iter()
+                    .find(|(_, ledger)| {
+                        ledger.entries.iter().any(|entry| {
+                            entry
+                                .legs
+                                .iter()
+                                .any(|leg| leg.leg.asset_definition_id() == asset_definition_id)
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is referenced by settlement ledger state ({settlement_id}); retain asset definition for settlement audit references"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, epoch), _)) = state_transaction
+                    .world
+                    .public_lane_rewards
+                    .iter()
+                    .find(|(_, record)| record.asset.definition() == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active public-lane reward ledger state (lane {lane_id}, epoch {epoch}); settle or prune rewards first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+                    .world
+                    .public_lane_reward_claims
+                    .iter()
+                    .find(|((_, _, asset_id), _)| asset_id.definition() == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((certificate_id, _)) = state_transaction
+                    .world
+                    .offline_allowances
+                    .iter()
+                    .find(|(_, record)| {
+                        record.certificate.allowance.asset.definition() == asset_definition_id
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((bundle_id, _)) = state_transaction
+                    .world
+                    .offline_to_online_transfers
+                    .iter()
+                    .find(|(_, record)| {
+                        record
+                            .transfer
+                            .receipts
+                            .iter()
+                            .any(|receipt| receipt.asset.definition() == asset_definition_id)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+
             let remove_assets: Vec<AssetId> = state_transaction
                 .world
                 .assets
@@ -10381,15 +11353,21 @@ pub mod isi {
                 .map(|(asset_id, _)| asset_id.clone())
                 .collect();
             for asset_id in remove_assets {
-                state_transaction.world.remove_asset_and_metadata(&asset_id);
+                state_transaction
+                    .world
+                    .remove_asset_and_metadata_with_total(&asset_id)?;
             }
 
-            let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
-                .world
-                .asset_definitions_in_domain_iter(&domain_id)
-                .map(|ad| ad.id().clone())
-                .collect();
             for asset_definition_id in remove_asset_definitions {
+                state_transaction
+                    .settlement
+                    .offline
+                    .escrow_accounts
+                    .remove(&asset_definition_id);
+                state_transaction
+                    .world
+                    .zk_assets
+                    .remove(asset_definition_id.clone());
                 state_transaction
                     .world
                     .asset_definitions
@@ -10978,6 +11956,10 @@ pub mod isi {
             asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
             nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
             nft::{Nft, NftId},
+            offline::{
+                OfflineAllowanceCommitment, OfflineBalanceProof, OfflineToOnlineTransfer,
+                OfflineTransferRecord, OfflineTransferStatus,
+            },
         };
         use iroha_data_model::{
             isi::{SetParameter, bridge::RecordBridgeReceipt},
@@ -11810,6 +12792,1909 @@ pub mod isi {
             assert!(
                 stx.world.asset_metadata.get(&asset_id).is_none(),
                 "asset metadata should be removed with assets"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_owns_foreign_domain() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(foreign_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.world
+                .domain_mut(&foreign_domain)
+                .expect("foreign domain exists")
+                .set_owned_by(account_id.clone());
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject foreign ownership orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("owns foreign domain"),
+                "error should explain ownership conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_owns_foreign_asset_definition() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(foreign_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let asset_def_id: AssetDefinitionId =
+                AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign asset definition");
+            stx.world
+                .asset_definition_mut(&asset_def_id)
+                .expect("foreign asset definition exists")
+                .set_owned_by(account_id.clone());
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject foreign asset-definition ownership");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("owns foreign asset definition"),
+                "error should explain ownership conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_governance_bond_escrow_account() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.gov.bond_escrow_account = account_id.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject governance bond-escrow account removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("governance bond escrow account"),
+                "error should explain governance bond escrow conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_governance_viral_incentive_pool_account()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.gov.viral_incentives.incentive_pool_account = account_id.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject governance viral incentive-pool account removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("governance viral incentive pool account"),
+                "error should explain governance viral incentive pool conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_oracle_reward_pool() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.oracle.economics.reward_pool = account_id.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject oracle reward-pool account removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("oracle reward pool account"),
+                "error should explain oracle reward-pool conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_content_publish_allow_account() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.content.publish_allow_accounts = vec![account_id.clone()];
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject content publish allow-list account removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("content publish allow-list account"),
+                "error should explain content publish-allow conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_sorafs_per_provider_telemetry_submitter()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xC3; 32]);
+            stx.gov
+                .sorafs_telemetry
+                .per_provider_submitters
+                .insert(provider_id, vec![account_id.clone()]);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject per-provider telemetry submitter account removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("per-provider SoraFS telemetry submitter"),
+                "error should explain per-provider telemetry submitter conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_configured_sorafs_provider_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xD5; 32]);
+            stx.gov
+                .sorafs_provider_owners
+                .insert(provider_id, account_id.clone());
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject configured SoraFS provider-owner account removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("configured as SoraFS provider owner"),
+                "error should explain configured provider-owner conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_offline_escrow_for_retained_asset_definition()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let retained_domain: DomainId = "retained.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(retained_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register retained domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let retained_def = AssetDefinitionId::new(retained_domain, "usd".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(retained_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register retained asset definition");
+            stx.settlement
+                .offline
+                .escrow_accounts
+                .insert(retained_def.clone(), account_id.clone());
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject retained offline escrow references");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("offline escrow account"),
+                "error should explain offline escrow conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&retained_def).is_some(),
+                "retained asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_owns_sorafs_provider() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32]);
+            stx.world
+                .provider_owners
+                .insert(provider_id, account_id.clone());
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject provider-owner orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("owns SoraFS provider"),
+                "error should explain ownership conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_citizenship_record() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.world.citizens.insert(
+                account_id.clone(),
+                crate::state::CitizenshipRecord::new(account_id.clone(), 100, 1),
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject citizenship-record orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active citizenship record"),
+                "error should explain citizenship conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_public_lane_validator_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.world.public_lane_validators.insert(
+                (LaneId::SINGLE, account_id.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: account_id.clone(),
+                    stake_account: account_id.clone(),
+                    total_stake: Numeric::new(1, 0),
+                    self_stake: Numeric::new(1, 0),
+                    metadata: Metadata::default(),
+                    status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                    activation_epoch: Some(1),
+                    activation_height: Some(1),
+                    last_reward_epoch: None,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject public-lane staking orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("public-lane validator stake state"),
+                "error should explain staking conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_public_lane_reward_record_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.world.public_lane_rewards.insert(
+                (LaneId::SINGLE, 1),
+                iroha_data_model::nexus::PublicLaneRewardRecord {
+                    lane_id: LaneId::SINGLE,
+                    epoch: 1,
+                    asset: AssetId::new(
+                        AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                        account_id.clone(),
+                    ),
+                    total_reward: Numeric::new(1, 0),
+                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                        account: account_id.clone(),
+                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                        amount: Numeric::new(1, 0),
+                    }],
+                    metadata: Metadata::default(),
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject public-lane reward-record orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("public-lane reward ledger state"),
+                "error should explain reward-state conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_is_reward_claim_asset_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+            stx.world.public_lane_reward_claims.insert(
+                (
+                    LaneId::SINGLE,
+                    ALICE_ID.clone(),
+                    AssetId::new(
+                        AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                        account_id.clone(),
+                    ),
+                ),
+                1,
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject reward-claim asset-owner orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("public-lane reward claim state"),
+                "error should explain reward-claim conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_repo_agreement_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let repo_id: iroha_data_model::repo::RepoAgreementId =
+                "repoguard".parse().expect("repo agreement id");
+            let agreement = iroha_data_model::repo::RepoAgreement::new(
+                repo_id.clone(),
+                account_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::repo::RepoCashLeg {
+                    asset_definition_id: AssetDefinitionId::new(
+                        domain_id.clone(),
+                        "usd".parse().unwrap(),
+                    ),
+                    quantity: Numeric::new(10, 0),
+                },
+                iroha_data_model::repo::RepoCollateralLeg::new(
+                    AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
+                    Numeric::new(12, 0),
+                ),
+                250,
+                1000,
+                1,
+                iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
+                None,
+            );
+            stx.world.repo_agreements.insert(repo_id, agreement);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject repo-agreement orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active repo agreement state"),
+                "error should explain repo-state conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_has_foreign_repo_agreement_state()
+        {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let foreign_domain: DomainId = "external.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(foreign_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign domain");
+
+            let (initiator, _) = gen_account_in(&foreign_domain);
+            let (counterparty, _) = gen_account_in(&foreign_domain);
+            Register::account(Account::new(initiator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign initiator");
+            Register::account(Account::new(counterparty.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign counterparty");
+
+            let cash_def = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(cash_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+
+            let collateral_def =
+                AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
+            let repo_id: iroha_data_model::repo::RepoAgreementId =
+                "foreign_ref_guard".parse().expect("repo agreement id");
+            stx.world.repo_agreements.insert(
+                repo_id.clone(),
+                iroha_data_model::repo::RepoAgreement::new(
+                    repo_id,
+                    initiator,
+                    counterparty,
+                    iroha_data_model::repo::RepoCashLeg {
+                        asset_definition_id: cash_def.clone(),
+                        quantity: Numeric::new(10, 0),
+                    },
+                    iroha_data_model::repo::RepoCollateralLeg::new(
+                        collateral_def,
+                        Numeric::new(12, 0),
+                    ),
+                    250,
+                    1_000,
+                    1,
+                    iroha_data_model::repo::RepoGovernance::with_defaults(1_000, 60),
+                    None,
+                ),
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject foreign repo references to its assets");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("asset definition")
+                    && err_string.contains("repo agreement state"),
+                "error should explain foreign repo asset-definition conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&cash_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_governance_voting_asset() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let voting_def = AssetDefinitionId::new(domain_id.clone(), "vote".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(voting_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.gov.voting_asset_id = voting_def.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject governance voting asset-definition removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("governance voting asset definition"),
+                "error should explain governance voting-asset conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&voting_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_governance_viral_reward_asset()
+        {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let reward_def = AssetDefinitionId::new(domain_id.clone(), "viral".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.gov.viral_incentives.reward_asset_definition_id = reward_def.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject governance viral reward asset-definition removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("governance viral reward asset definition"),
+                "error should explain governance viral reward-asset conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&reward_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_oracle_reward_asset() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let reward_def = AssetDefinitionId::new(domain_id.clone(), "oracle".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.oracle.economics.reward_asset = reward_def.clone();
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject oracle reward asset-definition removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("oracle reward asset definition"),
+                "error should explain oracle reward-asset conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&reward_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_eligible_collateral()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let collateral_def =
+                AssetDefinitionId::new(domain_id.clone(), "collateral".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(collateral_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup-domain asset definition");
+            stx.settlement.repo.eligible_collateral = vec![collateral_def.clone()];
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err(
+                    "domain unregister must reject settlement repo eligible collateral removal",
+                );
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("settlement repo eligible collateral"),
+                "error should explain settlement repo eligible-collateral conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&collateral_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_substitution_entry()
+         {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(foreign_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign domain");
+
+            let base_def = AssetDefinitionId::new(foreign_domain, "base".parse().unwrap());
+            let substitute_def = AssetDefinitionId::new(domain_id.clone(), "sub".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(base_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register foreign base asset definition");
+            Register::asset_definition(AssetDefinition::numeric(substitute_def.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup substitute asset definition");
+            stx.settlement
+                .repo
+                .collateral_substitution_matrix
+                .insert(base_def, vec![substitute_def.clone()]);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject settlement repo substitution removal");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("collateral substitution matrix"),
+                "error should explain settlement repo substitution conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&substitute_def).is_some(),
+                "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let reward_def = AssetDefinitionId::new(domain_id.clone(), "offline".parse().unwrap());
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(true),
+            );
+            Register::asset_definition(NewAssetDefinition {
+                id: reward_def.clone(),
+                spec: NumericSpec::integer(),
+                mintable: Mintable::Infinitely,
+                logo: None,
+                metadata,
+                confidential_policy: AssetConfidentialPolicy::transparent(),
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain offline asset definition");
+
+            assert!(
+                stx.settlement
+                    .offline
+                    .escrow_accounts
+                    .get(&reward_def)
+                    .is_some(),
+                "offline escrow mapping should exist before domain unregister"
+            );
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("domain unregister should remove domain-local offline escrow mapping");
+
+            assert!(
+                stx.settlement
+                    .offline
+                    .escrow_accounts
+                    .get(&reward_def)
+                    .is_none(),
+                "offline escrow mapping should be removed with domain asset definitions"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_none(),
+                "domain should be removed"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_settlement_ledger_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let settlement_id: iroha_data_model::isi::SettlementId =
+                "settleguard".parse().expect("settlement id");
+            let mut ledger = iroha_data_model::isi::SettlementLedger::default();
+            ledger.push(iroha_data_model::isi::SettlementLedgerEntry {
+                settlement_id: settlement_id.clone(),
+                kind: iroha_data_model::isi::SettlementKind::Dvp,
+                authority: account_id.clone(),
+                plan: iroha_data_model::isi::SettlementPlan::default(),
+                metadata: Metadata::default(),
+                block_height: 1,
+                block_hash: iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0; Hash::LENGTH]),
+                ),
+                executed_at_ms: 1,
+                legs: vec![iroha_data_model::isi::SettlementLegSnapshot {
+                    role: iroha_data_model::isi::SettlementLegRole::Delivery,
+                    leg: iroha_data_model::isi::SettlementLeg::new(
+                        AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
+                        Numeric::new(1, 0),
+                        account_id.clone(),
+                        ALICE_ID.clone(),
+                    ),
+                    committed: true,
+                }],
+                outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
+                    iroha_data_model::isi::SettlementSuccessRecord {
+                        first_committed: true,
+                        second_committed: true,
+                        fx_window_ms: None,
+                    },
+                ),
+            });
+            stx.world.settlement_ledgers.insert(settlement_id, ledger);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject settlement-ledger orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active settlement ledger state"),
+                "error should explain settlement-state conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_oracle_feed_provider_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+            feed.providers = vec![account_id.clone()];
+            stx.world.oracle_feeds.insert(feed.feed_id.clone(), feed);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject oracle-provider orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active oracle feed provider state"),
+                "error should explain oracle-state conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_oracle_feed_history_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+            let feed_id = feed.feed_id.clone();
+            stx.world.oracle_history.insert(
+                feed_id.clone(),
+                vec![iroha_data_model::events::data::oracle::FeedEventRecord {
+                    event: iroha_data_model::oracle::FeedEvent {
+                        feed_id: feed_id.clone(),
+                        feed_config_version: feed.feed_config_version,
+                        slot: 1,
+                        outcome: iroha_data_model::oracle::FeedEventOutcome::Success(
+                            iroha_data_model::oracle::FeedSuccess {
+                                value: iroha_data_model::oracle::ObservationValue::new(1_000, 2),
+                                entries: vec![iroha_data_model::oracle::ReportEntry {
+                                    oracle_id: account_id.clone(),
+                                    observation_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                                        Hash::new(b"oracle-history-domain-guard"),
+                                    ),
+                                    value: iroha_data_model::oracle::ObservationValue::new(
+                                        1_000, 2,
+                                    ),
+                                    outlier: false,
+                                }],
+                            },
+                        ),
+                    },
+                    evidence_hashes: Vec::new(),
+                }],
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject oracle-history orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active oracle feed history state"),
+                "error should explain oracle-history conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_offline_transfer_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let allowance = OfflineAllowanceCommitment::new(
+                AssetId::new(
+                    AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap()),
+                    account_id.clone(),
+                ),
+                Numeric::new(10, 0),
+                vec![0xCD],
+            );
+            let bundle_id = Hash::new(b"offline-transfer-domain-guard");
+            let transfer = OfflineToOnlineTransfer::new(
+                bundle_id,
+                account_id.clone(),
+                account_id.clone(),
+                Vec::new(),
+                OfflineBalanceProof::new(allowance, vec![0xCD], Numeric::new(1, 0), None),
+                None,
+                None,
+                None,
+            );
+            stx.world.offline_to_online_transfers.insert(
+                bundle_id,
+                OfflineTransferRecord {
+                    transfer,
+                    controller: account_id.clone(),
+                    status: OfflineTransferStatus::Settled,
+                    rejection_reason: None,
+                    recorded_at_ms: 1,
+                    recorded_at_height: 1,
+                    archived_at_height: None,
+                    history: Vec::new(),
+                    pos_verdict_snapshots: Vec::new(),
+                    verdict_snapshot: None,
+                    platform_snapshot: None,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject offline transfer orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active offline transfer state"),
+                "error should explain offline transfer conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_offline_verdict_revocation_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let verdict_id = Hash::new(b"offline-verdict-domain-guard");
+            stx.world.offline_verdict_revocations.insert(
+                verdict_id,
+                iroha_data_model::offline::OfflineVerdictRevocation {
+                    verdict_id,
+                    issuer: account_id.clone(),
+                    revoked_at_ms: 1,
+                    reason:
+                        iroha_data_model::offline::OfflineVerdictRevocationReason::IssuerRequest,
+                    note: None,
+                    metadata: Metadata::default(),
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject offline verdict revocation orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active offline verdict revocation state"),
+                "error should explain offline verdict revocation conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_governance_proposal_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let proposal_id = [0xB7; 32];
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                namespace: "gov".to_string(),
+                contract_id: "proposal-guard".to_string(),
+                code_hash_hex: ContractCodeHash::new([0x31; 32]),
+                abi_hash_hex: ContractAbiHash::new([0x41; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            });
+            stx.world.governance_proposals.insert(
+                proposal_id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: account_id.clone(),
+                    kind,
+                    created_height: 1,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline: crate::state::GovernancePipeline::default(),
+                    parliament_snapshot: None,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject governance proposal orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active governance proposal state"),
+                "error should explain governance proposal conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_content_bundle_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let bundle_id = Hash::new(b"content-bundle-domain-guard");
+            let stripe_layout = iroha_data_model::da::prelude::DaStripeLayout::default();
+            let manifest = iroha_data_model::content::ContentBundleManifest {
+                bundle_id,
+                index_hash: [0x55; 32],
+                dataspace: DataSpaceId::GLOBAL,
+                lane: LaneId::SINGLE,
+                blob_class: iroha_data_model::da::types::BlobClass::GovernanceArtifact,
+                retention: iroha_data_model::da::types::RetentionPolicy::default(),
+                cache: iroha_data_model::content::ContentCachePolicy {
+                    max_age_seconds: 60,
+                    immutable: false,
+                },
+                auth: iroha_data_model::content::ContentAuthMode::Public,
+                stripe_layout,
+                mime_overrides: std::collections::BTreeMap::new(),
+            };
+            stx.world.content_bundles.insert(
+                bundle_id,
+                iroha_data_model::content::ContentBundleRecord {
+                    bundle_id,
+                    manifest,
+                    total_bytes: 0,
+                    chunk_size: 1,
+                    chunk_hashes: Vec::new(),
+                    chunk_root: [0; 32],
+                    stripe_layout,
+                    pdp_commitment: None,
+                    files: Vec::new(),
+                    created_by: account_id.clone(),
+                    created_height: 1,
+                    expires_at_height: None,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject content bundle orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("content bundle state"),
+                "error should explain content-bundle conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_runtime_upgrade_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+                name: "runtime-guard".to_string(),
+                description: "guard".to_string(),
+                abi_version: 1,
+                abi_hash: [0x61; 32],
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 1,
+                end_height: 2,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            };
+            let upgrade_id = manifest.id();
+            stx.world.runtime_upgrades.insert(
+                upgrade_id,
+                iroha_data_model::runtime::RuntimeUpgradeRecord {
+                    manifest,
+                    status: iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed,
+                    proposer: account_id.clone(),
+                    created_height: 1,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject runtime-upgrade orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active runtime upgrade proposal state"),
+                "error should explain runtime-upgrade conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_viral_escrow_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let binding_digest = Hash::new(b"viral-escrow-domain-guard");
+            stx.world.viral_escrows.insert(
+                binding_digest,
+                iroha_data_model::social::ViralEscrowRecord {
+                    binding_hash: iroha_data_model::oracle::KeyedHash {
+                        pepper_id: "pepper".to_string(),
+                        digest: binding_digest,
+                    },
+                    sender: account_id.clone(),
+                    amount: Numeric::new(1, 0),
+                    created_at_ms: 1,
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject viral escrow orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active viral escrow state"),
+                "error should explain viral-escrow conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_sorafs_pin_manifest_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAC; 32]);
+            stx.world.pin_manifests.insert(
+                digest,
+                iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+                    digest,
+                    iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                        profile_id: 1,
+                        namespace: "sorafs".to_string(),
+                        name: "sf1".to_string(),
+                        semver: "1.0.0".to_string(),
+                        multihash_code: 0x1E,
+                    },
+                    [0xDC; 32],
+                    iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+                    account_id.clone(),
+                    1,
+                    None,
+                    None,
+                    Metadata::default(),
+                ),
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject SoraFS pin-manifest orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active SoraFS pin manifest state"),
+                "error should explain SoraFS pin-manifest conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_da_pin_intent_owner_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD2; 32]);
+            stx.world.da_pin_intents_by_ticket.insert(
+                ticket_id,
+                iroha_data_model::da::pin_intent::DaPinIntentWithLocation {
+                    intent: iroha_data_model::da::pin_intent::DaPinIntent {
+                        lane_id: LaneId::new(1),
+                        epoch: 1,
+                        sequence: 1,
+                        storage_ticket: ticket_id,
+                        manifest_hash: iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                            [0xE3; 32],
+                        ),
+                        alias: None,
+                        owner: Some(account_id.clone()),
+                    },
+                    location: iroha_data_model::da::commitment::DaCommitmentLocation {
+                        block_height: 1,
+                        index_in_bundle: 0,
+                    },
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject DA pin intent owner orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("active DA pin intent owner state"),
+                "error should explain DA pin intent owner conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_has_lane_relay_emergency_validator_state()
+        {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            stx.world.lane_relay_emergency_validators.insert(
+                DataSpaceId::GLOBAL,
+                iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
+                    validators: vec![account_id.clone()],
+                    expires_at_height: None,
+                    metadata: Metadata::default(),
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject lane relay emergency override orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("lane-relay emergency validator override state"),
+                "error should explain lane relay emergency validator conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_when_member_account_in_governance_parliament_snapshot_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+
+            let (account_id, _) = gen_account_in(&domain_id);
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register account in cleanup domain");
+
+            let proposal_id = [0xD7; 32];
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                namespace: "gov".to_string(),
+                contract_id: "snapshot-guard".to_string(),
+                code_hash_hex: ContractCodeHash::new([0x71; 32]),
+                abi_hash_hex: ContractAbiHash::new([0x81; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            });
+            let roster = iroha_data_model::governance::types::ParliamentRoster {
+                body: iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+                epoch: 1,
+                members: vec![account_id.clone()],
+                alternates: Vec::new(),
+                verified: 0,
+                candidate_count: 0,
+                derived_by: Default::default(),
+            };
+            stx.world.governance_proposals.insert(
+                proposal_id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: ALICE_ID.clone(),
+                    kind,
+                    created_height: 1,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline: crate::state::GovernancePipeline::default(),
+                    parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
+                        selection_epoch: 1,
+                        beacon: [0x91; 32],
+                        roster_root: [0x92; 32],
+                        bodies: iroha_data_model::governance::types::ParliamentBodies {
+                            selection_epoch: 1,
+                            rosters: std::collections::BTreeMap::from([(
+                                iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+                                roster,
+                            )]),
+                        },
+                    }),
+                },
+            );
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain unregister must reject governance parliament snapshot orphans");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("governance proposal parliament snapshot state"),
+                "error should explain governance parliament snapshot conflict: {err_string}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "cleanup domain should remain after rejected unregister"
+            );
+            assert!(
+                stx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
             );
         }
 
