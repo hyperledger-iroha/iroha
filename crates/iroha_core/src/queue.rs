@@ -75,6 +75,10 @@ use crate::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
+    nexus::space_directory::{
+        LaneIdentityMetadataError,
+        extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
+    },
     prelude::*,
     state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
     sumeragi::status,
@@ -424,13 +428,6 @@ pub enum Error {
         /// Reason describing why the privacy proof failed.
         reason: String,
     },
-    /// UAID {uaid} has no active manifest for dataspace {dataspace}
-    UaidNotBound {
-        /// UAID inferred from the authority account.
-        uaid: UniversalAccountId,
-        /// Dataspace targeted by the transaction.
-        dataspace: DataSpaceId,
-    },
 }
 
 /// Failure that can pop up when pushing transaction into the queue
@@ -567,79 +564,19 @@ impl Queue {
         dataspace_id: DataSpaceId,
         lane_alias: &str,
     ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
-        let account_entry = match world.account(authority) {
-            Ok(entry) => entry,
-            Err(_) => return Ok((None, Vec::new())),
-        };
-        let Some(uaid) = account_entry.value().uaid().copied() else {
-            return Ok((None, Vec::new()));
-        };
-
-        let bindings = world.uaid_dataspaces().get(&uaid).ok_or_else(|| {
-            Error::LaneComplianceDenied {
-                alias: lane_alias.to_string(),
-                reason: format!(
-                    "account {authority} carries UAID {uaid} but has no Space Directory bindings for dataspace {}",
-                    dataspace_id.as_u64()
-                ),
-            }
-        })?;
-
-        let is_bound = bindings.iter().any(|(dataspace, accounts)| {
-            *dataspace == dataspace_id && accounts.contains(authority)
-        });
-        if !is_bound {
-            return Err(Error::LaneComplianceDenied {
-                alias: lane_alias.to_string(),
-                reason: format!(
-                    "account {authority} is not bound to dataspace {} for UAID {uaid}",
-                    dataspace_id.as_u64()
-                ),
-            });
-        }
-
-        let manifest_set = world
-            .space_directory_manifests()
-            .get(&uaid)
-            .ok_or_else(|| Error::LaneComplianceDenied {
-                alias: lane_alias.to_string(),
-                reason: format!(
-                    "UAID {uaid} has no manifest registry for dataspace {}",
-                    dataspace_id.as_u64()
-                ),
-            })?;
-        let record =
-            manifest_set
-                .get(&dataspace_id)
-                .ok_or_else(|| Error::LaneComplianceDenied {
-                    alias: lane_alias.to_string(),
-                    reason: format!(
-                        "UAID {uaid} is missing a manifest for dataspace {}",
-                        dataspace_id.as_u64()
-                    ),
-                })?;
-
-        if !record.is_active() {
-            return Err(Error::LaneComplianceDenied {
-                alias: lane_alias.to_string(),
-                reason: format!(
-                    "UAID {uaid} manifest for dataspace {} is not active",
-                    dataspace_id.as_u64()
-                ),
-            });
-        }
-
-        let mut tags = BTreeSet::new();
-        for entry in &record.manifest.entries {
-            if let Some(note) = &entry.notes {
-                let trimmed = note.trim();
-                if !trimmed.is_empty() {
-                    tags.insert(trimmed.to_string());
+        extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(|err| {
+            match err {
+                LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => {
+                    Error::LaneComplianceDenied {
+                        alias: lane_alias.to_string(),
+                        reason: format!(
+                            "UAID {uaid} manifest for dataspace {} is not active",
+                            dataspace.as_u64()
+                        ),
+                    }
                 }
             }
-        }
-
-        Ok((Some(uaid), tags.into_iter().collect()))
+        })
     }
 
     /// Install governance manifests for Nexus lanes (idempotent).
@@ -1704,7 +1641,6 @@ impl Queue {
     ) -> Result<RoutingDecision, Failure> {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
-        let authority = checked.as_ref().authority();
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
@@ -1825,32 +1761,6 @@ impl Queue {
                 #[cfg(feature = "telemetry")]
                 {
                     manifest_allowed = true;
-                }
-            }
-        }
-
-        if let Ok(account_entry) = world.account(authority) {
-            if let Some(uaid) = account_entry.value().uaid().copied() {
-                let bound = world
-                    .uaid_dataspaces()
-                    .get(&uaid)
-                    .is_some_and(|bindings| bindings.is_bound_to(dataspace_id, authority));
-                if !bound {
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("uaid_not_bound");
-                    warn!(
-                        uaid = %uaid,
-                        dataspace = %dataspace_id.as_u64(),
-                        authority = %authority,
-                        "rejecting transaction: UAID not bound to dataspace"
-                    );
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err: Error::UaidNotBound {
-                            uaid,
-                            dataspace: dataspace_id,
-                        },
-                    });
                 }
             }
         }
@@ -5175,7 +5085,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_without_dataspace_binding_is_rejected() {
+    async fn uaid_without_dataspace_binding_is_admitted() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
         let dataspace = DataSpaceId::new(7);
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
@@ -5222,22 +5132,12 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        let err = queue
+        queue
             .push(
                 accepted_tx_by(account_id.clone(), &key_pair, &time_source),
                 state.view(),
             )
-            .expect_err("UAID without a dataspace binding must be rejected");
-        match err.err {
-            Error::UaidNotBound {
-                uaid: rejected,
-                dataspace: rejected_ds,
-            } => {
-                assert_eq!(rejected, uaid);
-                assert_eq!(rejected_ds, dataspace);
-            }
-            other => panic!("expected UaidNotBound, got {other:?}"),
-        }
+            .expect("UAID should route globally even without a dataspace binding");
     }
 
     #[tokio::test]
@@ -5297,7 +5197,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_binding_enforced_for_target_dataspace() {
+    async fn uaid_routing_allows_foreign_dataspace_without_binding() {
         let bound = DataSpaceId::new(42);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rebind"));
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, bound, true);
@@ -5316,25 +5216,12 @@ pub mod tests {
             }),
         );
 
-        let result = queue.push(
-            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
-            state.view(),
-        );
-
-        match result {
-            Err(Failure {
-                err:
-                    Error::UaidNotBound {
-                        uaid: rejected,
-                        dataspace,
-                    },
-                ..
-            }) => {
-                assert_eq!(rejected, uaid);
-                assert_eq!(dataspace, target);
-            }
-            other => panic!("expected UAID binding rejection, got {other:?}"),
-        }
+        queue
+            .push(
+                accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+                state.view(),
+            )
+            .expect("global UAID routing should not require target dataspace binding");
     }
 
     #[tokio::test]
@@ -5362,6 +5249,54 @@ pub mod tests {
                 state.view(),
             )
             .expect("UAID bound to dataspace should be admitted");
+    }
+
+    #[tokio::test]
+    async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
+        let dataspace = DataSpaceId::new(24);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::inactive-manifest"));
+        let (mut world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
+        let mut set = world
+            .space_directory_manifests
+            .view()
+            .get(&uaid)
+            .cloned()
+            .expect("manifest set must exist");
+        let record = set
+            .get(&dataspace)
+            .cloned()
+            .expect("manifest record must exist");
+        let mut inactive = record;
+        inactive.lifecycle.mark_expired(2);
+        set.upsert(inactive);
+        world.space_directory_manifests.insert(uaid, set);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world, kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace,
+            }),
+        );
+
+        let result = queue.push(
+            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            state.view(),
+        );
+
+        match result {
+            Err(Failure {
+                err: Error::LaneComplianceDenied { .. },
+                ..
+            }) => {}
+            other => panic!("expected inactive manifest rejection, got {other:?}"),
+        }
     }
 
     fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {

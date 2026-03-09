@@ -653,17 +653,18 @@ fn permissions_are_unified() {
 
     // Given
     let alice_id = ALICE_ID.clone();
-
-    let alice_literal = format!("{}@{}", ALICE_KEYPAIR.public_key(), alice_id.domain());
+    let rose_definition: AssetDefinitionId = format!("rose#{}", alice_id.domain())
+        .parse()
+        .expect("valid rose definition");
+    let rose_asset = AssetId::new(rose_definition, alice_id.clone());
     let permission1 = CanTransferAsset {
-        asset: format!("rose#{}#{alice_literal}", alice_id.domain())
-            .parse()
-            .unwrap(),
+        asset: rose_asset.clone(),
     };
     let allow_alice_to_transfer_rose_1 = Grant::account_permission(permission1, alice_id.clone());
 
+    let encoded_uppercase = rose_asset.canonical_encoded().to_ascii_uppercase();
     let permission2 = CanTransferAsset {
-        asset: format!("rose##{alice_literal}").parse().unwrap(),
+        asset: encoded_uppercase.parse().expect("valid encoded asset id"),
     };
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
 
