@@ -165,18 +165,18 @@ fn encodings(address: &AccountAddress) -> PositiveEncodings {
 
 fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> SingleCase {
     let public_key = ed25519_pk_with(seed);
-    let account = AccountId::new(domain(raw_domain), public_key.clone());
-    let address = AccountAddress::from_account_id(&account).expect("address encoding");
+    let normalized_domain = domain(raw_domain);
+    let account = AccountId::new(public_key.clone());
+    let address = AccountAddress::from_account_id(&account).expect("single-key encoding succeeds");
     let encodings = encodings(&address);
     let selector = selector_value();
-
     let value = json_obj!({
         "case_id": case_id,
         "category": "single",
         "note": note,
         "input": json_obj!({
             "raw_domain": raw_domain,
-            "normalized_domain": account.domain().name().as_ref(),
+            "normalized_domain": normalized_domain.name().as_ref(),
             "seed_byte": seed,
         }),
         "selector": selector,
@@ -213,7 +213,7 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 })
                 .collect::<Vec<_>>();
             let policy = MultisigPolicy::new(fixture.threshold, members).expect("policy");
-            let account = AccountId::new_multisig(domain, policy.clone());
+            let account = AccountId::new_multisig(policy.clone());
             let address =
                 AccountAddress::from_account_id(&account).expect("multisig encoding succeeds");
             let encodings = encodings(&address);
@@ -239,7 +239,7 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 "note": fixture.note,
                 "input": json_obj!({
                     "raw_domain": fixture.domain,
-                    "normalized_domain": account.domain().name().as_ref(),
+                    "normalized_domain": domain.name().as_ref(),
                     "member_keys_hex": Value::Array(
                         member_keys_hex
                             .iter()
@@ -293,6 +293,9 @@ fn error_to_json(err: &AccountAddressError) -> Value {
         }),
         AccountAddressError::InvalidHexAddress => {
             json_obj!({ "kind": "InvalidHexAddress" })
+        }
+        AccountAddressError::UnsupportedAddressFormat => {
+            json_obj!({ "kind": "UnsupportedAddressFormat" })
         }
         AccountAddressError::InvalidLength => {
             json_obj!({ "kind": "InvalidLength" })

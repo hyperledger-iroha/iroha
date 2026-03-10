@@ -195,13 +195,11 @@ pub struct AuthorityCreds {
 /// Generate a random authority with matching private key (domain `wonderland`).
 pub fn random_authority() -> AuthorityCreds {
     let kp = iroha_crypto::KeyPair::random();
-    let account = AccountId::of(
-        "wonderland".parse().expect("valid domain id"),
-        kp.public_key().clone(),
-    );
+    let account = AccountId::of(kp.public_key().clone());
+    let private_key = ExposedPrivateKey(kp.private_key().clone());
     AuthorityCreds {
         account,
-        private_key: ExposedPrivateKey(kp.private_key().clone()),
+        private_key,
     }
 }
 
@@ -678,6 +676,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 validation_worker_threads: defaults::sumeragi::VALIDATION_WORKER_THREADS,
                 validation_work_queue_cap: defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                validation_queue_full_inline_cutover_divisor:
+                    defaults::sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
                 qc_verify_worker_threads: defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap: defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
                 qc_verify_result_queue_cap: defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
@@ -1368,16 +1368,12 @@ mod tests {
         ));
 
         let keypair = iroha_crypto::KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain id"),
-            keypair.public_key().clone(),
-        );
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(
             "sumeragi_heartbeat".parse().expect("metadata key"),
             Json::new(true),
         );
-
         let tx = TransactionBuilder::new(chain_id.clone(), authority)
             .with_metadata(metadata)
             .sign(keypair.private_key());

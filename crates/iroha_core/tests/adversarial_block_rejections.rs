@@ -44,12 +44,14 @@ struct AdversarialSetup {
 fn setup_world() -> AdversarialSetup {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (bob_id, _) = gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-    let bob_account = Account::new(bob_id.clone()).build(&alice_id);
+    let alice_account =
+        Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());

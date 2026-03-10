@@ -171,34 +171,39 @@ fn social_world_with_owner(
     let oracle_slash_receiver = defaults::oracle::slash_receiver();
     let alice = ALICE_ID.clone();
     let bob = BOB_ID.clone();
+    let wonderland_id: DomainId = "wonderland".parse().expect("domain");
+    let validators_id: DomainId = "validators".parse().expect("domain");
+    let sora_id: DomainId = "sora".parse().expect("domain");
 
-    let wonderland: Domain = Domain::new("wonderland".parse().expect("domain")).build(&alice);
-    let validators: Domain = Domain::new("validators".parse().expect("domain")).build(provider);
-    let sora: Domain = Domain::new("sora".parse().expect("domain")).build(&alice);
+    let wonderland: Domain = Domain::new(wonderland_id.clone()).build(&alice);
+    let validators: Domain = Domain::new(validators_id.clone()).build(provider);
+    let sora: Domain = Domain::new(sora_id.clone()).build(&alice);
 
     let alice_account = {
-        let mut builder = Account::new(alice.clone());
+        let mut builder = Account::new(alice.clone().to_account_id(wonderland_id.clone()));
         if uaid_owner == &alice {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(&alice)
     };
     let bob_account = {
-        let mut builder = Account::new(bob.clone());
+        let mut builder = Account::new(bob.clone().to_account_id(wonderland_id));
         if uaid_owner == &bob {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(&bob)
     };
     let provider_account = {
-        let mut builder = Account::new(provider.clone());
+        let mut builder = Account::new(provider.clone().to_account_id(validators_id));
         if uaid_owner == provider {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(provider)
     };
-    let oracle_reward_pool_account = Account::new(oracle_reward_pool.clone()).build(&alice);
-    let oracle_slash_receiver_account = Account::new(oracle_slash_receiver.clone()).build(&alice);
+    let oracle_reward_pool_account =
+        Account::new(oracle_reward_pool.clone().to_account_id(sora_id.clone())).build(&alice);
+    let oracle_slash_receiver_account =
+        Account::new(oracle_slash_receiver.clone().to_account_id(sora_id)).build(&alice);
 
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice);
     let oracle_asset_def = AssetDefinition::numeric(oracle_reward_asset.clone()).build(&alice);

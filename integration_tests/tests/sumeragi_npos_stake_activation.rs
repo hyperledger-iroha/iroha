@@ -134,11 +134,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     let ineligible_peer = &peers[1];
     let other_peer_a = &peers[2];
     let other_peer_b = &peers[3];
-    let eligible_account = AccountId::new(domain.clone(), eligible_peer.id().public_key().clone());
-    let ineligible_account =
-        AccountId::new(domain.clone(), ineligible_peer.id().public_key().clone());
-    let other_account_a = AccountId::new(domain.clone(), other_peer_a.id().public_key().clone());
-    let other_account_b = AccountId::new(domain.clone(), other_peer_b.id().public_key().clone());
+    let eligible_account = AccountId::new(eligible_peer.id().public_key().clone());
+    let ineligible_account = AccountId::new(ineligible_peer.id().public_key().clone());
+    let other_account_a = AccountId::new(other_peer_a.id().public_key().clone());
+    let other_account_b = AccountId::new(other_peer_b.id().public_key().clone());
 
     // Register per-peer validators in an account domain sorted before `nexus`, so these records
     // drive candidate filtering instead of the default NPoS bootstrap records.
@@ -330,10 +329,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     let peer_b = &peers[1];
     let peer_c = &peers[2];
     let peer_d = &peers[3];
-    let account_a = AccountId::new(domain.clone(), peer_a.id().public_key().clone());
-    let account_b = AccountId::new(domain.clone(), peer_b.id().public_key().clone());
-    let account_c = AccountId::new(domain.clone(), peer_c.id().public_key().clone());
-    let account_d = AccountId::new(domain.clone(), peer_d.id().public_key().clone());
+    let account_a = AccountId::new(peer_a.id().public_key().clone());
+    let account_b = AccountId::new(peer_b.id().public_key().clone());
+    let account_c = AccountId::new(peer_c.id().public_key().clone());
+    let account_d = AccountId::new(peer_d.id().public_key().clone());
 
     let mut instructions = Vec::new();
     instructions.extend(register_validator_instructions(

@@ -26,13 +26,8 @@ translator: machine-google-reviewed
 Գործողությունների տարրեր.
 1. **Կանոնիկ ելք.** `AccountId::to_string()`/Էկրան պետք է թողարկի միայն IH58
    (ոչ `@domain` վերջածանց): Canonical hex-ը նախատեսված է վրիպազերծման համար (`0x...`):
-2. **Ընդունված մուտքեր.** վերլուծիչները ՊԵՏՔ Է ընդունեն IH58 (նախընտրելի), `sora` սեղմված,
-   և կանոնական վեցանկյուն (միայն `0x...`; մերկ վեցանկյունը մերժված է): Մուտքերը ԿԱՐՈՂ ԵՆ կրել մի
-   `@<domain>` վերջածանց՝ երթուղային ակնարկների համար; `<label>@<domain>` (rejected legacy form) փոխանունները պահանջում են a
-   լուծող.  3. **Վերլուծիչներ.** առանց տիրույթի IH58/sora վերլուծությունը պահանջում է տիրույթի ընտրիչ
-   լուծիչ, եթե ընտրիչը անուղղակի լռելյայն չէ (օգտագործեք կազմաձևված լռելյայն
-   տիրույթի պիտակ): UAID (`uaid:...`) և անթափանց (`opaque:...`) բառացիները պահանջում են
-   լուծողներ.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 checksum:** օգտագործեք Blake2b-512 `IH58PRE || prefix || payload`-ի վրա, վերցրեք
    առաջին 2 բայթ. Սեղմված այբուբենի հիմքը **105** է:
 5. **Curve gating.** SDK-ների լռելյայն է միայն Ed25519-ը: Տրամադրեք բացահայտ միացում

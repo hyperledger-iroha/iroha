@@ -184,15 +184,19 @@ Rust кодері бір кілтті контроллерлер үшін `0x02`
 v1 нормасы, кеңейтім жалаушасы тазартылды) және мультисиг контроллері үшін `0x0A` (0 нұсқасы,
 1-сынып, v1 нормасы, кеңейту жалауы тазартылған).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -317,7 +321,7 @@ SDK және оператордың жұмыс үрдістері бойынша
 - IME/NFKC түрлендірулері: жарты ені Sora kana кодты декодтауды бұзбай олардың толық ендік пішіндеріне қалыпқа келтіруге болады, бірақ ASCII `sora` sentinel және IH58 сандары/әріптері ASCII болып қалуы КЕРЕК. Толық ені немесе корпусы бүктелген күзетшілер беті `ERR_MISSING_COMPRESSED_SENTINEL`, толық ені ASCII пайдалы жүктемелері `ERR_INVALID_COMPRESSED_CHAR` жоғарылайды және бақылау сомасының сәйкессіздігі `ERR_CHECKSUM_MISMATCH` ретінде көпіршіктенеді. `crates/iroha_data_model/src/account/address.rs` жүйесіндегі сипат сынақтары осы жолдарды қамтиды, осылайша SDK және әмияндар детерминирленген сәтсіздіктерге сене алады.
 - Torii және `address@domain` (rejected legacy form) бүркеншік аттарының SDK талдауы енді IH58 (таңдаулы)/sora (екінші ең жақсы) кірістер бүркеншік аттың қалпына келуіне дейін сәтсіздікке ұшыраған кезде (мысалы, домен құрылымының қателігі, сондықтан тексеру сомасының қатесі қайталануы мүмкін), енді `ERR_*` кодтарын шығарады. прозалық жолдардан болжау.
 - 12 байттан қысқа жергілікті селектордың пайдалы жүктемелері `ERR_LOCAL8_DEPRECATED` бетін береді, бұл бұрынғы Local‑8 дайджесттерінен қатты үзіндіні сақтайды.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Нормативтік екілік векторлар
 

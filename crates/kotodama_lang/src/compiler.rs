@@ -1013,7 +1013,6 @@ seiyaku Test {
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
@@ -1152,7 +1151,6 @@ seiyaku Test {
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
@@ -1471,7 +1469,6 @@ seiyaku Test {
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
@@ -6611,7 +6608,6 @@ fn record_isi_access(
             let Some(id) = parse_account_temp(string_map, func_idx, *account) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_domain_r(access_set, id.domain());
             add_account_rw(access_set, &id);
         }
         ir::Instr::UnregisterAsset { asset } => {
@@ -6890,7 +6886,7 @@ fn record_instruction_box_access(
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
             RegisterBox::Account(r) => {
-                add_domain_r(access_set, r.object.id().domain());
+                add_domain_r(access_set, r.object.domain());
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
@@ -7173,7 +7169,7 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_domain_r(set, id.account().domain());
+    add_domain_r(set, id.definition().domain());
     add_asset_def_r(set, id.definition());
 }
 
@@ -7189,7 +7185,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_domain_r(set, id.account().domain());
+    add_domain_r(set, id.definition().domain());
     add_asset_def_r(set, id.definition());
 }
 

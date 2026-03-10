@@ -177,20 +177,16 @@ pub struct StateEntry {
 impl StateEntry {
     fn from_account(account: Account) -> Self {
         let account_id = account.id().clone();
-        let domain = account_id.domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
-        let signatory = account.signatory().to_string();
         let title = account_id.to_string();
-        let subtitle = format!("Signatory {signatory}");
+        let (subtitle, owner) = match account.try_signatory() {
+            Some(signatory) => {
+                let signatory = signatory.to_string();
+                (format!("Signatory {signatory}"), signatory)
+            }
+            None => ("Multisig controller".to_owned(), account_id.to_string()),
+        };
         let detail = metadata_summary(account.metadata());
-        let summary_json = build_summary_json(
-            &title,
-            &subtitle,
-            &detail,
-            Some(&domain),
-            Some(&signatory),
-            None,
-        );
+        let summary_json = build_summary_json(&title, &subtitle, &detail, None, Some(&owner), None);
         let (json, norito_bytes) = {
             let (json, bytes) = encode_json(&account);
             match (json, bytes) {
@@ -201,17 +197,17 @@ impl StateEntry {
                 }
             }
         };
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &domain, &signatory]);
+        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &owner]);
         let raw = format!("{account:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
-            owner: Some(signatory.clone()),
-            owner_lower: Some(signatory.to_ascii_lowercase()),
+            domain: None,
+            domain_lower: None,
+            owner: Some(owner.clone()),
+            owner_lower: Some(owner.to_ascii_lowercase()),
             asset_definition: None,
             asset_definition_lower: None,
             json,
@@ -221,23 +217,20 @@ impl StateEntry {
     }
 
     fn from_account_id(id: AccountId) -> Self {
-        let domain = id.domain().to_string();
-        let domain_lower = domain.to_ascii_lowercase();
         let subtitle = "Account identifier".to_owned();
         let detail = "Identifier projection".to_owned();
         let title = id.to_string();
-        let json_summary =
-            build_summary_json(&title, &subtitle, &detail, Some(&domain), None, None);
+        let json_summary = build_summary_json(&title, &subtitle, &detail, None, None, None);
         let norito_bytes = json_summary.as_bytes().to_vec();
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &domain]);
+        let search_blob = build_search_blob(&[&title, &subtitle, &detail]);
         let raw = format!("{id:#?}");
         Self {
             title,
             subtitle,
             detail,
             raw,
-            domain: Some(domain),
-            domain_lower: Some(domain_lower),
+            domain: None,
+            domain_lower: None,
             owner: None,
             owner_lower: None,
             asset_definition: None,
@@ -253,7 +246,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = owner.domain().to_string();
+        let domain = asset_id.definition().domain().to_string();
         let domain_lower = domain.to_ascii_lowercase();
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -302,7 +295,7 @@ impl StateEntry {
         let owner = asset_id.account().clone();
         let owner_str = owner.to_string();
         let owner_lower = owner_str.to_ascii_lowercase();
-        let domain = owner.domain().to_string();
+        let domain = asset_id.definition().domain().to_string();
         let domain_lower = domain.to_ascii_lowercase();
         let definition = asset_id.definition().to_string();
         let definition_lower = definition.to_ascii_lowercase();
@@ -867,7 +860,8 @@ mod tests {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let account = AccountBuilder::new(ALICE_ID.to_account_id(wonderland)).build(&ALICE_ID);
         let output = QueryOutput::new(
             QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Account(vec![account])]),
             0,
@@ -949,7 +943,8 @@ mod tests {
 
     #[test]
     fn state_entry_account_exposes_norito_payload() {
-        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let account = AccountBuilder::new(ALICE_ID.to_account_id(wonderland)).build(&ALICE_ID);
         let entry = StateEntry::from_account(account);
         let json = entry.json.expect("account json");
         let account_label = ALICE_ID.to_string();

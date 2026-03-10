@@ -955,13 +955,18 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     max_request_bytes: 1048576,
                     max_tools_per_list: 500,
+                    profile: "read_only",
                     expose_operator_routes: false,
+                    allow_tool_prefixes: [],
+                    deny_tool_prefixes: [],
                     rate_per_minute: Some(
                         240,
                     ),
                     burst: Some(
                         120,
                     ),
+                    async_job_ttl_secs: 300,
+                    async_job_max_entries: 2000,
                 },
                 proof_api: ProofApi {
                     rate_per_minute: Some(
@@ -1072,6 +1077,7 @@ fn minimal_config_snapshot() {
                     validation_worker_threads: 0,
                     validation_work_queue_cap: 0,
                     validation_result_queue_cap: 0,
+                    validation_queue_full_inline_cutover_divisor: 2,
                     qc_verify_worker_threads: 0,
                     qc_verify_work_queue_cap: 0,
                     qc_verify_result_queue_cap: 0,
@@ -1318,12 +1324,12 @@ fn minimal_config_snapshot() {
                     max_slash_bps: 10000,
                     reward_dust_threshold: 0,
                     stake_asset_id: "xor#nexus",
-                    stake_escrow_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-                    slash_sink_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+                    stake_escrow_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    slash_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 },
                 fees: NexusFees {
                     fee_asset_id: "xor#nexus",
-                    fee_sink_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+                    fee_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                     base_fee: 0,
                     per_byte_fee: 0,
                     per_instruction_fee: 0,
@@ -1546,7 +1552,7 @@ fn minimal_config_snapshot() {
                 overlay_max_bytes: 0,
                 overlay_chunk_instructions: 256,
                 gas: Gas {
-                    tech_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+                    tech_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                     accepted_assets: [],
                     units_per_gas: [],
                 },
@@ -1883,10 +1889,10 @@ fn minimal_config_snapshot() {
                 voting_asset_id: xor#sora,
                 citizenship_asset_id: xor#sora,
                 citizenship_bond_amount: 150,
-                citizenship_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                citizenship_escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
                 min_bond_amount: 150,
-                bond_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
-                slash_receiver_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                bond_escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
+                slash_receiver_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
@@ -1913,8 +1919,8 @@ fn minimal_config_snapshot() {
                     role_bond_multipliers: {},
                 },
                 viral_incentives: ViralIncentives {
-                    incentive_pool_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
-                    escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                    incentive_pool_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
+                    escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
                     reward_asset_definition_id: xor#sora,
                     follow_reward_amount: Numeric {
                         mantissa: 1,
@@ -3117,17 +3123,31 @@ fn parse_applies_default_account_domain_override_and_restores_globals() {
         "wonderland"
     );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
+    let expected_domain: iroha_data_model::domain::DomainId =
+        "wonderland".parse().expect("valid expected domain");
     assert_eq!(
-        config.gov.bond_escrow_account.domain().to_string(),
-        "wonderland"
+        config
+            .gov
+            .bond_escrow_account
+            .to_account_id(expected_domain.clone())
+            .domain(),
+        &expected_domain
     );
     assert_eq!(
-        config.gov.citizenship_escrow_account.domain().to_string(),
-        "wonderland"
+        config
+            .gov
+            .citizenship_escrow_account
+            .to_account_id(expected_domain.clone())
+            .domain(),
+        &expected_domain
     );
     assert_eq!(
-        config.gov.slash_receiver_account.domain().to_string(),
-        "wonderland"
+        config
+            .gov
+            .slash_receiver_account
+            .to_account_id(expected_domain.clone())
+            .domain(),
+        &expected_domain
     );
     assert_eq!(
         iroha_data_model::account::address::default_domain_name().as_ref(),

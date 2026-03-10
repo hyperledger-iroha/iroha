@@ -68,7 +68,7 @@ fn fixture_authority() -> AccountId {
     let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
         .parse()
         .expect("authority public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -642,12 +642,16 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let manifest_root = [0x58; 32];
 
     let genesis_account = iroha_data_model::account::AccountId::new(
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
     );
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
     let genesis_domain = genesis_domain.build(&genesis_account);
-    let genesis_account_value = Account::new(genesis_account.clone()).build(&genesis_account);
+    let genesis_account_value = Account::new(
+        genesis_account
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&genesis_account);
 
     let world = World::with([genesis_domain], [genesis_account_value], []);
 
@@ -794,7 +798,12 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let replay_world = {
         let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
         let genesis_domain = genesis_domain.build(&genesis_account);
-        let genesis_account_value = Account::new(genesis_account.clone()).build(&genesis_account);
+        let genesis_account_value = Account::new(
+            genesis_account
+                .clone()
+                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )
+        .build(&genesis_account);
         World::with([genesis_domain], [genesis_account_value], [])
     };
     let replay_query = LiveQueryStore::start_test();
@@ -2724,7 +2733,6 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
 #[test]
 fn core_host_reports_amx_budget_timeout() {
     let authority = AccountId::new(
-        "budget".parse().expect("budget domain"),
         "ed0120B0D324376E617A1B5CB024B3BAC4BC4F6F2C9B70F0E1CE64E2B3F0859FEB347B"
             .parse()
             .expect("budget authority key"),
@@ -2969,8 +2977,8 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let dsid = DataSpaceId::new(88);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
 
-    let domain_id = authority.domain().clone();
-    let account = Account::new(authority.clone())
+    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
         .with_uaid(Some(uaid))
         .build(&authority);
     let domain = Domain::new(domain_id).build(&authority);

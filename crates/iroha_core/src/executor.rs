@@ -428,7 +428,7 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
 }
 
 fn parse_fee_sponsor(
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
     metadata: &Metadata,
 ) -> Result<Option<AccountId>, ValidationFail> {
     let Some(raw) = metadata.get("fee_sponsor") else {
@@ -439,7 +439,7 @@ fn parse_fee_sponsor(
         Err(err) => {
             if let Ok(literal) = raw.try_into_any_norito::<String>()
                 && let Some(sponsor) =
-                    crate::block::parse_account_literal_with_world(world, &literal)
+                    crate::block::parse_account_literal_with_world(_world, &literal)
             {
                 return Ok(Some(sponsor));
             }
@@ -451,11 +451,7 @@ fn parse_fee_sponsor(
 }
 
 fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    crate::block::parse_account_literal_with_world(world, literal).or_else(|| {
-        AccountId::parse_encoded(literal)
-            .ok()
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-    })
+    crate::block::parse_account_literal_with_world(world, literal)
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
@@ -1289,24 +1285,24 @@ impl Executor {
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
-            let spec_key =
-                iroha_data_model::name::Name::from_str("multisig/spec").expect("static key valid");
             let account = state_transaction.world.account(authority).map_err(|err| {
                 ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
             })?;
-            let metadata = account.metadata();
-            if metadata.contains(&spec_key) {
-                let has_multisig_bundle = transaction.multisig_signatures().is_some();
-                let only_multisig_proposal_instructions = matches!(
+            if account.id().controller().multisig_policy().is_some() {
+                let only_custom_instruction_envelopes = matches!(
                     transaction.instructions(),
                     Executable::Instructions(items)
                         if !items.is_empty()
                             && items.iter().all(|instruction| {
-                                MultisigInstructionBox::try_from(instruction).is_ok()
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<CustomInstruction>()
+                                    .is_some()
                             })
                 );
-                if has_multisig_bundle && only_multisig_proposal_instructions {
-                    // Allowed: this is a multisig proposal/approval envelope, not a direct ISI submit.
+                if only_custom_instruction_envelopes {
+                    // Allowed: custom instruction envelopes are validated by their respective
+                    // runtime handlers (including multisig propose/approve/register paths).
                 } else {
                     #[cfg(feature = "telemetry")]
                     crate::telemetry::record_social_rejection(
@@ -1916,18 +1912,8 @@ impl Executor {
             ));
         };
 
-        let domain_hint = init.trim_matches(DELIMITER);
-        if let Ok(account) = AccountId::parse_encoded(last)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        {
-            if account.domain().to_string() != domain_hint {
-                return Err(ValidationFail::NotPermitted(
-                    "violates multisig role name format".to_owned(),
-                ));
-            }
-            return Ok(Some(account));
-        }
-        AccountId::parse_encoded(&format!("{last}@{domain_hint}"))
+        let _domain_hint = init.trim_matches(DELIMITER);
+        AccountId::parse_encoded(last)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map(Some)
             .map_err(|_| {
@@ -1986,18 +1972,7 @@ impl Executor {
             if let Some(multisig_account) =
                 Self::multisig_account_from(register_role.object().id())?
             {
-                let domain_owner = state_transaction
-                    .world
-                    .domain(multisig_account.domain())
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| {
-                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-                    })?;
-                if &domain_owner != authority {
-                    return Err(ValidationFail::NotPermitted(
-                        "only the domain owner can register multisig roles".to_owned(),
-                    ));
-                }
+                let _ = multisig_account;
                 return Err(ValidationFail::NotPermitted(
                     "reserved multisig role names may not be registered".to_owned(),
                 ));
@@ -2049,24 +2024,14 @@ impl Executor {
             None
         };
         if let Some(reg_trg) = reg_trg {
-            // Allow in genesis, or if tx authority owns the trigger owner's domain,
-            // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
+            // Allow in genesis, or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
-
-            let is_domain_owner = (!is_genesis) && {
-                let domain = trg_owner.domain().clone();
-                state_transaction
-                    .world
-                    .domains
-                    .get(&domain)
-                    .is_some_and(|d| d.owned_by() == authority)
-            };
 
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &trg_owner);
 
-            if !(is_genesis || is_domain_owner || has_permission) {
+            if !(is_genesis || has_permission) {
                 return Err(ValidationFail::NotPermitted(
                     "Can't register trigger owned by another account".to_owned(),
                 ));
@@ -3462,14 +3427,6 @@ fn can_modify_account_metadata(
         return Ok(true);
     }
 
-    let domain_owner = world
-        .domain(account_id.domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &domain_owner == authority {
-        return Ok(true);
-    }
-
     let required: Permission = executor_permission::account::CanModifyAccountMetadata {
         account: account_id.clone(),
     }
@@ -3478,7 +3435,7 @@ fn can_modify_account_metadata(
 }
 
 fn can_transfer_domain(
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
     authority: &AccountId,
     transfer: &Transfer<Account, DomainId, Account>,
 ) -> Result<bool, ValidationFail> {
@@ -3486,23 +3443,11 @@ fn can_transfer_domain(
         return Ok(true);
     }
 
-    let source_domain_owner = world
-        .domain(transfer.source().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &source_domain_owner == authority {
-        return Ok(true);
-    }
-
-    let transferred_domain_owner = world
-        .domain(transfer.object())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    Ok(&transferred_domain_owner == authority)
+    Ok(false)
 }
 
 fn can_transfer_asset_definition(
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
     authority: &AccountId,
     transfer: &Transfer<Account, AssetDefinitionId, Account>,
 ) -> Result<bool, ValidationFail> {
@@ -3510,19 +3455,7 @@ fn can_transfer_asset_definition(
         return Ok(true);
     }
 
-    let source_domain_owner = world
-        .domain(transfer.source().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &source_domain_owner == authority {
-        return Ok(true);
-    }
-
-    let definition_domain_owner = world
-        .domain(transfer.object().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    Ok(&definition_domain_owner == authority)
+    Ok(false)
 }
 
 fn can_transfer_nft(
@@ -3531,22 +3464,6 @@ fn can_transfer_nft(
     transfer: &Transfer<Account, iroha_data_model::NftId, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source() == authority {
-        return Ok(true);
-    }
-
-    let source_domain_owner = world
-        .domain(transfer.source().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &source_domain_owner == authority {
-        return Ok(true);
-    }
-
-    let nft_domain_owner = world
-        .domain(transfer.object().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &nft_domain_owner == authority {
         return Ok(true);
     }
 
@@ -3563,14 +3480,6 @@ fn can_transfer_asset(
     transfer: &Transfer<Asset, Numeric, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
-        return Ok(true);
-    }
-
-    let source_domain_owner = world
-        .domain(transfer.source().account().domain())
-        .map(|domain| domain.owned_by().clone())
-        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
-    if &source_domain_owner == authority {
         return Ok(true);
     }
 
@@ -3626,7 +3535,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanRegisterDomain",
     "CanUnregisterDomain",
     "CanModifyDomainMetadata",
-    "CanRegisterAssetDefinition",
     "CanUnregisterAssetDefinition",
     "CanModifyAssetDefinitionMetadata",
     "CanRegisterAccount",
@@ -3711,34 +3619,12 @@ pub(crate) fn extract_register_asset_definition(
 }
 
 pub(crate) fn ensure_asset_definition_registration_allowed(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    reg_asset_definition: &Register<AssetDefinition>,
+    _state_transaction: &mut StateTransaction<'_, '_>,
+    _authority: &AccountId,
+    _reg_asset_definition: &Register<AssetDefinition>,
 ) -> Result<(), ValidationFail> {
-    let domain_id = reg_asset_definition.object().id().domain().clone();
-    let domain_owner = state_transaction
-        .world
-        .domains
-        .get(&domain_id)
-        .map(|domain| domain.owned_by().clone());
-    let is_domain_owner = domain_owner
-        .as_ref()
-        .is_some_and(|owner| owner == authority);
-    let has_permission =
-        state_transaction.can_register_asset_definition_in_domain(authority, &domain_id);
-    if !(is_domain_owner || has_permission) {
-        iroha_logger::debug!(
-            %authority,
-            owner = %domain_owner
-                .as_ref()
-                .map_or_else(|| "unknown".to_owned(), ToString::to_string),
-            domain = %domain_id,
-            "asset-definition registration denied without ownership or permission"
-        );
-        return Err(ValidationFail::NotPermitted(
-            "Can't register asset definition in a domain owned by another account".to_owned(),
-        ));
-    }
+    // First-release hard-cut semantics: asset definitions are issuer-owned and not
+    // admission-gated by domain ownership.
     Ok(())
 }
 
@@ -3991,7 +3877,6 @@ mod tests {
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
         transaction::executable::IvmBytecode,
     };
-    use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
     use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
     use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
@@ -4066,8 +3951,9 @@ mod tests {
     fn fixture_simple_custom_instruction_mints_for_all_accounts() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.to_account_id(domain_id.clone())).build(&BOB_ID);
         let asset_definition_id: AssetDefinitionId =
             "rose#wonderland".parse().expect("asset definition id");
         let asset_definition =
@@ -4154,9 +4040,10 @@ mod tests {
     fn detached_nft_metadata_records_delta() {
         let (bob_id, _bob_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.to_account_id(domain_id.clone())).build(&bob_id);
         let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
@@ -4221,8 +4108,10 @@ mod tests {
 
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4275,8 +4164,10 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&genesis_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
+        let genesis_account =
+            Account::new(genesis_id.to_account_id(domain_id.clone())).build(&genesis_id);
 
         let world = World::with([domain], [alice_account, genesis_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -4314,14 +4205,17 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let foo_domain_id: DomainId = "foo".parse().expect("foo domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
-        let users_domain = Domain::new(users_domain_id).build(&user1);
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_account =
+            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
         let world = World::with(
             [users_domain, foo_domain],
@@ -4351,7 +4245,7 @@ mod tests {
         let mut stx = block.transaction();
         assert_eq!(
             stx.world
-                .domain(user1.domain())
+                .domain(&users_domain_id)
                 .expect("users domain should exist")
                 .owned_by(),
             &user1
@@ -4384,13 +4278,16 @@ mod tests {
     fn initial_executor_allows_transfer_asset_by_source_domain_owner() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
-        let users_domain = Domain::new(users_domain_id).build(&alice_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4433,13 +4330,16 @@ mod tests {
     fn initial_executor_denies_transfer_asset_without_owner_signature() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
-        let users_domain = Domain::new(users_domain_id).build(&user1);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let alice_account =
+            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4498,15 +4398,19 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
             .parse()
@@ -4558,19 +4462,23 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_allows_transfer_asset_definition_by_definition_domain_owner() {
+    fn initial_executor_denies_transfer_asset_definition_by_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&alice_id);
-        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
             .parse()
@@ -4605,25 +4513,37 @@ mod tests {
         let allowed = can_transfer_asset_definition(&stx.world, &alice_id, &transfer)
             .expect("asset-definition transfer permission check");
         assert!(
-            allowed,
-            "definition-domain owner should be allowed to transfer ownership"
+            !allowed,
+            "definition-domain ownership must not authorize transfer without source ownership"
         );
         let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
-        assert!(res.is_ok(), "expected transfer to succeed, got {res:?}");
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("Can't transfer asset definition"),
+                "unexpected rejection message: {msg}"
+            ),
+            other => panic!(
+                "initial executor should deny asset-definition transfer by non-source owner, got: {other:?}"
+            ),
+        }
     }
 
     #[test]
     fn initial_executor_denies_transfer_nft_without_ownership() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -4674,14 +4594,18 @@ mod tests {
     fn initial_executor_allows_transfer_nft_by_nft_domain_owner() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
-        let alice_domain = Domain::new(alice_id.domain().clone()).build(&alice_id);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -4723,9 +4647,10 @@ mod tests {
     fn initial_executor_denies_nft_metadata_edit_in_transaction() {
         let (bob_id, bob_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+        let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.to_account_id(domain_id.clone())).build(&bob_id);
         let nft_id: NftId = "nft_owner_modify$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
@@ -4755,7 +4680,8 @@ mod tests {
     #[test]
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
-        let account = Account::new(authority.clone()).build(&authority);
+        let authority_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let account = Account::new(authority.to_account_id(authority_domain_id)).build(&authority);
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4781,12 +4707,15 @@ mod tests {
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
-        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
-        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
+        let sponsor_account =
+            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
         let world = World::with([domain], [alice_account, sink_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4830,10 +4759,12 @@ mod tests {
         let (authority_id, authority_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let domain: Domain =
-            Domain::new("wonderland".parse().expect("domain id")).build(&authority_id);
-        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account =
+            Account::new(authority_id.to_account_id(domain_id.clone())).build(&authority_id);
+        let sponsor_account =
+            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
         let world = World::with([domain], [authority_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4881,10 +4812,13 @@ mod tests {
         let (authority_id, authority_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority_id);
-        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account =
+            Account::new(authority_id.to_account_id(domain_id.clone())).build(&authority_id);
+        let sponsor_account =
+            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
         let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let ad: AssetDefinition =
             AssetDefinition::numeric(asset_def_id.clone()).build(&authority_id);
@@ -4989,9 +4923,11 @@ mod tests {
 
         let (alice_id, alice_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
-        let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
-        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&alice_id);
+        let alice: Account =
+            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
+        let sink: Account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
         let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
@@ -5051,9 +4987,11 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let (payer_id, payer_kp) = gen_account_in("wonderland");
         let (tech_id, _tech_kp) = gen_account_in("wonderland");
-        let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&payer_id);
-        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
-        let tech: Account = Account::new(tech_id.clone()).build(&tech_id);
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer: Account =
+            Account::new(payer_id.to_account_id(domain_id.clone())).build(&payer_id);
+        let tech: Account = Account::new(tech_id.to_account_id(domain_id.clone())).build(&tech_id);
         let asset_def_id: AssetDefinitionId = "gas#wonderland".parse().unwrap();
         let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
@@ -5123,27 +5061,16 @@ mod tests {
     fn multisig_account_direct_signing_is_rejected() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
-        let ms_keypair = KeyPair::random();
-        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
-
-        let mut signatories = BTreeMap::new();
-        signatories.insert(ALICE_ID.clone(), 1);
-        let spec = MultisigSpec {
-            signatories,
-            quorum: nonzero!(1_u16),
-            transaction_ttl_ms: nonzero!(DEFAULT_MULTISIG_TTL_MS),
-        };
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("multisig/spec").expect("static key"),
-            Json::new(spec),
-        );
+        let signer = KeyPair::random();
+        let member = iroha_data_model::account::MultisigMember::new(signer.public_key().clone(), 1)
+            .expect("valid member");
+        let policy =
+            iroha_data_model::account::MultisigPolicy::new(1, vec![member]).expect("policy");
+        let multisig_id = AccountId::new_multisig(policy);
 
         let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account = Account::new(multisig_id.clone())
-            .with_metadata(metadata)
-            .build(&multisig_id);
+        let multisig_account =
+            Account::new(multisig_id.to_account_id(domain_id.clone())).build(&multisig_id);
 
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -5154,7 +5081,7 @@ mod tests {
 
         let tx = TransactionBuilder::new(chain, multisig_id.clone())
             .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(ms_keypair.private_key());
+            .sign(signer.private_key());
 
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -5337,8 +5264,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5405,8 +5334,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5441,8 +5372,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5469,8 +5402,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();

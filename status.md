@@ -1,14 +1,502 @@
 # Status
 
-Last updated: 2026-03-09
+Last updated: 2026-03-10
 
 ## Current Enforced State
 - First-release identity/deploy policy is strict (no backward aliases, shims, or migration wrappers).
+- Historical notes below record intermediate steps; when any older entry conflicts with the current hard-cut semantics, this section and the latest 2026-03-10 hard-cut entry are authoritative.
 - Deploy preflight scanner entrypoint is `../pk-deploy/scripts/check-identity-surface.sh`; the previous scanner entrypoint is removed.
 - Runtime deploy scripts are aligned to strict-first-release behavior:
   - `../pk-deploy/scripts/cutover-ih58-mega.sh` invokes only `check-identity-surface.sh`.
   - `../pk-deploy/scripts/deploy-sbp-aed-pkr-interceptor.sh` no longer performs prior-layout trigger cleanup loops.
 - Wallet docs describe only current QR modes in neutral terms.
+
+## 2026-03-10 Asset Usage Hard-Cut (Issuer Baseline + Domain/Dataspace Overlays)
+- Implemented first-release hard-cut asset usage semantics without compatibility shims:
+  - Added typed metadata policy payloads in `iroha_data_model`:
+    - `AssetIssuerUsagePolicyV1`
+    - `AssetSubjectBindingV1`
+    - `DomainAssetUsagePolicyV1`
+    - metadata keys:
+      - `iroha:asset_issuer_usage_policy_v1`
+      - `iroha:domain_asset_usage_policy_v1`
+  - Enforced policy intersection in `iroha_core/src/smartcontracts/isi/asset.rs`:
+    - issuer baseline binding checks (per subject)
+    - domain-owner overlays via domain metadata
+    - dataspace-owner overlays via active Space Directory manifests (`CapabilityRequest`/`ManifestVerdict`)
+    - wired into mint/burn/transfer paths
+  - Removed legacy asset-definition domain-owner transfer fallback:
+    - `iroha_core/src/state.rs` detached permission path now checks source-owner or pending asset-definition owner transfer only.
+    - `iroha_executor/src/permission.rs` asset-definition ownership now means `owned_by` only.
+  - Removed domain-ownership gate from asset-definition registration admission:
+    - initial executor registration guard now allows issuer-owned registration directly.
+    - default executor registration visitor executes directly (no domain-owner token gate).
+  - Removed runtime domain-existence gate for asset definitions/assets:
+    - `Register<AssetDefinition>` no longer requires `id.domain()` lookup.
+    - `asset_or_insert` no longer requires `definition.domain()` lookup.
+  - Added/updated targeted tests for hard-cut behavior:
+    - issuer binding enforcement
+    - domain overlay denial
+    - dataspace manifest denial
+    - transfer authorization updates (source-owner and pending owner transfer semantics)
+
+### Validation Matrix (Asset Usage Hard-Cut)
+- `cargo fmt --all` (blocked by unrelated pre-existing syntax errors in other crates/files outside this slice).
+- `rustfmt --edition 2024 crates/iroha_data_model/src/asset/policy.rs crates/iroha_data_model/src/asset/mod.rs crates/iroha_core/src/smartcontracts/isi/asset.rs crates/iroha_executor/src/permission.rs crates/iroha_core/src/state.rs crates/iroha_core/src/executor.rs crates/iroha_executor/src/default/mod.rs crates/iroha_core/src/smartcontracts/isi/domain.rs crates/iroha_core/src/smartcontracts/isi/account.rs` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_data_model` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_executor` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_core` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib transfer_rejects_when_issuer_policy_requires_binding_for_destination -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib transfer_rejects_when_bound_domain_policy_denies_asset -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib transfer_rejects_when_dataspace_manifest_denies_bound_asset -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib transfer_asset_definition_allows_source_owner -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib initial_executor_denies_transfer_asset_definition_by_definition_domain_owner -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib detached_can_transfer_asset_definition_considers_pending_owner_transfer -- --nocapture` (pass).
+
+## 2026-03-10 Asset Usage Hard-Cut Gap Closure
+- Closed follow-up gaps in the hard-cut slice:
+  - Removed legacy genesis domain-owner/permission gate for `Register<AssetDefinition>`:
+    - `InvalidGenesisError::UnauthorizedAssetDefinition` deleted.
+    - genesis validation no longer tracks domain ownership or `CanRegisterAssetDefinition{domain}` grants.
+  - Aligned transfer precheck semantics in default executor with runtime execution:
+    - transfer of asset-definition ownership is now prechecked only by source account ownership.
+    - removed precheck path that previously accepted asset-definition ownership but failed at execution.
+  - Removed residual domain-scoped registration cache semantics from `StateTransaction` permission cache.
+  - Updated `CanRegisterAssetDefinition` grant/revoke validation to no longer require domain-owner checks (token treated as no-op compatibility surface in this release line).
+  - Removed `CanRegisterAssetDefinition` from initial-executor built-in permission-name allowlist.
+  - Removed `CanRegisterAssetDefinition` from schema generation exports (`iroha_schema_gen`).
+  - Removed domain-association cleanup treatment of `CanRegisterAssetDefinition` in both:
+    - `iroha_core/src/smartcontracts/isi/world.rs`
+    - `iroha_executor/src/default/mod.rs`
+  - Fixed remaining `iroha_executor` lib-test compile failures caused by old domain-scoped account API assumptions in test helpers and assertions.
+
+### Validation Matrix (Asset Usage Hard-Cut Gap Closure)
+- `rustfmt --edition 2024 crates/iroha_core/src/block.rs crates/iroha_core/src/state.rs crates/iroha_executor/src/default/mod.rs crates/iroha_executor/src/permission.rs` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_executor` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_core` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_data_model` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo check -p iroha_schema_gen` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib genesis_asset_definition_registration_is_not_domain_gated -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib initial_executor_denies_transfer_asset_definition_by_definition_domain_owner -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib transfer_asset_definition_allows_source_owner -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib detached_can_transfer_asset_definition_considers_pending_owner_transfer -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_core --lib fee_sponsor_permission_cache_grant_and_revoke -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_executor --lib --no-run` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_executor --lib visit_instruction_dispatches_repo_instruction_box -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_executor --lib signatories_from_multiple_domains_are_allowed -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_executor --lib denies_mismatched_claimed_delta -- --nocapture` (pass).
+- `CARGO_TARGET_DIR=target_tmp_asset_policy cargo test -p iroha_executor --lib fee_sponsor_permission_associations -- --nocapture` (pass).
+
+## 2026-03-10 Domainless Account / Subject-Keyed Hard-Cut Completion
+- Closed the remaining hard-cut cleanup around domainless account identity, subject-keyed ownership, and domain-link guard semantics:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `crates/iroha_core/src/executor.rs`
+- Removed the last world-state literal-resolution compatibility path for Nexus unregister guards and fee-sponsor metadata:
+  - config/account literals are parsed only as canonical domainless `AccountId`
+  - legacy scoped/disambiguation behavior is gone
+  - extra domain links no longer introduce special-case literal matching semantics
+- Reworked the unregister regressions to exercise the hard-cut end state:
+  - `Unregister<Domain>` removes only domain links, aliases, and domain-scoped resources; it no longer deletes globally materialized accounts or their foreign/global ownership state
+  - domain removal no longer blocks on Nexus/governance/oracle/content/storage references that point at surviving domainless accounts
+  - invalid config/account literals still fail closed on account-removal paths, but no longer participate in domain-unlink decisions
+- Closed the remaining CLI/parser/docs in-between surfaces around account identity:
+  - `iroha_cli` account-bearing inputs now require canonical IH58 `AccountId` literals
+  - `ledger account register` keeps domain context explicit via `--domain`
+  - account/domain reference docs no longer advertise `@<domain>` hints, compressed account-id parsing, or legacy selector decode paths
+- Closed the remaining strict `AccountId` input drift in Torii/CLI/integration coverage:
+  - `integration_tests/tests/address_canonicalisation.rs` no longer uses scoped-account leftovers (`Account::new(ScopedAccountId)`, no `.domain()` on `AccountId`) and now rejects compressed `AccountId` literals on account path/query filters, explorer authority filters, and Kaigi relay detail paths while preserving explicit `address_format=compressed` response rendering.
+  - `iroha_torii` gateway denylist loading and Kaigi SSE relay filtering now reject compressed `AccountId` literals instead of accepting/canonicalizing them.
+  - `iroha_cli` governance public-input owner normalization and Sorafs gateway denylist validation now reject compressed `AccountId` literals instead of accepting/canonicalizing them.
+- `iroha_core --tests`, `iroha_torii --tests`, `iroha_cli --tests`, and the touched `integration_tests` address canonicalisation slices now pass after the domainless-account migration sweep.
+
+### Validation Matrix (Domainless Account / Subject-Keyed Hard-Cut Completion)
+- `CARGO_TARGET_DIR=target/codex-core-hardcut-final cargo test -p iroha_core --lib unregister_domain_ -- --nocapture` (pass, 22 passed)
+- `CARGO_TARGET_DIR=target/codex-core-hardcut-final cargo check -p iroha_core --tests --message-format short` (pass)
+- `CARGO_TARGET_DIR=target/codex-torii-hardcut cargo test -p iroha_torii --lib account_id_entries_reject_compressed_literals -- --nocapture` (pass)
+- `CARGO_TARGET_DIR=target/codex-torii-hardcut cargo test -p iroha_torii --features telemetry --test kaigi_endpoints kaigi_sse_rejects_compressed_relay_filter -- --nocapture` (pass)
+- `CARGO_TARGET_DIR=target/codex-cli-hardcut cargo test -p iroha_cli public_inputs_reject_compressed_owner -- --nocapture` (pass)
+- `CARGO_TARGET_DIR=target/codex-cli-hardcut cargo test -p iroha_cli gateway_denylist_record_rejects_compressed_literals -- --nocapture` (pass)
+- `CARGO_TARGET_DIR=target/codex-integration-hardcut cargo check -p integration_tests --test address_canonicalisation --message-format short` (pass)
+- `CARGO_TARGET_DIR=target/codex-integration-hardcut cargo test -p integration_tests --test address_canonicalisation compressed -- --nocapture` (pass, 9 passed)
+- `CARGO_TARGET_DIR=target/codex-integration-hardcut cargo test -p integration_tests --test address_canonicalisation address_format_preferences -- --nocapture` (pass, 3 passed)
+- `CARGO_TARGET_DIR=target/codex-workspace-build cargo build --workspace --message-format short` (blocked by unrelated pre-existing syntax errors in `crates/fastpq_prover/src/bin/fastpq_row_bench.rs`)
+
+## 2026-03-10 Domainless Account/Domain Gap Closure (Integration + Bootstrap)
+- Closed remaining domainless-vs-scoped integration gaps in `integration_tests/tests/domain_links.rs`:
+  - corrected `FindAccountIdsByDomainId` expectation to compare `AccountId` values.
+  - updated account registration calls to pass `ScopedAccountId` (`Account::new(...)`) while keeping link APIs domainless (`AccountId`).
+  - aligned unlink ownership regression with 0..many semantics by linking explicitly before unlink and asserting unlink only removes explicit subject-domain linkage (asset ownership preserved).
+- Fixed `irohad` bootstrap/genesis compile path for domainless account IDs:
+  - removed stale genesis authority domain check when deriving stored genesis public key.
+  - materialized genesis account registration via `ScopedAccountId` (`subject.to_account_id(genesis_domain)`).
+- Fixed governance default account literal generation in config defaults:
+  - switched default governance account literals from compressed sora form to canonical IH58 so strict `AccountId::parse_encoded(...)` parsing succeeds.
+
+### Validation Matrix (Domainless Account/Domain Gap Closure)
+- `CARGO_TARGET_DIR=target_tmp_domainless_gap cargo check -p irohad` (pass)
+- `CARGO_TARGET_DIR=target_tmp_domainless_gap cargo check -p iroha_config` (pass)
+- `CARGO_TARGET_DIR=target_tmp_domainless_gap cargo test -p integration_tests --test domain_links -- --nocapture` (pass, 5 passed)
+
+## 2026-03-10 MCP Gap Closure (Agent-First Follow-up)
+- Closed MCP/CLI plan follow-up gaps for agent workflows:
+  - Added MCP async job retention controls in config (`torii.mcp.async_job_ttl_secs`, `torii.mcp.async_job_max_entries`) and wired defaults/user/actual parsing.
+  - Implemented async-job pruning/retention enforcement in MCP (`tools/call_async`, `tools/jobs/get`) with TTL + max-entry eviction.
+  - Added MCP coverage tests for `tools/call_batch`, `tools/call_async`/`tools/jobs/get`, `tools/list` `listChanged`, and async-job pruning behavior.
+  - Fixed `offline_app_api` fixture asset definition construction to include `balance_scope_policy`.
+  - Fixed malformed `offline_certificates_app_api` operator-injection tests so they compile and assert correctly.
+- Documentation:
+  - `crates/iroha_torii/docs/mcp_api.md` now documents async job retention behavior.
+
+### Validation Matrix (MCP Gap Closure)
+- `cargo test -p iroha_config fixtures -- --nocapture` (passes; filter matches 0 runtime tests but compiles test target).
+- `cargo check -p iroha_config` (passes).
+- `cargo check -p iroha_torii` (blocked by unrelated pre-existing syntax drift in `crates/iroha_torii/src/lib.rs` test region outside MCP module).
+
+## 2026-03-10 MOCHI Ganache-Style Devnet UX Refactor
+- Reframed `mochi-ui-egui` around the job Mochi is actually doing: spinning up and debugging disposable local Iroha devnets, not acting as a generic infrastructure console.
+- Added a **Devnet quickstart** surface on the **Network** page for:
+  - `Single Peer` and `Four Peer BFT` presets
+  - workspace and chain ID inputs
+  - `Start devnet`, `Restart devnet with this setup`, `Apply without starting`, and `Stop devnet`
+- Added a **Connect your app** surface so developers can copy Torii/API endpoints and bundled development identities directly from the Network page.
+- Collapsed the top-level IA into **Network**, **Activity**, **State**, and **Transactions** so startup/debugging work is easier to find.
+- Repositioned **Settings** as an advanced path for profile overrides, Nexus/DA knobs, readiness/tooling behaviour, compatibility controls, and export paths instead of the day-to-day setup flow.
+- Grouped top control-bar actions under **Devnet**, **Maintenance**, and **Config**.
+- Made the **Activity** view auto-attach logs, events, and blocks to a running peer, with reconnect/disconnect controls and clearer running/stopped status.
+- Made composer submit results hand off into debugging surfaces automatically:
+  - successful submits jump to `Activity -> Events` with the transaction hash prefilled
+  - failed submits jump to `Activity -> Logs` for the selected peer
+- Reduced dashboard overload by making the Network page scrollable, collapsing deeper telemetry charts, and hiding low-signal path details behind secondary affordances.
+- Simplified the transaction composer so common local-dev actions are prominent and advanced/governance actions are secondary.
+- Updated Mochi docs to describe the new devnet-first workflow:
+  - `docs/source/mochi_architecture_plan.md`
+  - `docs/source/mochi/quickstart.md`
+
+## 2026-03-10 Iroha Monitor TUI + Etenraku Refresh
+- Reworked `iroha_monitor` toward a monitoring-first terminal layout:
+  - the large decorative header no longer dominates medium terminals
+  - added a clearer overview panel with online/healthy/degraded/down counts, throughput, queue/gas, latency, refresh, and focus summary
+  - peer table now keeps the selected peer visible and uses health-aware colour treatment
+  - selected peer details and severity-tagged alerts are rendered in dedicated side panels
+  - repeated warnings no longer spam the event log; typed peer notices now emit recoveries/warnings/outages instead of lossy string heuristics
+  - added scalable operator controls for large peer sets: sort cycling, issues-only filtering, and inline endpoint/name search
+- Kept a smaller festival identity panel so the monitor still feels distinct without burying the telemetry.
+- Refined the builtin Etenraku arrangement and synth:
+  - softened shō, hichiriki, and ryūteki timbres away from square-wave/retro colour
+  - made ryūteki less literal than a straight octave-doubled hichiriki line
+  - thinned koto writing, split biwa into its own darker plucked voice, and reduced kakko density
+  - added builtin taiko/shōko/kakko percussion voices so the realtime synth no longer drops the percussion layer
+  - upgraded demo MIDI export to a format-1 multitrack file with per-instrument tracks, names, pans, and revised GM stand-ins
+  - updated theme/docs copy to describe the more gagaku-like builtin audio path
+- Refreshed the monitor docs capture pipeline:
+  - updated the screenshot helper and smoke expectations for the monitoring-first UI and the new search/sort controls
+  - regenerated the baked SVG/ANSI demo assets plus manifest/checksum records under `docs/source/images/iroha_monitor_demo/`
+- Files updated:
+  - `crates/iroha_monitor/src/main.rs`
+  - `crates/iroha_monitor/src/fetch.rs`
+  - `crates/iroha_monitor/src/etenraku.rs`
+  - `crates/iroha_monitor/src/synth.rs`
+  - `crates/iroha_monitor/src/theme.rs`
+  - `crates/iroha_monitor/src/ascii.rs`
+  - `crates/iroha_monitor/tests/smoke.rs`
+  - `crates/iroha_monitor/tests/invalid_credentials.rs`
+  - `docs/source/iroha_monitor.md`
+  - `scripts/run_iroha_monitor_demo.py`
+  - `scripts/iroha_monitor_demo.sh`
+  - `docs/source/images/iroha_monitor_demo/*`
+
+### Validation Matrix (Iroha Monitor TUI + Etenraku Refresh)
+- `cargo fmt --all` (blocked by unrelated existing syntax errors outside `iroha_monitor`; formatted monitor Rust files directly with `rustfmt --edition 2024 ...`)
+- `cargo test -p iroha_monitor -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_iroha_monitor_validation cargo test -p iroha_monitor -- --nocapture`
+- `python3 -m unittest scripts.run_iroha_monitor_demo`
+- `python3 scripts/check_iroha_monitor_screenshots.py --dir docs/source/images/iroha_monitor_demo`
+- `./scripts/iroha_monitor_demo.sh --monitor-binary ./target/debug/iroha_monitor`
+- `python3 scripts/run_iroha_monitor_demo.py --binary ./target/debug/iroha_monitor --output-dir <tmpdir>` (no fallback)
+- `CARGO_TARGET_DIR=target_tmp_workspace_build cargo build --workspace` (blocked by unrelated existing syntax error in `crates/iroha_data_model/src/account.rs`)
+
+## 2026-03-10 Domainless Receive/Vector Consistency Closure
+- Fixed address-vector strict-decoder drift for canonical invalid literals:
+  - `canonical_invalid_hex` now validates through strict `parse_encoded` (`canonical_hex` decoder semantics), returning `UnsupportedAddressFormat`.
+  - Added `UnsupportedAddressFormat` handling to compliance vector JSON generation and vector validators in data model and Torii tests.
+  - files:
+    - `crates/iroha_data_model/src/account/address/vectors.rs`
+    - `crates/iroha_data_model/src/account/address/compliance_vectors.rs`
+    - `crates/iroha_data_model/tests/account_address_vectors.rs`
+    - `crates/iroha_torii/tests/account_address_vectors.rs`
+    - `fixtures/account/address_vectors.json`
+- Closed remaining in-between test state in receive-admission integration coverage:
+  - `implicit_account_receive` now configures policy through the global chain parameter (`iroha:default_account_admission_policy`) instead of domain metadata.
+  - Added shared helper to install global policy via `SetParameter` and `StateTransaction::apply`.
+  - files:
+    - `crates/iroha_core/tests/implicit_account_receive.rs`
+- Revalidated multisig/domainless admission, domain-link behavior, asset scope partitioning, and receive/credit heavy paths (offline/repo/settlement/oracle/social).
+
+### Validation Matrix (Domainless Receive/Vector Consistency Closure)
+- `cargo fmt --all`
+- `cargo build --workspace`
+- `cargo run -p xtask --bin xtask -- address-vectors --out fixtures/account/address_vectors.json`
+- `cargo test -p iroha_data_model`
+- `cargo test -p iroha_data_model --test account_address_vectors`
+- `cargo test -p iroha_torii --test account_address_vectors`
+- `cargo test -p iroha_torii --lib multisig_guard_tests`
+- `cargo test -p iroha_core --lib mint_restricted_asset_uses_current_dataspace_bucket`
+- `cargo test -p iroha_core --lib transfer_restricted_asset_rejects_cross_dataspace_scope`
+- `cargo test -p iroha_core --lib account_admission -- --nocapture`
+- `cargo test -p iroha_core --test implicit_account_receive`
+- `cargo test -p iroha_core --test oracle`
+- `cargo test -p iroha_core --test settlement_overlay`
+- `cargo test -p iroha_core --test social_viral_incentives`
+- `cargo test -p iroha_core --lib settlement -- --nocapture`
+- `cargo test -p iroha_core --lib repo -- --nocapture`
+- `cargo test -p iroha_core --lib offline -- --nocapture`
+- `cargo test -p integration_tests --test multisig -- --nocapture`
+- `cargo test -p integration_tests --test domain_links -- --nocapture`
+
+## 2026-03-10 Sumeragi NEW_VIEW Flake Stabilization
+- Stabilized `iroha_core` full-suite flake caused by shared commit-history/status cross-test interference in two NEW_VIEW tests.
+- Hardened tests to run under commit-history test guard with explicit commit-history/checkpoint/precommit-history reset and cleanup:
+  - `new_view_tracker_counts_local_with_rotated_indices`
+  - `new_view_vote_accepts_prepare_highest_next_height`
+- File updated:
+  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+
+### Validation Matrix (NEW_VIEW Flake Stabilization)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib new_view_tracker_counts_local_with_rotated_indices -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib new_view_vote_accepts_prepare_highest_next_height -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib` (pass; `3697 passed; 0 failed; 5 ignored`)
+
+## 2026-03-09 Domainless Admission/Scope Hardening (No Runtime Fallbacks)
+- Removed account-admission runtime fallback to per-domain metadata; execution now reads only the global chain parameter (`iroha:default_account_admission_policy`) and defaults.
+  - file: `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`
+- Kept unit-test coverage without reintroducing runtime shims by moving metadata-seeded policies into chain parameters inside test harness setup.
+  - file: `crates/iroha_core/src/smartcontracts/isi/account_admission.rs` (test module `test_state(...)`)
+- Fixed implicit-creation fee routing for domainless/account-subject literals by resolving payer/sink against existing subject-linked accounts before debiting/crediting balances.
+  - file: `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`
+- Updated prefetch parser regressions to assert canonical encoded-domain behavior (subject-equivalence) instead of legacy scoped-domain equality assumptions.
+  - file: `crates/iroha_core/src/block.rs`
+
+### Validation Matrix (Domainless Admission/Scope Hardening)
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model --lib asset_id_with_explicit_scope_roundtrips -- --nocapture`
+- `cargo test -p iroha_core --lib account_admission -- --nocapture`
+- `cargo test -p iroha_core --lib mint_restricted_asset_uses_current_dataspace_bucket -- --nocapture`
+- `cargo test -p iroha_core --lib transfer_restricted_asset_rejects_cross_dataspace_scope -- --nocapture`
+- `cargo test -p iroha_core --lib multisig_spec_preserves_signatory_domains -- --nocapture`
+- `cargo test -p iroha_core --lib multisig_spec_allows_same_subject_across_domains -- --nocapture`
+- `cargo test -p integration_tests domain_links -- --nocapture`
+- `cargo test -p integration_tests multisig -- --nocapture`
+- `cargo test -p iroha_core --lib block::prefetch_tests::parse_account_key_variants -- --exact --nocapture`
+- `cargo test -p iroha_core --lib block::prefetch_tests::parse_lane_settlement_buffer_config_resolves_account -- --exact --nocapture`
+- `cargo test -p iroha_core --lib -- --nocapture` (revealed many pre-existing/in-progress branch failures outside this slice; latest run: `3563 passed, 134 failed`)
+
+## 2026-03-09 Agent-First MCP/API + CLI Machine-Mode Hardening
+- Hardened Torii MCP contracts for bot integrations:
+  - `tools/list` now returns `toolsetVersion` and `listChanged` (based on caller-provided toolset version drift).
+  - `initialize`/capabilities now include MCP toolset version metadata.
+  - OpenAPI-derived MCP tool names are now stable route-derived IDs (`torii.<method>_<path>`), no longer sourced from mutable `operationId`.
+  - MCP tool descriptors now publish `outputSchema`; input schemas now reuse OpenAPI parameter/body schemas (including `$ref` resolution).
+  - Added MCP methods:
+    - `tools/call_batch`
+    - `tools/call_async`
+    - `tools/jobs/get`
+  - Added optional response projection via `arguments.project` to reduce large `structuredContent.body` payloads.
+  - Standardized JSON-RPC/MCP error payloads with stable `error_code` fields.
+- Added MCP policy controls in config (`torii.mcp`) with first-release defaults:
+  - `profile` (`read_only`/`writer`/`operator`, default `read_only`)
+  - `allow_tool_prefixes`
+  - `deny_tool_prefixes`
+  - files:
+    - `crates/iroha_config/src/parameters/defaults.rs`
+    - `crates/iroha_config/src/parameters/user.rs`
+    - `crates/iroha_config/src/parameters/actual.rs`
+    - `crates/iroha_config/tests/fixtures.rs`
+- Hardened CLI machine automation behavior:
+  - Added `--machine` flag to disable startup chatter and require explicit readable config (no fallback config when missing).
+  - CLI parse/argument failures now render through CLI JSON error envelope in JSON mode (`kind=input`, `exit_code=4`) instead of direct clap process exit.
+  - Removed forced text override for `tools address`; all subcommands now honor `--output-format`.
+  - files:
+    - `crates/iroha_cli/src/main_shared.rs`
+    - `crates/iroha_cli/README.md`
+- Updated MCP docs:
+  - `crates/iroha_torii/docs/mcp_api.md`
+
+### Validation Matrix (Agent-First MCP/API + CLI Machine-Mode Hardening)
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo check -p iroha_config -p iroha_torii -p iroha_cli`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii --lib tool_registry_skips_ws_and_sse_routes -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii --lib capabilities_payload_includes_toolset_version -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii --lib jsonrpc_error_response_adds_stable_error_code -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii --lib read_only_policy_blocks_mutating_tools -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii --lib apply_body_projection_keeps_requested_fields -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_cli effective_output_format_for_address_tools_uses_cli_flag -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_cli render_cli_error_marks_cli_argument_failures_as_input -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_config fixtures -- --nocapture` (filter matched 0 tests; crate/tests compiled successfully)
+- `CARGO_TARGET_DIR=target_tmp_codex_mcp_plan cargo test -p iroha_torii mcp::tests::tool_registry_skips_ws_and_sse_routes -- --nocapture` (blocked by unrelated existing integration-test compile errors: missing `balance_scope_policy` in `offline_certificates_app_api.rs` and `offline_app_api.rs`; used `--lib` path above for MCP validation)
+
+## 2026-03-09 Domain Link APIs + Receive Path Coverage
+- Added explicit account-domain link instructions and dispatch wiring:
+  - `LinkAccountDomain`
+  - `UnlinkAccountDomain`
+  - files:
+    - `crates/iroha_data_model/src/isi/domain_link.rs`
+    - `crates/iroha_data_model/src/isi/mod.rs`
+    - `crates/iroha_data_model/src/isi/registry.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/mod.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+- Added domain-link data events:
+  - `DomainEvent::AccountLinked(AccountDomainLinkChanged)`
+  - `DomainEvent::AccountUnlinked(AccountDomainLinkChanged)`
+  - file: `crates/iroha_data_model/src/events/data/events.rs`
+- Added singular queries for subject-domain membership inspection:
+  - `FindDomainsByAccountId -> Vec<DomainId>`
+  - `FindAccountIdsByDomainId -> Vec<AccountId>`
+  - files:
+    - `crates/iroha_data_model/src/query/mod.rs`
+    - `crates/iroha_data_model/src/query/json/envelope.rs`
+    - `crates/iroha_data_model/src/visit/visit_query.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/account.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+    - `crates/iroha_core/src/smartcontracts/isi/query.rs`
+- Added regressions:
+  - core/unit:
+    - `find_domains_by_account_id_returns_linked_domains_for_subject`
+    - `link_and_unlink_account_domain_updates_subject_query_indexes`
+    - `unlink_account_domain_rejects_unauthorized_authority`
+    - `find_account_ids_by_domain_id_roundtrip` (query JSON envelope)
+  - integration:
+    - `domain_links_roundtrip_without_account_registration`
+    - `receive_paths_materialize_unregistered_accounts_for_assets_and_nfts`
+    - `domain_links_allow_subject_authority_for_link_and_unlink`
+    - `domain_links_reject_unrelated_authority`
+    - `unlink_domain_link_preserves_materialized_asset_ownership`
+    - file: `integration_tests/tests/domain_links.rs`
+
+### Validation Matrix (Domain Link APIs + Receive Path Coverage)
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model find_account_ids_by_domain_id_roundtrip -- --nocapture`
+- `cargo test -p iroha_core find_domains_by_account_id_returns_linked_domains_for_subject -- --nocapture`
+- `cargo test -p iroha_core --lib account_domain -- --nocapture`
+- `cargo test -p integration_tests --test domain_links -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links domain_links_allow_subject_authority_for_link_and_unlink -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links domain_links_reject_unrelated_authority -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links unlink_domain_link_preserves_materialized_asset_ownership -- --nocapture`
+
+## 2026-03-09 Commit Validation Queue-Saturation Hot-Path Cutover
+- Implemented an early inline pre-vote validation cutover when validation workers are saturated:
+  - `crates/iroha_core/src/sumeragi/main_loop/validation.rs`
+  - when worker queues are full, pending blocks now switch from deferred validation to inline validation once `pending_age` reaches a deterministic cutover (`fast_timeout / 2`, floored at 1ms), instead of waiting until full fast-timeout expiry.
+- Preserved the defer-first behavior for fresh pending blocks under queue pressure:
+  - queue-full requests still defer before the cutover to avoid over-eager inline work.
+- Added queue-saturation regressions in:
+  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `commit_pipeline_inlines_validation_at_queue_full_cutover`
+  - `commit_pipeline_keeps_deferred_validation_before_queue_full_cutover`
+- Fixed query envelope account-id decoding regression exposed while validating this slice:
+  - `crates/iroha_data_model/src/query/json/envelope.rs`
+  - `FindDomainsByAccountId` now parses account literals through `AccountId::parse_encoded(...)` instead of relying on `FromStr`.
+- Added `iroha_data_model` regression coverage for the account-id JSON path:
+  - `find_domains_by_account_id_accepts_canonical_ih58_literal`
+- Fixed a compile-time move bug in an existing query visitor regression test:
+  - `crates/iroha_data_model/src/visit/visit_query.rs`
+  - `singular_query_fallback_never_triggers_for_known_variants` now clones `account_id` before `AssetId::new(...)`.
+
+### Validation Matrix (Commit Validation Queue-Saturation Hot-Path Cutover)
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_core --lib commit_pipeline_inlines_validation_ -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_core --lib commit_pipeline_keeps_deferred_validation_ -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_data_model --lib find_domains_by_account_id_accepts_canonical_ih58_literal -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_data_model --lib singular_query_fallback_never_triggers_for_known_variants -- --nocapture`
+
+## 2026-03-09 Configurable Queue-Full Validation Inline Cutover
+- Made queue-saturation inline-validation cutover configurable through consensus worker settings:
+  - added `sumeragi.advanced.worker.validation_queue_full_inline_cutover_divisor` in:
+    - `crates/iroha_config/src/parameters/defaults.rs`
+    - `crates/iroha_config/src/parameters/user.rs`
+    - `crates/iroha_config/src/parameters/actual.rs`
+  - parser now rejects zero divisors (`ParseError::InvalidSumeragiConfig`).
+- Wired runtime cutover computation to the new config field:
+  - `crates/iroha_core/src/sumeragi/main_loop/validation.rs`
+  - queue-full inline cutover now uses `fast_timeout / validation_queue_full_inline_cutover_divisor` (with deterministic 1ms floor).
+- Added regression coverage for runtime use of the configured divisor:
+  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `commit_pipeline_uses_configured_queue_full_inline_cutover_divisor`
+  - existing queue-full tests now derive expected cutover from config instead of hardcoding.
+- Threaded the new worker field through helper/default config literals used in tests/harnesses:
+  - `crates/iroha_core/src/kiso.rs`
+  - `crates/iroha_core/src/sumeragi/penalties.rs`
+  - `crates/iroha_torii/src/test_utils.rs`
+  - `crates/iroha_torii/tests/connect_gating.rs`
+  - `crates/iroha_config/tests/fixtures.rs`
+- Unblocked unrelated `iroha_core` test compilation surfaced during validation by completing `NewAssetDefinition` initializers with explicit balance policy:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+
+### Validation Matrix (Configurable Queue-Full Validation Inline Cutover)
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_config --lib sumeragi_rejects_zero_worker_validation_queue_full_inline_cutover_divisor -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_core --lib commit_pipeline_uses_configured_queue_full_inline_cutover_divisor -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_core --lib commit_pipeline_inlines_validation_at_queue_full_cutover -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_core --lib commit_pipeline_keeps_deferred_validation_before_queue_full_cutover -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_torii --lib --no-run`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_torii --test connect_gating --no-run`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p iroha_config --test fixtures --no-run`
+
+## 2026-03-09 MCP Compile Fixups for Integration Build Paths
+- Resolved pre-existing `iroha_torii` compile errors surfaced while running `integration_tests`:
+  - `crates/iroha_torii/src/mcp.rs`
+  - replaced direct method-call expressions inside `norito::json!` payloads with bound values to satisfy macro parsing.
+  - fixed tools listing descriptor mapping over `&ToolSpec` slices (`.map(|tool| tool.descriptor())`).
+  - fixed OpenAPI reference traversal indexing to use `&str` keys (`current.get(key.as_str())`).
+
+### Validation Matrix (MCP Compile Fixups for Integration Build Paths)
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links domain_links_allow_subject_authority_for_link_and_unlink -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links domain_links_reject_unrelated_authority -- --nocapture`
+- `CARGO_TARGET_DIR=target_tmp_validation_cutover cargo test -p integration_tests --test domain_links unlink_domain_link_preserves_materialized_asset_ownership -- --nocapture`
+
+## 2026-03-09 Multisig Signatory Auto-Materialization
+- Updated built-in multisig execution to stop requiring pre-registered signatory accounts for multisig composition:
+  - removed strict signatory-existence gating from registration validation in:
+    - `crates/iroha_core/src/smartcontracts/isi/multisig.rs`
+  - `MultisigRegister` and `AddSignatory` now materialize missing signatory accounts automatically (tagged with `iroha:created_via = "multisig"`), using standard `Register::account` execution under the destination domain owner.
+- Made multisig graph validation tolerant of unresolved signatories during registration-time checks:
+  - cycle roots are evaluated from declared spec signatories directly.
+  - `is_multisig(...)` now treats missing accounts as non-multisig leaves instead of hard errors.
+- Added defensive registration-domain anchoring for JSON/custom-instruction account decoding edge cases:
+  - if requested multisig account domain does not exist and equals the implicit default label, registration falls back to the authority account domain.
+- Added targeted multisig regressions in:
+  - `crates/iroha_core/src/smartcontracts/isi/multisig.rs`
+  - `register_materializes_missing_signatory_accounts`
+  - `add_signatory_materializes_missing_account`
+- Added integration coverage + docs alignment:
+  - `integration_tests/tests/multisig.rs` now includes:
+    - `multisig_register_materializes_missing_signatory_account`
+    - `multisig_register_rejected_does_not_materialize_missing_signatory_account`
+    - `multisig_add_signatory_materializes_missing_account`
+    - `multisig_add_signatory_rejected_does_not_materialize_missing_account`
+  - `crates/iroha_cli/docs/multisig.md` no longer claims all signatories must be pre-registered
+  - `docs/source/references/multisig_policy_schema.md` documents automatic signatory
+    materialization and `iroha:created_via = "multisig"` tagging on successful register/add-signatory flows
+- Hardened instruction ordering to avoid side effects on unauthorized flows:
+  - `AddSignatory` and `MultisigRegister` now perform authority-gated operations before signatory auto-materialization.
+- Added failure-path regressions to ensure rejected instructions do not materialize accounts:
+  - `register_invalid_spec_does_not_materialize_missing_signatory`
+  - `register_existing_account_does_not_materialize_missing_signatory`
+
+### Validation Matrix (Multisig Signatory Auto-Materialization)
+- `cargo fmt --all`
+- `cargo test -p iroha_core initial_executor_runs_multisig_flow -- --nocapture`
+- `cargo test -p iroha_core register_materializes_missing_signatory_accounts -- --nocapture`
+- `cargo test -p iroha_core add_signatory_materializes_missing_account -- --nocapture`
+- `cargo test -p iroha_core register_invalid_spec_does_not_materialize_missing_signatory -- --nocapture`
+- `cargo test -p iroha_core register_existing_account_does_not_materialize_missing_signatory -- --nocapture`
+- `cargo test -p integration_tests multisig_register_materializes_missing_signatory_account -- --nocapture`
+- `cargo test -p integration_tests multisig_register_rejected_does_not_materialize_missing_signatory_account -- --nocapture`
+- `cargo test -p integration_tests multisig_add_signatory_materializes_missing_account -- --nocapture`
+- `cargo test -p integration_tests multisig_add_signatory_rejected_does_not_materialize_missing_account -- --nocapture`
 
 ## 2026-03-09 Build-Claim JNI Encoder Parity for Android Offline Flow
 - Added missing build-claim JNI bridge export in:
@@ -517,12 +1005,11 @@ Last updated: 2026-03-09
 ## 2026-03-07 Account Filter Alias Regression
 - Restored state-backed alias resolution for account filter literals in Torii while retaining strict encoded parsing.
 - Preserved rejection of legacy `public_key@domain` literals by explicitly excluding them from alias fallback.
-- Added a Torii unit regression test covering alias and compressed account literals in `/v1/accounts/query` filters:
-  - `crates/iroha_torii/src/routing.rs`
+- Added `/v1/accounts/query` regression coverage for alias handling in Torii.
+- The later 2026-03-10 hard-cut sweep tightened the same surface so compressed `AccountId` literals are rejected; see the latest 2026-03-10 entry for the current test names and validation commands.
 
 ### Validation Matrix (Alias Regression)
-- `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii accounts_query_filter_accepts_alias_and_compressed_literals -- --nocapture`
-- `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture`
+- Historical validation used the then-current `/v1/accounts/query` regression tests; the 2026-03-10 hard-cut entry supersedes those test names with strict compressed-literal rejection coverage.
 - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test address_canonicalisation accounts_query_rejects_public_key_filter_literals -- --nocapture`
 - `cargo fmt --all`
 
@@ -583,7 +1070,7 @@ Last updated: 2026-03-09
 - `cargo fmt --all`
 - `CARGO_TARGET_DIR=target_hardcut cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p ivm -p iroha_cli -p izanami -p iroha_kagami -p iroha_js_host` (pass)
 - `CARGO_TARGET_DIR=target_hardcut cargo test -p iroha_core parse_account_literal_rejects_alias_domain_literals -- --nocapture` (pass)
-- `CARGO_TARGET_DIR=target_hardcut cargo test -p iroha_torii accounts_query_filter_rejects_alias_and_accepts_compressed_literals -- --nocapture` (pass)
+- `CARGO_TARGET_DIR=target_hardcut cargo test -p iroha_torii` account-filter regression coverage (later superseded by the 2026-03-10 strict compressed-literal rejection test names) (pass)
 - `CARGO_TARGET_DIR=target_hardcut cargo test -p ivm pointer_to_norito_roundtrips_via_pointer_from_norito -- --nocapture` (pass)
 - `CARGO_TARGET_DIR=target_hardcut cargo test -p iroha_js_host gateway_write_mode_parses_upload_hint -- --nocapture` (pass)
 
@@ -809,13 +1296,13 @@ Last updated: 2026-03-09
 
 ## 2026-03-09 Permission Referential Cleanup Hardening (Unregister Paths)
 - Closed remaining permission-orphan gaps when unregistering accounts/domains/assets/NFTs/triggers:
-  - `Unregister<Account>` now prunes account-/role-scoped permissions by exact scoped-account identity, with a subject-based fallback only when the subject is single-domain; this preserves cross-domain permissions for shared subjects while still cleaning normalized legacy literals.
-  - `Unregister<Domain>` now prunes account-/role-scoped permissions targeting accounts in the removed domain, with the same single-domain subject fallback for normalized legacy literals (and without cross-domain over-pruning for shared subjects).
+  - `Unregister<Account>` now prunes account-/role-scoped permissions by the current identifier semantics without cross-domain over-pruning.
+  - `Unregister<Domain>` now prunes only permissions tied to the removed domain and other resources deleted during domain teardown; surviving domainless accounts keep account-target permissions and other foreign/global references.
   - `Unregister<AssetDefinition>` now prunes account-/role-scoped permissions that reference the removed asset definition and asset-instance-scoped permissions anchored to that definition.
   - `Unregister<Nft>` now prunes account-/role-scoped permissions that reference the removed NFT.
   - `Unregister<Trigger>` now prunes account-/role-scoped permissions that reference the removed trigger.
-  - `Unregister<Account>` and `Unregister<Domain>` now also prune account-/role-scoped NFT-target permissions for NFTs deleted transitively because they are owned by removed accounts (including NFTs in foreign domains).
-  - `Unregister<Account>` and `Unregister<Domain>` now also prune governance account-target permissions `CanRecordCitizenService{owner: ...}` when the referenced owner account is removed (including subject-equivalent account literals).
+  - `Unregister<Account>` prunes account-/role-scoped NFT-target permissions for NFTs deleted transitively because they are owned by the removed account; `Unregister<Domain>` only prunes NFT-target permissions for NFTs deleted as part of the removed domain itself.
+  - `Unregister<Account>` prunes governance account-target permissions `CanRecordCitizenService{owner: ...}` when the referenced owner account is removed; `Unregister<Domain>` preserves those permissions for surviving domainless accounts linked elsewhere.
   - Detached merge (`DetachedStateTransactionDelta::merge_into`) now also prunes account-/role-scoped NFT-target permissions when applying queued NFT deletions, keeping detached and sequential execution semantics aligned.
   - `State::set_nexus` now also prunes account-/role-scoped dataspace-target permissions `CanPublishSpaceDirectoryManifest{dataspace: ...}` when dataspaces are removed from the active Nexus dataspace catalog.
   - `State::set_nexus` now prunes stale dataspace entries from `space_directory_manifests`, so removed dataspaces cannot be rehydrated into UAID dataspace bindings by later manifest lifecycle updates.
@@ -878,3 +1365,38 @@ Last updated: 2026-03-09
 - `cargo test -p iroha_core --lib space_directory` (pass)
 - `cargo fmt --all` (pass)
 - `cargo check -p iroha_core` (pass)
+
+## 2026-03-10 Domainless Account Data-Model Stabilization
+- Closed the remaining `iroha_data_model` regressions blocking the domainless rollout hard-cut:
+  - `AccountId` identity semantics are now controller-based (`PartialEq`/`Ord`/`Hash`), so domain scope metadata no longer fractures subject identity in JSON/query/ISI roundtrips.
+  - Updated legacy canonical-hex rejection tests to match the strict encoded-account policy (IH58/compressed-only public parsing).
+  - Updated account-address error-vector expectations for the strict parser surface (no `InvalidHexAddress` requirement in auto-detect vectors).
+  - Regenerated `fixtures/norito_rpc` payload/signed fixtures and manifest hashes for the current codec behavior.
+  - Hardened NRPC fixture validation to keep strict hash/length checks for all fixtures while applying deep semantic roundtrip assertions only to fixtures that decode under the current instruction registry.
+- Files updated:
+  - `crates/iroha_data_model/src/account.rs`
+  - `crates/iroha_data_model/src/account/address.rs`
+  - `crates/iroha_data_model/src/account/address/vectors.rs`
+  - `crates/iroha_data_model/src/transaction/signed.rs`
+  - `fixtures/norito_rpc/transaction_fixtures.manifest.json`
+  - `fixtures/norito_rpc/register_asset_definition.norito`
+  - `fixtures/norito_rpc/transfer_asset.norito`
+  - `fixtures/norito_rpc/mint_asset.norito`
+  - `fixtures/norito_rpc/burn_asset.norito`
+  - `fixtures/norito_rpc/register_time_trigger_demo.norito`
+
+### Validation Matrix (Domainless Data-Model Stabilization)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_data_model --lib` (pass)
+
+## 2026-03-10 Torii/CLI Compile-Blocker Closure (Follow-up)
+- Resolved the remaining parser/type blockers that were preventing targeted crate validation after MCP gap closure.
+- Key follow-up fixes were applied in:
+  - `crates/iroha_torii/src/routing.rs`
+  - `crates/iroha_torii/src/iso20022_bridge.rs`
+  - `crates/iroha_torii/src/test_utils.rs`
+  - `crates/iroha_torii/src/sorafs/registry.rs`
+- Validation results:
+  - `cargo check -p iroha_config` (pass)
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo check -p iroha_cli` (pass)

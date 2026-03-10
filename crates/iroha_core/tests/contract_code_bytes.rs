@@ -36,9 +36,9 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let dom: DomainId = "wonderland".parse().unwrap();
-    let auth = AccountId::of(dom.clone(), pubkey);
+    let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
-    let account = Account::new(auth.clone()).build(&auth);
+    let account = Account::new(auth.clone().to_account_id(dom)).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
 
@@ -112,9 +112,9 @@ fn register_contract_code_bytes_respects_size_cap() {
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let dom: DomainId = "wonderland".parse().unwrap();
-    let auth = AccountId::of(dom.clone(), pubkey);
+    let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
-    let account = Account::new(auth.clone()).build(&auth);
+    let account = Account::new(auth.clone().to_account_id(dom)).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
 

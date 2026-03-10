@@ -60,7 +60,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
 
     let domain_id: DomainId = "nexus".parse().expect("domain id");
     let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let account_id = AccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+    let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
     let compressed_literal = account_id
         .to_account_address()
@@ -130,9 +130,11 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register domain");
-    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account with uaid");
+    Register::account(
+        NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid)),
+    )
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register account with uaid");
     Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
@@ -346,11 +348,7 @@ fn consensus_guard() -> MutexGuard<'static, ()> {
 
 fn valid_missing_account_literal() -> String {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    AccountId::new(
-        "wonderland".parse().expect("domain"),
-        key_pair.public_key().clone(),
-    )
-    .to_string()
+    AccountId::new(key_pair.public_key().clone()).to_string()
 }
 
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {

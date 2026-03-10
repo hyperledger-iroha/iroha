@@ -5565,6 +5565,12 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP"
     )]
     pub validation_result_queue_cap: usize,
+    /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
+    #[config(
+        env = "SUMERAGI_VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR",
+        default = "defaults::sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR"
+    )]
+    pub validation_queue_full_inline_cutover_divisor: u32,
     /// QC verify worker threads (0 = auto).
     #[config(
         env = "SUMERAGI_QC_VERIFY_WORKER_THREADS",
@@ -6690,6 +6696,17 @@ impl Sumeragi {
         let validation_threads_ok = true;
         let validation_work_queue_ok = true;
         let validation_result_queue_ok = true;
+        let validation_queue_full_inline_cutover_divisor_ok = if worker
+            .validation_queue_full_inline_cutover_divisor
+            == 0
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.worker.validation_queue_full_inline_cutover_divisor must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
         let validation_pending_cap_ok = if worker.validation_pending_cap == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
                 "sumeragi.advanced.worker.validation_pending_cap must be greater than zero",
@@ -7058,6 +7075,7 @@ impl Sumeragi {
             && validation_threads_ok
             && validation_work_queue_ok
             && validation_result_queue_ok
+            && validation_queue_full_inline_cutover_divisor_ok
             && validation_pending_cap_ok
             && vote_burst_cap_ok
             && urgent_da_streak_ok
@@ -7208,6 +7226,8 @@ impl Sumeragi {
                 validation_worker_threads: worker.validation_worker_threads,
                 validation_work_queue_cap: worker.validation_work_queue_cap,
                 validation_result_queue_cap: worker.validation_result_queue_cap,
+                validation_queue_full_inline_cutover_divisor: worker
+                    .validation_queue_full_inline_cutover_divisor,
                 qc_verify_worker_threads: worker.qc_verify_worker_threads,
                 qc_verify_work_queue_cap: worker.qc_verify_work_queue_cap,
                 qc_verify_result_queue_cap: worker.qc_verify_result_queue_cap,
@@ -14509,7 +14529,7 @@ impl Default for ToriiNoritoRpcTransport {
 }
 
 /// Native MCP endpoint configuration parameters.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiMcp {
     /// Master enable switch for native `/v1/mcp`.
     #[config(default = "defaults::torii::mcp::ENABLED")]
@@ -14520,13 +14540,28 @@ pub struct ToriiMcp {
     /// Maximum number of tools emitted in one `tools/list` response page.
     #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
     pub max_tools_per_list: usize,
+    /// MCP tool profile (`read_only`, `writer`, `operator`).
+    #[config(default = "defaults::torii::mcp::PROFILE.to_string()")]
+    pub profile: String,
     /// Expose operator-only routes in MCP tool discovery.
     #[config(default = "defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES")]
     pub expose_operator_routes: bool,
+    /// Additional allow-list prefixes for tool names (empty => profile-only).
+    #[config(default = "defaults::torii::mcp::allow_tool_prefixes()")]
+    pub allow_tool_prefixes: Vec<String>,
+    /// Additional deny-list prefixes for tool names.
+    #[config(default = "defaults::torii::mcp::deny_tool_prefixes()")]
+    pub deny_tool_prefixes: Vec<String>,
     /// Optional steady-state MCP request budget (requests/minute).
     pub rate_per_minute: Option<u32>,
     /// Optional MCP burst budget.
     pub burst: Option<u32>,
+    /// Retention window in seconds for asynchronous MCP jobs.
+    #[config(default = "defaults::torii::mcp::ASYNC_JOB_TTL_SECS")]
+    pub async_job_ttl_secs: u64,
+    /// Maximum asynchronous MCP jobs retained in memory.
+    #[config(default = "defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES")]
+    pub async_job_max_entries: usize,
 }
 
 impl Default for ToriiMcp {
@@ -14535,9 +14570,14 @@ impl Default for ToriiMcp {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            profile: defaults::torii::mcp::PROFILE.to_string(),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
+            allow_tool_prefixes: defaults::torii::mcp::allow_tool_prefixes(),
+            deny_tool_prefixes: defaults::torii::mcp::deny_tool_prefixes(),
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE,
             burst: defaults::torii::mcp::BURST,
+            async_job_ttl_secs: defaults::torii::mcp::ASYNC_JOB_TTL_SECS,
+            async_job_max_entries: defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES,
         }
     }
 }
@@ -17041,6 +17081,31 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("sumeragi.advanced.worker table");
         worker.insert(
             "vote_burst_cap_with_payload_backlog".into(),
+            Value::Integer(0),
+        );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn sumeragi_rejects_zero_worker_validation_queue_full_inline_cutover_divisor() {
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let advanced = sumeragi
+            .entry("advanced")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced table");
+        let worker = advanced
+            .entry("worker")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.advanced.worker table");
+        worker.insert(
+            "validation_queue_full_inline_cutover_divisor".into(),
             Value::Integer(0),
         );
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());

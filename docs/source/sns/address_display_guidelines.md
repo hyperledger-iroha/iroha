@@ -15,10 +15,11 @@ payloads. The Android retail wallet sample in
 - **Monospace, selectable text.** Render both strings with a monospace font and
   `textIsSelectable="true"` so users can inspect values without invoking an IME.
   Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption that reminds operators no suffix is
-  required. Explorers should also highlight the canonical domain label when the
-  selector encodes a digest.
+- **Domainless address hints.** Canonical account literals are domainless; when
+  a workflow needs domain context, render it separately from the account
+  literal. Do not describe domain context as an omitted suffix or an implicit
+  default-domain reconstruction. Explorers may still highlight the canonical
+  domain label encoded by a selector digest when that context matters.
 - **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
   fails, display an explicit error instead of a blank image.
 - **Clipboard messaging.** After copying the compressed form, emit a toast or
@@ -63,10 +64,9 @@ surface whether an imported legacy literal carried a selector prefix without re-
   explorers and wallet dashboards can surface the Sora-only notice during paste/
   validation flows instead of only when they generate the compressed form
   themselves.
-The JavaScript parser accepts the same canonical formats as Torii (IH58,
-compressed `sora`, and canonical `0x…` hex). Bare hex without the `0x` sentinel
-is rejected by Torii, so SDKs must preserve the prefix when emitting hex
-literals.
+JavaScript `AccountId` parsing now matches Torii’s strict hard-cut contract:
+canonical IH58 only. Compressed `sora…` strings and canonical `0x…` hex remain
+address-display helpers, not `AccountId` parser inputs.
 
 ## Alphabet reference
 
@@ -111,34 +111,32 @@ transaction participants, account summaries, telemetry DTOs) using the
 underlying identifiers. Unknown values (for example `address_format=base64`)
 return `HTTP 400` so misconfigured SDKs fail fast.
 
-Requests always accept IH58 (preferred) and compressed (`sora`, second-best) selectors. Canonical
-IH58 strings remain the wire format for manifests, telemetry, and QR payloads,
-so only opt into `address_format=compressed` when rendering UX where the Sora
-alphabet offers material ergonomic wins.
+Account-bearing requests accept canonical IH58 `AccountId` literals only.
+Canonical IH58 strings remain the wire format for manifests, telemetry, and QR
+payloads, so use `address_format=compressed` only for rendered output where the
+Sora alphabet offers material ergonomic wins.
 
 Offline reporting endpoints reuse the same contract. `/v1/offline/allowances{,/query}`,
 `/v1/offline/certificates{,/query}`, `/v1/offline/transfers{,/query}`,
 `/v1/offline/settlements{,/query}`, `/v1/offline/receipts{,/query}`, and
 `/v1/offline/summaries{,/query}` now
 canonicalize `controller_id`, `receiver_id`, and `deposit_account_id` filter literals, so GET and
-POST filters happily accept IH58 (preferred) and compressed (`sora`, second-best) selectors (including `in`/`nin`
+POST filters accept canonical IH58 `AccountId` selectors (including `in`/`nin`
 arrays) without forcing operators to hand-normalize values ahead of time.
-When the selector targets the implicit default domain, clients may omit
-`@<domain>` entirely; Torii canonicalizes those preferred IH58 / second-best compressed (`sora`) inputs to
-canonical IH58 (no `@domain`) and emits the canonical string in responses + telemetry.
-Domainless literals intended for non-default domains should carry an explicit `@<domain>` suffix (or resolve via alias/UAID context). Legacy selector-bearing literals without that context can still fail with
-`ERR_DOMAIN_SELECTOR_UNRESOLVED`, which dashboards can monitor during migration.
+Canonical `AccountId` literals remain domainless even when a workflow also carries domain context;
+render or transport that context separately instead of appending `@<domain>` or relying on
+implicit default-domain reconstruction.
 
-## Accessibility + implicit domain metadata
+## Accessibility + explicit domain metadata
 
 - **Copy mode controls.** When rendering the IH58 (preferred)/compressed (`sora`, second-best)/QR toggle, mark each button with
   `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical IH58 account address”
   vs “Copy compressed Sora address—works only inside Sora-aware apps”). Include a visually-hidden
   `(safe to share)` or `(Sora-only)` suffix so screen readers convey the warnings present in the UI.
-- **Implicit domain hints.** Reuse the caption text from the main layout but also expose it via
-  `aria-describedby` on the address container (e.g., “Default domain: omit `.wonderland` in Sora
-  dashboards”). This keeps the implicit-domain cue available even when the caption is collapsed on
-  mobile.
+- **Domain context hints.** Reuse the caption text from the main layout but also expose it via
+  `aria-describedby` on the address container (for example, “Domain context: wonderland”).
+  Keep domain context separate from the canonical account literal instead of showing `@domain`
+  suffixes or implicit-default-domain captions.
 - **QR metadata.** The `/v1/explorer/accounts/{id}/qr` endpoint returns both the literal and SVG
   payload. Wrap the SVG with `<figure role="img" aria-label="IH58 QR for snx…">` so assistive tech
   can reference the literal field when announcing the image. If QR rendering fails, surface a
@@ -192,8 +190,8 @@ For canonical payloads, the controller immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-Selector tags (`0x00` default, `0x01` local12, `0x02` global) are accepted only
-when decoding legacy payloads for backward compatibility.
+Selector tags (`0x00` default, `0x01` local12, `0x02` global) are no longer
+accepted in canonical payload bytes.
 
 Canonical hex examples that wallet tooling can link or embed in docs/tests:
 

@@ -1,20 +1,19 @@
-//! End-to-end regressions for domain-scoped implicit account receive.
+//! End-to-end regressions for global implicit account receive admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{collections::BTreeMap, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
     state::{State, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    account::{
-        ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
-    },
+    account::{AccountAdmissionMode, AccountAdmissionPolicy},
     executor::ValidationFail,
     isi::error::{
         AccountAdmissionDefaultRoleError, AccountAdmissionError, AccountAdmissionQuotaExceeded,
@@ -41,70 +40,33 @@ fn test_state(world: World) -> State {
     State::new_for_testing(world, kura, query)
 }
 
-fn prepare_state(
-    policy: Option<AccountAdmissionPolicy>,
-    alice_balance: Numeric,
-) -> (
-    State,
-    DomainId,
-    AccountId,
-    KeyPair,
-    AssetDefinitionId,
-    AssetId,
-) {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-    let alice_id = AccountId::new(domain_id.clone(), alice_kp.public_key().clone());
+fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
+    let key_pair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
+    let account_id = AccountId::new(key_pair.public_key().clone());
+    (account_id, key_pair)
+}
 
-    let domain = policy.map_or_else(
-        || Domain::new(domain_id.clone()).build(&alice_id),
-        |policy| {
-            let mut metadata = Metadata::default();
-            let policy_key: Name = ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-                .parse()
-                .expect("policy metadata key");
-            metadata.insert(policy_key, Json::new(policy));
-            Domain::new(domain_id.clone())
-                .with_metadata(metadata)
-                .build(&alice_id)
-        },
-    );
+fn build_account_in_domain(
+    account_id: AccountId,
+    domain_id: DomainId,
+    authority: &AccountId,
+) -> Account {
+    Account::new(account_id.to_account_id(domain_id)).build(authority)
+}
 
-    let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), alice_balance);
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
-    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-
-    (
-        test_state(world),
-        domain_id,
-        alice_id,
-        alice_kp,
-        asset_def_id,
-        alice_asset_id,
+fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
+    BlockHeader::new(
+        NonZeroU64::new(height).expect("height"),
+        None,
+        None,
+        None,
+        timestamp_ms,
+        0,
     )
 }
 
-#[test]
-fn transfer_to_missing_account_creates_account_by_default() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-    let alice_id = AccountId::new(domain_id.clone(), alice_kp.public_key().clone());
-
-    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(50, 0));
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
-    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-    let state = test_state(world);
+fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
     let chain_id = state.chain_id.clone();
-
     let max_clock_drift = state
         .view()
         .world()
@@ -114,32 +76,60 @@ fn transfer_to_missing_account_creates_account_by_default() {
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
 
-    let dest_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest = AccountId::new(domain_id.clone(), dest_kp.public_key().clone());
-    assert!(
-        state.view().world().accounts().get(&dest).is_none(),
-        "destination must not exist before receipt"
-    );
+    AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
+        .expect("transaction admission must succeed")
+}
 
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+fn prepare_state(
+    policy: Option<AccountAdmissionPolicy>,
+    alice_balance: Numeric,
+) -> (State, AccountId, KeyPair, AssetDefinitionId, AssetId) {
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let (alice_id, alice_kp) = seeded_account(1);
+    let domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
+    let alice_asset = Asset::new(alice_asset_id.clone(), alice_balance);
+    let alice_account = build_account_in_domain(alice_id.clone(), domain_id, &alice_id);
+
+    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
+    let state = test_state(world);
+
+    if let Some(policy) = policy {
+        install_global_policy(&state, &alice_id, policy);
+    }
+
+    (state, alice_id, alice_kp, asset_def_id, alice_asset_id)
+}
+
+fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAdmissionPolicy) {
+    let mut block = state.block(block_header(1, 1_699_999_999_000));
+    let mut stx = block.transaction();
+    SetParameter::new(Parameter::Custom(policy.into_custom_parameter()))
+        .execute(authority, &mut stx)
+        .expect("set global account admission policy");
+    stx.apply();
+    block.commit().expect("commit policy update");
+}
+
+#[test]
+fn transfer_to_missing_account_creates_account_by_default() {
+    let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
+        prepare_state(None, Numeric::new(50, 0));
+    let chain_id = state.chain_id.clone();
+    let (dest, _) = seeded_account(2);
+
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
             Numeric::new(10, 0),
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
 
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
@@ -170,68 +160,25 @@ fn transfer_to_missing_account_creates_account_by_default() {
 
 #[test]
 fn transfer_to_missing_account_rejected_in_explicit_domain() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-    let alice_id = AccountId::new(domain_id.clone(), alice_kp.public_key().clone());
-
     let policy = AccountAdmissionPolicy {
         mode: AccountAdmissionMode::ExplicitOnly,
-        max_implicit_creations_per_tx: None,
-        max_implicit_creations_per_block: None,
-        implicit_creation_fee: None,
-        min_initial_amounts: BTreeMap::new(),
-        default_role_on_create: None,
+        ..AccountAdmissionPolicy::default()
     };
-    let mut metadata = Metadata::default();
-    let policy_key: Name = ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-        .parse()
-        .expect("policy metadata key");
-    metadata.insert(policy_key, Json::new(policy));
-    let domain: Domain = Domain::new(domain_id.clone())
-        .with_metadata(metadata)
-        .build(&alice_id);
-
-    let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(50, 0));
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
-    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-    let state = test_state(world);
+    let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
+        prepare_state(Some(policy), Numeric::new(50, 0));
     let chain_id = state.chain_id.clone();
+    let (dest, _) = seeded_account(2);
 
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
-
-    let dest_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest = AccountId::new(domain_id.clone(), dest_kp.public_key().clone());
-
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
             Numeric::new(10, 0),
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
 
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
@@ -241,7 +188,7 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
             err,
             TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 InstructionExecutionError::AccountAdmission(
-                    AccountAdmissionError::ImplicitAccountCreationDisabled(_)
+                    AccountAdmissionError::ImplicitAccountCreationDisabled
                 )
             ))
         ),
@@ -258,39 +205,20 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
 
 #[test]
 fn multiple_receipts_in_one_tx_create_account_once() {
-    let (state, domain_id, alice_id, alice_kp, asset_def_id, alice_asset_id) =
+    let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Numeric::new(50, 0));
     let chain_id = state.chain_id.clone();
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
+    let (dest, _) = seeded_account(2);
 
-    let dest_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest = AccountId::new(domain_id.clone(), dest_kp.public_key().clone());
-
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest.clone()),
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(7, 0), dest.clone()),
         ])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
@@ -310,41 +238,21 @@ fn transaction_quota_limits_implicit_accounts() {
         max_implicit_creations_per_tx: Some(1),
         ..AccountAdmissionPolicy::default()
     };
-    let (state, domain_id, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
+    let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Numeric::new(40, 0));
     let chain_id = state.chain_id.clone();
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
+    let (dest1, _) = seeded_account(2);
+    let (dest2, _) = seeded_account(3);
 
-    let dest1_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
-    let dest2_kp = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-    let dest2 = AccountId::new(domain_id.clone(), dest2_kp.public_key().clone());
-
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest1.clone()),
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest2.clone()),
         ])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_100_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_100_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     let err = result.expect_err("tx should be rejected by per-tx quota");
@@ -381,20 +289,12 @@ fn block_quota_limits_creations_across_transactions() {
         max_implicit_creations_per_block: Some(1),
         ..AccountAdmissionPolicy::default()
     };
-    let (state, domain_id, alice_id, alice_kp, asset_def_id, alice_asset_id) =
+    let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Numeric::new(60, 0));
     let chain_id = state.chain_id.clone();
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
+    let (dest1, _) = seeded_account(2);
+    let (dest2, _) = seeded_account(3);
 
-    let dest1_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
@@ -402,31 +302,18 @@ fn block_quota_limits_creations_across_transactions() {
             dest1.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted1 =
-        AcceptedTransaction::accept(tx1, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("tx1 admission must succeed");
+    let accepted1 = accept_transaction(&state, tx1);
 
-    let dest2_kp = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-    let dest2 = AccountId::new(domain_id.clone(), dest2_kp.public_key().clone());
-    let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx2 = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
             Numeric::new(3, 0),
             dest2.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted2 =
-        AcceptedTransaction::accept(tx2, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("tx2 admission must succeed");
+    let accepted2 = accept_transaction(&state, tx2);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_200_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_200_000));
     let mut ivm_cache = IvmCache::new();
     let (_, res1) = state_block.validate_transaction(accepted1, &mut ivm_cache);
     assert!(res1.is_ok(), "first tx should succeed: {res1:?}");
@@ -464,39 +351,21 @@ fn missing_default_role_rejects_in_pipeline() {
         default_role_on_create: Some(role_id.clone()),
         ..AccountAdmissionPolicy::default()
     };
-    let (state, domain_id, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
+    let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Numeric::new(25, 0));
     let chain_id = state.chain_id.clone();
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
+    let (dest, _) = seeded_account(11);
 
-    let dest_kp = KeyPair::from_seed(vec![11; 32], Algorithm::Ed25519);
-    let dest = AccountId::new(domain_id.clone(), dest_kp.public_key().clone());
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
             Numeric::new(5, 0),
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_400_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_400_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     let err = result.expect_err("tx should fail when default role is missing");
@@ -525,20 +394,11 @@ fn missing_default_role_rejects_in_pipeline() {
 
 #[test]
 fn implicit_account_can_spend_without_roles() {
-    let (state, domain_id, alice_id, alice_kp, asset_def_id, alice_asset_id) =
+    let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Numeric::new(20, 0));
     let chain_id = state.chain_id.clone();
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
+    let (bob_id, bob_kp) = seeded_account(5);
 
-    let bob_kp = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
-    let bob_id = AccountId::new(domain_id.clone(), bob_kp.public_key().clone());
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
         .with_instructions([Transfer::asset_numeric(
             alice_asset_id.clone(),
@@ -546,18 +406,9 @@ fn implicit_account_can_spend_without_roles() {
             bob_id.clone(),
         )])
         .sign(alice_kp.private_key());
-    let accepted1 =
-        AcceptedTransaction::accept(tx1, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("tx1 admission must succeed");
+    let accepted1 = accept_transaction(&state, tx1);
 
-    let mut block1 = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_500_000,
-        0,
-    ));
+    let mut block1 = state.block(block_header(1, 1_700_000_500_000));
     let mut ivm_cache = IvmCache::new();
     let (_, res1) = block1.validate_transaction(accepted1, &mut ivm_cache);
     assert!(res1.is_ok(), "first transfer should succeed: {res1:?}");
@@ -567,25 +418,16 @@ fn implicit_account_can_spend_without_roles() {
     assert_eq!(balance(&state, &bob_asset_id), Numeric::new(7, 0));
     assert_eq!(balance(&state, &alice_asset_id), Numeric::new(13, 0));
 
-    let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
+    let tx2 = TransactionBuilder::new(chain_id, bob_id.clone())
         .with_instructions([Transfer::asset_numeric(
             bob_asset_id.clone(),
             Numeric::new(5, 0),
             alice_id.clone(),
         )])
         .sign(bob_kp.private_key());
-    let accepted2 =
-        AcceptedTransaction::accept(tx2, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("tx2 admission must succeed");
+    let accepted2 = accept_transaction(&state, tx2);
 
-    let mut block2 = state.block(BlockHeader::new(
-        NonZeroU64::new(2).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_600_000,
-        0,
-    ));
+    let mut block2 = state.block(block_header(2, 1_700_000_600_000));
     let mut ivm_cache2 = IvmCache::new();
     let (_, res2) = block2.validate_transaction(accepted2, &mut ivm_cache2);
     assert!(
@@ -600,53 +442,21 @@ fn implicit_account_can_spend_without_roles() {
 
 #[test]
 fn multi_receipts_within_transaction_succeed_in_open_domain() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-    let alice_id = AccountId::new(domain_id.clone(), alice_kp.public_key().clone());
-
-    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(50, 0));
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
-    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-    let state = test_state(world);
+    let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
+        prepare_state(None, Numeric::new(50, 0));
     let chain_id = state.chain_id.clone();
+    let (dest1, _) = seeded_account(2);
+    let (dest2, _) = seeded_account(3);
 
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
-
-    let dest1_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
-    let dest2_kp = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-    let dest2 = AccountId::new(domain_id.clone(), dest2_kp.public_key().clone());
-
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest1.clone()),
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(7, 0), dest2.clone()),
         ])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
 
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
@@ -678,65 +488,25 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
 
 #[test]
 fn tx_cap_rejects_multiple_implicit_creations() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_kp = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-    let alice_id = AccountId::new(domain_id.clone(), alice_kp.public_key().clone());
-
     let policy = AccountAdmissionPolicy {
         max_implicit_creations_per_tx: Some(1),
         ..AccountAdmissionPolicy::default()
     };
-    let mut metadata = Metadata::default();
-    let policy_key: Name = ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-        .parse()
-        .expect("policy metadata key");
-    metadata.insert(policy_key, Json::new(policy));
-    let domain: Domain = Domain::new(domain_id.clone())
-        .with_metadata(metadata)
-        .build(&alice_id);
-
-    let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
-    let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(50, 0));
-    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
-    let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-    let state = test_state(world);
+    let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
+        prepare_state(Some(policy), Numeric::new(50, 0));
     let chain_id = state.chain_id.clone();
+    let (dest1, _) = seeded_account(2);
+    let (dest2, _) = seeded_account(3);
 
-    let max_clock_drift = state
-        .view()
-        .world()
-        .parameters()
-        .sumeragi()
-        .max_clock_drift();
-    let tx_params = state.view().world().parameters().transaction();
-    let crypto = state.crypto.read().clone();
-
-    let dest1_kp = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-    let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
-    let dest2_kp = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-    let dest2 = AccountId::new(domain_id, dest2_kp.public_key().clone());
-
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
+    let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(1, 0), dest1.clone()),
             Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(1, 0), dest2.clone()),
         ])
         .sign(alice_kp.private_key());
-    let accepted =
-        AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
-            .expect("transaction admission must succeed");
+    let accepted = accept_transaction(&state, tx);
 
-    let mut state_block = state.block(BlockHeader::new(
-        NonZeroU64::new(1).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_000_000,
-        0,
-    ));
+    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
 
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);

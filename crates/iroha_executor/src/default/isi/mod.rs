@@ -115,10 +115,7 @@ mod tests {
     impl DummyExecutor {
         fn new() -> Self {
             let authority_keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
-            let authority = AccountId::new(
-                "wonderland".parse().expect("valid domain"),
-                authority_keypair.public_key().clone(),
-            );
+            let authority = AccountId::new(authority_keypair.public_key().clone());
             let header =
                 BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
             Self {

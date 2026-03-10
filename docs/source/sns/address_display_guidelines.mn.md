@@ -26,7 +26,7 @@ payloads. The Android retail wallet sample in
 - **Monospace, selectable text.** Render both strings with a monospace font and
   `textIsSelectable="true"` so users can inspect values without invoking an IME.
   Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
+- **Domainless address hints.** Canonical account literals are domainless; when a workflow needs domain context, render it separately from the account literal. When the selector points at the implicit
   `default` domain, surface a caption that reminds operators no suffix is
   required. Explorers should also highlight the canonical domain label when the
   selector encodes a digest.

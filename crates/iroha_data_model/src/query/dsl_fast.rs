@@ -944,7 +944,7 @@ mod predicate_tests {
         let domain = "wonderland".parse().expect("domain id");
         let (public_key, _private_key) =
             KeyPair::from_seed(vec![0x24; 32], Algorithm::Ed25519).into_parts();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn sample_domain() -> Domain {

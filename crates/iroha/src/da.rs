@@ -1711,23 +1711,22 @@ mod tests {
         let sora_domain: DomainId = "sora".parse().expect("domain");
 
         let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-        let payer = AccountId::new(wonderland_domain.clone(), payer_key.public_key().clone());
+        let payer = AccountId::new(payer_key.public_key().clone());
 
         let treasury_key = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-        let treasury = AccountId::new(wonderland_domain.clone(), treasury_key.public_key().clone());
+        let treasury = AccountId::new(treasury_key.public_key().clone());
 
         let reserve_key = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-        let protocol_reserve =
-            AccountId::new(wonderland_domain.clone(), reserve_key.public_key().clone());
+        let protocol_reserve = AccountId::new(reserve_key.public_key().clone());
 
         let provider_key = KeyPair::from_seed(vec![4; 32], Algorithm::Ed25519);
-        let provider = AccountId::new(sora_domain.clone(), provider_key.public_key().clone());
+        let provider = AccountId::new(provider_key.public_key().clone());
 
         let pdp_key = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
-        let pdp_bonus = AccountId::new(sora_domain.clone(), pdp_key.public_key().clone());
+        let pdp_bonus = AccountId::new(pdp_key.public_key().clone());
 
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
-        let potr_bonus = AccountId::new(sora_domain.clone(), potr_key.public_key().clone());
+        let potr_bonus = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId = "xor#wonderland".parse().expect("xor asset");
 
         let accounts = DaRentLedgerAccounts {

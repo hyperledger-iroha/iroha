@@ -82,8 +82,7 @@ mod util {
             "ed012003415E0E516BE83870CE5A2165605E8719216B5ECCCE4AEDFB0B2B77862B3798"
                 .parse()
                 .unwrap();
-        let genesis_account_id =
-            AccountId::new(iroha_genesis::GENESIS_DOMAIN_ID.clone(), genesis_public_key);
+        let genesis_account_id = AccountId::new(genesis_public_key);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id);
@@ -92,7 +91,7 @@ mod util {
 
     pub fn gen_account_in(domain: &DomainId) -> (AccountId, KeyPair) {
         let key_pair = KeyPair::random();
-        let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let account_id = AccountId::new(key_pair.public_key().clone());
         (account_id, key_pair)
     }
 

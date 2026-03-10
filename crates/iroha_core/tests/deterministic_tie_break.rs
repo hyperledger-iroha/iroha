@@ -21,13 +21,14 @@ fn build_world() -> (
     let (a2, k2) = iroha_test_samples::gen_account_in("wonderland");
     let (a3, k3) = iroha_test_samples::gen_account_in("wonderland");
     let (a4, k4) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&a1);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&a1);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default()).build(&a1);
-    let acc1 = Account::new(a1.clone()).build(&a1);
-    let acc2 = Account::new(a2.clone()).build(&a1);
-    let acc3 = Account::new(a3.clone()).build(&a1);
-    let acc4 = Account::new(a4.clone()).build(&a1);
+    let acc1 = Account::new(a1.clone().to_account_id(domain_id.clone())).build(&a1);
+    let acc2 = Account::new(a2.clone().to_account_id(domain_id.clone())).build(&a1);
+    let acc3 = Account::new(a3.clone().to_account_id(domain_id.clone())).build(&a1);
+    let acc4 = Account::new(a4.clone().to_account_id(domain_id)).build(&a1);
     // Initialize zero balances for determinism
     let a1_coin = AssetId::of(ad.id().clone(), a1.clone());
     let a2_coin = AssetId::of(ad.id().clone(), a2.clone());

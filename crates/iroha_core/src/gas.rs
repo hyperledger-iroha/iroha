@@ -496,12 +496,15 @@ mod tests {
         let (authority, _) = gen_account_in("wonderland");
         let role_id: RoleId = "bench_role".parse().unwrap();
         let trigger_id: TriggerId = "bench_trg".parse().unwrap();
+        let bench_domain: DomainId = "bench".parse().unwrap();
 
         let register_domain: InstructionBox =
-            dm_isi::register::Register::domain(Domain::new("bench".parse().unwrap())).into();
+            dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
 
-        let register_account: InstructionBox =
-            dm_isi::register::Register::account(Account::new(authority.clone())).into();
+        let register_account: InstructionBox = dm_isi::register::Register::account(Account::new(
+            authority.clone().to_account_id(bench_domain),
+        ))
+        .into();
 
         let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let register_asset_definition: InstructionBox =

@@ -1610,10 +1610,10 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let account_id = AccountId::new(domain_id.clone(), KeyPair::random().into_parts().0);
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
         let definition_id: crate::asset::AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::new(definition_id, account_id.clone());
-        let domain_owner_id = AccountId::new(domain_id.clone(), KeyPair::random().into_parts().0);
+        let domain_owner_id = AccountId::new(KeyPair::random().into_parts().0);
 
         let domain = Domain {
             id: domain_id.clone(),
@@ -1621,7 +1621,7 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: domain_owner_id,
         };
-        let account = Account::new(account_id.clone()).into_account();
+        let account = Account::new(account_id.to_account_id(domain_id.clone())).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
 
         // Create three events with three levels of nesting
@@ -1629,7 +1629,11 @@ mod tests {
         // the second one is an account event with a domain event inside
         // the third one is an asset event with an account event with a domain event inside
         let domain_created = DomainEvent::Created(domain).into();
-        let account_created = DomainEvent::Account(AccountEvent::Created(account)).into();
+        let account_created = DomainEvent::Account(AccountEvent::Created(AccountCreated {
+            account,
+            domain: domain_id.clone(),
+        }))
+        .into();
         let asset_created =
             DomainEvent::Account(AccountEvent::Asset(AssetEvent::Created(asset))).into();
 
@@ -1708,13 +1712,11 @@ mod tests {
                 .map(crate::account::ParsedAccountId::into_account_id)
                 .unwrap();
         let receiver = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         );
         let deposit_account = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C"
                 .parse()
                 .expect("public key"),

@@ -252,7 +252,7 @@ fn encode_entry(signer: &SigningAuthority) -> Result<Value, SignerVaultError> {
 }
 
 fn account_literal(account_id: &AccountId) -> String {
-    format!("{account_id}@{}", account_id.domain())
+    account_id.to_string()
 }
 
 fn extract_string(object: &Map, key: &str) -> Result<String, SignerVaultError> {

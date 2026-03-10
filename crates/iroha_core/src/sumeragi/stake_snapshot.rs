@@ -278,7 +278,7 @@ mod tests {
         account::AccountId,
         metadata::Metadata,
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
-        prelude::{DomainId, PeerId},
+        prelude::PeerId,
     };
     use iroha_primitives::numeric::Numeric;
 
@@ -295,13 +295,12 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_a = KeyPair::random();
         let keypair_b = KeyPair::random();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
-        let account_a = AccountId::new(domain.clone(), keypair_a.public_key().clone());
-        let account_b = AccountId::new(domain, keypair_b.public_key().clone());
+        let account_a = AccountId::new(keypair_a.public_key().clone());
+        let account_b = AccountId::new(keypair_b.public_key().clone());
 
         {
             let mut block = state.world.public_lane_validators.block();
@@ -373,11 +372,10 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active = KeyPair::random();
         let keypair_pending = KeyPair::random();
-        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
-        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let account_active = AccountId::new(keypair_active.public_key().clone());
+        let account_pending = AccountId::new(keypair_pending.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
         let peer_pending = PeerId::new(keypair_pending.public_key().clone());
 
@@ -449,9 +447,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account = AccountId::new(domain, keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
         let peer = PeerId::new(keypair.public_key().clone());
 
         {
@@ -584,7 +581,6 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_a = KeyPair::random();
         let keypair_b = KeyPair::random();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
@@ -592,7 +588,7 @@ mod tests {
         let roster = vec![peer_a.clone(), peer_b.clone()];
 
         {
-            let account_id = AccountId::new(domain, keypair_a.public_key().clone());
+            let account_id = AccountId::new(keypair_a.public_key().clone());
             let mut block = state.world.public_lane_validators.block();
             block.insert(
                 (LaneId::new(1), account_id.clone()),

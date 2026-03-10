@@ -45,7 +45,7 @@ pub struct PersistCouncilArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
+    /// Authority `AccountId` for signing (canonical IH58 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -229,7 +229,7 @@ impl GenVrfArgs {
         seed: &[u8; 64],
         chain_bytes: &[u8],
         index: usize,
-        domain_id: &DomainId,
+        _domain_id: &DomainId,
     ) -> Result<norito::json::Value> {
         let alias = format!("{}{}@{}", self.account_prefix, index, self.domain);
         let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
@@ -238,7 +238,7 @@ impl GenVrfArgs {
             iroha_crypto::Algorithm::Ed25519,
         );
         let (account_public_key, _) = account_keypair.into_parts();
-        let account_id = AccountId::new(domain_id.clone(), account_public_key);
+        let account_id = AccountId::new(account_public_key);
         let account_id_str = account_id.to_string();
         let (variant_label, pk_b64, proof_b64) =
             self.candidate_payload(seed, chain_bytes, index, &account_id, &alias)?;
@@ -374,7 +374,7 @@ pub struct DeriveAndPersistArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
+    /// Authority `AccountId` for signing (canonical IH58 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -596,13 +596,13 @@ impl Run for CouncilArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReplaceCouncilArgs {
-    /// Account id of the member to replace (IH58 or sora compressed literal).
+    /// Account id of the member to replace (canonical IH58 account literal).
     #[arg(long)]
     pub missing: String,
     /// Optional epoch override; defaults to the latest persisted epoch
     #[arg(long)]
     pub epoch: Option<u64>,
-    /// Authority `AccountId` for signing (IH58 or sora compressed literal).
+    /// Authority `AccountId` for signing (canonical IH58 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing

@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use iroha_crypto::{Algorithm, KeyPair};
 use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
 
 use super::*;
@@ -43,8 +42,12 @@ impl VisitExecute for MultisigPropose {
             Ok(spec) => spec,
             Err(err) => deny!(executor, err),
         };
-        let proposer_role = multisig_role_for(&proposer);
-        let multisig_role = multisig_role_for(&multisig_account);
+        let home_domain = match multisig_home_domain(&multisig_account, executor) {
+            Ok(home_domain) => home_domain,
+            Err(err) => deny!(executor, err),
+        };
+        let proposer_role = multisig_role_for(&home_domain, &proposer);
+        let multisig_role = multisig_role_for(&home_domain, &multisig_account);
         let is_downward_proposal = host
             .query(FindRolesByAccountId::new(multisig_account.clone()))
             .execute_all()
@@ -201,21 +204,9 @@ fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
 }
 
 fn ensure_not_derived_multisig_account(
-    multisig_account: &AccountId,
-    spec: &MultisigSpec,
+    _multisig_account: &AccountId,
+    _spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
-    let domain_id = multisig_account.domain().clone();
-    let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-    let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-    let derived_id = AccountId::new(domain_id, derived.public_key().clone());
-
-    if &derived_id == multisig_account {
-        return Err(ValidationFail::NotPermitted(
-            "multisig account uses deterministically derived controller id; register with a random controller"
-                .to_owned(),
-        ));
-    }
-
     Ok(())
 }
 
@@ -230,13 +221,17 @@ impl VisitExecute for MultisigApprove {
             Ok(spec) => spec,
             Err(err) => deny!(executor, err),
         };
+        let home_domain = match multisig_home_domain(&multisig_account, executor) {
+            Ok(home_domain) => home_domain,
+            Err(err) => deny!(executor, err),
+        };
         let has_multisig_role = host
             .query(FindRolesByAccountId::new(approver.clone()))
             .execute_all()
             .map(|roles| {
                 roles
                     .into_iter()
-                    .any(|role| role == multisig_role_for(&multisig_account))
+                    .any(|role| role == multisig_role_for(&home_domain, &multisig_account))
             })
             .unwrap_or(false);
 
@@ -396,9 +391,9 @@ mod tests {
 
     use super::*;
 
-    fn account(seed: u8, domain: &DomainId) -> AccountId {
+    fn account(seed: u8, _domain: &DomainId) -> AccountId {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        AccountId::new(domain.clone(), key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_spec(_domain: &DomainId, signer: &AccountId) -> MultisigSpec {
@@ -472,7 +467,7 @@ mod tests {
         let spec = sample_spec(&domain, &signer);
         let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));
         let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        let multisig_account = AccountId::new(domain, derived.public_key().clone());
+        let multisig_account = AccountId::new(derived.public_key().clone());
 
         let err = ensure_not_derived_multisig_account(&multisig_account, &spec)
             .expect_err("derived multisig should be rejected");
@@ -491,7 +486,7 @@ mod tests {
         let spec = sample_spec(&domain, &signer);
         let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));
         let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        let derived_id = AccountId::new(domain.clone(), derived.public_key().clone());
+        let derived_id = AccountId::new(derived.public_key().clone());
         let multisig_account = account(9, &domain);
 
         assert_ne!(

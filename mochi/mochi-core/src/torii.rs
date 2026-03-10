@@ -3448,7 +3448,14 @@ fn domain_event_summary(event: &DomainEvent) -> (String, String) {
 
 fn account_event_summary(event: &AccountEvent) -> (String, String) {
     match event {
-        AccountEvent::Created(account) => ("Account created".to_owned(), account.id().to_string()),
+        AccountEvent::Created(account) => (
+            "Account created".to_owned(),
+            account
+                .account
+                .id()
+                .to_account_id(account.domain.clone())
+                .to_string(),
+        ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
         AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
         AccountEvent::PermissionAdded(change) => (
@@ -4462,7 +4469,6 @@ mod tests {
         ChainId,
         account::AccountId,
         block::consensus::{ExecWitness, ExecWitnessMsg},
-        domain::DomainId,
         events::{
             EventBox, SharedDataEvent,
             data::{
@@ -6794,8 +6800,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("wonderland").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))
@@ -6825,8 +6830,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("unexpected").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))
@@ -6859,8 +6863,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("decode").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))

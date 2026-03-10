@@ -13,7 +13,7 @@ use iroha_data_model::{
     account::Account,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     governance::types::ParliamentBody,
     isi::governance::{
         ApproveGovernanceProposal, AtWindow, CastPlainBallot, CouncilDerivationKind,
@@ -72,6 +72,7 @@ fn manifest_provenance(
 
 #[test]
 fn sora_parliament_plain_lifecycle_with_20_citizens() {
+    let domain_id: DomainId = "sora".parse().expect("domain");
     let (proposer_id, proposer_kp) = gen_account_in("sora");
     let (escrow_id, _escrow_kp) = gen_account_in("sora");
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
@@ -81,7 +82,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         })
         .collect();
 
-    let domain = Domain::new("sora".parse().expect("domain")).build(&proposer_id);
+    let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId = "xor#sora".parse().expect("asset definition");
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);
 
@@ -94,12 +95,14 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         Numeric::new(0, 0),
     );
 
-    let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);
-    let escrow_account = Account::new(escrow_id.clone()).build(&proposer_id);
+    let proposer_account =
+        Account::new(proposer_id.clone().to_account_id(domain_id.clone())).build(&proposer_id);
+    let escrow_account =
+        Account::new(escrow_id.clone().to_account_id(domain_id.clone())).build(&proposer_id);
     let citizen_accounts = citizens
         .iter()
         .cloned()
-        .map(|id| Account::new(id).build(&proposer_id));
+        .map(|id| Account::new(id.to_account_id(domain_id.clone())).build(&proposer_id));
 
     let world = World::with_assets(
         [domain],

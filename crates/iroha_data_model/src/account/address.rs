@@ -602,19 +602,28 @@ impl AccountAddress {
         Ok(format!("0x{}", hex::encode(canonical)))
     }
 
-    /// Convert this address into an [`AccountId`] using the resolved domain.
+    /// Convert this address into a domainless [`AccountId`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the controller payload cannot be decoded.
+    pub fn to_account_id(&self) -> Result<AccountId, AccountAddressError> {
+        let controller = self.to_account_controller()?;
+        Ok(AccountId { controller })
+    }
+
+    /// Convert this address into a [`ScopedAccountId`] using an explicit domain.
     ///
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] when the provided domain does not match the selector
     /// embedded in the address or when the controller payload cannot be decoded.
-    pub fn to_account_id(&self, domain: &DomainId) -> Result<AccountId, AccountAddressError> {
+    pub fn to_scoped_account_id(
+        &self,
+        domain: &DomainId,
+    ) -> Result<super::ScopedAccountId, AccountAddressError> {
         self.ensure_domain_matches(domain)?;
-        let controller = self.to_account_controller()?;
-        Ok(AccountId {
-            domain: domain.clone(),
-            controller,
-        })
+        Ok(self.to_account_id()?.to_account_id(domain.clone()))
     }
 
     /// Check that the provided domain matches the selector embedded in this address.
@@ -724,7 +733,7 @@ impl JsonDeserialize for AccountAddress {
 const CONTROLLER_MAX_LEN: usize = 1024;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
-const CONTROLLER_MULTISIG_MEMBER_MAX: usize = 255;
+const CONTROLLER_MULTISIG_MEMBER_MAX: usize = u16::MAX as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AddressHeader {
@@ -916,10 +925,10 @@ impl ControllerPayload {
                 out.push(CONTROLLER_MULTISIG_TAG);
                 out.push(payload.version);
                 out.extend_from_slice(&payload.threshold.to_be_bytes());
-                let member_count = u8::try_from(payload.members.len()).map_err(|_| {
+                let member_count = u16::try_from(payload.members.len()).map_err(|_| {
                     AccountAddressError::MultisigMemberOverflow(payload.members.len())
                 })?;
-                out.push(member_count);
+                out.extend_from_slice(&member_count.to_be_bytes());
                 for member in &payload.members {
                     out.push(member.curve.as_u8());
                     out.extend_from_slice(&member.weight.to_be_bytes());
@@ -968,11 +977,12 @@ impl ControllerPayload {
                     .ok_or(AccountAddressError::InvalidLength)?;
                 *cursor += 2;
                 let threshold = u16::from_be_bytes(threshold_bytes.try_into().unwrap());
-                let member_count = *bytes
-                    .get(*cursor)
-                    .ok_or(AccountAddressError::InvalidLength)?
-                    as usize;
-                *cursor += 1;
+                let member_count_bytes = bytes
+                    .get(*cursor..*cursor + 2)
+                    .ok_or(AccountAddressError::InvalidLength)?;
+                *cursor += 2;
+                let member_count = u16::from_be_bytes(member_count_bytes.try_into().unwrap());
+                let member_count = usize::from(member_count);
                 if member_count > CONTROLLER_MULTISIG_MEMBER_MAX {
                     return Err(AccountAddressError::MultisigMemberOverflow(member_count));
                 }
@@ -1686,14 +1696,14 @@ mod tests {
     }
 
     fn account_address_for_seed(seed: u8) -> AccountAddress {
-        let account = AccountId::new(default_domain_id(), ed25519_pk_with(seed));
+        let account = AccountId::new(ed25519_pk_with(seed));
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
     }
 
     #[cfg(feature = "json")]
     #[test]
     fn account_address_json_roundtrip_supports_canonical_hex_literals() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("account address");
         let json_literal = norito::json::to_json(&address).expect("serialize account address");
         let decoded: AccountAddress =
@@ -1781,7 +1791,14 @@ mod tests {
             AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
-        assert_eq!(parse_err.reason(), err.code_str());
+        assert_eq!(
+            parse_err.reason(),
+            "AccountId must use a canonical IH58 literal"
+        );
+        assert_eq!(
+            err.code_str(),
+            AccountAddressErrorCode::UnknownCurve.as_str()
+        );
     }
 
     #[test]
@@ -1795,7 +1812,14 @@ mod tests {
             AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
-        assert_eq!(parse_err.reason(), err.code_str());
+        assert_eq!(
+            parse_err.reason(),
+            "AccountId must use a canonical IH58 literal"
+        );
+        assert_eq!(
+            err.code_str(),
+            AccountAddressErrorCode::UnknownCurve.as_str()
+        );
     }
 
     #[test]
@@ -1810,7 +1834,7 @@ mod tests {
 
     #[test]
     fn local12_digest_absent_for_default_domain() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         assert!(
             address.local12_digest().is_none(),
@@ -1870,7 +1894,7 @@ mod tests {
         ];
 
         for (label, seed_byte) in vectors {
-            let account = AccountId::new(domain(label), ed25519_pk_with(seed_byte));
+            let account = AccountId::new(ed25519_pk_with(seed_byte));
             let address = AccountAddress::from_account_id(&account).expect("address encoding");
             let canonical = address
                 .canonical_hex()
@@ -1895,7 +1919,7 @@ mod tests {
     #[test]
     fn canonical_payload_omits_domain_selector_bytes() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical[0] >> 5, HEADER_VERSION_V1);
@@ -1910,8 +1934,8 @@ mod tests {
     fn non_default_domain_address_bytes_match_default_domain_bytes() {
         let _guard = guard_default_label();
         let key = ed25519_pk();
-        let default_account = AccountId::new(default_domain_id(), key.clone());
-        let local_account = AccountId::new(domain("treasury"), key);
+        let default_account = AccountId::new(key.clone());
+        let local_account = AccountId::new(key);
         let default_address = AccountAddress::from_account_id(&default_account).expect("encode");
         let local_address = AccountAddress::from_account_id(&local_account).expect("encode");
         assert_eq!(
@@ -1925,12 +1949,12 @@ mod tests {
     #[test]
     fn domain_kind_distinguishes_default_and_local_selectors() {
         let _guard = guard_default_label();
-        let default_account = AccountId::new(default_domain_id(), ed25519_pk_with(7));
+        let default_account = AccountId::new(ed25519_pk_with(7));
         let default_address =
             AccountAddress::from_account_id(&default_account).expect("encode default domain");
         assert_eq!(default_address.domain_kind(), AddressDomainKind::Default);
 
-        let local_account = AccountId::new(domain("treasury"), ed25519_pk_with(9));
+        let local_account = AccountId::new(ed25519_pk_with(9));
         let local_address =
             AccountAddress::from_account_id(&local_account).expect("encode local domain");
         assert_eq!(local_address.domain_kind(), AddressDomainKind::Default);
@@ -1963,7 +1987,7 @@ mod tests {
         let original = default_domain_name();
         let _reset = Reset(original.clone());
         let canonical = set_default_domain_name("ledger").expect("set default label");
-        let account = AccountId::new(domain(canonical.as_ref()), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical_bytes = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical_bytes[1], CONTROLLER_SINGLE_KEY_TAG);
@@ -1983,7 +2007,7 @@ mod tests {
     #[test]
     fn ih58_encoding_has_expected_structure() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = address.to_ih58(42).expect("ih58");
         let raw = bs58::decode(encoded).into_vec().expect("base58");
@@ -1997,7 +2021,7 @@ mod tests {
     #[test]
     fn account_address_encodes_secp256k1_controller() {
         let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::Secp256k1).into_parts();
-        let account = AccountId::new(domain("wonderland"), public_key.clone());
+        let account = AccountId::new(public_key.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode secp256k1");
         let controller = address
             .to_account_controller()
@@ -2007,16 +2031,14 @@ mod tests {
 
     #[test]
     fn account_address_to_account_id_roundtrip() {
-        let account = AccountId::new(domain("wonderland"), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode account id");
-        let roundtrip = address
-            .to_account_id(account.domain())
-            .expect("domain matches selector");
+        let roundtrip = address.to_account_id().expect("decode account id");
         assert_eq!(roundtrip, account);
 
         let other_domain = domain("garden");
         let projected = address
-            .to_account_id(&other_domain)
+            .to_scoped_account_id(&other_domain)
             .expect("global selector should project to arbitrary domain");
         assert_eq!(projected.domain(), &other_domain);
         assert_eq!(projected.signatory(), account.signatory());
@@ -2025,7 +2047,7 @@ mod tests {
     #[test]
     fn ih58_round_trip_recovers_canonical_payload() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = original.to_ih58(73).expect("ih58");
         let decoded =
@@ -2039,7 +2061,7 @@ mod tests {
     #[test]
     fn ih58_prefix_mismatch_fails() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = address.to_ih58(10).expect("ih58");
         let err = AccountAddress::from_ih58(&encoded, Some(11)).expect_err("prefix mismatch");
@@ -2055,7 +2077,7 @@ mod tests {
     #[test]
     fn ih58_invalid_checksum_rejected() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let mut bytes = bs58::decode(address.to_ih58(0).unwrap())
             .into_vec()
@@ -2070,7 +2092,7 @@ mod tests {
     #[test]
     fn compressed_round_trip() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let compressed = original.to_compressed_sora().expect("compressed encode");
         assert!(compressed.starts_with(COMPRESSED_SENTINEL));
@@ -2084,7 +2106,7 @@ mod tests {
     #[test]
     fn compressed_fullwidth_round_trip() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let compressed = original
             .to_compressed_sora_fullwidth()
@@ -2113,7 +2135,7 @@ mod tests {
 
     #[test]
     fn compressed_invalid_char_rejected() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let mut compressed = AccountAddress::from_account_id(&account)
             .expect("encode")
             .to_compressed_sora()
@@ -2183,7 +2205,7 @@ mod tests {
 
     #[test]
     fn compressed_checksum_mismatch_detected() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let compressed = address.to_compressed_sora().expect("compressed encode");
         let payload = &compressed[COMPRESSED_SENTINEL.len()..];
@@ -2223,7 +2245,7 @@ mod tests {
     #[test]
     fn canonical_decode_rejects_small_order_public_key() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .canonical_bytes()
@@ -2238,7 +2260,7 @@ mod tests {
     #[test]
     fn canonical_decode_rejects_non_canonical_public_key() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .canonical_bytes()
@@ -2256,7 +2278,7 @@ mod tests {
         let original = default_domain_name();
         let _reset = Reset(original.clone());
         set_default_domain_name(DEFAULT_DOMAIN_NAME).expect("reset default domain label");
-        let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let ih58 = address.to_ih58(42).expect("ih58");
         let compressed = address.to_compressed_sora().expect("compressed");
@@ -2300,7 +2322,7 @@ mod tests {
     #[test]
     fn parse_encoded_accepts_only_ih58_and_compressed() {
         let _guard = guard_default_label();
-        let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let ih58 = address.to_ih58(42).expect("ih58");
         let compressed = address.to_compressed_sora().expect("compressed");
@@ -2329,7 +2351,7 @@ mod tests {
             MultisigMember::new(ed25519_pk_with(2), 2).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let account = AccountId::new_multisig(domain.clone(), policy.clone());
+        let account = AccountId::new_multisig(policy.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode");
 
         address

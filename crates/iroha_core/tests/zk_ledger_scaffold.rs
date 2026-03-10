@@ -95,7 +95,7 @@ fn register_zk_asset_writes_policy_metadata() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -180,7 +180,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -262,7 +262,7 @@ fn schedule_confidential_policy_transition_records_pending() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -371,7 +371,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -490,7 +490,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -603,7 +603,7 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -673,7 +673,7 @@ fn shield_rejected_when_policy_disallows() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
@@ -750,7 +750,7 @@ fn unshield_rejected_when_policy_disallows() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -827,7 +827,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
@@ -959,7 +959,7 @@ fn shield_burns_and_unshield_mints() {
     // Setup: register domain/account/asset and mint
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
@@ -1179,7 +1179,7 @@ fn zk_roots_are_bounded_in_world_state() {
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
@@ -1332,7 +1332,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         let mut stx = block.transaction();
         for instr in [
             Register::domain(Domain::new(domain_id.clone())).into(),
-            Register::account(NewAccount::new(owner.clone())).into(),
+            Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
             Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(

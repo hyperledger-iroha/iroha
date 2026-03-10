@@ -184,15 +184,19 @@ payload bit: │version  │ class  │  norm  │ext │
 መደበኛ v1፣ የኤክስቴንሽን ባንዲራ ጸድቷል) እና `0x0A` ለብዙ ሲግ ተቆጣጣሪዎች (ስሪት 0፣
 ክፍል 1፣ መደበኛ v1፣ የኤክስቴንሽን ባንዲራ ጸድቷል)።
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -317,7 +321,7 @@ tag-specific payload, then move on to the controller bytes.
 - IME/NFKC ልወጣዎች፡- የግማሽ ስፋት የሶራ ካና ዲኮዲንግ ሳይሰበር ወደ ሙሉ ስፋት ቅፆች ሊስተካከል ይችላል፣ነገር ግን ASCII `sora` sentinel እና IH58 አሃዞች/ፊደሎች ASCII መቆየት አለባቸው። ባለሙሉ ስፋት ወይም በኬዝ የታጠፈ ሴንቴልስ ላዩን `ERR_MISSING_COMPRESSED_SENTINEL`፣ ሙሉ ስፋት ASCII የሚጫኑ ጭነቶች `ERR_INVALID_COMPRESSED_CHAR` ከፍ ያደርጋሉ፣ እና የቼክሰም አለመዛመጃዎች እንደ `ERR_CHECKSUM_MISMATCH` ከፍ ይላል። በ`crates/iroha_data_model/src/account/address.rs` ውስጥ ያሉ የንብረት ሙከራዎች እነዚህን መንገዶች ስለሚሸፍኑ ኤስዲኬዎች እና የኪስ ቦርሳዎች በወሳኝ ውድቀቶች ላይ ሊመሰረቱ ይችላሉ።
 - Torii እና ኤስዲኬ የ`address@domain` (rejected legacy form) ተለዋጭ ስሞችን መፈተሽ አሁን IH58 (የተመረጡ)/ሶራ (ሁለተኛ-ምርጥ) ግብዓቶች ከተለዋጭ ስም መመለሻ በፊት (ለምሳሌ) የደንበኛ አወቃቀር አለመመጣጠን ሳይቻል ሲገመት ተመሳሳይ `ERR_*` ኮዶችን ያወጣሉ ከስድ ንባቦች.
 - የአካባቢ መራጭ ከ 12 ባይት ወለል `ERR_LOCAL8_DEPRECATED` ያጠረ ይጭናል፣ ከውርስ Local-8 መፋጨት ጠንካራ መቆራረጥን ይጠብቃል።
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 መደበኛ ሁለትዮሽ ቬክተሮች
 

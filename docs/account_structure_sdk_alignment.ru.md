@@ -14,14 +14,8 @@
 Задачи:
 1. **Канонический вывод:** `AccountId::to_string()`/Display ДОЛЖЕН выдавать только IH58
    (без суффикса `@domain`). Канонический hex — только для отладки (`0x...`).
-2. **Допустимые входы:** парсеры ДОЛЖНЫ принимать IH58 (предпочтительно), `sora`
-   сжатый и канонический hex (только `0x...`; голый hex отвергается).
-   Входы МОГУТ содержать суффикс `@<domain>` для подсказок маршрутизации;
-   алиасы `<label>@<domain>` (rejected legacy form) требуют резолвера. 
-   (multihash hex) остаётся поддержанным.
-3. **Резолверы:** разбор IH58/sora без домена требует резолвера селектора домена,
-   если селектор не является неявным дефолтом (используйте настроенную метку
-   домена по умолчанию). Литералы UAID (`uaid:...`) и opaque (`opaque:...`) требуют резолверов.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Контрольная сумма IH58:** используйте Blake2b‑512 над `IH58PRE || prefix || payload`,
    берите первые 2 байта. Основание сжатого алфавита — **105**.
 5. **Ограничение кривых:** по умолчанию SDK — только Ed25519. Предоставьте явный opt‑in

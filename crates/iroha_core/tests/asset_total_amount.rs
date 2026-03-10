@@ -55,12 +55,12 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     let (holder_looking_glass, _kp_b) = gen_account_in("looking_glass");
     let (burn_to_zero, _kp_c) = gen_account_in("looking_glass");
 
-    for account_id in [
-        holder_wonderland.clone(),
-        holder_looking_glass.clone(),
-        burn_to_zero.clone(),
+    for (account_id, domain_id) in [
+        (holder_wonderland.clone(), wonderland.clone()),
+        (holder_looking_glass.clone(), looking_glass.clone()),
+        (burn_to_zero.clone(), looking_glass.clone()),
     ] {
-        Register::account(Account::new(account_id))
+        Register::account(Account::new(account_id.to_account_id(domain_id)))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
     }
@@ -165,9 +165,11 @@ fn asset_totals_drop_when_unregistering_account() {
         .expect("register domain");
 
     let (holder, _holder_key) = gen_account_in("wonderland");
-    Register::account(Account::new(holder.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register holder");
+    Register::account(Account::new(
+        holder.clone().to_account_id(domain_id.clone()),
+    ))
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register holder");
 
     let definition_id: AssetDefinitionId = "account_drop#wonderland".parse().expect("asset def");
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
@@ -252,12 +254,16 @@ fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
 
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
-    Register::account(Account::new(source_holder.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source holder");
-    Register::account(Account::new(foreign_holder.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register foreign holder");
+    Register::account(Account::new(
+        source_holder.clone().to_account_id(source_domain.clone()),
+    ))
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register source holder");
+    Register::account(Account::new(
+        foreign_holder.clone().to_account_id(foreign_domain.clone()),
+    ))
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = "domain_drop#source".parse().expect("asset def");
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
@@ -359,12 +365,16 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
 
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
-    Register::account(Account::new(source_holder.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source holder");
-    Register::account(Account::new(foreign_holder.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register foreign holder");
+    Register::account(Account::new(
+        source_holder.clone().to_account_id(source_domain.clone()),
+    ))
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register source holder");
+    Register::account(Account::new(
+        foreign_holder.clone().to_account_id(foreign_domain.clone()),
+    ))
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = "teardown#source".parse().expect("asset def");
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))

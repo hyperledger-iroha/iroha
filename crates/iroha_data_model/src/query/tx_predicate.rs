@@ -837,7 +837,7 @@ mod tests {
         let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
         let (public_key, _) =
             iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
-        crate::account::AccountId::new(domain, public_key)
+        crate::account::AccountId::new(public_key)
     }
 
     fn sample_hash_literal(seed: u8) -> String {

@@ -26,13 +26,8 @@ həyata keçirilməsi. Lütfən, SDK davranışını və testlərini kanonik spe
 Fəaliyyət elementləri:
 1. **Kanonik çıxış:** `AccountId::to_string()`/Ekran yalnız IH58 yaymalıdır
    (`@domain` şəkilçisi yoxdur). Kanonik hex sazlama üçündir (`0x...`).
-2. **Qəbul edilmiş daxiletmələr:** təhlilçilər IH58 (üstünlük verilir), `sora` sıxılmış,
-   və kanonik hex (yalnız `0x...`; çılpaq hex rədd edilir). Girişlər daşıya bilər
-   marşrutlaşdırma göstərişləri üçün `@<domain>` şəkilçisi; `<label>@<domain>` (rejected legacy form) ləqəbləri a tələb edir
-   həlledici.  3. **Həlledicilər:** domensiz IH58/sora təhlili üçün domen seçicisi tələb olunur
-   seçici gizli defolt olmadıqda həlledici (konfiqurasiya edilmiş standartdan istifadə edin
-   domen etiketi). UAID (`uaid:...`) və qeyri-şəffaf (`opaque:...`) hərfləri tələb edir
-   həlledicilər.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 yoxlama məbləği:** `IH58PRE || prefix || payload` üzərində Blake2b-512 istifadə edin, götürün
    ilk 2 bayt. Sıxılmış əlifba bazası **105**-dir.
 5. **Əyri keçid:** SDK-lar defolt olaraq yalnız Ed25519-dur. üçün açıq seçim təmin edin

@@ -3097,11 +3097,8 @@ fn runtime_durable_get_or_insert_default_state_map() {
             .parse()
             .expect("public key"),
     );
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     vm.set_host(host);
     // Run hajimari
     vm.run().expect("exec");

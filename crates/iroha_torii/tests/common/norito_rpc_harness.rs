@@ -112,10 +112,7 @@ impl NoritoRpcHarness {
 pub fn sample_transaction_bytes() -> Vec<u8> {
     let chain_id: ChainId = ChainId::from("test-chain");
     let key_pair = KeyPair::random();
-    let account = AccountId::of(
-        "wonderland".parse().expect("valid domain"),
-        key_pair.public_key().clone(),
-    );
+    let account = AccountId::of(key_pair.public_key().clone());
     TransactionBuilder::new(chain_id, account)
         .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
         .sign(key_pair.private_key())

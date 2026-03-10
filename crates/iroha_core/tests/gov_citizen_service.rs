@@ -11,7 +11,7 @@ use iroha_data_model::{
     Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     isi::governance::{
         CitizenServiceEvent, CouncilDerivationKind, PersistCouncilForEpoch,
         RecordCitizenServiceOutcome, RegisterCitizen,
@@ -28,9 +28,14 @@ use nonzero_ext::nonzero;
 fn build_world(def_id: &AssetDefinitionId) -> World {
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
-    let domain = Domain::new("wonderland".parse().expect("domain")).build(&alice_id);
-    let alice_account = iroha_data_model::account::Account::new(alice_id.clone()).build(&alice_id);
-    let escrow_account = iroha_data_model::account::Account::new(bob_id.clone()).build(&bob_id);
+    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let alice_account =
+        iroha_data_model::account::Account::new(alice_id.clone().to_account_id(domain_id.clone()))
+            .build(&alice_id);
+    let escrow_account =
+        iroha_data_model::account::Account::new(bob_id.clone().to_account_id(domain_id))
+            .build(&bob_id);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),

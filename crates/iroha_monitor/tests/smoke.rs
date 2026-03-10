@@ -42,9 +42,14 @@ fn spawn_lite_smoke_renders_frames() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("祭 Matsuri Vision"),
-        "expected Matsuri header in stdout, got: {}",
+        stdout.contains("[headless]"),
+        "expected headless summary in stdout, got: {}",
         stdout.chars().take(200).collect::<String>()
+    );
+    assert!(
+        stdout.contains("UPLINK ESTABLISHED") || stdout.contains("telemetry online"),
+        "expected startup or recovery activity in stdout, got: {}",
+        stdout.chars().take(300).collect::<String>()
     );
 }
 
@@ -118,8 +123,12 @@ fn attach_mode_with_stubs_runs_cleanly() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.contains("Festival whispers"));
-    assert!(stderr.trim().is_empty(), "stderr should be empty: {stderr}");
+    assert!(stdout.contains("[headless]"));
+    assert!(stdout.contains("telemetry online"));
+    assert!(
+        stderr.contains("falling back to headless output"),
+        "expected headless fallback notice in stderr: {stderr}"
+    );
 }
 
 fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {

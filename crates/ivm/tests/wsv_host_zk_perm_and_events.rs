@@ -112,7 +112,7 @@ fn zk_register_shield_permissions_and_events() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -194,7 +194,7 @@ fn unshield_requires_verify_even_with_permission() {
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -280,7 +280,7 @@ fn zk_transfer_requires_matching_vk_reference() {
 
     let mut host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

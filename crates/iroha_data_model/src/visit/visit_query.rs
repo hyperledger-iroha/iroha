@@ -39,6 +39,8 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
     singular_query_visitors! {
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
+        visit_find_domains_by_account_id(FindDomainsByAccountId),
+        visit_find_account_ids_by_domain_id(FindAccountIdsByDomainId),
         visit_find_proof_record_by_id(FindProofRecordById),
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
         visit_find_active_abi_versions(FindActiveAbiVersions),
@@ -110,6 +112,10 @@ macro_rules! query_visitors {
             // Singular Query visitors
             visit_find_executor_data_model(&FindExecutorDataModel),
             visit_find_parameters(&FindParameters),
+            visit_find_domains_by_account_id(&$crate::query::account::FindDomainsByAccountId),
+            visit_find_account_ids_by_domain_id(
+                &$crate::query::domain::FindAccountIdsByDomainId
+            ),
             visit_find_proof_record_by_id(&$crate::query::proof::FindProofRecordById),
             visit_find_contract_manifest_by_code_hash(
                 &$crate::query::smart_contract::FindContractManifestByCodeHash
@@ -199,6 +205,8 @@ mod tests {
         match query {
             SingularQueryBox::FindExecutorDataModel(_) => {}
             SingularQueryBox::FindParameters(_) => {}
+            SingularQueryBox::FindDomainsByAccountId(_) => {}
+            SingularQueryBox::FindAccountIdsByDomainId(_) => {}
             SingularQueryBox::FindProofRecordById(_) => {}
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
             SingularQueryBox::FindActiveAbiVersions(_) => {}
@@ -287,11 +295,18 @@ mod tests {
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
             "rose#wonderland".parse().expect("valid asset definition");
-        let asset_id = AssetId::new(asset_definition, account_id);
+        let asset_id = AssetId::new(asset_definition, account_id.clone());
+        let domain_id: crate::domain::DomainId = "wonderland".parse().expect("valid domain");
 
         let queries = vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             SingularQueryBox::FindParameters(FindParameters),
+            SingularQueryBox::FindDomainsByAccountId(
+                crate::query::account::prelude::FindDomainsByAccountId::new(account_id.clone()),
+            ),
+            SingularQueryBox::FindAccountIdsByDomainId(
+                crate::query::domain::prelude::FindAccountIdsByDomainId::new(domain_id),
+            ),
             SingularQueryBox::FindProofRecordById(
                 crate::query::proof::prelude::FindProofRecordById { id: proof_id },
             ),

@@ -63,7 +63,7 @@ fn register_account_and_asset_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -141,7 +141,7 @@ fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

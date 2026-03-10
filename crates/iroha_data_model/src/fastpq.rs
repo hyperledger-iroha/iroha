@@ -246,10 +246,7 @@ mod tests {
 
     fn account(label: &str) -> AccountId {
         let _ = label;
-        AccountId::new(
-            "wonderland".parse().expect("domain id"),
-            SIGNATORY.parse().expect("valid public key"),
-        )
+        AccountId::new(SIGNATORY.parse().expect("valid public key"))
     }
 
     fn asset(label: &str) -> AssetDefinitionId {

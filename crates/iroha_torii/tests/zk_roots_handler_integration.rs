@@ -126,10 +126,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     // Seed shielded roots via ISIs
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
-    let owner = AccountId::new(
-        domain_id.clone(),
-        ACCOUNT_SIGNATORY.parse().expect("public key"),
-    );
+    let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -137,7 +134,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         let mut stx = block.transaction();
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
-            Register::account(NewAccount::new(owner.clone())).into(),
+            Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
             Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
@@ -158,7 +155,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
                 .execute_instruction(&mut stx, &owner, instr)
                 .unwrap();
         }
-        // Push 5 commitments (cap is 3)
+        // Push 5 commitments (cap is 3).
         for i in 0..5u8 {
             let mut note = [0u8; 32];
             note[0] = i;

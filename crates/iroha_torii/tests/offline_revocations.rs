@@ -285,7 +285,13 @@ fn seed_offline_revocations(state: &Arc<State>, seeds: &[RevocationSeed]) -> Vec
 
 fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
     let first = seeds.first().expect("revocation seeds");
-    let domain_id = first.certificate.controller.domain().clone();
+    let domain_id = first
+        .certificate
+        .allowance
+        .asset
+        .definition()
+        .domain()
+        .clone();
 
     let domain = Domain {
         id: domain_id,
@@ -325,6 +331,7 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
         mintable: Default::default(),
         logo: None,
         metadata: asset_definition_metadata,
+        balance_scope_policy: Default::default(),
         owned_by: first.certificate.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),
@@ -337,25 +344,22 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
 
 #[allow(clippy::too_many_lines)]
 fn build_revocation_seeds() -> Vec<RevocationSeed> {
-    let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
+    let _domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keypair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let operator_account = AccountId::of(domain.clone(), operator_keypair.public_key().clone());
-    let asset_definition =
-        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
-
+    let operator_account = AccountId::of(operator_keypair.public_key().clone());
     let controller_one = AccountId::of(
-        domain.clone(),
         KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
     let controller_two = AccountId::of(
-        domain.clone(),
-        KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519)
+        KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
     let spend_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+    let asset_definition =
+        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
 
     let mut cert_one = OfflineWalletCertificate {
         controller: controller_one.clone(),

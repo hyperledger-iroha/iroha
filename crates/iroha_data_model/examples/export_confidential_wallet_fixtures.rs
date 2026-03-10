@@ -27,7 +27,7 @@ fn main() {
             .parse()
             .unwrap();
     let keypair = KeyPair::from_private_key(signing_key.clone()).unwrap();
-    let authority_seed = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+    let authority_seed = AccountId::new(keypair.public_key().clone());
     let authority_literal = authority_seed.canonical_ih58().unwrap();
     let authority = AccountId::parse_encoded(&authority_literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)

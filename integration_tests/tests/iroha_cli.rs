@@ -209,7 +209,7 @@ fn local_program_config() -> ProgramConfig {
     let domain_id: DomainId = "wonderland".parse().expect("literal domain should parse");
     ProgramConfig {
         torii_url: Url::parse("http://127.0.0.1:8080").expect("literal URL should parse"),
-        account: AccountId::new(domain_id, key.public_key().clone()),
+        account: AccountId::new(key.public_key().clone()),
         key,
         status_timeout: DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,

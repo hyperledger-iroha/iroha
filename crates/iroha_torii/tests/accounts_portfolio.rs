@@ -233,7 +233,11 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
+        Register::account(
+            NewAccount::new_in_domain(first_account.clone(), domain_id.clone())
+                .with_uaid(Some(uaid)),
+        )
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
         Mint::asset_numeric(500u64, AssetId::new(cash_id, first_account.clone())).into(),
@@ -262,7 +266,11 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let first_account = account_id_from_seed(&domain_id, 0x11);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
+        Register::account(
+            NewAccount::new_in_domain(first_account.clone(), domain_id.clone())
+                .with_uaid(Some(uaid)),
+        )
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
         Mint::asset_numeric(875u64, AssetId::new(cash_id, first_account.clone())).into(),
@@ -283,17 +291,17 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     uaid
 }
 
-fn account_id_from_signatory(domain_id: DomainId, signatory_hex: &str) -> AccountId {
+fn account_id_from_signatory(_domain_id: DomainId, signatory_hex: &str) -> AccountId {
     let normalized = signatory_hex
         .strip_prefix("ed0120")
         .unwrap_or(signatory_hex);
     let public_key = PublicKey::from_hex(Algorithm::Ed25519, normalized)
         .expect("signatory literal parses into a public key");
-    AccountId::new(domain_id, public_key)
+    AccountId::new(public_key)
 }
 
-fn account_id_from_seed(domain_id: &DomainId, seed_byte: u8) -> AccountId {
+fn account_id_from_seed(_domain_id: &DomainId, seed_byte: u8) -> AccountId {
     let seed = vec![seed_byte; 32];
     let (public, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-    AccountId::new(domain_id.clone(), public)
+    AccountId::new(public)
 }

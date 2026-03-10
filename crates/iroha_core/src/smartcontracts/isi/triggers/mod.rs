@@ -217,12 +217,7 @@ pub mod isi {
             // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
-            let is_domain_owner = (!is_genesis)
-                && state_transaction
-                    .world
-                    .domains
-                    .get(owner.domain())
-                    .is_some_and(|d| d.owned_by() == authority);
+            let is_domain_owner = false;
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
             if !(is_genesis || is_domain_owner || has_permission) {
@@ -910,12 +905,16 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(Account::new(
+            BOB_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         // Register a by-call trigger owned by Alice
         let trig_id: TriggerId = "bycall_authz_test".parse().unwrap();
@@ -988,12 +987,16 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register alice");
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register bob");
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register alice");
+        Register::account(Account::new(
+            BOB_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register bob");
         let bob_id = (*BOB_ID).clone();
 
         let trig_id: TriggerId = "perm_cleanup".parse().expect("trigger id");
@@ -1089,9 +1092,11 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         // Register a by-call trigger that may run exactly once
         let trig_id: TriggerId = "manual_once".parse().unwrap();
@@ -1137,12 +1142,16 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(Account::new(
+            BOB_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let trig_id: TriggerId = "reg_trigger_denied".parse().unwrap();
         let trig = Trigger::new(
@@ -1189,12 +1198,16 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+        Register::account(Account::new(
+            BOB_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let trig_id: TriggerId = "reg_trigger_allowed".parse().unwrap();
         let trig = Trigger::new(
@@ -1240,9 +1253,11 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         // Register a by-call trigger with Exactly(1) repeat
         let trig_id: TriggerId = "utrig_burn_rm".parse().unwrap();
@@ -1324,9 +1339,11 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let trig_id: TriggerId = "time_zero_period".parse().unwrap();
         let schedule = ExecutionTime::Schedule(
@@ -1371,9 +1388,11 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));

@@ -127,6 +127,7 @@ fn append_npos_bootstrap(
     builder: GenesisBuilder,
     registrations: &mut BootstrapRegistrations,
     topology: &[PeerId],
+    escrow_domain_id: &DomainId,
     escrow_account_id: &AccountId,
 ) -> Result<GenesisBuilder, color_eyre::eyre::Error> {
     if topology.is_empty() {
@@ -134,7 +135,6 @@ fn append_npos_bootstrap(
     }
 
     let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN.parse()?;
-    let ivm_domain: DomainId = escrow_account_id.domain().clone();
     let stake_asset_id: AssetDefinitionId = DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID.parse()?;
 
     let mut builder = builder.next_transaction();
@@ -142,13 +142,15 @@ fn append_npos_bootstrap(
         builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
         registrations.domains.insert(nexus_domain.clone());
     }
-    if !registrations.domains.contains(&ivm_domain) {
-        builder = builder.append_instruction(Register::domain(Domain::new(ivm_domain.clone())));
-        registrations.domains.insert(ivm_domain.clone());
+    if !registrations.domains.contains(escrow_domain_id) {
+        builder =
+            builder.append_instruction(Register::domain(Domain::new(escrow_domain_id.clone())));
+        registrations.domains.insert(escrow_domain_id.clone());
     }
     if !registrations.accounts.contains(escrow_account_id) {
-        builder =
-            builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
+        builder = builder.append_instruction(Register::account(Account::new(
+            escrow_account_id.to_account_id(escrow_domain_id.clone()),
+        )));
         registrations.accounts.insert(escrow_account_id.clone());
     }
     if !registrations.asset_defs.contains(&stake_asset_id) {
@@ -159,10 +161,7 @@ fn append_npos_bootstrap(
     }
 
     for peer in topology {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
-        if !registrations.accounts.contains(&validator_id) {
-            builder =
-                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
+        let validator_id = AccountId::new()));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -302,12 +301,9 @@ impl<T: Write> RunArgs<T> for Args {
         )?;
         if needs_npos_bootstrap {
             let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
-            let escrow_account_id =
-                AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
-            builder = append_npos_bootstrap(
-                builder,
-                &mut bootstrap_registrations,
+            let escrow_account_id = AccountId::new(&mut bootstrap_registrations,
                 &topology_peers,
+                &ivm_domain,
                 &escrow_account_id,
             )?;
         }
@@ -818,9 +814,8 @@ mod tests {
             .parse()
             .expect("parse default NPoS domain");
         let mut expected = std::collections::BTreeSet::new();
-        expected.insert(AccountId::new(nexus_domain, peer.public_key().clone()));
-        assert_eq!(
-            validators, expected,
+        let _ = nexus_domain;
+        expected.insert(AccountId::new(expected,
             "expected NPoS bootstrap to register topology validators"
         );
     }

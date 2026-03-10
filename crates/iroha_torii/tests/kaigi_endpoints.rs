@@ -39,12 +39,12 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     // Prepare domain, accounts, and metadata.
     let domain_id: DomainId = "kaigi".parse().expect("domain id");
     let owner_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let owner_id = AccountId::new(domain_id.clone(), owner_kp.public_key().clone());
-    let owner = Account::new(owner_id.clone()).build(&owner_id);
+    let owner_id = AccountId::new(owner_kp.public_key().clone());
+    let owner = Account::new(owner_id.to_account_id(domain_id.clone())).build(&owner_id);
 
     let relay_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let relay_id = AccountId::new(domain_id.clone(), relay_kp.public_key().clone());
-    let relay = Account::new(relay_id.clone()).build(&owner_id);
+    let relay_id = AccountId::new(relay_kp.public_key().clone());
+    let relay = Account::new(relay_id.to_account_id(domain_id.clone())).build(&owner_id);
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
@@ -322,7 +322,7 @@ async fn kaigi_endpoints_honor_json_accept_header() {
 }
 
 #[tokio::test]
-async fn kaigi_sse_accepts_compressed_relay_filter() {
+async fn kaigi_sse_rejects_compressed_relay_filter() {
     let (app, relay_account, _owner_account) = build_app();
     let relay_compressed = compressed_literal(&relay_account);
     let resp = app
@@ -335,7 +335,7 @@ async fn kaigi_sse_accepts_compressed_relay_filter() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

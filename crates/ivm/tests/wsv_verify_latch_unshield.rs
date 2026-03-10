@@ -42,7 +42,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 
 fn sample_account() -> AccountId {
     AccountId::new(
-        "wonderland".parse().expect("domain id"),
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .expect("public key"),
@@ -107,7 +106,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     assert!(wsv.has_permission(&caller, &PermissionToken::Unshield(asset.clone())));
     wsv.grant_permission(
         &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&caller)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
     );
 
     // Host with ZK (Halo2 IPA) enabled and sufficient max_k
@@ -122,7 +121,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     };
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     )
     .with_zk_halo2_config(cfg);
@@ -259,7 +258,7 @@ fn unshield_rejects_mismatched_verifying_key() {
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
     let mut host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -337,11 +336,11 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
     wsv.grant_permission(
         &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&caller)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
     );
     let mut host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

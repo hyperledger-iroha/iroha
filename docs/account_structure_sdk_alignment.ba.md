@@ -26,14 +26,8 @@ translator: machine-google-reviewed
 Эш пункттары:
 1. **Каноник сығыш:** I18NI000000005X/Display IH58 ғына Эй
    (юҡ I18NI000000006X суффиксы). Канон hex өсөн отладка (`0x...`).
-2. **Ҡабул ителгән индереүҙәр:** анализлаусылар ҡабул итергә тейеш IH58 (өҫтөнлөк), `sora` ҡыҫылған,
-   һәм канонлы гекс (`0x...` ғына; яланғас гекс кире ҡағыла). Инпуттар МАЙ ташый ан
-   Маршрутлаштырыу кәңәштәре өсөн `@<domain>` суффиксы; I18NI000000011X псевдонимы талап итә.
-   хәл итеүсе. Сеймал I18NI0000012X (күпхаш гекс) ярҙам итә.
-3. **Репочинкалар:** доменһыҙ IH58/сора анализлау домен-һайлаусы талап итә .
-   әгәр селектор асыҡланмаған ғәҙәттәгесә (конфигурацияланған ғәҙәттәгесә ҡулланыу
-   домен ярлығы). УАИД (`uaid:...`) һәм асыҡ булмаған (I18NI000000014X) литрҙар кәрәк
-   хәл итеүселәр.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 тикшерелгән сумма:** ҡулланыу Blak2b-512 өҫтөндә I18NI000000015X, алыу
    тәүге 2 байт. Ҡыҫылған алфавит базаһы **105**.
 5. **Ҡырмыҫҡа ҡапҡаһы:** SDKs ғәҙәттәгесә Ed25519-тик. Асыҡтан-асыҡ опт-ин тәьмин итеү өсөн .

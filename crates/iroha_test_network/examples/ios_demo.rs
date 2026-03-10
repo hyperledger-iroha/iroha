@@ -154,7 +154,7 @@ fn parse_numeric(value: &str, context: &str) -> Result<Numeric> {
 fn account_id_from_parts(public_key: &str, domain: &DomainId) -> Result<AccountId> {
     let parsed_key = PublicKey::from_str(public_key)
         .wrap_err_with(|| eyre!("Failed to parse public key `{public_key}`"))?;
-    Ok(AccountId::new(domain.clone(), parsed_key))
+    Ok(AccountId::new(parsed_key))
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {

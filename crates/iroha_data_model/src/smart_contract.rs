@@ -75,10 +75,7 @@ pub mod payloads {
 
         #[test]
         fn validate_decode_from_slice_roundtrips_any_query() {
-            let authority = AccountId::new(
-                DomainId::from_str("domain").expect("valid domain"),
-                KeyPair::random().public_key().clone(),
-            );
+            let authority = AccountId::new(KeyPair::random().public_key().clone());
             let header = BlockHeader {
                 height: NonZeroU64::new(1).expect("nonzero height"),
                 prev_block_hash: None,

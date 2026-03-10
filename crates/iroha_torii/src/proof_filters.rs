@@ -131,12 +131,10 @@ fn has_values<T>(value: Option<&Vec<T>>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
         events::EventBox,
         events::data::proof::{
             ProofEvent, ProofPruneOrigin, ProofPruned, ProofRejected, ProofVerified,
@@ -184,10 +182,7 @@ mod tests {
     }
 
     fn pruned_event(backend: &str) -> EventBox {
-        let account = AccountId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let account = AccountId::of(KeyPair::random().public_key().clone());
         EventBox::Data(
             DataEvent::Proof(ProofEvent::Pruned(ProofPruned {
                 backend: backend.to_string(),

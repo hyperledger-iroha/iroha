@@ -461,18 +461,6 @@ impl Topology {
         self.1
     }
 
-    /// Re-arrange the set of peers after each successful block commit.
-    #[cfg(test)]
-    fn rotate_set_a(&mut self) {
-        if self.0.len() <= 1 {
-            return;
-        }
-        let rotate_at = self.min_votes_for_commit().min(self.0.len());
-        if rotate_at > 1 {
-            self.0[..rotate_at].rotate_left(1);
-        }
-    }
-
     /// Update topology after a block has been committed.
     ///
     /// Membership is refreshed while preserving canonical ordering for subsequent
@@ -775,7 +763,10 @@ mod tests {
     fn rotate_set_a() {
         let mut topology = test_topology(7);
         let initial_topology = topology.clone();
-        topology.rotate_set_a();
+        let rotate_at = topology.min_votes_for_commit().min(topology.0.len());
+        if rotate_at > 1 {
+            topology.0[..rotate_at].rotate_left(1);
+        }
         assert_eq!(
             extract_order(&topology, &initial_topology),
             vec![1, 2, 3, 4, 0, 5, 6]
@@ -1192,7 +1183,10 @@ mod tests {
                 assert_eq!(validating.len(), expected_validating_len);
             }
 
-            topology.rotate_set_a();
+            let rotate_at = topology.min_votes_for_commit().min(topology.0.len());
+            if rotate_at > 1 {
+                topology.0[..rotate_at].rotate_left(1);
+            }
             assert_eq!(topology.min_votes_for_commit(), expected_min);
             assert_eq!(topology.proxy_tail_index(), expected_min - 1);
             assert_eq!(topology.collector_indices_k(2), expected_collectors);

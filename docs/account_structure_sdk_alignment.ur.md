@@ -14,14 +14,8 @@
 کارروائیاں:
 1. **کینونیکل آؤٹ پٹ:** `AccountId::to_string()`/Display لازماً صرف IH58 دے
    (`@domain` لاحقہ کے بغیر)۔ کینونیکل hex صرف ڈی بگنگ کے لیے ہے (`0x...`).
-2. **قابلِ قبول ان پٹس:** پارسرز کو IH58 (ترجیحی)، `sora` compressed، اور کینونیکل hex
-   (صرف `0x...`؛ بغیر prefix کے hex کو مسترد کریں) قبول کرنا چاہیے۔ ان پٹس میں
-   routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` (rejected legacy form) aliases
-   کے لیے resolver درکار ہے۔ 
-3. **Resolvers:** selector-free domainless IH58/sora parsing configured default domain
-   label پر direct bind کرتی ہے؛ domain-selector resolver canonical flows میں required نہیں۔
-   Legacy selector-bearing literals کے لیے resolver/fallback اب بھی useful ہے، جبکہ
-   UAID (`uaid:...`) اور opaque (`opaque:...`) literals کے لیے resolvers بدستور درکار ہیں۔
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 checksum:** `IH58PRE || prefix || payload` پر Blake2b‑512 استعمال کریں اور
    پہلے 2 بائٹس لیں۔ compressed alphabet base **105** ہے۔
 5. **Curve gating:** SDKs کا ڈیفالٹ صرف Ed25519 ہے۔ ML‑DSA/GOST/SM کے لیے واضح opt‑in دیں

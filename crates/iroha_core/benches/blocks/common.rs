@@ -293,7 +293,7 @@ fn construct_domain_id(i: usize) -> DomainId {
 
 fn generate_account_id(domain_id: DomainId, seed: u128) -> AccountId {
     let keypair = KeyPair::from_seed(seed.to_le_bytes().to_vec(), Algorithm::Ed25519);
-    AccountId::new(domain_id, keypair.public_key().clone())
+    AccountId::new(keypair.public_key().clone())
 }
 
 #[cfg(test)]
@@ -312,10 +312,7 @@ mod tests {
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(
-            "test_domain".parse().expect("valid domain"),
-            keypair.public_key().clone(),
-        );
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         // Should not panic even if executor bytecode is missing or invalid
         let state = build_state(rt.handle(), &account_id, keypair.private_key());

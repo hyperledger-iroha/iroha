@@ -279,7 +279,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         nexus::LaneId,
-        prelude::{DomainId, Json, Metadata},
+        prelude::{Json, Metadata},
     };
 
     use super::*;
@@ -304,13 +304,12 @@ mod tests {
         PeerId::from(parse_public_key(hex))
     }
 
-    fn account_for_peer(domain: &DomainId, peer: &PeerId) -> AccountId {
-        AccountId::of(domain.clone(), peer.public_key().clone())
+    fn account_for_peer(peer: &PeerId) -> AccountId {
+        AccountId::of(peer.public_key().clone())
     }
 
     #[test]
     fn election_is_deterministic_and_capped() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peers = [
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"),
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"),
@@ -320,12 +319,7 @@ mod tests {
             .iter()
             .map(|peer| CandidateProfile {
                 peer_id: peer.clone(),
-                record: Some(sample_record(
-                    peer,
-                    2_000,
-                    2_000,
-                    &account_for_peer(&domain, peer),
-                )),
+                record: Some(sample_record(peer, 2_000, 2_000, &account_for_peer(peer))),
                 stake_shares: Vec::new(),
             })
             .collect();
@@ -352,7 +346,6 @@ mod tests {
 
     #[test]
     fn election_is_deterministic_under_input_reordering() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peers = [
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"),
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"),
@@ -364,12 +357,7 @@ mod tests {
             .iter()
             .map(|peer| CandidateProfile {
                 peer_id: peer.clone(),
-                record: Some(sample_record(
-                    peer,
-                    5_000,
-                    5_000,
-                    &account_for_peer(&domain, peer),
-                )),
+                record: Some(sample_record(peer, 5_000, 5_000, &account_for_peer(peer))),
                 stake_shares: Vec::new(),
             })
             .collect();
@@ -442,11 +430,10 @@ mod tests {
 
     #[test]
     fn candidates_below_self_bond_filtered() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let pk = parse_public_key(
             "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         );
-        let account = AccountId::of(domain, pk.clone());
+        let account = AccountId::of(pk.clone());
         let peer = PeerId::from(pk);
 
         let profiles = vec![CandidateProfile {
@@ -470,18 +457,14 @@ mod tests {
 
     #[test]
     fn candidates_violating_concentration_filtered() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let pk = parse_public_key(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
         );
-        let account = AccountId::of(domain.clone(), pk.clone());
+        let account = AccountId::of(pk.clone());
         let peer = PeerId::from(pk);
-        let nominator = AccountId::of(
-            domain,
-            parse_public_key(
-                "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B",
-            ),
-        );
+        let nominator = AccountId::of(parse_public_key(
+            "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B",
+        ));
 
         let record = sample_record(&peer, 1_000, 200, &account);
         let shares = vec![PublicLaneStakeShare {
@@ -516,18 +499,14 @@ mod tests {
 
     #[test]
     fn candidates_respect_min_nomination_bond() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let pk = parse_public_key(
             "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B",
         );
-        let account = AccountId::of(domain.clone(), pk.clone());
+        let account = AccountId::of(pk.clone());
         let peer = PeerId::from(pk);
-        let nominator = AccountId::of(
-            domain,
-            parse_public_key(
-                "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-            ),
-        );
+        let nominator = AccountId::of(parse_public_key(
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+        ));
 
         let record = sample_record(&peer, 1_000, 800, &account);
         let shares = vec![PublicLaneStakeShare {
@@ -562,7 +541,6 @@ mod tests {
 
     #[test]
     fn seat_band_allows_extra_validators_and_correlation_limits_entities() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
@@ -570,9 +548,9 @@ mod tests {
         let peer_c =
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
 
-        let account_a = AccountId::of(domain.clone(), peer_a.public_key().clone());
-        let _account_b = AccountId::of(domain.clone(), peer_b.public_key().clone());
-        let account_c = AccountId::of(domain, peer_c.public_key().clone());
+        let account_a = AccountId::of(peer_a.public_key().clone());
+        let _account_b = AccountId::of(peer_b.public_key().clone());
+        let account_c = AccountId::of(peer_c.public_key().clone());
 
         let record = |acct: &AccountId| PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
@@ -650,7 +628,6 @@ mod tests {
 
     #[test]
     fn seat_band_trimmed_is_deterministic() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
@@ -658,8 +635,8 @@ mod tests {
         let peer_c =
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
 
-        let account_a = AccountId::of(domain.clone(), peer_a.public_key().clone());
-        let account_c = AccountId::of(domain, peer_c.public_key().clone());
+        let account_a = AccountId::of(peer_a.public_key().clone());
+        let account_c = AccountId::of(peer_c.public_key().clone());
 
         let record = |acct: &AccountId| PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
@@ -746,7 +723,6 @@ mod tests {
 
     #[test]
     fn seat_band_fractional_entity_cap_fills_base_target() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
@@ -755,7 +731,7 @@ mod tests {
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
 
         let record_with_entity = |peer: &PeerId, entity: &str| {
-            let account = account_for_peer(&domain, peer);
+            let account = account_for_peer(peer);
             let mut metadata = Metadata::default();
             metadata.insert(Name::from_str("entity").unwrap(), Json::new(entity));
             PublicLaneValidatorRecord {
@@ -821,7 +797,6 @@ mod tests {
 
     #[test]
     fn election_deterministic_with_seat_band_and_permuted_candidates() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
         let peer_b =
@@ -831,10 +806,10 @@ mod tests {
         let peer_d =
             peer_from_hex("ed0120ED8FBA0C4978E7E51A7AE3229F32238A0674052A509F1F8C8236DA0D7B6614A7");
 
-        let account_a = AccountId::of(domain.clone(), peer_a.public_key().clone());
-        let account_b = AccountId::of(domain.clone(), peer_b.public_key().clone());
-        let account_c = AccountId::of(domain.clone(), peer_c.public_key().clone());
-        let account_d = AccountId::of(domain.clone(), peer_d.public_key().clone());
+        let account_a = AccountId::of(peer_a.public_key().clone());
+        let account_b = AccountId::of(peer_b.public_key().clone());
+        let account_c = AccountId::of(peer_c.public_key().clone());
+        let account_d = AccountId::of(peer_d.public_key().clone());
 
         let record_with_entity = |account: &AccountId, entity: &str| {
             let mut metadata = Metadata::default();
@@ -914,14 +889,13 @@ mod tests {
 
     #[test]
     fn correlation_shortfall_fills_base_target() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
             peer_from_hex("ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B");
 
         let record = |peer: &PeerId| {
-            let account = account_for_peer(&domain, peer);
+            let account = account_for_peer(peer);
             let mut metadata = Metadata::default();
             metadata.insert(Name::from_str("entity").unwrap(), Json::new("acme"));
             PublicLaneValidatorRecord {
@@ -968,7 +942,6 @@ mod tests {
 
     #[test]
     fn seat_band_scales_entity_cap() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
@@ -979,7 +952,7 @@ mod tests {
             peer_from_hex("ed012009AF095595D88C116C3CC3AE2435999040A48DABFEA6985F3B6F7E335A8925B2");
 
         let record = |peer: &PeerId, entity: &str| {
-            let account = account_for_peer(&domain, peer);
+            let account = account_for_peer(peer);
             let mut metadata = Metadata::default();
             metadata.insert(Name::from_str("entity").unwrap(), Json::new(entity));
             PublicLaneValidatorRecord {
@@ -1050,16 +1023,15 @@ mod tests {
 
     #[test]
     fn correlation_uses_entity_metadata_when_present() {
-        let domain = DomainId::from_str("wonderland").unwrap();
         let peer_a =
             peer_from_hex("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
         let peer_b =
             peer_from_hex("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4");
         let peer_c =
             peer_from_hex("ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B");
-        let account_a = account_for_peer(&domain, &peer_a);
-        let account_b = account_for_peer(&domain, &peer_b);
-        let account_c = account_for_peer(&domain, &peer_c);
+        let account_a = account_for_peer(&peer_a);
+        let account_b = account_for_peer(&peer_b);
+        let account_c = account_for_peer(&peer_c);
 
         let mut meta = Metadata::default();
         meta.insert(Name::from_str("entity").unwrap(), Json::new("acme"));

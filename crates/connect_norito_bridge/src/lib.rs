@@ -35,7 +35,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     ChainId,
     account::{
-        AccountId,
+        AccountId, ScopedAccountId,
         address::{AccountAddress, AccountAddressError, AccountAddressFormat},
     },
     asset::id::{AssetDefinitionId, AssetId},
@@ -393,6 +393,10 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
     AccountId::parse_encoded(&value)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Authority)
+}
+
+fn parse_scoped_account_id(value: String) -> BridgeResult<ScopedAccountId> {
+    ScopedAccountId::from_str(&value).map_err(|_| BridgeError::Authority)
 }
 
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
@@ -7298,7 +7302,7 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, private_key) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
+        let account_id = AccountId::new(public_key);
         let account = CString::new(account_id.to_string()).expect("valid cstring");
         let (_, bytes) = private_key.to_bytes();
         (account, bytes)
@@ -7308,7 +7312,7 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
+        let account_id = AccountId::new(public_key);
         CString::new(account_id.to_string()).expect("valid cstring")
     }
 
@@ -7518,7 +7522,7 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account = AccountId::new(domain_id, public_key);
+        let account = AccountId::new(public_key);
         CString::new(account.to_string()).expect("valid cstring")
     }
 
@@ -8301,7 +8305,7 @@ mod offline_challenge_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id = DomainId::from_str(domain).expect("domain");
-        let account = AccountId::new(domain_id, public_key);
+        let account = AccountId::new(public_key);
         let literal = account_literal(&account);
         let parsed = AccountId::parse_encoded(&literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -8491,7 +8495,7 @@ mod offline_fastpq_proof_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain = DomainId::from_str("default").expect("domain");
-        let account = AccountId::new(domain, public_key);
+        let account = AccountId::new(public_key);
         let literal = account.to_string();
         AccountId::parse_encoded(&literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -8868,7 +8872,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
+        let account = parse_scoped_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -8879,7 +8883,11 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
-                    let register = MultisigRegister::with_account(account.clone(), spec.clone());
+                    let register = MultisigRegister::with_account(
+                        account.account.clone(),
+                        account.domain.clone(),
+                        spec.clone(),
+                    );
                     Executable::from([InstructionBox::from(register)])
                 }
             });
@@ -8927,7 +8935,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
+        let account = parse_scoped_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -8938,7 +8946,11 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
-                    let register = MultisigRegister::with_account(account.clone(), spec.clone());
+                    let register = MultisigRegister::with_account(
+                        account.account.clone(),
+                        account.domain.clone(),
+                        spec.clone(),
+                    );
                     Executable::from([InstructionBox::from(register)])
                 }
             });
@@ -10127,7 +10139,7 @@ mod offline_receipt_challenge_tests {
     fn sample_account_id() -> AccountId {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
-        AccountId::new(domain, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_asset_id(account: &AccountId) -> AssetId {
@@ -11580,7 +11592,7 @@ mod tests {
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain, keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
         let noncanonical = format!("{address_hex}@{}", account.domain());
         let mut map = JsonMap::new();
@@ -11830,7 +11842,7 @@ mod tests {
     fn account_address_parse_render_via_ffi() {
         let domain = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let account_id = AccountId::new(domain, key_pair.public_key().clone());
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account_id).expect("address");
         let canonical = canonical_bytes(&address);
         let ih58 = address.to_ih58(42).expect("ih58 encoding");
@@ -12571,7 +12583,7 @@ mod sorafs_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain = DomainId::from_str("default").expect("domain");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

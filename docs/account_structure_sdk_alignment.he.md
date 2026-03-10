@@ -14,13 +14,8 @@
 משימות:
 1. **פלט קנוני:** `AccountId::to_string()`/Display חייב להפיק IH58 בלבד
    (ללא סיומת `@domain`). ה‑hex הקנוני מיועד לדיבוג (`0x...`).
-2. **קלטים נתמכים:** מפרשים חייבים לקבל IH58 (מועדף), `sora` דחוס, ו‑hex קנוני
-   (רק `0x...`; hex ללא תחילית נדחה). הקלטים יכולים לכלול סיומת `@<domain>`
-   לרמזי ניתוב; כינויים `<label>@<domain>` (rejected legacy form) דורשים resolver. 
-   (multihash hex) נשאר נתמך.
-3. **Resolvers:** פיענוח IH58/sora ללא דומיין דורש resolver לבוחר דומיין אלא אם
-   הסלקטור הוא ברירת מחדל מובלעת (השתמשו בתווית הדומיין ברירת המחדל המוגדרת).
-   ליטרלים UAID (`uaid:...`) ו‑opaque (`opaque:...`) דורשים resolvers.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Checksum של IH58:** השתמשו ב‑Blake2b‑512 על `IH58PRE || prefix || payload`,
    וקחו את שני הבייטים הראשונים. בסיס האלפבית הדחוס הוא **105**.
 5. **גייטינג עקומות:** ברירת המחדל ב‑SDK היא Ed25519 בלבד. ספקו opt‑in מפורש

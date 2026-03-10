@@ -257,7 +257,6 @@ mod tests {
             .expect("valid initiator account")
             .into_account_id();
         let counterparty = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
                 .expect("public key"),

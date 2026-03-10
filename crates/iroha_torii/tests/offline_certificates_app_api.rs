@@ -194,10 +194,7 @@ async fn offline_certificates_issue_ignores_client_supplied_operator() {
     let harness = build_cert_harness();
     let mut draft_value = certificate_draft_json(&harness.fixtures.certificate);
     let wrong_operator_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let wrong_operator = AccountId::of(
-        harness.fixtures.controller.domain().clone(),
-        wrong_operator_keys.public_key().clone(),
-    );
+    let wrong_operator = AccountId::of(wrong_operator_keys.public_key().clone());
     match &mut draft_value {
         Value::Object(map) => {
             map.insert(
@@ -239,10 +236,7 @@ async fn offline_certificates_renew_issue_ignores_client_supplied_operator() {
     let harness = build_cert_harness();
     let mut draft_value = certificate_draft_json(&harness.fixtures.renewed_certificate);
     let wrong_operator_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-    let wrong_operator = AccountId::of(
-        harness.fixtures.controller.domain().clone(),
-        wrong_operator_keys.public_key().clone(),
-    );
+    let wrong_operator = AccountId::of(wrong_operator_keys.public_key().clone());
     match &mut draft_value {
         Value::Object(map) => {
             map.insert(
@@ -434,7 +428,7 @@ fn build_cert_harness() -> CertHarness {
 fn build_cert_fixtures() -> CertFixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let controller_keys = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
-    let controller = AccountId::of(domain.clone(), controller_keys.public_key().clone());
+    let controller = AccountId::of(controller_keys.public_key().clone());
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     let asset_definition =
         AssetDefinitionId::new(domain.clone(), Name::from_str("xor").expect("asset name"));
@@ -536,7 +530,13 @@ fn certificate_draft_json(certificate: &OfflineWalletCertificate) -> Value {
 
 fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
     let domain = Domain {
-        id: fixtures.controller.domain().clone(),
+        id: fixtures
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone(),
         logo: None,
         metadata: Metadata::default(),
         owned_by: fixtures.controller.clone(),
@@ -559,6 +559,7 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
         mintable: Default::default(),
         logo: None,
         metadata: asset_definition_metadata,
+        balance_scope_policy: Default::default(),
         owned_by: fixtures.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),

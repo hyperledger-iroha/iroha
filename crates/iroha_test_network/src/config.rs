@@ -344,10 +344,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             .unwrap_or_else(|| PathBuf::from("."))
     }
     let chain = chain_id.clone();
-    let genesis_account = AccountId::new(
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-        genesis_key_pair.public_key().clone(),
-    );
+    let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
     let genesis_id = sanitize_account_id(&genesis_account);
     let alice_id = sanitize_account_id(&ALICE_ID);
     let ivm_dir = default_ivm_dir();
@@ -752,7 +749,7 @@ fn apply_preexec_nexus_overrides(
     block_policies: Option<&DaProofPolicyBundle>,
 ) -> Result<(), Report> {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let gas_account_id = AccountId::new(ivm_domain, genesis_key_pair.public_key().clone());
+    let gas_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let gas_account = gas_account_id.to_string();
 
     let mut nexus = nexus_config.cloned().unwrap_or_default();
@@ -1075,10 +1072,7 @@ mod tests {
         ))];
 
         let block = genesis(vec![instructions], topology, vec![entry]);
-        let genesis_account = AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-        );
+        let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         check_genesis_block(
             &block.0,
             &genesis_account,
@@ -1412,10 +1406,7 @@ mod tests {
         let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
         let block = genesis(vec![vec![instruction]], topology.clone(), vec![entry]);
 
-        let genesis_account = AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-        );
+        let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let genesis_account_entry = Account {
             id: genesis_account.clone(),
             metadata: Metadata::default(),
@@ -1727,10 +1718,7 @@ mod tests {
         };
 
         let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
-        let genesis_account = AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            genesis_key_pair.public_key().clone(),
-        );
+        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let genesis_account_entry = Account {
             id: genesis_account,
             metadata: Metadata::default(),

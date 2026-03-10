@@ -248,12 +248,9 @@ fn with_offline_allowance_genesis(
         .expect("default wonderland domain should parse");
 
     // Seed every domain touched by the fixture so genesis mint/register steps can resolve
-    // controller/operator/asset-owner scopes even when they use non-wonderland domains.
+    // asset-definition scopes even when they use non-wonderland domains.
     let mut required_domains = BTreeSet::new();
     required_domains.insert(certificate.allowance.asset.definition().domain().clone());
-    required_domains.insert(certificate.allowance.asset.account().domain().clone());
-    required_domains.insert(certificate.controller.domain().clone());
-    required_domains.insert(certificate.operator.domain().clone());
     for domain in required_domains {
         if domain != genesis_domain && domain != wonderland_domain {
             builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
@@ -268,7 +265,9 @@ fn with_offline_allowance_genesis(
     required_accounts.insert(certificate.operator.clone());
     for account in required_accounts {
         if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
-            builder = builder.with_genesis_instruction(Register::account(Account::new(account)));
+            builder = builder.with_genesis_instruction(Register::account(Account::new(
+                account.to_account_id(wonderland_domain.clone()),
+            )));
         }
     }
 
@@ -590,7 +589,8 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let digest = match AccountDomainSelector::from_domain(ALICE_ID.domain()).expect("selector") {
+    let domain: DomainId = "wonderland".parse().expect("wonderland domain parses");
+    let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
         AccountDomainSelector::LocalDigest12(bytes) => bytes,
         other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
     };
@@ -608,7 +608,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@{}", ALICE_ID.domain())
+    format!("{public_key}@wonderland")
 }
 
 struct KaigiRelaySeed {
@@ -745,10 +745,10 @@ async fn accounts_query_accepts_ih58_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
+async fn accounts_listing_filter_rejects_compressed_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_filter_accepts_compressed_literals),
+        stringify!(accounts_listing_filter_rejects_compressed_literals),
     )
     .await?
     else {
@@ -757,6 +757,10 @@ async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = compressed_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("compressed literal must fail strict parsing")
+        .reason()
+        .to_string();
     let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
     let http = http_client();
     let mut url = network
@@ -774,27 +778,25 @@ async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from accounts listing with compressed filter, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "compressed filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "compressed literal should resolve to IH58 output {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_compressed_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_accepts_compressed_filter_literals),
+        stringify!(accounts_query_rejects_compressed_filter_literals),
     )
     .await?
     else {
@@ -803,6 +805,10 @@ async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = compressed_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("compressed literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -820,17 +826,15 @@ async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from accounts query with compressed literal, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "compressed filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        ids.iter().all(|id| id == &expected),
-        "compressed literal should yield canonical IH58 output {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
@@ -954,10 +958,10 @@ async fn accounts_listing_rejects_unknown_address_format() -> Result<()> {
 }
 
 #[tokio::test]
-async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
+async fn account_path_endpoints_reject_compressed_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_path_endpoints_accept_compressed_literals),
+        stringify!(account_path_endpoints_reject_compressed_literals),
     )
     .await?
     else {
@@ -966,6 +970,10 @@ async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = compressed_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("compressed literal must fail strict parsing")
+        .reason()
+        .to_string();
     let http = http_client();
 
     let surfaces: [SurfaceSpec; 3] = [
@@ -987,11 +995,15 @@ async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
             .header("Accept", "application/json")
             .send()
             .await?;
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "compressed literal should be rejected for {url}"
+        );
+        let body = resp.text().await.unwrap_or_default();
         assert!(
-            resp.status().is_success(),
-            "compressed literal should be accepted for {}, got {}",
-            url,
-            resp.status()
+            body.contains(&reason),
+            "response body should mention {reason}, got {body}"
         );
     }
 
@@ -1146,10 +1158,10 @@ async fn asset_holders_get_supports_compressed_response() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> {
+async fn asset_holders_query_rejects_compressed_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(asset_holders_query_accepts_compressed_filter_literals),
+        stringify!(asset_holders_query_rejects_compressed_filter_literals),
     )
     .await?
     else {
@@ -1158,6 +1170,10 @@ async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> 
     network.ensure_blocks(1).await?;
 
     let literal = compressed_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("compressed literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"address_format":null}}"#
     );
@@ -1175,21 +1191,15 @@ async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> 
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from asset holders query with compressed literal, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "compressed filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_holder_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        !ids.is_empty(),
-        "compressed filter literal should match canonical accounts"
-    );
-    assert!(
-        ids.iter().all(|id| id == &expected),
-        "asset holders query should emit canonical IH58 literals by default; expected {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
@@ -1568,26 +1578,24 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
         }
         url
     };
+    let compressed_reason = AccountId::parse_encoded(&compressed_literal)
+        .expect_err("compressed authority filter must fail strict parsing")
+        .reason()
+        .to_string();
     let resp = http
         .get(compressed_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "explorer transactions should accept compressed authority filters"
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "explorer transactions should reject compressed authority filters"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_explorer_authorities(&parsed);
+    let body = resp.text().await?;
     assert!(
-        !authorities.is_empty(),
-        "compressed authority filter should still yield results"
-    );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &account_literal),
-        "compressed authority filters should not change response defaults; got {authorities:?}"
+        body.contains(&compressed_reason),
+        "response body should mention {compressed_reason}, got {body}"
     );
 
     Ok(())
@@ -1696,26 +1704,24 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
         }
         url
     };
+    let compressed_reason = AccountId::parse_encoded(&compressed_literal)
+        .expect_err("compressed authority filter must fail strict parsing")
+        .reason()
+        .to_string();
     let resp = http
         .get(compressed_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "explorer instructions should accept compressed authority filters"
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "explorer instructions should reject compressed authority filters"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_explorer_authorities(&parsed);
+    let body = resp.text().await?;
     assert!(
-        !authorities.is_empty(),
-        "compressed authority filter should still yield instruction results"
-    );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &account_literal),
-        "compressed authority filters should not change response defaults; got {authorities:?}"
+        body.contains(&compressed_reason),
+        "response body should mention {compressed_reason}, got {body}"
     );
 
     Ok(())
@@ -1946,19 +1952,20 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_alias_and_compressed_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
-    let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
+    let account_id = AccountId::new(keypair.public_key().clone());
+    let account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        .with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_accepts_compressed_filter_literals),
+        stringify!(accounts_query_rejects_alias_and_compressed_filter_literals),
     )
     .await?
     else {
@@ -2010,19 +2017,18 @@ async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -
         .await?;
     let status = resp.status();
     let body = resp.text().await?;
-    assert!(
-        status.is_success(),
-        "compressed literal should be accepted, got {status} body={body}"
+    let reason = AccountId::parse_encoded(&compressed_literal)
+        .expect_err("compressed literal must fail strict parsing")
+        .reason()
+        .to_string();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "compressed literal should be rejected, got {status} body={body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&body)?;
-    let ids = extract_account_ids(&parsed);
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "compressed literal should resolve to {expected}, got {ids:?}"
-    );
-    assert!(
-        ids.iter().all(|id| !id.contains('@')),
-        "response should return canonical IH58 ids, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
@@ -2224,7 +2230,7 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
 async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id = relay_id.domain().clone();
+    let domain_id: DomainId = "wonderland".parse()?;
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
@@ -2346,21 +2352,20 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        detail_resp.status().is_success(),
-        "kaigi relay detail should accept compressed literal, got {}",
+    assert_eq!(
+        detail_resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "kaigi relay detail should reject compressed literal, got {}",
         detail_resp.status()
     );
-    let detail: norito::json::Value = norito::json::from_str(&detail_resp.text().await?)?;
-    let default_detail_literal = detail
-        .get("relay")
-        .and_then(norito::json::Value::as_object)
-        .and_then(|relay| relay.get("relay_id"))
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("relay detail missing relay literal"))?;
-    assert_eq!(
-        default_detail_literal, seed.relay_ih58,
-        "compressed literal path should resolve to IH58 detail output"
+    let body = detail_resp.text().await?;
+    let reason = AccountId::parse_encoded(&seed.relay_compressed)
+        .expect_err("compressed relay literal must fail strict parsing")
+        .reason()
+        .to_string();
+    assert!(
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     let formatted_detail_url = base.join(&format!(

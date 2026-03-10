@@ -32,8 +32,9 @@ fn create_election_inserts_referendum_with_configured_window() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let alice_id = iroha_test_samples::ALICE_ID.clone();
-    let domain = Domain::new("wonderland".parse().expect("domain")).build(&alice_id);
-    let account = Account::new(alice_id.clone()).build(&alice_id);
+    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let account = Account::new(alice_id.clone().to_account_id(domain_id)).build(&alice_id);
     let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     let mut state = State::new_for_testing(world, kura, query_handle);
     // Configure governance window defaults

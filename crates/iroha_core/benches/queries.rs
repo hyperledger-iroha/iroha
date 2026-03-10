@@ -40,7 +40,7 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 fn fixture_account_in_domain(label: &str, domain_id: &DomainId) -> AccountId {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
     let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-    AccountId::new(domain_id.clone(), public_key)
+    AccountId::new(public_key)
 }
 
 fn bench_domain_id() -> DomainId {
@@ -633,7 +633,7 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .expect("valid chain id");
         let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random();
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder

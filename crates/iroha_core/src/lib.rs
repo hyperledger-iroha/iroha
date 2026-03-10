@@ -532,7 +532,7 @@ mod tests {
         };
         let encoded = rid.to_string();
         let decoded: RoleIdWithOwner = encoded.parse().expect("roundtrip");
-        assert_eq!(decoded.account, account);
+        assert_eq!(decoded.account.subject_id(), account.subject_id());
         assert_eq!(decoded.id, role);
     }
 

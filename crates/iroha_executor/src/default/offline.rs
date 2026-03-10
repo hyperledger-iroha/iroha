@@ -214,17 +214,15 @@ mod tests {
 
     impl Visit for StubExecutor {}
 
-    fn sample_account(seed: u8, domain: &str) -> AccountId {
+    fn sample_account(seed: u8, _domain: &str) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let domain_id: DomainId = domain.parse().expect("valid domain");
-        AccountId::new(domain_id, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
-        let definition = AssetDefinitionId::new(
-            owner.domain().clone(),
-            "sample".parse::<Name>().expect("valid name"),
-        );
+        let domain: DomainId = "offline".parse().expect("valid test domain");
+        let definition =
+            AssetDefinitionId::new(domain, "sample".parse::<Name>().expect("valid name"));
         AssetId::new(definition, owner.clone())
     }
 

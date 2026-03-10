@@ -26,13 +26,8 @@ SDK နှင့် Codec ပိုင်ရှင်များအတွက်
 လုပ်ဆောင်ချက်များ-
 1. ** Canonical အထွက်-** `AccountId::to_string()`/Display သည် IH58 ကိုသာ ထုတ်လွှတ်ရမည်
    (နံပါတ် `@domain` နောက်ဆက်တွဲ)။ Canonical hex သည် အမှားရှာပြင်ခြင်းအတွက် (`0x...`) ဖြစ်သည်။
-2. **လက်ခံထားသော သွင်းအားစုများ-** ခွဲခြမ်းစိတ်ဖြာသူများသည် IH58 (နှစ်သက်ရာ)၊ `sora` ဖိသိပ်မှုကို လက်ခံရမည်၊
-   နှင့် canonical hex (`0x...` only; bare hex ကို ငြင်းပယ်သည်)။ သွင်းအားစုများ သယ်ဆောင်လာနိုင်သည်။
-   လမ်းကြောင်း အရိပ်အမြွက်များအတွက် `@<domain>` နောက်ဆက်တွဲ။ `<label>@<domain>` (rejected legacy form) aliases လိုအပ်သည်။
-   ဖြေရှင်းသူ။  3. **ဖြေရှင်းသူများ-** domainless IH58/sora ခွဲခြမ်းစိတ်ဖြာခြင်း domain-selector တစ်ခု လိုအပ်သည်
-   ရွေးချယ်သူသည် သွယ်ဝိုက်သောပုံသေမဟုတ်ပါက ဖြေရှင်းသူ (ပြင်ဆင်ထားသော ပုံသေကိုသုံးပါ။
-   ဒိုမိန်းတံဆိပ်)။ UAID (`uaid:...`) နှင့် opaque (`opaque:...`) စာသားများ လိုအပ်သည်
-   ဖြေရှင်းသူများ။
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 checksum-** `IH58PRE || prefix || payload` ကျော် Blake2b-512 ကိုသုံးပါ၊ ယူပါ။
    ပထမ 2 bytes ။ ချုံ့ထားသော အက္ခရာအခြေခံသည် **105** ဖြစ်သည်။
 5. ** Curve gating-** SDKs များသည် မူရင်း Ed25519-only သို့ဖြစ်သည်။ တိကျပြတ်သားသော ရွေးချယ်မှုကို ပေးပါ။

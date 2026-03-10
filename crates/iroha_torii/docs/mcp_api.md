@@ -6,23 +6,29 @@ It lets AI agents call Torii and Connect endpoints through JSON-RPC.
 ## Endpoints
 
 - `GET /v1/mcp` returns MCP capabilities and server metadata.
-- `POST /v1/mcp` accepts JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`).
+- `POST /v1/mcp` accepts JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`, `tools/call_batch`, `tools/call_async`, `tools/jobs/get`).
 
 ## JSON-RPC Methods
 
 - `initialize`: return server capabilities and protocol metadata.
-- `tools/list`: page through available tools.
+- `tools/list`: page through available tools and return `toolsetVersion` / `listChanged`.
 - `tools/call`: execute one tool by name.
+- `tools/call_batch`: execute multiple tool calls in one request.
+- `tools/call_async`: enqueue one tool call and return a job id.
+- `tools/jobs/get`: fetch async job status/result by `job_id`.
+
+Async jobs are stored in-memory and pruned by `torii.mcp.async_job_ttl_secs` and
+`torii.mcp.async_job_max_entries`.
 
 ## Common Flow
 
 1. Call `initialize`.
-2. Call `tools/list` (with optional `cursor`) until `nextCursor` is `null`.
+2. Call `tools/list` (with optional `cursor` and `toolset_version`) until `nextCursor` is `null`.
 3. Call `tools/call` for the target tool.
 
 ## Tool Naming
 
-- OpenAPI-derived tools use `torii.<operationId-or-fallback>`.
+- OpenAPI-derived tools use stable route-derived ids (`torii.<method>_<path...>`), not mutable OpenAPI `operationId` labels.
 - Connect helper tools include:
   - `connect.ws.ticket`
   - `connect.session.create`
@@ -1934,3 +1940,5 @@ Optional request metadata:
 When route dispatch fails validation or access checks, `structuredContent.status`
 contains the HTTP failure status, `isError` is `true` for HTTP `>= 400`, and
 `structuredContent.body` carries the route error payload.
+
+All JSON-RPC error payloads now include `error.data.error_code` for stable programmatic handling.

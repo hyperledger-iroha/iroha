@@ -649,9 +649,9 @@ mod account {
         #[has_origin(origin = Account)]
         /// Event describing changes applied to an account.
         pub enum AccountEvent {
-            #[has_origin(account => account.id())]
+            #[has_origin(account => account.account.id())]
             /// Account was created.
-            Created(Account),
+            Created(AccountCreated),
             /// Account was deleted.
             Deleted(AccountId),
             #[has_origin(asset_event => &asset_event.origin().account)]
@@ -684,6 +684,14 @@ mod account {
     #[model]
     mod model {
         use super::*;
+
+        /// Account creation payload with explicit domain context.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountCreated {
+            pub account: Account,
+            pub domain: DomainId,
+        }
 
         /// Depending on the wrapping event, [`AccountPermissionChanged`] role represents the added or removed account role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -721,6 +729,28 @@ mod account {
         #[must_use]
         pub fn permission(&self) -> &Permission {
             &self.permission
+        }
+    }
+
+    impl AccountCreated {
+        /// Construct a new account-created payload with explicit domain context.
+        #[must_use]
+        pub fn new(account: Account, domain: DomainId) -> Self {
+            Self { account, domain }
+        }
+    }
+
+    impl AccountEvent {
+        /// Return the explicit domain context carried by this event when wrapped as a [`DomainEvent`].
+        #[must_use]
+        pub fn origin_domain(&self) -> &DomainId {
+            match self {
+                Self::Created(created) => &created.domain,
+                Self::Asset(asset_event) => &asset_event.origin().definition.domain,
+                other => {
+                    panic!("domain context is not embedded in account event variant {other:?}")
+                }
+            }
         }
     }
 }
@@ -927,9 +957,15 @@ mod domain {
             #[has_origin(nft_event => &nft_event.origin().domain)]
             /// NFT event occurred in the domain scope.
             Nft(NftEvent),
-            #[has_origin(account_event => &account_event.origin().domain)]
+            #[has_origin(account_event => account_event.origin_domain())]
             /// Account event occurred in the domain scope.
             Account(AccountEvent),
+            #[has_origin(link_changed => &link_changed.domain)]
+            /// Account subject was linked to the domain.
+            AccountLinked(AccountDomainLinkChanged),
+            #[has_origin(link_changed => &link_changed.domain)]
+            /// Account subject was unlinked from the domain.
+            AccountUnlinked(AccountDomainLinkChanged),
             #[has_origin(metadata_changed => &metadata_changed.target)]
             /// Metadata entry was inserted or updated.
             MetadataInserted(DomainMetadataChanged),
@@ -942,7 +978,7 @@ mod domain {
             #[has_origin(summary => &summary.call.domain_id)]
             /// Aggregated Kaigi roster metrics were recorded.
             KaigiRosterSummary(KaigiRosterSummary),
-            #[has_origin(summary => &summary.relay.domain)]
+            #[has_origin(summary => &summary.domain)]
             /// Kaigi relay registration summary emitted.
             KaigiRelayRegistered(model::KaigiRelayRegistrationSummary),
             #[has_origin(summary => &summary.call.domain_id)]
@@ -985,6 +1021,16 @@ mod domain {
         pub struct DomainOwnerChanged {
             pub domain: DomainId,
             pub new_owner: AccountId,
+        }
+
+        /// Account-domain link payload emitted when membership links change.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountDomainLinkChanged {
+            /// Domain where the link mutation happened.
+            pub domain: DomainId,
+            /// Domainless account identifier whose membership link changed.
+            pub account: AccountId,
         }
 
         /// Aggregated Kaigi roster counts without exposing individual identities.
@@ -1034,6 +1080,8 @@ mod domain {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
         pub struct KaigiRelayRegistrationSummary {
+            /// Domain where the relay registration was recorded.
+            pub domain: DomainId,
             /// Relay identifier.
             pub relay: AccountId,
             /// Relay bandwidth class advertised during registration.
@@ -1045,8 +1093,14 @@ mod domain {
         impl KaigiRelayRegistrationSummary {
             /// Construct a new relay registration summary payload.
             #[must_use]
-            pub fn new(relay: AccountId, bandwidth_class: u8, hpke_fingerprint: Hash) -> Self {
+            pub fn new(
+                domain: DomainId,
+                relay: AccountId,
+                bandwidth_class: u8,
+                hpke_fingerprint: Hash,
+            ) -> Self {
                 Self {
+                    domain,
                     relay,
                     bandwidth_class,
                     hpke_fingerprint,
@@ -2091,7 +2145,10 @@ mod tests {
 pub mod prelude {
     pub use super::{
         DataEvent, HasOrigin, MetadataChanged,
-        account::{AccountEvent, AccountEventSet, AccountPermissionChanged, AccountRoleChanged},
+        account::{
+            AccountCreated, AccountEvent, AccountEventSet, AccountPermissionChanged,
+            AccountRoleChanged,
+        },
         asset::{
             AssetChanged, AssetDefinitionEvent, AssetDefinitionEventSet,
             AssetDefinitionMintabilityChanged, AssetDefinitionOwnerChanged,
@@ -2104,12 +2161,12 @@ pub mod prelude {
         },
         config::{ConfigurationEvent, ConfigurationEventSet, ParameterChanged},
         domain::{
-            DomainEvent, DomainEventSet, DomainOwnerChanged, KaigiRelayHealthSummary,
-            KaigiRelayManifestSummary, KaigiRelayRegistrationSummary, KaigiRosterSummary,
-            KaigiUsageSummary, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
-            StreamingSoranetAccessKind, StreamingSoranetRoute, StreamingSoranetStreamTag,
-            StreamingTicketCapabilities, StreamingTicketPolicy, StreamingTicketReady,
-            StreamingTicketRecord, StreamingTicketRevoked,
+            AccountDomainLinkChanged, DomainEvent, DomainEventSet, DomainOwnerChanged,
+            KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,
+            KaigiRosterSummary, KaigiUsageSummary, StreamingPrivacyRelay, StreamingPrivacyRoute,
+            StreamingRouteBinding, StreamingSoranetAccessKind, StreamingSoranetRoute,
+            StreamingSoranetStreamTag, StreamingTicketCapabilities, StreamingTicketPolicy,
+            StreamingTicketReady, StreamingTicketRecord, StreamingTicketRevoked,
         },
         executor::{ExecutorEvent, ExecutorEventSet, ExecutorUpgrade},
         nft::{NftEvent, NftEventSet, NftOwnerChanged},

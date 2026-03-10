@@ -28,7 +28,7 @@ fn decode_typed_submitballot_fallback_yields_permission_denied_without_verify() 
     // Host + VM
     let host = ivm::mock_wsv::WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     );
     let mut vm = IVM::new(0);
@@ -87,7 +87,7 @@ fn decode_typed_finalize_fallback_yields_permission_denied_without_verify() {
     let caller: ivm::mock_wsv::ScopedAccountId = sample_account();
     let host = ivm::mock_wsv::WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     );
     let mut vm = IVM::new(0);

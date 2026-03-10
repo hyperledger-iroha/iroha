@@ -985,7 +985,7 @@ For higher-level walkthroughs, see:
   snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
   directly into `TxBuilder` to produce signed transactions.
 
-> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept IH58 (preferred)/sora (second-best)/canonical literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically so wallets can forward whatever selector they display without manual escaping.
+> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical IH58 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
 
 Upcoming work (tracked under IOS3) includes governance endpoints, additional query
 builders, and WebSocket/SSE subscribers shared with Android/JS.

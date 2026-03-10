@@ -253,10 +253,7 @@ pub mod isi {
             state_transaction.world.account(&source)?;
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;
-            let authority_is_source_owner = authority == &source
-                || state_transaction.world.domain(source.domain())?.owned_by() == authority;
-            let authority_is_nft_domain_owner =
-                state_transaction.world.domain(object.domain())?.owned_by() == authority;
+            let authority_is_source_owner = authority == &source;
             let required_permission: Permission =
                 iroha_executor_data_model::permission::nft::CanTransferNft {
                     nft: object.clone(),
@@ -280,10 +277,7 @@ pub mod isi {
                                     .any(|permission| permission == &required_permission)
                             })
                     });
-            if !(authority_is_source_owner
-                || authority_is_nft_domain_owner
-                || authority_has_transfer_permission)
-            {
+            if !(authority_is_source_owner || authority_has_transfer_permission) {
                 return Err(Error::InvariantViolation(
                     "Can't transfer NFT of another account".to_owned().into(),
                 ));
@@ -404,11 +398,12 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register domain");
 
-            let holder_id =
-                AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-            Register::account(Account::new(holder_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register holder account");
+            let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(Account::new(
+                holder_id.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register holder account");
 
             let nft_id: NftId = "cleanup$nft-cleanup".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
@@ -474,35 +469,34 @@ pub mod isi {
             let state = State::new(World::default(), kura, query_handle);
 
             let users_domain: DomainId = "users".parse().expect("domain id");
-            let user1 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
-            let user2 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
+            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&user1, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(user1.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user1 account");
-            Register::account(Account::new(user2.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user2 account");
+            Register::account(Account::new(
+                user1.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user1 account");
+            Register::account(Account::new(
+                user2.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
@@ -526,35 +520,34 @@ pub mod isi {
             let state = State::new(World::default(), kura, query_handle);
 
             let users_domain: DomainId = "users".parse().expect("domain id");
-            let user1 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
-            let user2 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
+            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(user1.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user1 account");
-            Register::account(Account::new(user2.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user2 account");
+            Register::account(Account::new(
+                user1.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user1 account");
+            Register::account(Account::new(
+                user2.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))

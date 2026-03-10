@@ -4501,7 +4501,7 @@ mod evidence_http_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -4705,7 +4705,7 @@ mod evidence_http_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -4797,7 +4797,7 @@ mod evidence_http_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -10606,7 +10606,7 @@ mod tx_hash_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: crate::crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -12006,7 +12006,7 @@ mod tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .expect("private key");
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
         let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
 

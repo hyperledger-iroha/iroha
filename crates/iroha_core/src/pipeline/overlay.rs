@@ -1130,6 +1130,15 @@ mod tests_overlay_manifest {
 
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
+    fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
+        iroha_data_model::account::Account::new(
+            authority
+                .clone()
+                .to_account_id("wonderland".parse().expect("static domain id")),
+        )
+        .build(authority)
+    }
+
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
@@ -1155,8 +1164,7 @@ mod tests_overlay_manifest {
         let domain: iroha_data_model::domain::Domain =
             iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
                 .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
+        let account = build_wonderland_account(&authority_id);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -1265,6 +1273,15 @@ mod tests {
 
     use super::*;
 
+    fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
+        iroha_data_model::account::Account::new(
+            authority
+                .clone()
+                .to_account_id("wonderland".parse().expect("static domain id")),
+        )
+        .build(authority)
+    }
+
     #[test]
     fn empty_overlay_is_noop() {
         let ovl = TxOverlay::default();
@@ -1275,19 +1292,15 @@ mod tests {
     fn overlay_rejects_ivm_without_gas_limit() {
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
         };
 
         let (program, _header_len, _meta) = sample_program();
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -1312,7 +1325,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -1362,12 +1374,9 @@ mod tests {
 
         // Minimal authority/world setup.
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -1421,7 +1430,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -1471,12 +1479,9 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -1626,12 +1631,9 @@ mod tests {
         vk_record.key = Some(vk_box.clone());
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -1784,12 +1786,9 @@ mod tests {
         vk_record.key = Some(vk_box.clone());
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -1896,7 +1895,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -1946,12 +1944,9 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -2065,7 +2060,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             domain::Domain,
             isi::Log,
             level::Level,
@@ -2084,12 +2078,9 @@ mod tests {
             .into();
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -2125,7 +2116,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             domain::Domain,
             isi::Log,
             level::Level,
@@ -2144,12 +2134,9 @@ mod tests {
             .into();
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -2187,7 +2174,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             isi::Log,
@@ -2252,12 +2238,9 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -2310,7 +2293,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -2362,12 +2344,9 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -2418,7 +2397,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             isi::Log,
@@ -2476,12 +2454,9 @@ mod tests {
         vk_record.key = Some(vk_box);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
             .verifying_keys
@@ -2582,7 +2557,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             proof::VerifyingKeyRecord,
@@ -2594,12 +2568,9 @@ mod tests {
         let bytecode = IvmBytecode::from_compiled(program);
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
 
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
@@ -2756,10 +2727,7 @@ mod tests {
         let namespace = "apps".to_string();
         let contract_id = "calc".to_string();
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
 
         // Inject a manifest with a mismatched abi_hash into WSV plus the instance binding.
         let mut world = crate::state::World::default();
@@ -2847,10 +2815,7 @@ mod tests {
         };
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let authority_str = authority.to_string();
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -3105,10 +3070,7 @@ mod tests {
         let contract_id = "calc".to_string();
         let wrong_binding = Hash::new(b"other-binding");
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
 
         // Insert a manifest for the actual code, but bind the namespace to a different code hash.
         let mut world = crate::state::World::default();
@@ -3177,10 +3139,7 @@ mod tests {
         let namespace = "apps".to_string();
         let contract_id = "calc".to_string();
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
 
         // Bind namespace to code hash but do not seed manifest in WSV.
         let mut world = crate::state::World::default();
@@ -3235,10 +3194,7 @@ mod tests {
         let namespace = "apps".to_string();
         let contract_id = "calc".to_string();
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
 
         let mut world = crate::state::World::default();
         world
@@ -3329,13 +3285,10 @@ mod tests {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain =
             iroha_data_model::domain::Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = iroha_data_model::account::Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -3383,13 +3336,10 @@ mod tests {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
 
         let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain =
             iroha_data_model::domain::Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = iroha_data_model::account::Account::new(authority.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();

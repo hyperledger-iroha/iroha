@@ -291,7 +291,7 @@ fn construct_domain_id(i: usize) -> DomainId {
 }
 
 fn generate_account_id(domain_id: DomainId) -> AccountId {
-    AccountId::new(domain_id, KeyPair::random().into_parts().0)
+    AccountId::new(KeyPair::random().into_parts().0)
 }
 
 #[cfg(test)]
@@ -304,9 +304,7 @@ mod tests {
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(
-            "test_domain".parse().expect("valid domain"),
-            keypair.public_key().clone(),
+        let account_id = AccountId::new(keypair.public_key().clone(),
         );
 
         build_state(rt.handle(), &account_id, keypair.private_key());
@@ -316,9 +314,7 @@ mod tests {
     fn build_state_records_init_transaction() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(
-            "test_domain".parse().expect("valid domain"),
-            keypair.public_key().clone(),
+        let account_id = AccountId::new(keypair.public_key().clone(),
         );
 
         let state = build_state(rt.handle(), &account_id, keypair.private_key());

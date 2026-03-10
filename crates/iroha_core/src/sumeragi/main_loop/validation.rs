@@ -2,7 +2,7 @@
 
 use std::{
     sync::{Arc, mpsc},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use iroha_logger::prelude::*;
@@ -193,6 +193,20 @@ impl Actor {
             .inflight
             .get(&hash)
             .map(|inflight| Instant::now().saturating_duration_since(inflight.started_at))
+    }
+
+    fn validation_queue_full_inline_cutover(&self) -> Duration {
+        let fast_timeout = self.pending_fast_path_timeout_current();
+        let divisor = self
+            .config
+            .worker
+            .validation_queue_full_inline_cutover_divisor
+            .max(1);
+        if fast_timeout == Duration::ZERO {
+            Duration::ZERO
+        } else {
+            (fast_timeout / divisor).max(Duration::from_millis(1))
+        }
     }
 
     /// Validate a pending block (stateless + stateful) before sending any votes.
@@ -403,15 +417,32 @@ impl Actor {
                 self.subsystems.validation.inflight.clear();
                 self.subsystems.validation.superseded_results.clear();
             } else {
+                let pending_age = pending.age();
+                let fast_timeout = self.pending_fast_path_timeout_current();
+                let inline_cutover = self.validation_queue_full_inline_cutover();
+                if pending_age < inline_cutover {
+                    warn!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        pending_age_ms = pending_age.as_millis(),
+                        fast_timeout_ms = fast_timeout.as_millis(),
+                        inline_cutover_ms = inline_cutover.as_millis(),
+                        "validation worker queue full; deferring pre-vote validation"
+                    );
+                    pending.validation_status = ValidationStatus::Pending;
+                    self.pending.pending_blocks.insert(hash, pending);
+                    return ValidationGateOutcome::Deferred;
+                }
                 warn!(
                     height = pending.height,
                     view = pending.view,
                     block = %hash,
-                    "validation worker queue full; deferring pre-vote validation"
+                    pending_age_ms = pending_age.as_millis(),
+                    fast_timeout_ms = fast_timeout.as_millis(),
+                    inline_cutover_ms = inline_cutover.as_millis(),
+                    "validation worker queue saturated; running pre-vote validation inline"
                 );
-                pending.validation_status = ValidationStatus::Pending;
-                self.pending.pending_blocks.insert(hash, pending);
-                return ValidationGateOutcome::Deferred;
             }
         }
 

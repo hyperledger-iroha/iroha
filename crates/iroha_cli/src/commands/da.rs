@@ -1939,7 +1939,6 @@ mod tests {
         crypto::KeyPair,
         data_model::{
             Metadata,
-            domain::DomainId,
             prelude::{AccountId, ChainId},
         },
     };
@@ -1976,8 +1975,7 @@ mod tests {
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
             let key_pair = KeyPair::random();
-            let domain: DomainId = "wonderland".parse().expect("domain");
-            let account = AccountId::new(domain, key_pair.public_key().clone());
+            let account = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
@@ -2623,20 +2621,18 @@ mod tests {
             potr_bonus_pool: XorAmount::from_micro(25_000),
             egress_credit_per_gib: XorAmount::from_micro(1_500),
         };
-        let domain: DomainId = "test".parse().expect("test domain");
-        let provider_domain: DomainId = "provider".parse().expect("provider domain");
         let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-        let payer = AccountId::new(domain.clone(), payer_key.public_key().clone());
+        let payer = AccountId::new(payer_key.public_key().clone());
         let treasury_key = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-        let treasury = AccountId::new(domain.clone(), treasury_key.public_key().clone());
+        let treasury = AccountId::new(treasury_key.public_key().clone());
         let reserve_key = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-        let reserve = AccountId::new(domain.clone(), reserve_key.public_key().clone());
+        let reserve = AccountId::new(reserve_key.public_key().clone());
         let provider_key = KeyPair::from_seed(vec![4; 32], Algorithm::Ed25519);
-        let provider = AccountId::new(provider_domain.clone(), provider_key.public_key().clone());
+        let provider = AccountId::new(provider_key.public_key().clone());
         let pdp_key = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
-        let pdp = AccountId::new(provider_domain.clone(), pdp_key.public_key().clone());
+        let pdp = AccountId::new(pdp_key.public_key().clone());
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
-        let potr = AccountId::new(provider_domain.clone(), potr_key.public_key().clone());
+        let potr = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId = "xor#sora".parse().expect("asset definition");
         let accounts = da::DaRentLedgerAccounts {
             payer: &payer,

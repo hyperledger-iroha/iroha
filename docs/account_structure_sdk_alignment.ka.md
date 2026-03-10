@@ -26,13 +26,8 @@ translator: machine-google-reviewed
 მოქმედების ელემენტები:
 1. **კანონიკური გამომავალი:** `AccountId::to_string()`/დისპლეი უნდა გამოსცეს მხოლოდ IH58
    (არა `@domain` სუფიქსი). Canonical hex განკუთვნილია გამართვისთვის (`0x...`).
-2. **მიღებული შეყვანები:** პარსერებმა უნდა მიიღონ IH58 (სასურველია), `sora` შეკუმშული,
-   და კანონიკური თექვსმეტობითი (მხოლოდ `0x...`; შიშველი თექვსმეტი უარყოფილია). შეყვანები შეიძლება იყოს
-   `@<domain>` სუფიქსი მარშრუტიზაციის მინიშნებებისთვის; `<label>@<domain>` (rejected legacy form) მეტსახელები მოითხოვს ა
-   გადამწყვეტი.  3. **გამხსნელები:** დომენის გარეშე IH58/sora ანალიზს სჭირდება დომენის სელექტორი
-   გადამწყვეტი, თუ სელექტორი არ არის ნაგულისხმევი ნაგულისხმევი (გამოიყენეთ კონფიგურირებული ნაგულისხმევი
-   დომენის ეტიკეტი). UAID (`uaid:...`) და გაუმჭვირვალე (`opaque:...`) ლიტერალები მოითხოვს
-   გადამწყვეტები.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 საკონტროლო ჯამი:** გამოიყენეთ Blake2b-512 `IH58PRE || prefix || payload`-ზე, აიღეთ
    პირველი 2 ბაიტი. შეკუმშული ანბანის საფუძველია **105**.
 5. **მრუდის კარიბჭე:** SDK ნაგულისხმევად არის მხოლოდ Ed25519. მიაწოდეთ მკაფიო არჩევა

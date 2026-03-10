@@ -48,6 +48,10 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
     md
 }
 
+fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
+    Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id)
+}
+
 #[test]
 fn runtime_upgrade_rejects_non_v1_manifest() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
@@ -58,9 +62,9 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -114,9 +118,9 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -196,9 +200,9 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -247,9 +251,9 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -297,9 +301,9 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -359,9 +363,9 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -433,9 +437,9 @@ fn activation_allows_v1_in_same_block() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -510,9 +514,9 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -580,9 +584,9 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;
@@ -636,9 +640,9 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
     let untrusted = KeyPair::random();
     let (pubkey, _) = trusted.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = new_account_in_domain(&account_id, &domain_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;

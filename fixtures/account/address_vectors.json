@@ -53,7 +53,7 @@
       {
         "case_id": "canonical-invalid-hex",
         "expected_error": {
-          "kind": "InvalidHexAddress"
+          "kind": "UnsupportedAddressFormat"
         },
         "format": "canonical_hex",
         "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2G",
@@ -62,7 +62,7 @@
       {
         "case_id": "canonical-trailing-bytes",
         "expected_error": {
-          "kind": "UnexpectedTrailingBytes"
+          "kind": "UnsupportedAddressFormat"
         },
         "format": "canonical_hex",
         "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2900",
@@ -71,7 +71,7 @@
       {
         "case_id": "canonical-multisig-truncated",
         "expected_error": {
-          "kind": "InvalidLength"
+          "kind": "UnsupportedAddressFormat"
         },
         "format": "canonical_hex",
         "input": "0x0A0101000303010001002068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F9601000100207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E4130100020020884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4",

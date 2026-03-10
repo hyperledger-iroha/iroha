@@ -26,14 +26,8 @@ translator: machine-google-reviewed
 བྱ་བའི་རྣམ་གྲངས།
 1. **ཀེ་ནོ་ནིག་ཨའུཊི་པུཊི་:** `AccountId::to_string()`/བཀྲམ་སྟོན་འབད་དགོཔ་ IH58 རྐྱངམ་གཅིག
    (No I18NI0000006X རྗེས་འཇུག་)། ཀེ་ནོ་ནིག་ཧེགསི་འདི་ རྐྱེན་སེལ་འབད་ནིའི་དོན་ལུ་ཨིན། (I18NI000000007X)
-2. **ངོས་ལེན་འབད་ཡོད་པའི་ཨིན་པུཊི་:** དབྱེ་དཔྱད་འབད་མི་ཚུ་གིས་ IH58 (དགའ་གདམ་) IH58 (དགའ་གདམ་), `sora` བསྡམ་བཞག་ཡོདཔ།
-   དང་ ཀེ་ནོ་ནིག་ཧེགསི་ (`0x...` རྐྱངམ་གཅིག; ཧྲིལ་བུམ་གྱི་ཧེག་སི་ ཆ་འཇོག་འབད་ཡོདཔ་)། ཨིན་པུཊི་ཚུ་ འབག་འོང་།
-   `@<domain>` འགྲུལ་ལམ་བརྡ་སྟོན་གྱི་དོན་ལུ་ རྗེས་འཇུག་; I18NI000000011 ཚིག་བརྗོད་ཚུ་ལུ་ a དགོཔ་ཨིན།
-   སེལ་ནི་; སེལ་ནི་ I18NI000000012X (multihash hex) འདི་རྒྱབ་སྐྱོར་ལུས་ཡོདཔ་ཨིན།
-3. **སེལ་མི་:** ཌོ་མེན་མེད་ IH58/sora དབྱེ་དཔྱད་འབད་ནི་ལུ་ མངའ་ཁོངས་-སེལ་འཐུའི་དོན་ལུ་དགོཔ་ཨིན།
-   སེལ་འཐུ་འདི་ མངོན་གསལ་ཅན་གྱི་སྔོན་སྒྲིག་ཨིན་པ་ཅིན་ (རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་ལག་ལེན་འཐབ།
-   མངའ་ཁོངས་ཁ་ཡིག་)། ཡུ་ཨེ་ཨའི་ཌི་ (`uaid:...`) དང་ མ་མཐོང་པའི་ (`opaque:...`) དོན་དངོས་ཚུ་ལུ་ དགོས་མཁོ་ཡོདཔ་ཨིན།
-   སེལ་མཁན།; སེལ་མི།
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 ཅེག་སམ་:** `IH58PRE || prefix || payload` ལས་ Blake2b-512 ལག་ལེན་འཐབ།
    the དང་པོ་ ༢ བཱའིཊི། བསྡམས་ཡོད་པའི་ཡི་གུ་གཞི་རྟེན་འདི་ **105** ཨིན།
 ༥ ** གུག་གུགཔ་གི་སྒྲ་སྒྲིག་:** ཨེསི་ཌི་ཀེ་ཚུ་ Ed25519-only ལུ་སྔོན་སྒྲིག་འབད། དོན་གསལ་གསལ་སྟོན་འབད་ནི།

@@ -3339,7 +3339,8 @@ impl GenesisMaterial {
     }
 
     fn account_in_domain(&self, domain: &DomainId) -> AccountId {
-        AccountId::new(domain.clone(), self.key_pair.public_key().clone())
+        let _ = domain;
+        AccountId::new(self.key_pair.public_key().clone())
     }
 }
 

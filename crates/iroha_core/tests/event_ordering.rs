@@ -12,8 +12,9 @@ use iroha_data_model::prelude::*;
 fn data_events_follow_instruction_order_in_tx() {
     // Build world with a domain, account, and an asset definition
     let (authority_id, kp) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority_id);
-    let acc = Account::new(authority_id.clone()).build(&authority_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+    let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
     let ad: AssetDefinition =
         AssetDefinition::new("rose#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&authority_id);

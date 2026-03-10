@@ -426,7 +426,7 @@ fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> 
     let domain_id: DomainId = "dummy".parse().expect("valid domain id");
     let keypair = KeyPair::random();
     let authority = ScopedAccountId::new(domain_id, keypair.public_key().clone());
-    let mut builder = TransactionBuilder::new(chain_id, authority);
+    let mut builder = TransactionBuilder::new(chain_id, authority.into());
     builder.set_creation_time(Duration::from_millis(0));
     let tx = builder
         .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
@@ -1474,29 +1474,12 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
             if !key_str.starts_with("kaigi_relay__") {
                 continue;
             }
-            let mut registration: KaigiRelayRegistration =
+            let registration: KaigiRelayRegistration =
                 value.clone().try_into_any_norito().map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         err.to_string(),
                     ))
                 })?;
-
-            if registration.relay_id.domain != domain_id {
-                let replacement = world.accounts().iter().find_map(|(candidate_id, _)| {
-                    (candidate_id.domain() == &domain_id
-                        && candidate_id.controller() == registration.relay_id.controller())
-                    .then(|| candidate_id.clone())
-                });
-                if let Some(account_id) = replacement {
-                    registration.relay_id = account_id;
-                } else {
-                    return Err(Error::Query(
-                        iroha_data_model::ValidationFail::InternalError(
-                            "relay metadata stored under mismatched domain".to_string(),
-                        ),
-                    ));
-                }
-            }
 
             let feedback =
                 match iroha_data_model::kaigi::kaigi_relay_feedback_key(&registration.relay_id) {
@@ -3215,7 +3198,7 @@ pub async fn handle_get_proof(
 /// DTO for FindProofRecordById as a signed core query
 pub struct ProofFindByIdQueryDto {
     /// Authority account id to sign the query
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Private key used to sign
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Proof backend (e.g., "halo2/ipa")
@@ -3252,7 +3235,7 @@ pub fn signed_find_proof_by_id(
         proof_hash: arr,
     };
     let singular = SingularQueryBox::FindProofRecordById(FindProofRecordById { id });
-    let req = QueryRequest::Singular(singular).with_authority(dto.authority.clone());
+    let req = QueryRequest::Singular(singular).with_authority(dto.authority.clone().into());
     // Build a temporary KeyPair from the private key. Public key derived within KeyPair::from
     let key_pair = iroha_crypto::KeyPair::from(dto.private_key.0.clone());
     Ok(req.sign(&key_pair))
@@ -5126,29 +5109,36 @@ mod evidence_submit_tests {
     }
 }
 
-fn multisig_spec_key() -> Name {
-    Name::from_str("multisig/spec").expect("static multisig spec key")
-}
-
 fn reject_direct_multisig_signing(
     world: &impl WorldReadOnly,
     tx: &SignedTransaction,
 ) -> Option<AcceptTransactionFail> {
-    let account = world.accounts().get(tx.authority())?;
+    let _account = world.accounts().get(tx.authority())?;
+    if tx.authority().controller().multisig_policy().is_none() {
+        return None;
+    }
 
-    let metadata = account.metadata();
-    let has_multisig_role = world
-        .account_roles_iter(tx.authority())
-        .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
-    let spec_present = metadata.contains(&multisig_spec_key());
-    (spec_present || has_multisig_role).then(|| {
-        let rejection = SignatureVerificationFail::new(
-            tx.signature().clone(),
-            SignatureRejectionCode::UnsupportedAuthority,
-            "direct signing with multisig accounts is forbidden; use multisig propose/approve",
-        );
-        AcceptTransactionFail::SignatureVerification(rejection)
-    })
+    let only_custom_instruction_envelopes = matches!(
+        tx.instructions(),
+        Executable::Instructions(items)
+            if !items.is_empty()
+                && items.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::CustomInstruction>()
+                        .is_some()
+                })
+    );
+    if only_custom_instruction_envelopes {
+        return None;
+    }
+
+    let rejection = SignatureVerificationFail::new(
+        tx.signature().clone(),
+        SignatureRejectionCode::UnsupportedAuthority,
+        "direct signing with multisig accounts is forbidden; use multisig propose/approve",
+    );
+    Some(AcceptTransactionFail::SignatureVerification(rejection))
 }
 
 #[cfg(test)]
@@ -5160,7 +5150,8 @@ mod multisig_guard_tests {
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        prelude::Json as ModelJson,
+        account::{MultisigMember, MultisigPolicy},
+        isi::CustomInstruction,
         role::{Role, RoleId},
     };
 
@@ -5170,24 +5161,23 @@ mod multisig_guard_tests {
     fn direct_multisig_signing_rejected_during_admission() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let chain_id: ChainId = "multisig-direct-sign-guard".parse().unwrap();
-        let ms_keypair = KeyPair::random();
-        let multisig_id = ScopedAccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+        let signer_keypair = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(signer_keypair.public_key().clone(), 1).unwrap()],
+        )
+        .unwrap();
+        let multisig_id = ScopedAccountId::new_multisig(domain_id.clone(), policy);
 
-        let spec = ModelJson::from("spec");
-        let mut metadata = Metadata::default();
-        metadata.insert(multisig_spec_key(), spec);
-
-        let domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account = Account::new(multisig_id.clone())
-            .with_metadata(metadata)
-            .build(&multisig_id);
+        let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
+        let multisig_account = Account::new(multisig_id.clone()).build(multisig_id.account());
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let tx = TransactionBuilder::new(chain_id, multisig_id.clone())
+        let tx = TransactionBuilder::new(chain_id, multisig_id.clone().into())
             .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(ms_keypair.private_key());
+            .sign(signer_keypair.private_key());
 
         let view = state.view();
         let rejection = reject_direct_multisig_signing(view.world(), &tx);
@@ -5200,36 +5190,66 @@ mod multisig_guard_tests {
     }
 
     #[test]
-    fn direct_multisig_signing_rejected_for_multisig_role() {
+    fn single_signatory_with_multisig_role_is_not_rejected() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
-        let ms_keypair = KeyPair::random();
-        let multisig_id = ScopedAccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+        let signer = KeyPair::random();
+        let signatory_id = ScopedAccountId::new(domain_id.clone(), signer.public_key().clone());
 
         let role_id: RoleId = "MULTISIG_SIGNATORY/test/0".parse().unwrap();
-        let role = Role::new(role_id.clone(), multisig_id.clone()).build(&multisig_id);
+        let role =
+            Role::new(role_id.clone(), signatory_id.clone().into()).build(signatory_id.account());
 
-        let domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
-        let mut world =
-            World::with_assets_and_roles([domain], [multisig_account], [], [], [], [role]);
-        world.grant_role_for_tests(multisig_id.clone(), role_id);
+        let domain = Domain::new(domain_id.clone()).build(signatory_id.account());
+        let account = Account::new(signatory_id.clone()).build(signatory_id.account());
+        let mut world = World::with_assets_and_roles([domain], [account], [], [], [], [role]);
+        world.grant_role_for_tests(signatory_id.clone().into(), role_id);
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
-        let tx = TransactionBuilder::new(chain_id, multisig_id.clone())
+        let tx = TransactionBuilder::new(chain_id, signatory_id.clone().into())
             .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(ms_keypair.private_key());
+            .sign(signer.private_key());
 
         let view = state.view();
         let rejection = reject_direct_multisig_signing(view.world(), &tx);
-        match rejection {
-            Some(AcceptTransactionFail::SignatureVerification(fail)) => {
-                assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
-            }
-            other => panic!("expected multisig direct-sign rejection, got {other:?}"),
-        }
+        assert!(
+            rejection.is_none(),
+            "single-signature signatories with multisig role must pass admission guard"
+        );
+    }
+
+    #[test]
+    fn multisig_authority_with_custom_instruction_envelope_is_not_rejected() {
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let chain_id: ChainId = "multisig-custom-envelope-guard".parse().unwrap();
+        let signer_keypair = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(signer_keypair.public_key().clone(), 1).unwrap()],
+        )
+        .unwrap();
+        let multisig_id = ScopedAccountId::new_multisig(domain_id.clone(), policy);
+
+        let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
+        let multisig_account = Account::new(multisig_id.clone()).build(multisig_id.account());
+        let world = World::with([domain], [multisig_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query_handle);
+
+        let custom: InstructionBox = CustomInstruction::new("multisig-envelope").into();
+        let tx = TransactionBuilder::new(chain_id, multisig_id.clone().into())
+            .with_executable(Executable::Instructions(vec![custom].into()))
+            .sign(signer_keypair.private_key());
+
+        let view = state.view();
+        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        assert!(
+            rejection.is_none(),
+            "multisig custom instruction envelopes must pass admission guard"
+        );
     }
 }
 
@@ -5953,8 +5973,9 @@ pub async fn handle_post_contract_code(
     let isi = smart_contract_code::RegisterSmartContractCode {
         manifest: req.manifest.clone(),
     };
-    let mut tx_builder = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
+    let mut tx_builder =
+        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+            .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
     let preview_tx = tx_builder.clone().sign(&req.private_key.0);
     let protected_namespaces = protected_contract_namespaces(&state, &preview_tx);
     let mut metadata_attached = false;
@@ -6407,7 +6428,7 @@ pub async fn handle_get_contract_code_bytes(
 /// Request for activating a contract instance
 pub struct ActivateInstanceDto {
     /// Authority account id
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Private key for signing
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Target namespace
@@ -6467,7 +6488,7 @@ pub async fn handle_post_contract_instance_activate(
         contract_id: req.contract_id,
         code_hash,
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.into())
         .with_instructions(core::iter::once(Box::new(isi).into_instruction_box()))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(
@@ -6531,7 +6552,7 @@ pub async fn handle_post_contract_instance(
         }),
     ];
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
         .with_instructions(instructions.into_iter())
         .sign(&private_key.0);
 
@@ -6631,7 +6652,7 @@ pub async fn handle_post_contract_call(
     let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
     metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
         .with_metadata(metadata)
         .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
             code_bytes,
@@ -6811,7 +6832,7 @@ pub fn handle_proof_retention_status(
 /// DTO for registering a verifying key
 pub struct ZkVkRegisterDto {
     /// Account authorizing the operation
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Exposed private key used to sign the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
@@ -6886,7 +6907,7 @@ fn _assert_vk_register_dto_json() {
 /// DTO for updating a verifying key record
 pub struct ZkVkUpdateDto {
     /// Account authorizing the operation
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Exposed private key used to sign the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
@@ -7383,7 +7404,7 @@ pub async fn handle_post_vk_register(
         id,
         record: vk_record,
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
@@ -7423,7 +7444,7 @@ pub async fn handle_post_vk_update(
         id,
         record: vk_record,
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
@@ -7493,7 +7514,7 @@ pub struct ContractCodeRecordDto {
 )]
 pub struct RegisterContractCodeDto {
     /// Account that authorizes the transaction
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key; Exposed for API transport
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Contract manifest to register on-chain
@@ -7525,7 +7546,7 @@ fn _assert_register_contract_code_dto_send() {
 /// Request for deploying contract code (bytecode provided as base64)
 pub struct DeployContractDto {
     /// Transaction authority
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode
@@ -7556,7 +7577,7 @@ pub struct DeployContractResponseDto {
 /// Request for dry-run simulation of contract deployment without enqueueing a transaction.
 pub struct ContractSimulateDto {
     /// Transaction authority used for host context and metadata validation.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key used to build the in-memory transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode.
@@ -7789,7 +7810,7 @@ fn prepare_contract_call(
 /// Request body for combined deploy + activate workflow.
 pub struct DeployAndActivateInstanceDto {
     /// Transaction authority
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Governance namespace that will host the contract instance
@@ -7838,7 +7859,7 @@ pub struct DeployAndActivateInstanceResponseDto {
 /// Request payload for invoking a deployed contract instance.
 pub struct ContractCallDto {
     /// Account authorizing the call.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Private key used to sign the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Target namespace hosting the contract instance.
@@ -7856,7 +7877,7 @@ pub struct ContractCallDto {
     pub gas_asset_id: Option<String>,
     /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
     #[norito(default)]
-    pub fee_sponsor: Option<iroha_data_model::account::ScopedAccountId>,
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
     /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
     pub gas_limit: u64,
 }
@@ -7905,7 +7926,7 @@ struct PreparedContractCall {
 /// Request payload for creating a subscription plan.
 pub struct SubscriptionPlanCreateDto {
     /// Account authorizing the transaction (plan provider).
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Asset definition id used to store the plan metadata.
@@ -7973,7 +7994,7 @@ pub struct SubscriptionPlanListResponseDto {
 /// Request payload for creating a subscription.
 pub struct SubscriptionCreateDto {
     /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Subscription NFT id to register.
@@ -8086,7 +8107,7 @@ pub struct SubscriptionGetResponseDto {
 /// Request payload for subscription status updates.
 pub struct SubscriptionActionDto {
     /// Account authorizing the transaction (subscriber).
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Optional charge time override in UTC milliseconds.
@@ -8128,7 +8149,7 @@ pub enum SubscriptionCancelMode {
 /// Request payload for recording subscription usage.
 pub struct SubscriptionUsageRequestDto {
     /// Account authorizing the transaction (usage reporter).
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key for submitting the transaction.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Usage counter key to update.
@@ -8164,7 +8185,7 @@ pub struct SubscriptionActionResponseDto {
 /// Request payload for Torii SoraFS pin registration endpoint.
 pub struct RegisterPinManifestDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Numeric profile identifier advertised by the manifest/descriptor.
@@ -8344,7 +8365,7 @@ const _: () = {
 /// Request payload for Torii SoraFS capacity declaration endpoint.
 pub struct RegisterCapacityDeclarationDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Canonical Norito encoding of `CapacityDeclarationV1`, base64 encoded.
@@ -8456,7 +8477,7 @@ pub struct CompleteReplicationOrderResponseDto {
 /// Request payload for Torii SoraFS capacity telemetry endpoint.
 pub struct RecordCapacityTelemetryDto {
     /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Provider identifier (hex-encoded BLAKE3-256).
@@ -8506,7 +8527,7 @@ pub struct RecordCapacityTelemetryDto {
 /// Request payload for Torii SoraFS capacity dispute endpoint.
 pub struct RegisterCapacityDisputeDto {
     /// Account authorizing the dispute submission.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Canonical base64-encoded Norito payload of `CapacityDisputeV1`.
@@ -8993,7 +9014,7 @@ pub async fn handle_post_contract_deploy(
         code_hash: prepared.code_hash,
         code: prepared.code_bytes.clone(),
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions(
             [
                 dm::InstructionBox::from(isi_code),
@@ -9109,7 +9130,7 @@ pub async fn handle_post_sorafs_register_manifest(
         successor_of: successor_digest,
     };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -9197,7 +9218,7 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     let record_for_node = record.clone();
     let isi = sorafs::RegisterCapacityDeclaration { record };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -9322,7 +9343,7 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
 
     let isi = sorafs::RecordCapacityTelemetry { record };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -9627,7 +9648,7 @@ pub async fn handle_post_sorafs_register_capacity_dispute(
     );
 
     let isi = sorafs::RegisterCapacityDispute { record };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -11277,13 +11298,8 @@ mod deploy_tests {
         let prog = minimal_ivm_program(1);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
         let kp = iroha_crypto::KeyPair::random();
-        let authority: iroha_data_model::account::ScopedAccountId =
-            iroha_data_model::account::ScopedAccountId::of(
-                "wonderland".parse().unwrap(),
-                kp.public_key().clone(),
-            );
         let req = DeployContractDto {
-            authority,
+            authority: iroha_data_model::account::AccountId::of(kp.public_key().clone()),
             private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
             code_b64,
         };
@@ -11536,8 +11552,7 @@ mod sorafs_pin_tests {
             retention_epoch: policy.retention_epoch,
         };
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RegisterPinManifestDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -11606,8 +11621,7 @@ mod sorafs_pin_tests {
             retention_epoch: policy.retention_epoch,
         };
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let proof_bytes = b"alias-proof";
         let req = RegisterPinManifestDto {
             authority,
@@ -11996,7 +12010,7 @@ mod sorafs_capacity_tests {
         let policy = dm::MultisigPolicy::new(1, members).expect("policy");
         let authority = dm::ScopedAccountId::new_multisig(domain, policy);
 
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
+        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.into())
             .with_instructions([dm::Log::new(dm::Level::INFO, "too many signatures".into())])
             .sign_multisig(signers.iter().map(KeyPair::private_key));
 
@@ -12039,8 +12053,7 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let metadata = vec![MetadataEntryDto {
             key: "label".into(),
             value: IrohaJson::from(Value::String("edge".into())),
@@ -12260,8 +12273,7 @@ mod sorafs_capacity_tests {
         let dispute_bytes = norito::to_bytes(&dispute).expect("encode dispute");
         let dispute_b64 = base64::engine::general_purpose::STANDARD.encode(&dispute_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
 
         let req = RegisterCapacityDisputeDto {
             authority,
@@ -12332,8 +12344,7 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
             authority: authority.clone(),
@@ -12398,8 +12409,7 @@ mod sorafs_capacity_tests {
         let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
         let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
 
         let register_req = RegisterCapacityDeclarationDto {
             authority: authority.clone(),
@@ -12529,8 +12539,7 @@ mod sorafs_capacity_tests {
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -12589,8 +12598,7 @@ mod sorafs_capacity_tests {
         seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let kp = iroha_crypto::KeyPair::random();
-        let authority =
-            dm::ScopedAccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = dm::AccountId::new(kp.public_key().clone());
         let req = RecordCapacityTelemetryDto {
             authority,
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
@@ -13066,7 +13074,7 @@ fn instruction_matches_asset_id(
 #[cfg(feature = "app_api")]
 fn instruction_matches_account_id(
     instr: &iroha_data_model::isi::InstructionBox,
-    expected: &ScopedAccountId,
+    expected: &AccountId,
 ) -> bool {
     use iroha_data_model::isi::{TransferAssetBatch, TransferBox};
 
@@ -13427,7 +13435,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         );
                     }
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
-                        let matched = iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                        let matched = iroha_data_model::account::AccountId::parse_encoded(s)
                             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_or(false, |parsed| parsed.controller() == acc.controller());
                         if torii_debug_match_enabled() {
@@ -13487,7 +13495,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "result_ok" => v.as_bool().map_or(false, |b| result_ok != b),
                 "authority" => {
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
-                        iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                        iroha_data_model::account::AccountId::parse_encoded(s)
                             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_or(true, |id| id.controller() != acc.controller())
                     } else {
@@ -13574,7 +13582,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         list.iter()
                             .filter_map(|v| v.as_str())
                             .filter_map(|s| {
-                                iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                                iroha_data_model::account::AccountId::parse_encoded(s)
                                     .map(
                                         iroha_data_model::account::ParsedAccountId::into_account_id,
                                     )
@@ -13634,7 +13642,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         list.iter()
                             .filter_map(|v| v.as_str())
                             .filter_map(|s| {
-                                iroha_data_model::account::ScopedAccountId::parse_encoded(s)
+                                iroha_data_model::account::AccountId::parse_encoded(s)
                                     .map(
                                         iroha_data_model::account::ParsedAccountId::into_account_id,
                                     )
@@ -13701,11 +13709,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
 #[cfg(feature = "app_api")]
 fn tx_authority_matches_subject(
     tx: &iroha_data_model::query::CommittedTransaction,
-    account_id: &iroha_data_model::account::ScopedAccountId,
+    account_id: &iroha_data_model::account::AccountId,
 ) -> bool {
     match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
-            signed.authority().controller() == account_id.controller()
+            signed.authority() == account_id
         }
         _ => false,
     }
@@ -14221,8 +14229,8 @@ pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
-) -> Result<(iroha_data_model::account::ScopedAccountId, String), Error> {
-    use iroha_data_model::{account::ScopedAccountId, query::error::QueryExecutionFail};
+) -> Result<(iroha_data_model::account::AccountId, String), Error> {
+    use iroha_data_model::query::error::QueryExecutionFail;
 
     parse_account_literal(literal, telemetry, endpoint)
         .map(|parsed| {
@@ -14242,8 +14250,8 @@ pub fn parse_account_path_segment(
 #[cfg(feature = "app_api")]
 fn resolve_parsed_account_against_world(
     state: &CoreState,
-    parsed: &ScopedAccountId,
-) -> Option<iroha_data_model::account::ScopedAccountId> {
+    parsed: &AccountId,
+) -> Option<iroha_data_model::account::AccountId> {
     let world = state.world_view();
     if world.account(parsed).is_ok() {
         return Some(parsed.clone());
@@ -14265,10 +14273,9 @@ fn parse_account_literal_with_state(
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-) -> Result<(iroha_data_model::account::ScopedAccountId, String), iroha_data_model::error::ParseError>
-{
+) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
     let trimmed = literal.trim();
-    match ScopedAccountId::parse_encoded(trimmed) {
+    match AccountId::parse_encoded(trimmed) {
         Ok(parsed) => {
             let parsed_id = parsed.into_account_id();
             let resolved =
@@ -14289,7 +14296,7 @@ pub(crate) fn parse_account_path_segment_with_state(
     literal: &str,
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
-) -> Result<(iroha_data_model::account::ScopedAccountId, String), Error> {
+) -> Result<(iroha_data_model::account::AccountId, String), Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     parse_account_literal_with_state(state, literal, telemetry, endpoint).map_err(|err| {
@@ -14359,21 +14366,17 @@ fn canonicalize_account_literal_value(
 #[cfg(feature = "app_api")]
 fn scoped_accounts_for_subject_sorted(
     world: &impl WorldReadOnly,
-    parsed_account: &ScopedAccountId,
-) -> Vec<ScopedAccountId> {
+    parsed_account: &AccountId,
+) -> Vec<AccountId> {
     let subject = parsed_account.subject_id();
-    let mut accounts: Vec<ScopedAccountId> = world
+    let mut accounts: Vec<AccountId> = world
         .accounts_for_subject_iter(&subject)
         .map(|entry| entry.id().clone())
         .collect();
     if accounts.is_empty() {
         accounts.push(parsed_account.clone());
     }
-    accounts.sort_by(|left, right| {
-        left.domain()
-            .cmp(right.domain())
-            .then_with(|| left.controller().cmp(right.controller()))
-    });
+    accounts.sort_by(|left, right| left.controller().cmp(right.controller()));
     accounts.dedup();
     accounts
 }
@@ -14508,12 +14511,10 @@ fn canonicalize_query_account_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<Option<String>> {
-    use iroha_data_model::{
-        ValidationFail, account::ScopedAccountId, query::error::QueryExecutionFail,
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     literal
-        .map(|raw| match ScopedAccountId::parse_encoded(raw) {
+        .map(|raw| match AccountId::parse_encoded(raw) {
             Ok(parsed) => {
                 record_account_literal_accept(telemetry, context, parsed.account_id());
                 Ok(parsed.canonical().to_string())
@@ -14537,9 +14538,7 @@ pub fn parse_account_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<iroha_data_model::account::ParsedAccountId, iroha_data_model::error::ParseError> {
-    use iroha_data_model::account::ScopedAccountId;
-
-    match ScopedAccountId::parse_encoded(literal) {
+    match AccountId::parse_encoded(literal) {
         Ok(parsed) => {
             record_account_literal_accept(telemetry, context, parsed.account_id());
             Ok(parsed)
@@ -14555,7 +14554,7 @@ pub fn parse_account_literal(
 fn record_account_literal_accept(
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    _account_id: &ScopedAccountId,
+    _account_id: &AccountId,
 ) {
     telemetry.with_metrics(|metrics| {
         metrics.inc_torii_address_domain(context, "default");
@@ -15969,10 +15968,9 @@ mod tx_query_filter_tests {
         GenericHashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]))
     }
 
-    fn account_with_key() -> (dm::ScopedAccountId, KeyPair) {
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
         let kp = KeyPair::random();
-        let account = dm::ScopedAccountId::new(domain, kp.public_key().clone());
+        let account = dm::AccountId::new(kp.public_key().clone());
         (account, kp)
     }
 
@@ -15981,7 +15979,7 @@ mod tx_query_filter_tests {
     }
 
     fn build_external_tx(
-        authority: &dm::ScopedAccountId,
+        authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -16024,7 +16022,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx(
-        authority: &dm::ScopedAccountId,
+        authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -16041,7 +16039,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx_with_metadata(
-        authority: &dm::ScopedAccountId,
+        authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
@@ -16059,7 +16057,7 @@ mod tx_query_filter_tests {
     }
 
     fn make_external_tx_with_instructions(
-        authority: &dm::ScopedAccountId,
+        authority: &dm::AccountId,
         keypair: &KeyPair,
         created_ms: u64,
         instructions: Vec<dm::InstructionBox>,
@@ -16175,11 +16173,10 @@ mod tx_query_filter_tests {
 
     #[test]
     fn filter_authority_eq_matches() {
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
-        let a = dm::ScopedAccountId::new(domain.clone(), kp_a.public_key().clone());
-        let b = dm::ScopedAccountId::new(domain, kp_b.public_key().clone());
+        let a = dm::AccountId::new(kp_a.public_key().clone());
+        let b = dm::AccountId::new(kp_b.public_key().clone());
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -16195,11 +16192,10 @@ mod tx_query_filter_tests {
     fn tx_predicate_from_filter_applies_without_feature() {
         use iroha_data_model::query::dsl_fast::EvaluatePredicate;
 
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
-        let a = dm::ScopedAccountId::new(domain.clone(), kp_a.public_key().clone());
-        let b = dm::ScopedAccountId::new(domain, kp_b.public_key().clone());
+        let a = dm::AccountId::new(kp_a.public_key().clone());
+        let b = dm::AccountId::new(kp_b.public_key().clone());
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
         let tx_b = make_external_tx(&b, &kp_b, 1_710_000_000_000, None, false);
 
@@ -16266,8 +16262,7 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&expr, &tx));
 
         let other_kp = KeyPair::random();
-        let other_account =
-            dm::ScopedAccountId::new(asset_def.domain().clone(), other_kp.public_key().clone());
+        let other_account = dm::AccountId::new(other_kp.public_key().clone());
         let other_id = dm::AssetId::new(asset_def, other_account);
         let expr_miss = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
@@ -16434,9 +16429,8 @@ mod explorer_lookup_tests {
         ));
 
         let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
-        let domain: dm::DomainId = "wonderland".parse().expect("valid domain id");
         let authority_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = dm::ScopedAccountId::new(domain, authority_key.public_key().clone());
+        let authority = dm::AccountId::new(authority_key.public_key().clone());
         let mut hashes = Vec::new();
         let mut txs = Vec::new();
         for (index, instructions) in instruction_batches.into_iter().enumerate() {
@@ -16992,12 +16986,12 @@ mod tx_query_integration_smoke {
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         stx0.apply();
         let valid0 = unverified0
@@ -17009,10 +17003,10 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let asset_id = dm::AssetId::new(asset_def, actor_id.clone());
+        let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
 
-        let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone());
+        let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
         bldr_asset.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_asset = bldr_asset
             .with_instructions::<dm::InstructionBox>([mint.into()])
@@ -17020,7 +17014,7 @@ mod tx_query_integration_smoke {
         let entry_hash_asset = format!("{}", signed_asset.hash_as_entrypoint());
         let tx_asset = AcceptedTransaction::new_unchecked(Cow::Owned(signed_asset));
 
-        let mut bldr_log = dm::TransactionBuilder::new(chain_id, actor_id.clone());
+        let mut bldr_log = dm::TransactionBuilder::new(chain_id, actor_id.clone().into());
         bldr_log.set_creation_time(core::time::Duration::from_millis(1100));
         let signed_log = bldr_log
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -17094,13 +17088,13 @@ mod tx_query_integration_smoke {
         let kp_exec = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .ok();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.to_string();
         dm::Register::account(dm::Account::new(acc_a.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .ok();
         stx.apply();
         // Validate and persist a minimal block record to initialize transactions state
@@ -17119,14 +17113,14 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
         // tx_a: authority acc_a at t=1000ms
-        let mut bldr_a = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut bldr_a = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         bldr_a.set_creation_time(core::time::Duration::from_millis(1000));
         let tx_a = bldr_a
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx_a = AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
         // tx_b: authority acc_a at t=2000ms
-        let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         bldr_b.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = bldr_b
             .with_instructions::<dm::InstructionBox>([dm::Log::new(
@@ -17139,7 +17133,7 @@ mod tx_query_integration_smoke {
         let tx_b = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
 
         // tx_c: authority acc_a at t=2000ms (different entrypoint hash)
-        let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         bldr_c.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = bldr_c
             .with_instructions::<dm::InstructionBox>([dm::Log::new(
@@ -17282,15 +17276,15 @@ mod tx_query_integration_smoke {
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
         dm::Register::account(dm::Account::new(actor_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         stx0.apply();
         let valid0 = unverified0
@@ -17304,7 +17298,8 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let mut accepted = Vec::new();
         for i in 0..5u64 {
-            let mut builder = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone());
+            let mut builder =
+                dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
             builder.set_creation_time(core::time::Duration::from_millis(1_000 + i * 250));
             let signed = builder
                 .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -17389,16 +17384,16 @@ mod tx_query_integration_smoke {
         let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(dom_id.clone(), kp_seed.public_key().clone());
         dm::Register::domain(dm::Domain::new(dom_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         dm::Register::account(dm::Account::new(acc_a.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         dm::Register::account(dm::Account::new(acc_b.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .unwrap();
         stx0.apply();
         let valid0 = unverified0
@@ -17416,7 +17411,7 @@ mod tx_query_integration_smoke {
         };
 
         // tx1: t=1000, result_ok=true, capture entrypoint hash string
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -17424,7 +17419,7 @@ mod tx_query_integration_smoke {
         let entry_hash1_str = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
         // tx2: t=2000, result_ok=true
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -17528,8 +17523,7 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
-        let account = dm::ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+        let account = dm::AccountId::new(kp.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(chain_id.clone(), account.clone());
         builder.set_creation_time(core::time::Duration::from_millis(1000));
         let signed = builder
@@ -17605,9 +17599,8 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_a = dm::AccountId::new(kp_a.public_key().clone());
+        let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_b_str = format!("{}", acc_b);
 
         let (_max_clock_drift, _tx_limits) = {
@@ -17714,8 +17707,7 @@ mod tx_query_integration_smoke {
         // Build two transactions: A at 1500ms, A at 900ms
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
-        let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
+        let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_a_str = format!("{}", acc_a);
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -18681,10 +18673,10 @@ mod tx_query_integration_smoke {
             let mut stx0 = st_block0.transaction();
             let exec_id = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
             dm::Register::domain(dm::Domain::new(dom.clone()))
-                .execute(&exec_id, &mut stx0)
+                .execute(exec_id.account(), &mut stx0)
                 .ok();
             dm::Register::account(dm::Account::new(acc_b.clone()))
-                .execute(&exec_id, &mut stx0)
+                .execute(exec_id.account(), &mut stx0)
                 .ok();
             stx0.apply();
             let valid0 = unverified0
@@ -18701,14 +18693,16 @@ mod tx_query_integration_smoke {
         };
 
         // tx_success: authority == B, deterministic success
-        let mut success_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut success_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         success_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let signed_success = success_builder
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx_success = AcceptedTransaction::new_unchecked(Cow::Owned(signed_success));
         // tx_fail_c: failure due to missing account
-        let mut fail_c_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut fail_c_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         fail_c_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_c = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_c = fail_c_builder
@@ -18718,7 +18712,7 @@ mod tx_query_integration_smoke {
 
         // tx_fail_d: failure due to missing account (unregister non-existent)
         let mut unregister_missing_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_d = dm::Unregister::domain("void".parse::<dm::DomainId>().unwrap());
         let signed_d = unregister_missing_builder
@@ -18728,7 +18722,7 @@ mod tx_query_integration_smoke {
 
         // tx_fail_e: another failure case (duplicate domain register)
         let mut duplicate_domain_builder =
-            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         duplicate_domain_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_e = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_e = duplicate_domain_builder
@@ -18858,10 +18852,10 @@ mod tx_query_integration_smoke {
             let mut stx0 = st_block0.transaction();
             let exec_id = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
             dm::Register::domain(dm::Domain::new(dom.clone()))
-                .execute(&exec_id, &mut stx0)
+                .execute(exec_id.account(), &mut stx0)
                 .ok();
             dm::Register::account(dm::Account::new(acc_a.clone()))
-                .execute(&exec_id, &mut stx0)
+                .execute(exec_id.account(), &mut stx0)
                 .ok();
             stx0.apply();
             let valid0 = unverified0
@@ -18879,7 +18873,7 @@ mod tx_query_integration_smoke {
         };
 
         // A_true@1000
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -18887,7 +18881,7 @@ mod tx_query_integration_smoke {
         let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
         // A_false@2000 (fail)
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -18898,7 +18892,7 @@ mod tx_query_integration_smoke {
         let entry_hash_b = format!("{}", signed_b.hash_as_entrypoint());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
         // A_false@2000 (fail)
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone().into());
         b3.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -19061,15 +19055,15 @@ mod app_api_integration_tests {
 
     fn state_with_assets(
         domain_id: DomainId,
-        authority: ScopedAccountId,
-        accounts: Vec<ScopedAccountId>,
+        authority: AccountId,
+        accounts: Vec<AccountId>,
         asset_definitions: Vec<AssetDefinitionId>,
         assets: Vec<Asset>,
     ) -> Arc<State> {
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
         let accounts: Vec<Account> = accounts
             .into_iter()
-            .map(|id| Account::new(id).build(&authority))
+            .map(|id| Account::new(id.to_account_id(domain_id.clone())).build(&authority))
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
@@ -19149,9 +19143,8 @@ mod app_api_integration_tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
-        let dom: DomainId = "wonderland".parse().unwrap();
-        let acc_a = ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
+        let acc_a = AccountId::new(kp_a.public_key().clone());
+        let acc_b = AccountId::new(kp_b.public_key().clone());
         let account_literal = acc_b.to_string();
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -19550,9 +19543,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let domain_id = alice_id.domain().clone();
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
         let assets = vec![
@@ -19617,9 +19609,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let domain_id = alice_id.domain().clone();
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
         let assets = vec![
@@ -19735,12 +19726,14 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("alpha".parse().unwrap(), kp.public_key().clone());
-        let domain_alpha = Domain::new("alpha".parse().unwrap()).build(&alice_id);
-        let domain_omega = Domain::new("omega".parse().unwrap()).build(&alice_id);
-        let domain_gamma = Domain::new("gamma".parse().unwrap()).build(&alice_id);
-        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let alpha: DomainId = "alpha".parse().unwrap();
+        let omega: DomainId = "omega".parse().unwrap();
+        let gamma: DomainId = "gamma".parse().unwrap();
+        let domain_alpha = Domain::new(alpha.clone()).build(&alice_id);
+        let domain_omega = Domain::new(omega).build(&alice_id);
+        let domain_gamma = Domain::new(gamma).build(&alice_id);
+        let account = Account::new(alice_id.to_account_id(alpha)).build(&alice_id);
         let world = World::with(
             [domain_alpha, domain_omega, domain_gamma],
             [account],
@@ -19962,9 +19955,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let domain_id = alice_id.domain().clone();
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
         let assets = vec![
@@ -20023,9 +20015,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let domain_id = alice_id.domain().clone();
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
         let assets = vec![
@@ -20089,9 +20080,8 @@ mod app_api_integration_tests {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let domain_id = alice_id.domain().clone();
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let assets = vec![Asset::new(
             AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -20322,8 +20312,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
 
         let kp = KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let alice_id: AccountId = AccountId::new(kp.public_key().clone());
 
         let vk_hash = Hash::new(b"vk-set-hash");
         let transition_id = Hash::new(b"transition-window");
@@ -20346,8 +20335,8 @@ mod app_api_integration_tests {
             pending_transition: Some(pending_transition),
         };
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let domain = Domain::new(domain_id).build(&alice_id);
-        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let domain = Domain::new(domain_id.clone()).build(&alice_id);
+        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
         let asset_def = AssetDefinition::numeric("rose#wonderland".parse().unwrap())
             .confidential_policy(policy)
             .build(&alice_id);
@@ -20552,19 +20541,13 @@ mod app_api_integration_tests {
         }
     }
 
-    fn build_asset_holder_fixture_state() -> (
-        Arc<iroha_core::state::State>,
-        ScopedAccountId,
-        ScopedAccountId,
-    ) {
+    fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
-        let alice_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
-        let bob_id: ScopedAccountId =
-            ScopedAccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
+        let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
+        let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
 
-        let domain_id = alice_id.domain().clone();
+        let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let assets = vec![
             Asset::new(
@@ -20587,7 +20570,7 @@ mod app_api_integration_tests {
         (state, alice_id, bob_id)
     }
 
-    fn compressed_literal(account_id: &ScopedAccountId) -> String {
+    fn compressed_literal(account_id: &AccountId) -> String {
         let compressed = account_id
             .to_account_address()
             .and_then(|address| address.to_compressed_sora())
@@ -20624,14 +20607,12 @@ mod query_endpoint_tests {
             parameters::QueryParams,
         };
         let alice_keypair = KeyPair::random();
-        let alice_id: ScopedAccountId = ScopedAccountId::new(
-            "wonderland".parse().unwrap(),
-            alice_keypair.public_key().clone(),
-        );
+        let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().unwrap();
 
         // Build a small world with a single asset for Alice.
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
-        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let domain = Domain::new(domain_id.clone()).build(&alice_id);
+        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
@@ -20697,10 +20678,7 @@ mod query_endpoint_tests {
         };
 
         let alice_keypair = KeyPair::random();
-        let alice_id: ScopedAccountId = ScopedAccountId::new(
-            "wonderland".parse().unwrap(),
-            alice_keypair.public_key().clone(),
-        );
+        let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
 
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
@@ -20759,8 +20737,7 @@ mod query_endpoint_tests {
 
         let authority_key = KeyPair::random();
         let signer_key = KeyPair::random();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = ScopedAccountId::new(domain, authority_key.public_key().clone());
+        let authority = AccountId::new(authority_key.public_key().clone());
 
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
@@ -20870,11 +20847,10 @@ mod query_endpoint_tests {
         use iroha_data_model::isi;
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
 
-        let authority: dm::ScopedAccountId = dm::ScopedAccountId::parse_encoded(
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-        )
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("valid account id");
+        let authority: dm::AccountId =
+            dm::AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("valid account id");
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
@@ -21719,12 +21695,9 @@ mod governance_stream_tests {
         isi::governance::CouncilDerivationKind,
     };
 
-    fn sample_account() -> ScopedAccountId {
+    fn sample_account() -> AccountId {
         let keypair = KeyPair::random();
-        ScopedAccountId::new(
-            "wonderland".parse().expect("domain id"),
-            keypair.public_key().clone(),
-        )
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn find_kind<'a>(payloads: &'a [Value], kind: &str) -> Option<&'a Value> {
@@ -22085,7 +22058,7 @@ fn convert_kaigi_event(
     };
     match data_event.as_ref() {
         DataEvent::Domain(DomainEvent::KaigiRelayRegistered(summary)) => {
-            let domain = summary.relay.domain.to_string();
+            let domain = summary.domain.to_string();
             let relay = summary.relay.to_string();
             let payload = json_object(vec![
                 json_entry("kind", KaigiRelayEventKind::Registration.as_str()),
@@ -22100,7 +22073,7 @@ fn convert_kaigi_event(
             Some((KaigiRelayEventKind::Registration, domain, relay, payload))
         }
         DataEvent::Domain(DomainEvent::KaigiRelayHealthUpdated(summary)) => {
-            let domain = summary.relay.domain.to_string();
+            let domain = summary.call.domain_id.to_string();
             let relay = summary.relay.to_string();
             let payload = json_object(vec![
                 json_entry("kind", KaigiRelayEventKind::Health.as_str()),
@@ -27706,7 +27679,7 @@ mod cursor_mode_tests {
 
     fn seed_stored_cursor(
         live_query_store: &iroha_core::query::store::LiveQueryStoreHandle,
-        authority: &ScopedAccountId,
+        authority: &AccountId,
         gas_budget: u64,
     ) -> iroha_data_model::query::parameters::ForwardCursor {
         let query_output = (0..3).map(|i| {
@@ -27736,7 +27709,7 @@ mod cursor_mode_tests {
     }
 
     fn signed_singular_find_active_abi(
-        authority: &ScopedAccountId,
+        authority: &AccountId,
         signer: &iroha_crypto::KeyPair,
     ) -> iroha_data_model::query::SignedQuery {
         use iroha_data_model::query::QueryRequest;
@@ -27757,10 +27730,8 @@ mod cursor_mode_tests {
         s.pipeline.query_stored_min_gas_units = 200;
         let state = Arc::new(s);
 
-        // Build a valid ScopedAccountId via generated key to avoid parser pitfalls
         let kp = iroha_crypto::KeyPair::random();
-        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -27796,8 +27767,7 @@ mod cursor_mode_tests {
         let state = Arc::new(s);
 
         let kp = iroha_crypto::KeyPair::random();
-        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         let opts = QueryOptions {
@@ -27830,8 +27800,7 @@ mod cursor_mode_tests {
         let state = Arc::new(s);
 
         let kp = iroha_crypto::KeyPair::random();
-        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+        let authority = AccountId::new(kp.public_key().clone());
         let cursor = seed_stored_cursor(&state.query_handle, &authority, 250);
         let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
             .with_authority(authority)
@@ -27867,8 +27836,7 @@ mod cursor_mode_tests {
         let state = Arc::new(s);
 
         let kp = iroha_crypto::KeyPair::random();
-        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let authority = ScopedAccountId::new(domain, kp.public_key().clone());
+        let authority = AccountId::new(kp.public_key().clone());
         let signed = signed_singular_find_active_abi(&authority, &kp);
 
         // No override and no gas_units → should pass in ephemeral mode
@@ -28031,7 +27999,7 @@ pub struct OfflineAllowanceListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter allowances by controller account literal (IH58 (preferred)/sora (second-best)).
+    /// Filter allowances by controller account literal (canonical IH58 only).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -28082,11 +28050,11 @@ pub struct OfflineTransferListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter transfers by originating controller (IH58 (preferred)/sora (second-best) literals accepted).
+    /// Filter transfers by originating controller (canonical IH58 only).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (IH58 (preferred)/sora (second-best) literals accepted).
+    /// Filter transfers by receiver account literal (canonical IH58 only).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (IH58 (preferred)/sora (second-best) literals accepted).
+    /// Filter transfers by deposit account literal (canonical IH58 only).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -28146,13 +28114,13 @@ pub struct OfflineTransferProofRequest {
 )]
 pub struct OfflineWalletCertificateDraft {
     /// Account that owns the allowance.
-    pub controller: ScopedAccountId,
+    pub controller: AccountId,
     /// Deprecated operator account supplied by older clients.
     ///
-    /// Torii now derives the operator account from its configured operator key and
-    /// the controller domain, so this field is optional and ignored.
+    /// Torii now derives the operator account from its configured operator key,
+    /// so this field is optional and ignored.
     #[norito(default)]
-    pub operator: Option<ScopedAccountId>,
+    pub operator: Option<AccountId>,
     /// Commitment to the allowance this certificate governs.
     pub allowance: OfflineAllowanceCommitment,
     /// Spend public key baked into the wallet.
@@ -28183,7 +28151,7 @@ pub struct OfflineWalletCertificateDraft {
 impl OfflineWalletCertificateDraft {
     fn into_certificate(
         self,
-        operator: ScopedAccountId,
+        operator: AccountId,
         operator_signature: Signature,
     ) -> OfflineWalletCertificate {
         OfflineWalletCertificate {
@@ -28261,7 +28229,7 @@ pub struct OfflineBuildClaimIssueResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueRequest {
     /// Account authorizing the issuance transaction.
-    pub authority: ScopedAccountId,
+    pub authority: AccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Certificate describing the allowance commitment and policy.
@@ -28281,7 +28249,7 @@ pub struct OfflineAllowanceIssueResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeRequest {
     /// Account authorizing the revocation transaction.
-    pub authority: ScopedAccountId,
+    pub authority: AccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Certificate identifier to revoke (hex, case-insensitive).
@@ -28310,7 +28278,7 @@ pub struct OfflineCertificateRevokeResponse {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRenewRequest {
     /// Account authorizing the renewal transaction.
-    pub authority: ScopedAccountId,
+    pub authority: AccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// New certificate describing the renewed allowance.
@@ -28357,7 +28325,7 @@ pub struct OfflineSettlementBuildClaimOverride {
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
     /// Account authorizing the settlement transaction.
-    pub authority: ScopedAccountId,
+    pub authority: AccountId,
     /// Signing key exposed for API transport.
     pub private_key: ExposedPrivateKey,
     /// Prepared offline-to-online transfer bundle.
@@ -28990,14 +28958,14 @@ fn tx_projections_to_json(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
-    use iroha_data_model::account::ScopedAccountId;
+    use iroha_data_model::account::AccountId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
 
     #[test]
     fn projections_emit_compressed_authority_when_requested() {
-        let account: ScopedAccountId = ALICE_ID.clone();
+        let account: AccountId = ALICE_ID.clone();
         let compressed = account
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
@@ -29019,7 +28987,7 @@ mod tx_projection_display_tests {
 
     #[test]
     fn projections_preserve_ih58_literals_by_default() {
-        let account: ScopedAccountId = BOB_ID.clone();
+        let account: AccountId = BOB_ID.clone();
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: None,
@@ -29244,8 +29212,8 @@ pub async fn handle_v1_account_permissions_with_policy(
     let world = state.world_view();
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &account);
     let mut permissions = BTreeSet::new();
-    for scoped_account in &scoped_accounts {
-        match world.account_permissions_iter(scoped_account) {
+    for account_id in &scoped_accounts {
+        match world.account_permissions_iter(account_id) {
             Ok(iter) => permissions.extend(iter.cloned()),
             Err(FindError::Account(_)) => {}
             Err(err) => {
@@ -29357,8 +29325,8 @@ pub async fn handle_v1_account_assets_with_policy(
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
 
     let mut projected_assets = Vec::new();
-    for scoped_account in &scoped_accounts {
-        for asset in world.assets_in_account_iter(scoped_account) {
+    for account_id in &scoped_accounts {
+        for asset in world.assets_in_account_iter(account_id) {
             if let Some(expected) = asset_filter.as_ref()
                 && asset.id() != expected
             {
@@ -29553,8 +29521,8 @@ pub async fn handle_v1_repo_agreements_query(
 struct RepoTestFixture {
     state: Arc<CoreState>,
     agreements: Vec<(String, u64)>,
-    initiator_id: ScopedAccountId,
-    counterparty_id: ScopedAccountId,
+    initiator_id: AccountId,
+    counterparty_id: AccountId,
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -29579,14 +29547,8 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
 
     let initiator_keys = KeyPair::random();
     let counterparty_keys = KeyPair::random();
-    let initiator_id: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().unwrap(),
-        initiator_keys.public_key().clone(),
-    );
-    let counterparty_id: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().unwrap(),
-        counterparty_keys.public_key().clone(),
-    );
+    let initiator_id: AccountId = AccountId::new(initiator_keys.public_key().clone());
+    let counterparty_id: AccountId = AccountId::new(counterparty_keys.public_key().clone());
     let authority_id = initiator_id.clone();
     let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
     let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
@@ -29599,12 +29561,16 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::domain(Domain::new("wonderland".parse().unwrap()))
         .execute(&authority_id, &mut stx)
         .unwrap();
-    Register::account(Account::new(initiator_id.clone()))
-        .execute(&authority_id, &mut stx)
-        .unwrap();
-    Register::account(Account::new(counterparty_id.clone()))
-        .execute(&authority_id, &mut stx)
-        .unwrap();
+    Register::account(Account::new(
+        initiator_id.to_account_id("wonderland".parse().unwrap()),
+    ))
+    .execute(&authority_id, &mut stx)
+    .unwrap();
+    Register::account(Account::new(
+        counterparty_id.to_account_id("wonderland".parse().unwrap()),
+    ))
+    .execute(&authority_id, &mut stx)
+    .unwrap();
     Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone()))
         .execute(&authority_id, &mut stx)
         .unwrap();
@@ -29808,15 +29774,14 @@ async fn repo_agreements_list_respects_compressed_address_format() {
 
 #[cfg(all(test, feature = "app_api"))]
 #[tokio::test]
-async fn repo_agreements_list_filter_accepts_compressed_accounts() {
+async fn repo_agreements_list_filter_accepts_canonical_accounts() {
     use axum::body::to_bytes;
 
     let fixture = build_repo_state_for_tests();
-    let compressed_literal = crate::address_format::AddressFormatPreference::Compressed
-        .display_literal(&fixture.initiator_id);
+    let canonical_literal = fixture.initiator_id.to_string();
     let filter_expr = FilterExpr::Eq(
         FieldPath("initiator".to_owned()),
-        norito::json::Value::from(compressed_literal),
+        norito::json::Value::from(canonical_literal),
     );
     let filter_value = crate::filter::filter_expr_to_value(&filter_expr);
     let filter_json = norito::json::to_string(&filter_value).unwrap();
@@ -29838,21 +29803,20 @@ async fn repo_agreements_list_filter_accepts_compressed_accounts() {
     assert_eq!(
         payload["total"].as_u64().unwrap(),
         fixture.agreements.len() as u64,
-        "compressed initiator literal should match all agreements"
+        "canonical initiator literal should match all agreements"
     );
 }
 
 #[cfg(all(test, feature = "app_api"))]
 #[tokio::test]
-async fn repo_agreements_query_filter_accepts_compressed_accounts() {
+async fn repo_agreements_query_filter_accepts_canonical_accounts() {
     use axum::body::to_bytes;
 
     let fixture = build_repo_state_for_tests();
-    let compressed_literal = crate::address_format::AddressFormatPreference::Compressed
-        .display_literal(&fixture.counterparty_id);
+    let canonical_literal = fixture.counterparty_id.to_string();
     let filter_expr = FilterExpr::Eq(
         FieldPath("counterparty".to_owned()),
-        norito::json::Value::from(compressed_literal),
+        norito::json::Value::from(canonical_literal),
     );
     let envelope = crate::filter::QueryEnvelope {
         filter: Some(filter_expr),
@@ -29875,7 +29839,7 @@ async fn repo_agreements_query_filter_accepts_compressed_accounts() {
     assert_eq!(
         payload["total"].as_u64().unwrap(),
         fixture.agreements.len() as u64,
-        "compressed counterparty literal should match all agreements"
+        "canonical counterparty literal should match all agreements"
     );
 }
 
@@ -30872,11 +30836,7 @@ fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model:
             Entry::Vacant(slot) => {
                 slot.insert(account);
             }
-            Entry::Occupied(mut slot) => {
-                if account.id().domain() < slot.get().id().domain() {
-                    slot.insert(account);
-                }
-            }
+            Entry::Occupied(_) => {}
         }
     }
 
@@ -31004,7 +30964,7 @@ fn default_onboarding_domain() -> Option<DomainId> {
 #[cfg(feature = "app_api")]
 fn derive_onboarding_uaid(
     alias: &str,
-    account_id: &ScopedAccountId,
+    account_id: &AccountId,
     identity: Option<&Map>,
 ) -> UniversalAccountId {
     let mut seed = Map::new();
@@ -31053,7 +31013,7 @@ pub async fn handle_v1_accounts_onboard(
     }
     let account_literal = account_literal.trim();
 
-    let mut account_id: ScopedAccountId = ScopedAccountId::parse_encoded(account_literal)
+    let account_id = AccountId::parse_encoded(account_literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| onboarding_invalid_request("invalid account id literal"))?;
 
@@ -31061,20 +31021,9 @@ pub async fn handle_v1_accounts_onboard(
         .allowed_domain
         .clone()
         .or_else(default_onboarding_domain);
-    if let Some(domain) = expected_domain {
-        if account_id.domain() != &domain {
-            account_id = if let Some(signatory) = account_id.try_signatory() {
-                ScopedAccountId::new(domain.clone(), signatory.clone())
-            } else if let Some(policy) = account_id.multisig_policy() {
-                ScopedAccountId::new_multisig(domain.clone(), policy.clone())
-            } else {
-                return Err(onboarding_invalid_request("unsupported account controller"));
-            };
-            if account_id.domain() != &domain {
-                return Err(onboarding_invalid_request("account domain is not allowed"));
-            }
-        }
-    }
+    let scoped_account_id = expected_domain
+        .map(|domain| account_id.to_account_id(domain))
+        .ok_or_else(|| onboarding_invalid_request("account domain is not configured"))?;
 
     if app.state.world_view().account(&account_id).is_ok() {
         return Err(onboarding_invalid_request("account already exists"));
@@ -31106,7 +31055,7 @@ pub async fn handle_v1_accounts_onboard(
     }
 
     let register = Register::account(
-        dm::Account::new(account_id.clone())
+        dm::Account::new(scoped_account_id)
             .with_metadata(metadata)
             .with_uaid(Some(uaid)),
     );
@@ -31413,7 +31362,7 @@ pub async fn handle_v1_accounts_portfolio(
 struct DataspaceSummaryAccumulator {
     dataspace_id: DataSpaceId,
     dataspace_alias: Option<String>,
-    accounts: BTreeSet<iroha_data_model::account::ScopedAccountId>,
+    accounts: BTreeSet<iroha_data_model::account::AccountId>,
     manifest: Option<SpaceDirectoryManifestRecord>,
     portfolio_accounts: u64,
     portfolio_positions: u64,
@@ -31893,7 +31842,7 @@ fn portfolio_asset_id_literal(asset_id: &iroha_data_model::asset::AssetId) -> St
 /// Request payload for submitting a signed space directory manifest through Torii.
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Exposed private key used to sign/authenticate the manifest payload.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Manifest describing the permissions for the space directory assets.
@@ -31914,7 +31863,7 @@ pub struct SpaceDirectoryManifestPublishDto {
 /// Request payload for revoking a manifest from the space directory.
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
-    pub authority: iroha_data_model::account::ScopedAccountId,
+    pub authority: iroha_data_model::account::AccountId,
     /// Private key presented to authenticate the revocation request.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// UAID literal (`uaid:<hex>` or raw 64-hex digest).
@@ -32185,7 +32134,7 @@ pub async fn handle_post_space_directory_manifest_publish(
     }
 
     let isi = PublishSpaceDirectoryManifest { manifest };
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority)
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.into())
         .with_instructions([InstructionBox::from(isi)])
         .sign(&private_key.0);
 
@@ -32232,7 +32181,7 @@ pub async fn handle_post_space_directory_manifest_revoke(
         revoked_epoch,
         reason,
     };
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority)
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.into())
         .with_instructions([InstructionBox::from(isi)])
         .sign(&private_key.0);
 
@@ -32407,16 +32356,16 @@ mod accounts_query_tests {
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .unwrap();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .unwrap();
         for _ in 0..5 {
             let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
             let acct = dm::ScopedAccountId::new(domain_id.clone(), kp.public_key().clone());
             dm::Register::account(dm::Account::new(acct))
-                .execute(&exec_id, &mut stx)
+                .execute(exec_id.account(), &mut stx)
                 .unwrap();
         }
         stx.apply();
@@ -32456,7 +32405,7 @@ mod accounts_query_tests {
     }
 
     #[tokio::test]
-    async fn accounts_query_filter_rejects_alias_and_accepts_compressed_literals() {
+    async fn accounts_query_filter_accepts_canonical_and_rejects_alias_and_compressed_literals() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -32477,10 +32426,10 @@ mod accounts_query_tests {
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .expect("register domain");
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .expect("register executor account");
 
         let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -32492,7 +32441,7 @@ mod accounts_query_tests {
         );
         let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
         dm::Register::account(account)
-            .execute(&exec_id, &mut stx)
+            .execute(exec_id.account(), &mut stx)
             .expect("register labelled account");
 
         stx.apply();
@@ -32503,8 +32452,9 @@ mod accounts_query_tests {
         let committed = valid.clone().commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
-        let expected = account_id.to_string();
+        let expected = account_id.account().to_string();
         let compressed_literal = account_id
+            .account()
             .to_account_address()
             .expect("account address")
             .to_compressed_sora()
@@ -32537,11 +32487,11 @@ mod accounts_query_tests {
             "alias literal `{alias_literal}` must be rejected"
         );
 
-        let compressed_env = crate::filter::QueryEnvelope {
+        let canonical_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("id".to_string()),
-                Value::String(compressed_literal.clone()),
+                Value::String(expected.clone()),
             )),
             select: None,
             sort: Vec::new(),
@@ -32554,7 +32504,7 @@ mod accounts_query_tests {
         };
         let resp = handle_v1_accounts_query(
             state.clone(),
-            crate::utils::extractors::NoritoJson(compressed_env),
+            crate::utils::extractors::NoritoJson(canonical_env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
         .await
@@ -32563,7 +32513,7 @@ mod accounts_query_tests {
         assert_eq!(
             resp.status(),
             StatusCode::OK,
-            "compressed literal `{compressed_literal}` should be accepted"
+            "canonical literal `{expected}` should be accepted"
         );
         let body = resp
             .into_body()
@@ -32586,11 +32536,37 @@ mod accounts_query_tests {
             .collect();
         assert!(
             ids.iter().any(|id| id == &expected),
-            "compressed literal `{compressed_literal}` should resolve to `{expected}`, got {ids:?}"
+            "canonical literal `{expected}` should resolve to `{expected}`, got {ids:?}"
         );
         assert!(
             ids.iter().all(|id| !id.contains('@')),
             "response should expose canonical ids, got {ids:?}"
+        );
+
+        let compressed_env = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("id".to_string()),
+                Value::String(compressed_literal.clone()),
+            )),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+        let compressed_result = handle_v1_accounts_query(
+            state.clone(),
+            crate::utils::extractors::NoritoJson(compressed_env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await;
+        assert!(
+            compressed_result.is_err(),
+            "compressed literal `{compressed_literal}` must be rejected"
         );
     }
 }
@@ -32619,7 +32595,7 @@ pub async fn handle_v1_explorer_accounts(
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<ScopedAccountId>,
+    owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let aggregates = crate::explorer::ExplorerAggregates::build(&world);
@@ -32638,7 +32614,7 @@ pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
     domain: Option<DomainId>,
-    owned_by: Option<ScopedAccountId>,
+    owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let governance = state.governance_snapshot();
@@ -32696,7 +32672,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<ScopedAccountId>,
+    owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
     asset_id: Option<AssetId>,
 ) -> Result<AxResponse, Error> {
@@ -32716,7 +32692,7 @@ pub async fn handle_v1_explorer_assets(
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    owned_by: Option<ScopedAccountId>,
+    owned_by: Option<AccountId>,
     domain: Option<DomainId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
@@ -32817,7 +32793,7 @@ pub fn parse_transaction_status_filter(
 
 #[cfg(feature = "app_api")]
 struct ExplorerTransactionFilters {
-    authority: Option<ScopedAccountId>,
+    authority: Option<AccountId>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
@@ -32860,8 +32836,8 @@ impl ExplorerTransactionFilters {
 
 #[cfg(feature = "app_api")]
 struct ExplorerInstructionFilters {
-    account: Option<ScopedAccountId>,
-    authority: Option<ScopedAccountId>,
+    account: Option<AccountId>,
+    authority: Option<AccountId>,
     transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
@@ -33020,7 +32996,7 @@ pub async fn handle_v1_explorer_transactions(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    authority: Option<ScopedAccountId>,
+    authority: Option<AccountId>,
     block: Option<u64>,
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
@@ -33078,7 +33054,7 @@ pub async fn handle_v1_explorer_transactions_latest(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     pagination: crate::explorer::ExplorerPaginationQuery,
-    authority: Option<ScopedAccountId>,
+    authority: Option<AccountId>,
     block: Option<u64>,
     status: Option<ExplorerTransactionStatusFilter>,
     asset_id: Option<iroha_data_model::asset::AssetId>,
@@ -33132,8 +33108,8 @@ pub async fn handle_v1_explorer_transactions_latest(
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 pub struct ExplorerInstructionQuery {
-    pub account: Option<ScopedAccountId>,
-    pub authority: Option<ScopedAccountId>,
+    pub account: Option<AccountId>,
+    pub authority: Option<AccountId>,
     pub transaction_hash: Option<HashOf<TransactionEntrypoint>>,
     pub status: Option<ExplorerTransactionStatusFilter>,
     pub block: Option<u64>,
@@ -33940,7 +33916,7 @@ fn find_instruction_detail_by_scan(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
-    account_id: ScopedAccountId,
+    account_id: AccountId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     let aggregates = crate::explorer::ExplorerAggregates::build(&world);
@@ -33959,7 +33935,7 @@ pub async fn handle_v1_explorer_account_detail(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
-    account_id: ScopedAccountId,
+    account_id: AccountId,
     telemetry: MaybeTelemetry,
     address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
@@ -34060,7 +34036,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let mut holders: Vec<(ScopedAccountId, Numeric)> = Vec::new();
+    let mut holders: Vec<(AccountId, Numeric)> = Vec::new();
     let mut total_supply = Numeric::zero();
 
     for asset in view.world().assets_iter() {
@@ -34346,7 +34322,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     use std::collections::BTreeSet;
 
     use iroha_data_model::{
-        account::ScopedAccountId,
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
     };
@@ -34378,8 +34353,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         window_ms: u64,
         start_ms: u64,
         transfers: u64,
-        senders: BTreeSet<ScopedAccountId>,
-        receivers: BTreeSet<ScopedAccountId>,
+        senders: BTreeSet<AccountId>,
+        receivers: BTreeSet<AccountId>,
         amount: Numeric,
     }
 
@@ -34725,36 +34700,39 @@ mod explorer_asset_definition_econometrics_tests {
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(alice_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(carol_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
 
         // Ensure balances exist so transfers/burn would be valid if executed.
         dm::Mint::asset_numeric(
             1_000_u32,
-            dm::AssetId::new(def_id.clone(), alice_id.clone()),
+            dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
-        .execute(&exec_id, &mut stx0)
+        .execute(exec_id.account(), &mut stx0)
         .ok();
         // Avoid depending on intra-block transaction ordering: ensure burn is valid even if it
         // executes before the transfers in the canonicalized payload order.
-        dm::Mint::asset_numeric(10_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
-            .ok();
+        dm::Mint::asset_numeric(
+            10_u32,
+            dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         stx0.apply();
         let valid0 = unverified0
@@ -34772,12 +34750,12 @@ mod explorer_asset_definition_econometrics_tests {
             .unwrap_or(u64::MAX);
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let asset_alice = dm::AssetId::new(def_id.clone(), alice_id.clone());
-        let asset_bob = dm::AssetId::new(def_id.clone(), bob_id.clone());
+        let asset_alice = dm::AssetId::new(def_id.clone(), alice_id.clone().into());
+        let asset_bob = dm::AssetId::new(def_id.clone(), bob_id.clone().into());
 
         // Issuance within 1h/24h/7d: mint 100 to Alice.
         let mint_ms = now_ms.saturating_sub(50 * 60 * 1000);
-        let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone());
+        let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone().into());
         txb_mint.set_creation_time(core::time::Duration::from_millis(mint_ms));
         let signed_mint = txb_mint
             .with_instructions::<dm::InstructionBox>([dm::Mint::asset_numeric(
@@ -34790,13 +34768,14 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Velocity: one transfer 2h ago (outside 1h, inside 24h/7d).
         let transfer_ms = now_ms.saturating_sub(2 * 60 * 60 * 1000);
-        let mut txb_transfer = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone());
+        let mut txb_transfer =
+            dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
         txb_transfer.set_creation_time(core::time::Duration::from_millis(transfer_ms));
         let signed_transfer = txb_transfer
             .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
                 asset_alice.clone(),
                 7_u32,
-                bob_id.clone(),
+                bob_id.clone().into(),
             )
             .into()])
             .sign(kp_alice.private_key());
@@ -34805,19 +34784,19 @@ mod explorer_asset_definition_econometrics_tests {
         // Velocity: batch transfer 30m ago (inside 1h/24h/7d), two entries.
         let batch_ms = now_ms.saturating_sub(30 * 60 * 1000);
         let entry_a = dm::TransferAssetBatchEntry::new(
-            alice_id.clone(),
-            bob_id.clone(),
+            alice_id.clone().into(),
+            bob_id.clone().into(),
             def_id.clone(),
             1_u32,
         );
         let entry_b = dm::TransferAssetBatchEntry::new(
-            alice_id.clone(),
-            carol_id.clone(),
+            alice_id.clone().into(),
+            carol_id.clone().into(),
             def_id.clone(),
             2_u32,
         );
         let batch = dm::TransferAssetBatch::new(vec![entry_a, entry_b]);
-        let mut txb_batch = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone());
+        let mut txb_batch = dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
         txb_batch.set_creation_time(core::time::Duration::from_millis(batch_ms));
         let signed_batch = txb_batch
             .with_instructions::<dm::InstructionBox>([batch.into()])
@@ -34826,7 +34805,7 @@ mod explorer_asset_definition_econometrics_tests {
 
         // Issuance within 30d series but outside 7d: burn 5 from Bob.
         let burn_ms = now_ms.saturating_sub(10 * 24 * 60 * 60 * 1000);
-        let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone());
+        let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone().into());
         txb_burn.set_creation_time(core::time::Duration::from_millis(burn_ms));
         let signed_burn = txb_burn
             .with_instructions::<dm::InstructionBox>([dm::Burn::asset_numeric(
@@ -35023,27 +35002,33 @@ mod explorer_asset_definition_snapshot_tests {
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(alice_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
 
-        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), alice_id.clone()))
-            .execute(&exec_id, &mut stx0)
-            .ok();
-        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
-            .ok();
+        dm::Mint::asset_numeric(
+            100_u32,
+            dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Mint::asset_numeric(
+            100_u32,
+            dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         stx0.apply();
         let valid0 = unverified0
@@ -35182,27 +35167,33 @@ mod explorer_asset_definition_snapshot_tests {
         let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(alice_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::account(dm::Account::new(bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(&exec_id, &mut stx0)
+            .execute(exec_id.account(), &mut stx0)
             .ok();
 
-        dm::Mint::asset_numeric(1_u32, dm::AssetId::new(def_id.clone(), alice_id.clone()))
-            .execute(&exec_id, &mut stx0)
-            .ok();
-        dm::Mint::asset_numeric(100_u32, dm::AssetId::new(def_id.clone(), bob_id.clone()))
-            .execute(&exec_id, &mut stx0)
-            .ok();
+        dm::Mint::asset_numeric(
+            1_u32,
+            dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Mint::asset_numeric(
+            100_u32,
+            dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         stx0.apply();
         let valid0 = unverified0
@@ -36364,7 +36355,7 @@ fn current_unix_timestamp_ms() -> u64 {
 #[derive(Clone)]
 struct OfflineAllowanceListItem {
     certificate_id_hex: String,
-    controller: ScopedAccountId,
+    controller: AccountId,
     asset_id: String,
     registered_at_ms: u64,
     expires_at_ms: u64,
@@ -36593,7 +36584,7 @@ fn transfer_hex_field(field: &str) -> bool {
 #[derive(Clone)]
 struct OfflineVerdictRevocationListItem {
     verdict_id_hex: String,
-    issuer: ScopedAccountId,
+    issuer: AccountId,
     revoked_at_ms: u64,
     reason: OfflineVerdictRevocationReason,
     record: OfflineVerdictRevocation,
@@ -36602,7 +36593,7 @@ struct OfflineVerdictRevocationListItem {
 #[cfg(feature = "app_api")]
 struct OfflineCounterSummaryListItem {
     certificate_id_hex: String,
-    controller: ScopedAccountId,
+    controller: AccountId,
     apple_key_counters: BTreeMap<String, u64>,
     android_series_counters: BTreeMap<String, u64>,
     summary_hash_hex: String,
@@ -37747,9 +37738,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     #[cfg(test)]
-    use iroha_data_model::{
-        ValidationFail, account::ScopedAccountId, query::error::QueryExecutionFail,
-    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let canonical_validator = canonicalize_query_account_literal(
         "validator",
@@ -37759,7 +37748,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
     )?;
     let validator_filter = if let Some(canonical) = canonical_validator {
         Some(
-            ScopedAccountId::parse_encoded(&canonical)
+            AccountId::parse_encoded(&canonical)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| {
                     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -37809,7 +37798,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{
-        ValidationFail, account::ScopedAccountId, asset::AssetId, nexus::PublicLanePendingReward,
+        ValidationFail, asset::AssetId, nexus::PublicLanePendingReward,
         query::error::QueryExecutionFail,
     };
 
@@ -37824,7 +37813,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
             "missing account query parameter".to_owned(),
         )))
     })?;
-    let account_id: ScopedAccountId = ScopedAccountId::parse_encoded(&account_literal)
+    let account_id: AccountId = AccountId::parse_encoded(&account_literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -37878,14 +37867,14 @@ pub async fn handle_v1_nexus_public_lane_rewards(
 #[cfg(feature = "app_api")]
 fn collect_pending_public_lane_rewards<'a>(
     lane_id: LaneId,
-    account_id: &iroha_data_model::account::ScopedAccountId,
+    account_id: &iroha_data_model::account::AccountId,
     upto_epoch: u64,
     asset_filter: Option<&iroha_data_model::asset::AssetId>,
     reward_claims: impl Iterator<
         Item = (
             &'a (
                 LaneId,
-                iroha_data_model::account::ScopedAccountId,
+                iroha_data_model::account::AccountId,
                 iroha_data_model::asset::AssetId,
             ),
             &'a u64,
@@ -38118,7 +38107,7 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
     use iroha_data_model::{
-        account::ScopedAccountId,
+        account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         metadata::Metadata,
         nexus::{
@@ -38230,7 +38219,7 @@ mod public_lane_tests {
         };
 
         let rewards = vec![((lane_id, 1), record_a), ((lane_id, 2), record_b)];
-        let claims: Vec<((LaneId, ScopedAccountId, AssetId), u64)> = Vec::new();
+        let claims: Vec<((LaneId, AccountId, AssetId), u64)> = Vec::new();
 
         let filtered = collect_pending_public_lane_rewards(
             lane_id,
@@ -40874,15 +40863,7 @@ fn sign_offline_certificate(
     }
 
     let operator_key = issuer.operator_keypair.public_key().clone();
-    let operator = ScopedAccountId::new(draft.controller.domain().clone(), operator_key);
-    let lineage = parse_offline_draft_lineage(&draft.metadata)?;
-    if lineage.min_build_number == 0 {
-        return Err(conversion_error(format!(
-            "{OFFLINE_REJECTION_REASON_PREFIX}lineage_invalid:offline.build_claim.min_build_number must be greater than zero"
-        )));
-    }
-
-    // Placeholder signature; operator_signing_bytes ignores operator_signature.
+    let operator = AccountId::new(operator_key);
     let mut certificate = draft.into_certificate(operator, Signature::from_bytes(&[]));
     let payload = certificate
         .operator_signing_bytes()
@@ -41041,7 +41022,7 @@ pub async fn handle_post_v1_offline_allowances_issue(
         certificate: req.certificate,
     };
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -41082,7 +41063,7 @@ pub async fn handle_v1_offline_allowance_get(
 fn offline_allowance_controller_or_error(
     state: &CoreState,
     certificate_id: &iroha_crypto::Hash,
-) -> Result<iroha_data_model::account::ScopedAccountId> {
+) -> Result<AccountId> {
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
 
     let world = state.world_view();
@@ -41137,13 +41118,14 @@ pub async fn handle_post_v1_offline_allowances_renew(
 
     let old_certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
     let controller = offline_allowance_controller_or_error(&state, &old_certificate_id)?;
+    let authority: AccountId = req.authority.clone().into();
 
-    if controller != req.authority {
+    if controller != authority {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:only the allowance controller may renew"
         )));
     }
-    if req.certificate.controller != req.authority {
+    if req.certificate.controller != authority {
         return Err(conversion_error(format!(
             "{OFFLINE_REJECTION_REASON_PREFIX}unauthorized_controller:renewal certificate controller mismatch"
         )));
@@ -41153,7 +41135,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
     let isi = offline::RegisterOfflineAllowance {
         certificate: req.certificate,
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -41202,14 +41184,14 @@ pub async fn handle_post_v1_offline_certificates_revoke(
     };
     let revocation = OfflineVerdictRevocation {
         verdict_id,
-        issuer: req.authority.clone(),
+        issuer: req.authority.clone().into(),
         revoked_at_ms: 0,
         reason,
         note: req.note,
         metadata: req.metadata,
     };
     let isi = offline::RegisterOfflineVerdictRevocation { revocation };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -41262,7 +41244,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
         )));
     }
     let isi = offline::SubmitOfflineToOnlineTransfer { transfer };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority)
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.into())
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
     let transaction_hash_hex = tx.hash().to_string();
@@ -42179,7 +42161,7 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
 #[cfg(feature = "app_api")]
 fn build_billing_trigger(
     trigger_id: TriggerId,
-    authority: ScopedAccountId,
+    authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
 ) -> Trigger {
@@ -42209,7 +42191,7 @@ fn build_billing_trigger(
 }
 
 #[cfg(feature = "app_api")]
-fn build_usage_trigger(trigger_id: TriggerId, authority: ScopedAccountId) -> Trigger {
+fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
 
     let action = Action::new(
@@ -42259,7 +42241,7 @@ pub async fn handle_post_v1_subscription_plan(
         )),
     ];
 
-    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone())
+    let tx = TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
         .with_instructions(instructions)
         .sign(&private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -42296,7 +42278,7 @@ pub async fn handle_v1_subscription_plans(
 ) -> Result<impl IntoResponse> {
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            ScopedAccountId::parse_encoded(&raw)
+            AccountId::parse_encoded(&raw)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
@@ -42367,6 +42349,7 @@ pub async fn handle_post_v1_subscription_create(
         first_charge_ms,
         grant_usage_to_provider,
     } = req;
+    let authority: AccountId = authority.into();
 
     let (plan, charge_at_ms, period_start, period_end, billing_trigger_id, usage_trigger_id) = {
         let world = state.world_view();
@@ -42496,7 +42479,7 @@ pub async fn handle_v1_subscriptions(
 ) -> Result<impl IntoResponse> {
     let owned_by = match params.owned_by {
         Some(raw) if !raw.trim().is_empty() => Some(
-            ScopedAccountId::parse_encoded(&raw)
+            AccountId::parse_encoded(&raw)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
         ),
@@ -42504,7 +42487,7 @@ pub async fn handle_v1_subscriptions(
     };
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            ScopedAccountId::parse_encoded(&raw)
+            AccountId::parse_encoded(&raw)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
@@ -42635,6 +42618,7 @@ pub async fn handle_post_v1_subscription_pause(
         private_key,
         ..
     } = req;
+    let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
         let world = state.world_view();
@@ -42724,6 +42708,7 @@ pub async fn handle_post_v1_subscription_resume(
         charge_at_ms,
         ..
     } = req;
+    let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, plan, billing_trigger_exists) = {
         let world = state.world_view();
@@ -42827,6 +42812,7 @@ pub async fn handle_post_v1_subscription_cancel(
         cancel_mode,
         ..
     } = req;
+    let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
         let world = state.world_view();
@@ -42929,6 +42915,7 @@ pub async fn handle_post_v1_subscription_keep(
         private_key,
         ..
     } = req;
+    let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner) = {
         let world = state.world_view();
@@ -43012,6 +42999,7 @@ pub async fn handle_post_v1_subscription_charge_now(
         charge_at_ms,
         ..
     } = req;
+    let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
         let world = state.world_view();
@@ -43110,6 +43098,7 @@ pub async fn handle_post_v1_subscription_usage(
         delta,
         usage_trigger_id,
     } = req;
+    let authority: AccountId = authority.into();
 
     if delta < Numeric::zero() {
         return Err(conversion_error(
@@ -43401,7 +43390,7 @@ mod subscription_api_tests {
         (queue, chain_id, telemetry)
     }
 
-    fn sample_plan(provider: ScopedAccountId) -> SubscriptionPlan {
+    fn sample_plan(provider: AccountId) -> SubscriptionPlan {
         SubscriptionPlan {
             provider,
             billing: SubscriptionBilling {
@@ -43422,8 +43411,8 @@ mod subscription_api_tests {
 
     fn sample_subscription_state(
         plan_id: AssetDefinitionId,
-        provider: ScopedAccountId,
-        subscriber: ScopedAccountId,
+        provider: AccountId,
+        subscriber: AccountId,
         status: SubscriptionStatus,
         billing_trigger_id: TriggerId,
     ) -> SubscriptionState {
@@ -43457,16 +43446,18 @@ mod subscription_api_tests {
     }
 
     fn state_with_plans_and_subscriptions(
-        provider: ScopedAccountId,
-        subscriber: ScopedAccountId,
+        provider: AccountId,
+        subscriber: AccountId,
         plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
         subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
     ) -> Arc<CoreState> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let domain = Domain::new(domain_id).build(&provider);
+        let domain = Domain::new(domain_id.clone()).build(&provider);
+        let provider_account = provider.to_account_id(domain_id.clone());
+        let subscriber_account = subscriber.to_account_id(domain_id.clone());
         let accounts = vec![
-            Account::new(provider.clone()).build(&provider),
-            Account::new(subscriber.clone()).build(&provider),
+            Account::new(provider_account).build(&provider),
+            Account::new(subscriber_account).build(&subscriber),
         ];
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()
@@ -45086,8 +45077,8 @@ pub async fn handle_v1_account_assets_query_with_policy(
     let world = state.world_view();
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
     let mut projected_assets = Vec::new();
-    for scoped_account in &scoped_accounts {
-        for asset in world.assets_in_account_iter(scoped_account) {
+    for account_id in &scoped_accounts {
+        for asset in world.assets_in_account_iter(account_id) {
             projected_assets.push(AccountAssetListItem {
                 asset_id: asset.id().to_string(),
                 quantity: asset.value().clone().into_inner(),
@@ -45235,7 +45226,7 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetHolderListItem {
-    account_id: iroha_data_model::account::ScopedAccountId,
+    account_id: iroha_data_model::account::AccountId,
     canonical_id: String,
     asset_id: String,
     quantity: iroha_primitives::numeric::Numeric,
@@ -45244,7 +45235,7 @@ struct AssetHolderListItem {
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AssetHolderSortField {
-    ScopedAccountId,
+    AccountId,
     Quantity,
 }
 
@@ -45259,7 +45250,7 @@ fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetH
     let mut selectors = Vec::new();
     for sk in spec {
         let field = match sk.key.0.as_str() {
-            "account_id" => AssetHolderSortField::ScopedAccountId,
+            "account_id" => AssetHolderSortField::AccountId,
             "quantity" => AssetHolderSortField::Quantity,
             _ => continue,
         };
@@ -45271,7 +45262,7 @@ fn compile_asset_holder_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<AssetH
     if selectors.is_empty() {
         selectors.push(AssetHolderSortSelector {
             ascending: true,
-            field: AssetHolderSortField::ScopedAccountId,
+            field: AssetHolderSortField::AccountId,
         });
     }
     selectors
@@ -45285,7 +45276,7 @@ fn asset_holder_sort_key(
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
         match selector.field {
-            AssetHolderSortField::ScopedAccountId => {
+            AssetHolderSortField::AccountId => {
                 if selector.ascending {
                     components.push(SortKeyComponent::asc(&item.canonical_id));
                 } else {
@@ -45414,7 +45405,7 @@ pub async fn handle_v1_asset_holders(
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
     // Aggregate balances per account
-    let mut map: BTreeMap<ScopedAccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in assets {
         if let Some(expected) = asset_filter.as_ref()
             && asset.id().to_string() != *expected
@@ -45496,10 +45487,7 @@ pub async fn handle_v1_asset_holders_query(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::{
-        account::ScopedAccountId,
-        asset::{AssetId, id::AssetDefinitionId},
-    };
+    use iroha_data_model::asset::{AssetId, id::AssetDefinitionId};
 
     let def_id: AssetDefinitionId = definition_id
         .parse()
@@ -45508,7 +45496,7 @@ pub async fn handle_v1_asset_holders_query(
     let world = state.world_view();
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
-    let mut map: BTreeMap<ScopedAccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in assets {
         let acct = asset.id().account().clone();
         let entry = map

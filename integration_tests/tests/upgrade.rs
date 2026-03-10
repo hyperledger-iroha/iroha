@@ -31,7 +31,7 @@ fn executor_upgrade_should_work() -> Result<()> {
     let admin_public_key = ADMIN_PUBLIC_KEY_MULTIHASH
         .parse::<iroha::crypto::PublicKey>()
         .expect("admin public key should parse");
-    let admin_id = AccountId::new(admin_domain, admin_public_key);
+    let admin_id = AccountId::new(admin_public_key);
     let admin_private_key = ADMIN_PRIVATE_KEY_MULTIHASH
         .parse::<iroha::crypto::PrivateKey>()
         .unwrap();

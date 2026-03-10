@@ -30,11 +30,8 @@ fn encode_u64(value: u64) -> Vec<u8> {
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
-    AccountId::new(domain.clone(), keypair.public_key().clone())
-}
-
-fn governance_batch() -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    let _ = domain;
+    AccountId::new(PublicInputs::default());
     annotate_inputs(&mut batch, 7);
 
     batch.push(StateTransition::new(

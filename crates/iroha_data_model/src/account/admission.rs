@@ -1,13 +1,10 @@
-//! Domain-scoped account admission policy.
+//! Global account admission policy.
 //!
 //! Iroha accounts are explicit on-chain entities identified by canonical IH58 account IDs.
-//! This module defines a domain metadata policy that controls *implicit account creation on
-//! receipt* for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs)
-//! to a never-before-seen `AccountId` can auto-create the corresponding account object when the
-//! domain policy allows it.
-//!
-//! The policy is stored under a reserved domain metadata key as a JSON payload
-//! (see [`ACCOUNT_ADMISSION_POLICY_METADATA_KEY`]).
+//! This module defines a chain-level policy that controls *implicit account creation on receipt*
+//! for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs) to a
+//! never-before-seen `AccountId` can auto-create the corresponding account object when the
+//! global policy allows it.
 
 use std::collections::BTreeMap;
 
@@ -20,13 +17,17 @@ use crate::{
     prelude::{AccountId, AssetDefinitionId, RoleId},
 };
 
-/// Reserved domain metadata key holding a JSON-encoded [`AccountAdmissionPolicy`].
+/// Legacy domain metadata key previously used for account admission policy payloads.
+///
+/// Account admission is now configured globally via
+/// [`AccountAdmissionPolicy::PARAMETER_ID_STR`], and this key is retained only for compatibility
+/// with external tooling that may still reference the literal.
 pub const ACCOUNT_ADMISSION_POLICY_METADATA_KEY: &str = "iroha:account_admission_policy";
 
 /// Default cap for the number of implicit accounts that may be created in a single transaction.
 pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
 
-/// Domain admission mode for accounts.
+/// Admission mode for implicit account creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -34,9 +35,9 @@ pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
 )]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
 pub enum AccountAdmissionMode {
-    /// Only explicit `Register<Account>` may create accounts in this domain.
+    /// Only explicit `Register<Account>` may create accounts.
     ExplicitOnly,
-    /// Receipt-like operations may implicitly create destination accounts in this domain.
+    /// Receipt-like operations may implicitly create destination accounts.
     ImplicitReceive,
 }
 
@@ -69,14 +70,14 @@ pub struct ImplicitAccountCreationFee {
     pub destination: ImplicitAccountFeeDestination,
 }
 
-/// Domain-scoped policy controlling whether receipt operations may create accounts implicitly.
+/// Chain-level policy controlling whether receipt operations may create accounts implicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct AccountAdmissionPolicy {
-    /// Whether implicit account creation is enabled for this domain.
+    /// Whether implicit account creation is enabled.
     pub mode: AccountAdmissionMode,
     /// Optional per-transaction cap for implicit account creations.
     #[norito(default)]

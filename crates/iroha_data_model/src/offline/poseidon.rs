@@ -566,7 +566,7 @@ mod tests {
     fn sample_account() -> AccountId {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
-        AccountId::new(domain, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
@@ -577,8 +577,7 @@ mod tests {
     fn sample_certificate(owner: &AccountId, asset: &AssetId) -> OfflineWalletCertificate {
         let spend_key = KeyPair::from_seed(vec![0x02; 32], Algorithm::Ed25519);
         let operator = KeyPair::from_seed(vec![0x03; 32], Algorithm::Ed25519);
-        let operator_account =
-            AccountId::new(owner.domain().clone(), operator.public_key().clone());
+        let operator_account = AccountId::new(operator.public_key().clone());
         OfflineWalletCertificate {
             controller: owner.clone(),
             operator: operator_account,
@@ -634,8 +633,7 @@ mod tests {
     fn fixture_certificate(owner: &AccountId, asset: &AssetId) -> OfflineWalletCertificate {
         let spend_key = KeyPair::from_seed(vec![0x10; 32], Algorithm::Ed25519);
         let operator = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let operator_account =
-            AccountId::new(owner.domain().clone(), operator.public_key().clone());
+        let operator_account = AccountId::new(operator.public_key().clone());
         OfflineWalletCertificate {
             controller: owner.clone(),
             operator: operator_account,

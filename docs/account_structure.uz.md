@@ -184,15 +184,19 @@ Rust kodlovchisi bitta kalitli kontrollerlar uchun `0x02` ni yozadi (versiya 0, 
 norma v1, kengaytma bayrog'i tozalandi) va multisig kontrollerlari uchun `0x0A` (versiya 0,
 1-sinf, norma v1, kengaytma bayrog'i tozalangan).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -317,7 +321,7 @@ Amalga oshirishning asosiy tafsilotlari:
 - IME/NFKC konvertatsiyalari: yarim kenglikdagi Sora kanani dekodlashni buzmasdan toʻliq kenglikdagi shakllariga normallashtirish mumkin, lekin ASCII `sora` sentinel va IH58 raqamlar/harflar ASCII boʻlib qolishi KERAK. To'liq kenglikdagi yoki korpusli katlanmış qo'riqchilar yuzasi `ERR_MISSING_COMPRESSED_SENTINEL`, to'liq kenglikdagi ASCII foydali yuklari `ERR_INVALID_COMPRESSED_CHAR` ni oshiradi va nazorat summasining mos kelmasligi `ERR_CHECKSUM_MISMATCH` sifatida ko'tariladi. `crates/iroha_data_model/src/account/address.rs`-dagi mulk testlari ushbu yo'llarni qamrab oladi, shuning uchun SDK va hamyonlar deterministik nosozliklarga tayanishi mumkin.
 - Torii va `address@domain` (rejected legacy form) taxalluslarining SDK tahlili endi IH58 (afzal)/sora (ikkinchi-eng yaxshi) kiritishlar taxallusdan oldin muvaffaqiyatsizlikka uchraganida (masalan, domen tuzilmasi xatosi, shuning uchun tekshirish yig‘indisi noto‘g‘ri bo‘lishi mumkin), endi bir xil `ERR_*` kodlarini chiqaradi. nasriy satrlardan taxmin qilish.
 - 12 baytdan qisqaroq mahalliy selektorning foydali yuklari `ERR_LOCAL8_DEPRECATED` yuzasida eski Local‑8 dayjestlaridan qattiq kesishni saqlaydi.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Normativ ikkilik vektorlar
 

@@ -42,8 +42,7 @@ mod tests {
     impl StubExecutor {
         fn new() -> Self {
             let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let account_id =
-                AccountId::new("wonderland".parse().unwrap(), key_pair.public_key().clone());
+            let account_id = AccountId::new(key_pair.public_key().clone());
             let header = BlockHeader::new(
                 NonZeroU64::new(1).expect("height > 0"),
                 None,

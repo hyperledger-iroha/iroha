@@ -17,8 +17,9 @@ use iroha_data_model::{
 fn proof_event_includes_call_hash() {
     // Minimal world
     let (authority_id, kp) = iroha_test_samples::gen_account_in("zkd");
-    let domain: Domain = Domain::new("zkd".parse().unwrap()).build(&authority_id);
-    let acc = Account::new(authority_id.clone()).build(&authority_id);
+    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+    let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

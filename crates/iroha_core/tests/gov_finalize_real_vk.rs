@@ -39,8 +39,9 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);
     let state = State::new_for_testing(world, kura, query);
 

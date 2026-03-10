@@ -13,9 +13,9 @@ companion tooling. It provides:
 - A checksummed, human-facing **Iroha Base58 address (IH58)** produced by
   `AccountAddress::to_ih58` that binds a chain discriminant to the account
   controller and offers deterministic interop-friendly textual forms.
-- Domain selectors for implicit default domains and local digests, with a
-  reserved global-registry selector tag for future Nexus-backed routing (the
-  registry lookup is **not yet shipped**).
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
 ## Motivation
 
@@ -56,22 +56,22 @@ and a deterministic mapping from domain name to the authoritative chain.
 
 ```
 AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
     controller: AccountController // single PublicKey or multisig policy
 }
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-Display: canonical IH58 literal (no `@domain` suffix)
+Display / JSON text: canonical IH58 literal only
 Parse accepts:
-- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Canonical IH58 account literals only.
+- Runtime parsers reject compressed `sora...`, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as
+  `label@domain`.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
-
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
 ```
 
 `ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
@@ -119,11 +119,13 @@ pub struct Common {
 
 ### 2. Canonical address codecs
 
-The Rust data model exposes a single canonical payload representation
-(`AccountAddress`) that can be emitted as several human-facing formats. IH58 is
-the preferred account format for sharing and canonical output; the compressed
-`sora` form is a second-best, Sora-only option for UX where the kana alphabet
-adds value. Canonical hex remains a debugging aid.
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
+
+- `AccountId` text/JSON parsing is hard-cut to canonical IH58 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as IH58, as a Sora-only compressed helper view, or as canonical hex
+  for low-level debugging and address-envelope JSON.
 
 - **IH58 (Iroha Base58)** – a Base58 envelope that embeds the chain
   discriminant. Decoders validate the prefix before promoting the payload to
@@ -140,9 +142,10 @@ adds value. Canonical hex remains a debugging aid.
 - **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
   envelope.
 
-`AccountAddress::parse_encoded` accepts encoded account identifiers only: IH58 (preferred) and compressed (`sora`, second-best). It rejects canonical hex (`0x...`), bare hex, and any `@domain` suffix. Torii now calls `parse_encoded` for ISO 20022 supplementary
-addresses and stores the canonical hex form so metadata remains deterministic
-regardless of the original representation.
+`AccountAddress::parse_encoded` accepts IH58 and compressed (`sora`) forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical IH58 and reject compressed, canonical
+hex, `norito:`, alias, and `@domain` forms.
 
 #### 2.1 Header byte layout (ADDR-1a)
 
@@ -170,53 +173,27 @@ The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
 norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
 class 1, norm v1, extension flag cleared).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
-
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
-
-```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
-```
-
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
-
-**Legacy selector examples**
-
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
 #### 2.3 Controller payload encodings (ADDR-1a)
 
 The controller payload is a tagged union appended immediately after the header in
-canonical payloads (or after the legacy selector segment when decoding pre-cutover payloads):
+canonical payloads:
 
 | Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
 | `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
-| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | Supports up to 255 members (`CONTROLLER_MULTISIG_MEMBER_MAX`). Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
 Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
 hosts and SDKs can verify the controller deterministically. See
@@ -280,9 +257,11 @@ Key implementation details:
   being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
   removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
 - The binary controller payload (`ControllerPayload::Multisig`) encodes
-  `version:u8`, `threshold:u16`, `member_count:u8`, then each member’s
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
   `AccountAddress::canonical_bytes()` writes to IH58 (preferred)/sora (second-best) payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
 - Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
   `iroha-ms-policy` personalization string so governance manifests can bind to a
   deterministic policy ID that matches the controller bytes embedded in IH58.
@@ -298,41 +277,34 @@ Key implementation details:
 
 #### 2.4 Failure rules (ADDR-1a)
 
-- Payloads shorter than the required canonical header+controller size (or malformed legacy selector-bearing payloads) emit `AccountAddressError::InvalidLength` or `AccountAddressError::UnexpectedTrailingBytes`.
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
 - Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
-- Unknown legacy selector/controller tags raise `UnknownDomainTag` or `UnknownControllerTag`.
+- Unknown controller tags raise `UnknownControllerTag`.
 - Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
-- Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
 - IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `sora` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
-- Torii and SDK parsing of `address@domain` (rejected legacy form) aliases now emit the same `ERR_*` codes when IH58 (preferred)/sora (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
-- Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  compressed `sora...`, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical IH58 only.
 
 #### 2.5 Normative binary vectors
 
-- **Selector-free canonical payload (`default`, seed byte `0x00`)**  
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
   Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519), `0x20` key length, followed by the 32-byte key payload.
-- **Legacy local-domain digest payload (`treasury`, seed byte `0x01`, decode compatibility only)**  
-  Legacy canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Breakdown: `0x02` header, selector tag `0x01` plus digest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, followed by the single-key payload (`0x00` tag, `0x01` curve id, `0x20` length, 32-byte Ed25519 key).
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
 
-Unit tests (`account::address::tests::parse_encoded_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_encoded`, guaranteeing that tooling can parse both selector-free canonical payloads and legacy selector-bearing fixtures across hex, IH58 (preferred), and compressed (`sora`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
-
-| Domain      | Seed byte | Hex payload (selector-free canonical for `default`; legacy selector-bearing for non-default rows) | Compressed (`sora`) |
-|-------------|-----------|-------------------------------------------------------------------------------|------------|
-| default     | `0x00`    | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| wonderland  | `0x02`    | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-| iroha       | `0x03`    | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-| alpha       | `0x04`    | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-| omega       | `0x05`    | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-| governance  | `0x06`    | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-| validators  | `0x07`    | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-| explorer    | `0x08`    | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-| soranet     | `0x09`    | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-| kitsune     | `0x0A`    | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-| da          | `0x0B`    | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+IH58 outputs plus Sora-compressed helper views for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical IH58 is
+accepted.
 
 Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 
@@ -345,17 +317,16 @@ consistent textual forms for every canonical payload. Selected fixtures from
 `fixtures/account/address_vectors.json` (generated via
 `cargo xtask address-vectors`) are shown below for quick reference:
 
-| Account / legacy note | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal |
+| Account label / note | IH58 literal (prefix `0x02F1`) | Sora compressed (`sora`) literal |
 |--------------------|--------------------------------|-------------------------|
 | `default` account (selector-free canonical payload, seed `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | `treasury` account (selector-free canonical payload, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| Legacy registry-selector alias (`registry_id = 0x0000_002A`, decode-only compatibility) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
 responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
-flows can rely on them verbatim. Canonical IH58/compressed outputs are globally
-scoped and selector-free; optional `<address>@<domain>` (rejected legacy form) suffixes are legacy routing
-hints only and are not part of canonical output.
+flows can rely on them verbatim. Canonical IH58 is the only public `AccountId`
+text/JSON input form; the compressed strings shown here are helper outputs only
+and are not accepted by the `AccountId` parser.
 
 #### 2.6 Textual aliases for interoperability (planned)
 
@@ -391,31 +362,33 @@ hints only and are not part of canonical output.
 
 #### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` contains full IH58 (preferred) and compressed (`sora`, second-best)
-literals for every canonical payload. Highlights:
+`fixtures/account/address_vectors.json` contains full IH58 (preferred) and
+compressed (`sora`, second-best) helper literals for canonical payloads.
+Highlights:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
   IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, compressed (`sora`)
   `sorauﾛ1N…LJ5HSE`. Torii emits these exact strings from `AccountId`’s
   `Display` implementation (canonical IH58) and `AccountAddress::to_compressed_sora`.
-- **`addr-global-registry-002a` (legacy selector compatibility fixture).**  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`sora`)
-  `sorakX…CM6AEP`. Demonstrates decode compatibility for pre-cutover selector-bearing
-  payloads; newly encoded addresses do not emit selector bytes.
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
 - **Failure case (`ih58-prefix-mismatch`).**  
   Parsing an IH58 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
   expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  before domain routing is attempted. The `ih58-checksum-mismatch` fixture
-  exercises tampering detection over the Blake2b checksum.
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `sora...`, `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `ih58-checksum-mismatch` fixture exercises tampering detection over the Blake2b
+  checksum.
 
 #### 2.9 Compliance fixtures
 
 ADDR‑2 ships a replayable fixture bundle covering positive and negative
-scenarios across canonical hex, IH58 (preferred), compressed (`sora`, half-/full-width),
-selector-free canonical payloads, legacy selector decode-compatibility aliases, and multisignature controllers. The
-canonical JSON lives in `fixtures/account/address_vectors.json` and can be
-regenerated with:
+scenarios across canonical IH58, compressed helper output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
@@ -580,8 +553,8 @@ the change so the audit trail is reconstructable offline.
    `iroha tools address convert <address> --format json --expect-prefix 753`
    (or consume `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-   The CLI accepts IH58, `sora…`, and canonical `0x…` literals; append
-   `@<domain>` only when you need to preserve a label for manifests.
+  The CLI address tool accepts IH58, `sora…`, and canonical `0x…` literals;
+  runtime `AccountId` parsers continue to accept canonical IH58 only.
   The JSON summary reports the parsed format/domain kind plus canonical
   encodings (IH58, compressed, canonical hex) for each input.
   For newline-oriented exports use
@@ -596,7 +569,7 @@ the change so the audit trail is reconstructable offline.
    the manifest with `cargo xtask address-vectors` before requesting signatures.
 4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
    sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes IH58 (preferred)/sora (second-best) literals immediately after the bundle lands.
+   canonicalizes account filters and path literals from canonical IH58 input only.
 5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
    zero for 30 days; if regressions appear, republish the previous manifest
    only in the affected non-production environment until telemetry stabilises.
@@ -612,7 +585,7 @@ their change tickets.
   plus the resolved domain as a label fetched from the registry. Domains are
   clearly marked as descriptive metadata that may change, while IH58 is the
   stable address.
-- **Input canonicalization:** Torii and SDKs accept encoded account IDs only (IH58 preferred, `sora` compressed accepted) and reject `@domain` suffixes, alias forms, and canonical-hex account literals in runtime parser paths. There is no
+- **Input canonicalization:** Torii and SDKs accept canonical IH58 account IDs only and reject `@domain` suffixes, alias forms, compressed `sora` literals, and canonical-hex account literals in runtime parser paths. There is no
   strict-mode toggle; raw phone/email identifiers must be kept off-ledger
   via UAID/opaque mappings.
 - **Error prevention:** Wallets parse IH58 prefixes and enforce chain-discriminant
@@ -659,8 +632,7 @@ their change tickets.
   users that the compressed `sora…` form is Sora-only and susceptible to IME rewrites.
 - **Torii integration:** Cache Nexus manifests respecting TTL, emit
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
-  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
-  compressed accepted) with canonical IH58 output.
+  keep account-literal parsing canonical-IH58-only with canonical IH58 output.
 
 ### Torii response formats
 

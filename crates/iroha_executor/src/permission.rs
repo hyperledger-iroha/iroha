@@ -696,11 +696,9 @@ pub mod asset_definition {
     ///
     /// `authority` is owner of asset definition if:
     /// - `asset_definition.owned_by` is `authority`
-    /// - `asset_definition.domain_id` domain is owned by `authority`
     ///
     /// # Errors
     /// - if `FindAssetDefinitionById` fails
-    /// - if `is_domain_owner` fails
     pub fn is_asset_definition_owner(
         asset_definition_id: &AssetDefinitionId,
         authority: &AccountId,
@@ -720,15 +718,7 @@ pub mod asset_definition {
                 FindError::AssetDefinition(asset_definition_id.clone()),
             ))
         })?;
-        if asset_definition.owned_by() == authority {
-            Ok(true)
-        } else {
-            crate::permission::domain::is_domain_owner(
-                asset_definition_id.domain(),
-                authority,
-                host,
-            )
-        }
+        Ok(asset_definition.owned_by() == authority)
     }
 
     /// Pass condition that checks if `authority` is the owner of asset definition.
@@ -751,16 +741,23 @@ pub mod asset_definition {
     }
 
     impl ValidateGrantRevoke for CanRegisterAssetDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
+        fn validate_grant(
+            &self,
+            _authority: &AccountId,
+            _context: &Context,
+            _host: &Iroha,
+        ) -> Result {
+            // First-release hard-cut semantics no longer gate asset-definition registration
+            // by domain ownership; this permission remains a no-op compatibility token.
+            Ok(())
         }
         fn validate_revoke(
             &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
+            _authority: &AccountId,
+            _context: &Context,
+            _host: &Iroha,
         ) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
+            Ok(())
         }
     }
 
@@ -968,23 +965,14 @@ pub mod account {
 
     /// Check if `authority` is the owner of account.
     ///
-    /// `authority` is owner of account if:
-    /// - `account_id` is `authority`
-    /// - `account_id.domain_id` is owned by `authority`
-    ///
-    /// # Errors
-    ///
-    /// Fails if `is_domain_owner` fails
+    /// `authority` owns the account if it matches the account subject exactly.
     pub fn is_account_owner(
         account_id: &AccountId,
         authority: &AccountId,
         host: &Iroha,
     ) -> Result<bool> {
-        if account_id == authority {
-            Ok(true)
-        } else {
-            crate::permission::domain::is_domain_owner(account_id.domain(), authority, host)
-        }
+        let _ = host;
+        Ok(account_id == authority)
     }
 
     /// Pass condition that checks if `authority` is the owner of account.
@@ -1069,23 +1057,17 @@ pub mod trigger {
     };
 
     use super::*;
-    use crate::{
-        data_model::{
-            isi::error::InstructionExecutionError,
-            query::{error::FindError, trigger::FindTriggers},
-        },
-        permission::domain::is_domain_owner,
+    use crate::data_model::{
+        isi::error::InstructionExecutionError,
+        query::{error::FindError, trigger::FindTriggers},
     };
 
     /// Check if `authority` is the owner of trigger.
     ///
-    /// `authority` is owner of trigger if:
-    /// - `trigger.action.authority` is `authority`
-    /// - `trigger.action.authority.domain_id` is owned by `authority`
+    /// `authority` owns the trigger if it matches the trigger authority exactly.
     ///
     /// # Errors
     /// - `FindTrigger` fails
-    /// - `is_domain_owner` fails
     pub fn is_trigger_owner(
         trigger_id: &TriggerId,
         authority: &AccountId,
@@ -1093,8 +1075,7 @@ pub mod trigger {
     ) -> Result<bool> {
         let trigger = find_trigger(trigger_id, host)?;
 
-        Ok(trigger.action().authority() == authority
-            || is_domain_owner(trigger.action().authority().domain(), authority, host)?)
+        Ok(trigger.action().authority() == authority)
     }
     /// Returns the trigger.
     pub(crate) fn find_trigger(trigger_id: &TriggerId, host: &Iroha) -> Result<Trigger> {
@@ -1344,7 +1325,6 @@ pub mod domain {
         CanUnregisterDomain,
         CanModifyDomainMetadata,
         iroha_executor_data_model::permission::account::CanRegisterAccount,
-        iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition,
         CanRegisterNft,
     );
 }
@@ -1494,7 +1474,7 @@ mod tests {
             data_model::{
                 block::BlockHeader,
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, DomainId, RoleId},
+                prelude::{AccountId, RoleId},
             },
         },
     };
@@ -1515,12 +1495,11 @@ mod tests {
     }
 
     fn make_account_id() -> AccountId {
-        let domain: DomainId = "wonderland".parse().unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

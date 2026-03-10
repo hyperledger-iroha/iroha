@@ -1,8 +1,8 @@
 # MOCHI Quickstart
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+**MOCHI** is a local Hyperledger Iroha devnet app. This guide walks through installing the
+prerequisites, building the application, launching the egui frontend, and using the devnet
+quickstart, maintenance controls, and live activity surfaces for day-to-day development.
 
 ## Prerequisites
 
@@ -40,7 +40,7 @@ cargo xtask mochi-bundle
 
 The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
 
-## Launching the egui shell
+## Launching the devnet app
 
 Run the UI directly from cargo:
 
@@ -48,7 +48,8 @@ Run the UI directly from cargo:
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+By default MOCHI opens on the **Network** page with a single-peer preset in a temporary data
+directory:
 
 - Data root: `$TMPDIR/mochi`.
 - Torii base port: `8080`.
@@ -72,13 +73,27 @@ Environment variables mirror the same overrides when CLI flags are omitted: set 
 continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
 explicit `config/local.toml`.
 
+After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
+
+- Pick `Single Peer` or `Four Peer BFT`.
+- Adjust the workspace, chain ID, and base ports.
+- Use **Start devnet**, **Restart devnet with this setup**, **Apply without starting**, or
+  **Stop devnet**.
+- Use the **Connect your app** card to copy Torii/API endpoints and the bundled development
+  identities.
+- Open **Advanced settings** only when the quickstart fields are not enough.
+
 ## Settings & persistence
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+Open **Advanced settings** from the Network page or the top control bar when you need to adjust the
+full supervisor configuration:
 
 - **Data root** — base directory for peer configs, storage, logs, and snapshots.
 - **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- **Profile override / inline TOML** — advanced topology and config tuning.
+- **Nexus / DA** — lane, dataspace, and DA-specific configuration.
+- **Tooling / readiness** — auto-build and readiness-smoke behaviour.
+- **Logs / exports** — output and export directory controls.
 
 Advanced knobs such as the supervisor restart policy live in
 `config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
@@ -93,7 +108,7 @@ manual tweaks alongside MOCHI-managed values.
 
 ## Snapshots & wipe/re-genesis
 
-The **Maintenance** dialog exposes two safety operations:
+The **Maintenance** controls expose the reset flows you use when iterating on a local network:
 
 - **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
   `snapshots/<label>` under the active data root. Labels are sanitized automatically.
@@ -101,27 +116,40 @@ The **Maintenance** dialog exposes two safety operations:
   manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
   the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
   can replay evidence bundles without touching files manually.
+- **Reset lane** — clears a configured Nexus lane when lane management is enabled for the current
+  profile.
 - **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
   Kagami, and restarts peers when the wipe completes.
 
 Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
 `wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
 
-## Logs & streams
+## Activity, state, and transactions
 
-The dashboard exposes data/metrics at a glance:
+The **Activity** view exposes the live debugging surfaces:
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
+- **Logs** — tails `irohad` stdout/stderr/system lifecycle messages for the selected peer.
+- **Events** — shows managed event streams with filter and export controls.
+- **Blocks** — shows managed block streams with decoded summaries.
+- The activity toggles can auto-attach these surfaces to a running peer so you can start a devnet
+  and inspect it immediately instead of wiring streams by hand.
+
+The **Network** view continues to show the peer dashboard and readiness/health telemetry:
+
 - **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+- **Startup readiness** — after pressing **Start devnet**, MOCHI probes `/status` with bounded
+  backoff; the banner reports when each peer goes ready (with the observed queue depth) or surfaces
+  the Torii error if readiness times out.
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+The **State** and **Transactions** views keep the common dev workflow in one app:
+
+- **State** provides quick access to accounts, assets, peers, domains, and asset definitions without
+  leaving the UI. The Peers query mirrors `FindPeers`, which helps confirm the current validator set
+  before running integration tests.
+- **Transactions** prioritizes mint/burn/transfer and registration flows, while still exposing raw
+  Norito editing, multisig proposals, manifests, admission policy updates, and role changes.
+- Successful transaction submissions now jump into **Activity → Events** with the transaction hash
+  prefilled as a filter; failed submissions jump into **Activity → Logs** for the selected peer.
 
 Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
 dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved

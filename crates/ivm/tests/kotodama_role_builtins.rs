@@ -35,11 +35,8 @@ fn kotodama_create_and_grant_role_enables_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

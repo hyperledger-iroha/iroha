@@ -37,9 +37,7 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 ///
 ///     validate_grant_revoke!(<CanDoSomethingWithAsset>, (authority, instruction));
 ///
-///     let owner = AccountId::new(
-///         "wonderland".parse().unwrap(),
-///         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+///     let owner = AccountId::new(///         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 ///             .parse()
 ///             .unwrap(),
 ///     );

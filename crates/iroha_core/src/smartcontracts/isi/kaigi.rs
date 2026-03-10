@@ -51,7 +51,7 @@ impl Execute for CreateKaigi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let template = self.call;
-        if authority != template.host() {
+        if !same_account_subject(authority, template.host()) {
             return Err(unauthorized("only the host account may create a Kaigi"));
         }
 
@@ -107,7 +107,7 @@ impl Execute for JoinKaigi {
         let mut nullifier = nullifier;
         let mut roster_root = roster_root;
 
-        let allow_unassociated = authority == &participant;
+        let allow_unassociated = same_account_subject(authority, &participant);
         apply_with_record(
             state_transaction,
             &call_id,
@@ -194,7 +194,7 @@ impl Execute for EndKaigi {
             authority,
             false,
             move |_, record| {
-                if authority != &record.host {
+                if !same_account_subject(authority, &record.host) {
                     return Err(unauthorized("only the host may end a Kaigi"));
                 }
                 if record.status == KaigiStatus::Ended {
@@ -237,7 +237,7 @@ impl Execute for RecordKaigiUsage {
             authority,
             false,
             |stx, record| {
-                if authority != &record.host {
+                if !same_account_subject(authority, &record.host) {
                     return Err(unauthorized("only the host may record usage for a Kaigi"));
                 }
 
@@ -302,7 +302,7 @@ impl Execute for SetKaigiRelayManifest {
             authority,
             false,
             |stx, record| {
-                if authority != &record.host {
+                if !same_account_subject(authority, &record.host) {
                     return Err(unauthorized(
                         "only the host may update the Kaigi relay manifest",
                     ));
@@ -365,7 +365,7 @@ impl Execute for RegisterKaigiRelay {
     ) -> Result<(), Error> {
         let registration = self.relay;
 
-        if authority != &registration.relay_id {
+        if !same_account_subject(authority, &registration.relay_id) {
             return Err(unauthorized(
                 "only the relay account may register or update itself",
             ));
@@ -395,7 +395,7 @@ impl Execute for RegisterKaigiRelay {
             limits::DEFAULT_JSON_LIMIT,
         )?;
 
-        let domain_id = registration.relay_id.domain.clone();
+        let domain_id = relay_domain(state_transaction, &registration.relay_id)?;
         {
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             domain.metadata_mut().insert(key.clone(), value.clone());
@@ -404,17 +404,16 @@ impl Execute for RegisterKaigiRelay {
         state_transaction
             .world
             .emit_events(Some(DomainEvent::MetadataInserted(MetadataChanged {
-                target: domain_id,
+                target: domain_id.clone(),
                 key,
                 value: value.clone(),
             })));
 
-        emit_relay_registration_summary(state_transaction, &registration);
+        emit_relay_registration_summary(state_transaction, &domain_id, &registration);
         #[cfg(feature = "telemetry")]
-        state_transaction.telemetry.record_kaigi_relay_registration(
-            &registration.relay_id.domain,
-            registration.bandwidth_class,
-        );
+        state_transaction
+            .telemetry
+            .record_kaigi_relay_registration(&domain_id, registration.bandwidth_class);
         Ok(())
     }
 }
@@ -447,12 +446,15 @@ impl Execute for ReportKaigiRelayHealth {
             authority,
             false,
             |stx, record| {
-                if authority != &record.host {
+                if !same_account_subject(authority, &record.host) {
                     return Err(unauthorized("only the host may report Kaigi relay health"));
                 }
                 let manifest_contains_relay =
                     record.relay_manifest.as_ref().is_some_and(|manifest| {
-                        manifest.hops.iter().any(|hop| hop.relay_id == relay_id)
+                        manifest
+                            .hops
+                            .iter()
+                            .any(|hop| same_account_subject(&hop.relay_id, &relay_id))
                     });
                 if !manifest_contains_relay {
                     return Err(relay_error(
@@ -472,8 +474,10 @@ impl Execute for ReportKaigiRelayHealth {
                 store_relay_feedback(stx, &feedback)?;
                 emit_relay_health_summary(stx, &feedback);
                 #[cfg(feature = "telemetry")]
+                let relay_domain = relay_domain(stx, &relay_id)?;
+                #[cfg(feature = "telemetry")]
                 stx.telemetry
-                    .record_kaigi_relay_health(&relay_id.domain, &relay_id, status);
+                    .record_kaigi_relay_health(&relay_domain, &relay_id, status);
 
                 Ok(AccessGrant::Default)
             },
@@ -505,7 +509,8 @@ where
         .try_into_any_norito()
         .map_err(|err| Error::Conversion(err.to_string()))?;
 
-    let mut associated = authority == &record.host || record.has_participant(authority);
+    let mut associated =
+        same_account_subject(authority, &record.host) || record.has_participant(authority);
 
     let grant: AccessGrant = f(state_transaction, &mut record)?;
 
@@ -566,7 +571,7 @@ fn store_relay_feedback(
         limits::DEFAULT_JSON_LIMIT,
     )?;
 
-    let domain_id = feedback.relay_id.domain.clone();
+    let domain_id = relay_domain(state_transaction, &feedback.relay_id)?;
     {
         let domain = state_transaction.world.domain_mut(&domain_id)?;
         domain.metadata_mut().insert(key.clone(), value.clone());
@@ -599,6 +604,10 @@ fn privacy_error(message: impl Into<String>) -> Error {
 
 fn relay_error(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+}
+
+fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
+    left.subject_id() == right.subject_id()
 }
 
 fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
@@ -643,7 +652,7 @@ fn ensure_manifest_relays_registered(
         let key = kaigi_relay_metadata_key(&hop.relay_id).map_err(|err| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
         })?;
-        let domain_id = hop.relay_id.domain.clone();
+        let domain_id = relay_domain(state_transaction, &hop.relay_id)?;
         let domain = state_transaction.world.domain(&domain_id)?;
         let stored = domain.metadata().get(&key).cloned().ok_or_else(|| {
             relay_error("relay referenced in manifest is not registered in its domain")
@@ -671,7 +680,8 @@ fn ensure_relay_allowed_by_governance(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<(), Error> {
-    let allowlist = load_allowlist(state_transaction, &relay_id.domain)?;
+    let domain_id = relay_domain(state_transaction, relay_id)?;
+    let allowlist = load_allowlist(state_transaction, &domain_id)?;
     if let Some(allowlist) = allowlist
         && !allowlist.contains(relay_id)
     {
@@ -707,7 +717,8 @@ fn load_relay_feedback(
     let key = kaigi_relay_feedback_key(relay_id).map_err(|err| {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })?;
-    let domain = state_transaction.world.domain(&relay_id.domain)?;
+    let domain_id = relay_domain(state_transaction, relay_id)?;
+    let domain = state_transaction.world.domain(&domain_id)?;
     let Some(stored) = domain.metadata().get(&key) else {
         return Ok(None);
     };
@@ -740,16 +751,36 @@ fn emit_roster_summary(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord)
 
 fn emit_relay_registration_summary(
     stx: &mut StateTransaction<'_, '_>,
+    domain_id: &DomainId,
     registration: &KaigiRelayRegistration,
 ) {
     let fingerprint = Hash::new(&registration.hpke_public_key);
     let summary = KaigiRelayRegistrationSummary::new(
+        domain_id.clone(),
         registration.relay_id.clone(),
         registration.bandwidth_class,
         fingerprint,
     );
     stx.world
         .emit_events(Some(DomainEvent::KaigiRelayRegistered(summary)));
+}
+
+fn relay_domain(
+    state_transaction: &StateTransaction<'_, '_>,
+    relay_id: &AccountId,
+) -> Result<DomainId, Error> {
+    let linked_domains = state_transaction
+        .world
+        .domains_for_subject(&relay_id.subject_id());
+    match linked_domains.as_slice() {
+        [domain_id] => Ok(domain_id.clone()),
+        [] => Err(relay_error(
+            "relay account is not linked to any domain; explicit relay domain is required",
+        )),
+        _ => Err(relay_error(
+            "relay account is linked to multiple domains; explicit relay domain is required",
+        )),
+    }
 }
 
 fn emit_relay_manifest_summary(
@@ -816,10 +847,12 @@ fn process_join(
                 roster_root: roster_root.as_ref(),
                 proof,
             })?;
-            if authority != participant && authority != &record.host {
+            if !same_account_subject(authority, participant)
+                && !same_account_subject(authority, &record.host)
+            {
                 return Err(unauthorized("only the host may invite other accounts"));
             }
-            if record.host == *participant {
+            if same_account_subject(&record.host, participant) {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract("host is already part of the call".into()),
                 ));
@@ -841,7 +874,7 @@ fn process_join(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            if authority != participant {
+            if !same_account_subject(authority, participant) {
                 return Err(unauthorized(
                     "privacy mode joins must be submitted by the participant",
                 ));
@@ -915,12 +948,14 @@ fn process_leave(
                 roster_root: roster_root.as_ref(),
                 proof,
             })?;
-            if authority != participant && authority != &record.host {
+            if !same_account_subject(authority, participant)
+                && !same_account_subject(authority, &record.host)
+            {
                 return Err(unauthorized(
                     "only the host or participant may remove a participant",
                 ));
             }
-            if record.host == *participant {
+            if same_account_subject(&record.host, participant) {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "host cannot leave the call without ending it".into(),
@@ -934,7 +969,7 @@ fn process_leave(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            if authority != participant {
+            if !same_account_subject(authority, participant) {
                 return Err(unauthorized(
                     "privacy mode leaves must be submitted by the participant",
                 ));
@@ -1119,9 +1154,10 @@ mod tests {
     }
 
     fn sample_ids() -> (DomainId, AccountId, AccountId) {
+        let domain = DomainId::from_str("nexus").expect("domain id");
         let (host, _) = gen_account_in("nexus");
         let (participant, _) = gen_account_in("nexus");
-        (host.domain.clone(), host, participant)
+        (domain, host, participant)
     }
 
     fn new_record(mode: KaigiPrivacyMode) -> (KaigiRecord, AccountId, AccountId) {
@@ -1333,14 +1369,14 @@ mod tests {
 
     #[test]
     fn create_kaigi_emits_roster_summary_and_manifest() {
-        let (_domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(host.domain.clone(), Name::from_str("relayed").unwrap());
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("relayed").unwrap());
 
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1370,17 +1406,14 @@ mod tests {
 
     #[test]
     fn host_can_update_relay_manifest() {
-        let (_domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(
-            host.domain.clone(),
-            Name::from_str("manifest-update").unwrap(),
-        );
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("manifest-update").unwrap());
 
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
@@ -1394,15 +1427,17 @@ mod tests {
 
             let manifest = sample_manifest();
             for hop in &manifest.hops {
-                let relay_domain = hop.relay_id.domain.clone();
+                let relay_domain: DomainId = "relay".parse().expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new(hop.relay_id.clone()))
-                    .execute(&ALICE_ID, stx)
-                    .expect("register relay account");
+                Register::account(Account::new(
+                    hop.relay_id.clone().to_account_id(relay_domain.clone()),
+                ))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
@@ -1437,28 +1472,37 @@ mod tests {
                 .clone()
                 .try_into_any_norito()
                 .expect("deserialize metadata");
-            assert_eq!(record.relay_manifest.as_ref(), Some(&manifest));
+            let stored_manifest = record.relay_manifest.expect("stored relay manifest");
+            assert_eq!(stored_manifest.expiry_ms, manifest.expiry_ms);
+            assert_eq!(stored_manifest.hops.len(), manifest.hops.len());
+            for (stored_hop, expected_hop) in stored_manifest.hops.iter().zip(&manifest.hops) {
+                assert_eq!(
+                    stored_hop.relay_id.subject_id(),
+                    expected_hop.relay_id.subject_id()
+                );
+                assert_eq!(stored_hop.hpke_public_key, expected_hop.hpke_public_key);
+                assert_eq!(stored_hop.weight, expected_hop.weight);
+            }
         });
     }
 
     #[test]
     fn non_host_cannot_update_relay_manifest() {
-        let (_domain, host, participant) = sample_ids();
-        let call = KaigiId::new(
-            host.domain.clone(),
-            Name::from_str("manifest-authz").unwrap(),
-        );
+        let (domain, host, participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("manifest-authz").unwrap());
 
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(participant.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register participant");
+            Register::account(Account::new(
+                participant.clone().to_account_id(domain.clone()),
+            ))
+            .execute(&ALICE_ID, stx)
+            .expect("register participant");
             stx.world.take_external_events();
 
             CreateKaigi {
@@ -1492,10 +1536,10 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(relay_id.clone()))
+            Register::account(Account::new(relay_id.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
             stx.world.take_external_events();
@@ -1536,11 +1580,11 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             for relay in [&relay_a, &relay_b, &relay_c] {
-                Register::account(Account::new(relay.clone()))
+                Register::account(Account::new(relay.clone().to_account_id(domain.clone())))
                     .execute(&ALICE_ID, stx)
                     .expect("register relay account");
             }
@@ -1632,17 +1676,14 @@ mod tests {
 
     #[test]
     fn host_can_clear_relay_manifest() {
-        let (_domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(
-            host.domain.clone(),
-            Name::from_str("manifest-clear").unwrap(),
-        );
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("manifest-clear").unwrap());
 
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
@@ -1683,7 +1724,7 @@ mod tests {
     #[test]
     fn relay_registration_persists_metadata_and_emits_summary() {
         let (relay_id, _relay_account) = gen_account_in("relay");
-        let domain_id = relay_id.domain.clone();
+        let domain_id = DomainId::from_str("relay").expect("domain id");
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
             hpke_public_key: vec![0x10, 0x20, 0x30],
@@ -1694,9 +1735,11 @@ mod tests {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(relay_id.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register relay account");
+            Register::account(Account::new(
+                relay_id.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, stx)
+            .expect("register relay account");
             stx.world.take_external_events();
 
             RegisterKaigiRelay {
@@ -1708,7 +1751,7 @@ mod tests {
             let events = stx.world.take_external_events();
             let summary =
                 extract_registration_summary(&events).expect("relay registration summary event");
-            assert_eq!(summary.relay(), &relay_id);
+            assert_eq!(summary.relay().subject_id(), relay_id.subject_id());
             assert_eq!(*summary.bandwidth_class(), 5);
 
             let key = kaigi_relay_metadata_key(&relay_id).expect("metadata key");
@@ -1721,23 +1764,25 @@ mod tests {
             let decoded: KaigiRelayRegistration = stored
                 .try_into_any_norito()
                 .expect("decode relay registration");
-            assert_eq!(decoded, registration);
+            assert_eq!(
+                decoded.relay_id.subject_id(),
+                registration.relay_id.subject_id()
+            );
+            assert_eq!(decoded.hpke_public_key, registration.hpke_public_key);
+            assert_eq!(decoded.bandwidth_class, registration.bandwidth_class);
         });
     }
 
     #[test]
     fn manifest_requires_registered_relays() {
-        let (_domain, host, _participant) = sample_ids();
-        let call = KaigiId::new(
-            host.domain.clone(),
-            Name::from_str("manifest-validate").unwrap(),
-        );
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("manifest-validate").unwrap());
 
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1750,8 +1795,8 @@ mod tests {
             stx.world.take_external_events();
 
             let manifest = sample_manifest();
-            for hop in &manifest.hops {
-                let relay_domain = hop.relay_id.domain.clone();
+            for _hop in &manifest.hops {
+                let relay_domain: DomainId = "relay".parse().expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain))
                         .execute(&ALICE_ID, stx)
@@ -1772,15 +1817,17 @@ mod tests {
             }
 
             for hop in &manifest.hops {
-                let relay_domain = hop.relay_id.domain.clone();
+                let relay_domain: DomainId = "relay".parse().expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new(hop.relay_id.clone()))
-                    .execute(&ALICE_ID, stx)
-                    .expect("register relay account");
+                Register::account(Account::new(
+                    hop.relay_id.clone().to_account_id(relay_domain.clone()),
+                ))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
                 stx.world.take_external_events();
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
 
@@ -1817,11 +1864,12 @@ mod tests {
     fn transparent_join_updates_roster_summary() {
         let (mut record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
 
+        let domain = record.id.domain_id.clone();
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1881,16 +1929,19 @@ mod tests {
         let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
         let call_id = record.id.clone();
 
+        let domain = call_id.domain_id.clone();
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(participant.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register participant");
+            Register::account(Account::new(
+                participant.clone().to_account_id(domain.clone()),
+            ))
+            .execute(&ALICE_ID, stx)
+            .expect("register participant");
             stx.world.take_external_events();
 
             CreateKaigi {
@@ -1935,11 +1986,12 @@ mod tests {
     fn record_usage_updates_usage_summary() {
         let (record, host, _participant) = new_record(KaigiPrivacyMode::Transparent);
 
+        let domain = record.id.domain_id.clone();
         with_state_transaction(|stx| {
-            Register::domain(Domain::new(host.domain.clone()))
+            Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone()))
+            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();

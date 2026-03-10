@@ -1131,7 +1131,7 @@ mod tests {
         let pk_bytes = signer.verifying_key().to_bytes();
         let pk =
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
-        AccountId::new(domain.clone(), pk)
+        AccountId::new(pk)
     }
 
     #[test]

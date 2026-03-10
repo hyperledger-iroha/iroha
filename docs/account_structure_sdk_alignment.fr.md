@@ -14,15 +14,8 @@ Références clés :
 Actions :
 1. **Sortie canonique :** `AccountId::to_string()`/Display DOIT émettre uniquement IH58
    (sans suffixe `@domain`). Le hex canonique est réservé au débogage (`0x...`).
-2. **Entrées acceptées :** les parseurs DOIVENT accepter IH58 (préféré), `sora`
-   compressé et le hex canonique (uniquement `0x...` ; le hex nu est rejeté).
-   Les entrées PEUVENT porter un suffixe `@<domain>` pour des indices de routage ;
-   les alias `<label>@<domain>` (rejected legacy form) exigent un résolveur. 
-   (hex multihash) reste pris en charge.
-3. **Résolveurs :** le parsing IH58/sora sans domaine nécessite un résolveur de
-   sélection de domaine, sauf si le sélecteur est le défaut implicite (utiliser
-   l’étiquette de domaine par défaut configurée). Les littéraux UAID (`uaid:...`)
-   et opaque (`opaque:...`) nécessitent des résolveurs.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Checksum IH58 :** utiliser Blake2b‑512 sur `IH58PRE || prefix || payload`,
    prendre les 2 premiers octets. La base de l’alphabet compressé est **105**.
 5. **Garde des courbes :** les SDK sont Ed25519‑only par défaut. Fournir un opt‑in
