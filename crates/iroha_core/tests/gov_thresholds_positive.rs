@@ -13,6 +13,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
+    domain::DomainId,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -38,9 +39,12 @@ fn approves_when_ratio_and_turnout_met() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
-    let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    let alice_account: Account =
+        Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
+    let bob_account: Account =
+        Account::new(BOB_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
     let world = World::with([domain], [alice_account, bob_account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
 

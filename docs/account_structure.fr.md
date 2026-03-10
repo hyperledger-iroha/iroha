@@ -172,15 +172,19 @@ L'encodeur Rust écrit `0x02` pour les contrôleurs à touche unique (version 0,
 norme v1, indicateur d'extension effacé) et `0x0A` pour les contrôleurs multisig (version 0,
 classe 1, norme v1, drapeau d'extension effacé).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -307,7 +311,7 @@ Détails clés de la mise en œuvre :
 - Conversions IME/NFKC : les Sora kana demi-largeur peuvent être normalisés dans leur forme pleine largeur sans interrompre le décodage, mais la sentinelle ASCII `sora` et les chiffres/lettres IH58 DOIVENT rester ASCII. Les sentinelles pleine largeur ou pliées font surface `ERR_MISSING_COMPRESSED_SENTINEL`, les charges utiles ASCII pleine largeur augmentent `ERR_INVALID_COMPRESSED_CHAR` et les discordances de somme de contrôle apparaissent sous la forme `ERR_CHECKSUM_MISMATCH`. Les tests de propriété dans `crates/iroha_data_model/src/account/address.rs` couvrent ces chemins afin que les SDK et les portefeuilles puissent s'appuyer sur des échecs déterministes.
 - L'analyse Torii et SDK des alias `address@domain` (rejected legacy form) émettent désormais les mêmes codes `ERR_*` lorsque les entrées IH58 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
 - Les charges utiles du sélecteur local de moins de 12 octets apparaissent `ERR_LOCAL8_DEPRECATED`, préservant un basculement définitif à partir des anciens résumés Local‑8.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Vecteurs binaires normatifs
 

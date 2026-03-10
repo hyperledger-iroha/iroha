@@ -38,10 +38,8 @@ async fn gov_proposal_get_returns_record() {
     let id_hex = hex::encode(id_bytes);
     // Build a minimal proposer id
     let kp = iroha_crypto::KeyPair::random();
-    let proposer: iroha_data_model::account::AccountId = iroha_data_model::account::AccountId::of(
-        "wonderland".parse().unwrap(),
-        kp.public_key().clone(),
-    );
+    let proposer: iroha_data_model::account::AccountId =
+        iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer,
         kind: ProposalKind::DeployContract(DeployContractProposal {
@@ -174,13 +172,12 @@ async fn gov_council_current_uses_configured_fallback() {
         .expect("asset id");
 
     let mut wb = state.world.block();
-    let domain: DomainId = "wonderland".parse().expect("domain");
     let stake_def = state.gov.parliament_eligibility_asset_id.clone();
 
     let eligible_kp = KeyPair::random();
     let ineligible_kp = KeyPair::random();
-    let eligible_account = DMAccountId::of(domain.clone(), eligible_kp.public_key().clone());
-    let ineligible_account = DMAccountId::of(domain.clone(), ineligible_kp.public_key().clone());
+    let eligible_account = DMAccountId::of(eligible_kp.public_key().clone());
+    let ineligible_account = DMAccountId::of(ineligible_kp.public_key().clone());
 
     let mut peers: UniqueVec<_> = UniqueVec::new();
     let _ = peers.push(PeerId::from(eligible_kp.public_key().clone()));
@@ -225,10 +222,8 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     };
     // Locks: one Aye with amount=10000, duration=conviction_step_blocks (factor=2 before clamp).
     let kp = iroha_crypto::KeyPair::random();
-    let owner: iroha_data_model::account::AccountId = iroha_data_model::account::AccountId::of(
-        "wonderland".parse().unwrap(),
-        kp.public_key().clone(),
-    );
+    let owner: iroha_data_model::account::AccountId =
+        iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let conviction_step = raw_state.gov.conviction_step_blocks.max(1);
     let duration_blocks = conviction_step;
     let max_conviction = raw_state.gov.max_conviction;

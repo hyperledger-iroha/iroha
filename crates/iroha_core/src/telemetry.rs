@@ -14280,7 +14280,7 @@ mod tests {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");
             let domain_id: DomainId = "wonderland".parse().expect("domain id");
             let key_pair = KeyPair::random();
-            let authority = AccountId::new(domain_id, key_pair.public_key().clone());
+            let authority = AccountId::new(key_pair.public_key().clone());
             TransactionBuilder::new(chain_id, authority).sign(key_pair.private_key())
         }
 

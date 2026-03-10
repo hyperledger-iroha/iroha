@@ -1306,9 +1306,8 @@ mod tests {
     #[test]
     fn replace_account_id_updates_trigger_authority_and_filter() {
         let set = Set::default();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let old = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-        let new = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let old = AccountId::new(KeyPair::random().public_key().clone());
+        let new = AccountId::new(KeyPair::random().public_key().clone());
 
         let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
         let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
@@ -1371,10 +1370,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("valid domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority = AccountId::new(KeyPair::random().public_key().clone());
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1443,10 +1439,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_disabled".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("valid domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority = AccountId::new(KeyPair::random().public_key().clone());
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let mut action = SpecializedAction::new(
@@ -1500,10 +1493,7 @@ mod tests {
             {
                 let mut tx = block.transaction();
                 let trigger_id: TriggerId = "time_trigger_missing_meta".parse().expect("valid id");
-                let authority = AccountId::new(
-                    "wonderland".parse().expect("valid domain"),
-                    KeyPair::random().public_key().clone(),
-                );
+                let authority = AccountId::new(KeyPair::random().public_key().clone());
                 let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
                 let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
                 let action = SpecializedAction::new(
@@ -1852,6 +1842,7 @@ impl TryFrom<SetDto> for Set {
 
 #[cfg(test)]
 mod dto_tests {
+    use std::collections::BTreeMap;
     use std::num::NonZeroU64;
 
     use iroha_crypto::{HashOf, KeyPair};
@@ -1867,9 +1858,7 @@ mod dto_tests {
     use super::*;
 
     fn sample_set() -> Set {
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
-        let authority: dm::AccountId =
-            dm::AccountId::new(domain, KeyPair::random().public_key().clone());
+        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
 
         let set = Set::default();
         {
@@ -1947,6 +1936,49 @@ mod dto_tests {
         set
     }
 
+    fn assert_loaded_action_dto_equivalent<F>(left: &LoadedActionDto<F>, right: &LoadedActionDto<F>)
+    where
+        F: PartialEq + core::fmt::Debug,
+    {
+        assert_eq!(left.executable, right.executable);
+        assert_eq!(left.repeats, right.repeats);
+        assert_eq!(left.authority.subject_id(), right.authority.subject_id());
+        assert_eq!(left.filter, right.filter);
+        assert_eq!(left.metadata, right.metadata);
+    }
+
+    fn assert_trigger_entries_equivalent<F>(
+        left: &[(TriggerId, LoadedActionDto<F>)],
+        right: &[(TriggerId, LoadedActionDto<F>)],
+    ) where
+        F: Clone + PartialEq + core::fmt::Debug,
+    {
+        let left_map: BTreeMap<_, _> = left.iter().cloned().collect();
+        let right_map: BTreeMap<_, _> = right.iter().cloned().collect();
+        assert_eq!(left_map.len(), right_map.len());
+        for (id, left_action) in &left_map {
+            let right_action = right_map
+                .get(id)
+                .expect("decoded trigger set must preserve trigger ids");
+            assert_loaded_action_dto_equivalent(left_action, right_action);
+        }
+    }
+
+    fn assert_contract_entries_equivalent(
+        left: &[(HashOf<IvmBytecode>, IvmBytecodeEntryDto)],
+        right: &[(HashOf<IvmBytecode>, IvmBytecodeEntryDto)],
+    ) {
+        assert_eq!(left.len(), right.len());
+        for (hash, left_entry) in left {
+            let right_entry = right
+                .iter()
+                .find_map(|(right_hash, right_entry)| (right_hash == hash).then_some(right_entry))
+                .expect("decoded trigger set must preserve contract hashes");
+            assert_eq!(left_entry.original_contract, right_entry.original_contract);
+            assert_eq!(left_entry.count, right_entry.count);
+        }
+    }
+
     #[test]
     fn empty_set_roundtrip_dto() {
         let set = Set::default();
@@ -1990,9 +2022,7 @@ mod dto_tests {
 
     #[test]
     fn set_dto_repairs_inconsistent_storage() {
-        let domain: dm::DomainId = "wonderland".parse().unwrap();
-        let authority: dm::AccountId =
-            dm::AccountId::new(domain, KeyPair::random().public_key().clone());
+        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
 
         let missing_code = IvmBytecode::from_compiled(vec![0x01]);
         let missing_hash = HashOf::new(&missing_code);
@@ -2073,14 +2103,15 @@ mod dto_tests {
         let json_repr = json::to_json(&set).expect("serialize set to json");
         let decoded: Set = json::from_json(&json_repr).expect("deserialize set from json");
 
-        let original = SetDto::from(&set)
-            .encode()
-            .expect("encode original set dto");
-        let decoded_bytes = SetDto::from(&decoded)
-            .encode()
-            .expect("encode decoded set dto");
+        let original = SetDto::from(&set);
+        let decoded_dto = SetDto::from(&decoded);
 
-        assert_eq!(original, decoded_bytes);
+        assert_trigger_entries_equivalent(&original.data, &decoded_dto.data);
+        assert_trigger_entries_equivalent(&original.pipeline, &decoded_dto.pipeline);
+        assert_trigger_entries_equivalent(&original.time, &decoded_dto.time);
+        assert_trigger_entries_equivalent(&original.by_call, &decoded_dto.by_call);
+        assert_eq!(original.ids, decoded_dto.ids);
+        assert_contract_entries_equivalent(&original.contracts, &decoded_dto.contracts);
     }
 
     #[test]

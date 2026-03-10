@@ -38,11 +38,8 @@ fn sample_account() -> ScopedAccountId {
 fn register_peer_then_unregister() {
     let alice: ScopedAccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     let mut vm = IVM::new(100);
     vm.set_host(host);
 
@@ -86,11 +83,8 @@ fn register_peer_then_unregister() {
 fn create_enable_disable_remove_trigger() {
     let alice: ScopedAccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     let mut vm = IVM::new(100);
     vm.set_host(host);
 

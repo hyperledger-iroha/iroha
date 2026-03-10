@@ -124,7 +124,7 @@ translator: manual
 ### קידודי JSON
 
 - `Hash` → Hex באורך 64 תווים (32 בתים, אותיות קטנות).
-- `AccountId`: canonical IH58 literal (no `@domain` suffix; optional `@<domain>` hint).
+- `AccountId`: canonical IH58 literal (no `@domain` suffix).
 - `ExposedPrivateKey` מקבל גם hex רגיל וגם גרסה עם קידומת אלגוריתם (למשל `ed25519:…`). תשובות חוזרות כ-hex רגיל.
 
 ### תשובת GET

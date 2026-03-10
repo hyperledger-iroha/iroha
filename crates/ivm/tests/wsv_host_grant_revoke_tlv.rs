@@ -68,7 +68,7 @@ fn grant_revoke_permission_with_tlv() {
     )]);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        ivm::mock_wsv::AccountId::from(&bob.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

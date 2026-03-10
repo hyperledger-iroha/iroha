@@ -25,7 +25,7 @@ fn main() {
     let wallet_pk = [0x33u8; 32];
     let domain: DomainId = "wonderland".parse().expect("domain parses");
     let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-    let account_id = AccountId::new(domain, keypair.public_key().clone()).to_string();
+    let account_id = AccountId::new(keypair.public_key().clone()).to_string();
 
     // Request permissions in Open (app → wallet)
     let req_perms = proto::PermissionsV1 {

@@ -8,10 +8,7 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn query_accessors_return_inner_values() {
-    let account_id = AccountId::new(
-        DomainId::from_str("domain").expect("valid"),
-        KeyPair::random().public_key().clone(),
-    );
+    let account_id = AccountId::new(KeyPair::random().public_key().clone());
     let roles_query = FindRolesByAccountId::new(account_id.clone());
     assert_eq!(roles_query.account_id(), &account_id);
 

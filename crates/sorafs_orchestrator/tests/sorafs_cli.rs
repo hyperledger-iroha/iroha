@@ -51,11 +51,7 @@ fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
         b"sorafs-cli-manifest-submit-authority".to_vec(),
         Algorithm::Ed25519,
     );
-    let authority = AccountId::new(
-        "wonderland".parse::<DomainId>().expect("domain id parses"),
-        keypair.public_key().clone(),
-    )
-    .to_string();
+    let authority = AccountId::new(keypair.public_key().clone()).to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
 }

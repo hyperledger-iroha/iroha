@@ -5,14 +5,13 @@ use iroha_config::parameters::actual::Governance;
 use iroha_core::governance::{draw::derive_parliament_bodies, state::ParliamentTerm};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId, account::AccountId, domain::DomainId, governance::types::ParliamentBody,
+    ChainId, account::AccountId, governance::types::ParliamentBody,
     isi::governance::CouncilDerivationKind,
 };
 
 fn account(tag: u8) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let (public_key, _) = KeyPair::from_seed(vec![tag; 32], Algorithm::Ed25519).into_parts();
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 #[test]

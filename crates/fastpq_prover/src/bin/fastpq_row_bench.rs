@@ -531,19 +531,8 @@ fn seed_root(seed: u64) -> [u8; 32] {
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
-    AccountId::new(domain.clone(), keypair.public_key().clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use fastpq_prover::build_trace;
-
-    #[test]
-    fn scenario_count_totals_match_batch_rows() {
-        let counts = ScenarioCounts {
-            transfer_rows: 10,
-            mint_rows: 2,
+    let _ = domain;
+    AccountId::new(mint_rows: 2,
             burn_rows: 1,
             role_grant_rows: 1,
             role_revoke_rows: 1,

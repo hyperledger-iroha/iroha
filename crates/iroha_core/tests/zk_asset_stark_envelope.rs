@@ -82,7 +82,7 @@ fn prepare_state() -> (State, AccountId, AssetDefinitionId) {
 
     for instr in [
         Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -135,7 +135,7 @@ fn prepare_state_with_bound_stark_vk(
 
     for instr in [
         Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         executor

@@ -119,9 +119,6 @@ static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLoc
         .expect("static heartbeat metadata key")
 });
 #[cfg(test)]
-static HEARTBEAT_DOMAIN_ID: LazyLock<DomainId> =
-    LazyLock::new(|| DomainId::from_str("sumeragi_heartbeat").expect("static heartbeat domain"));
-#[cfg(test)]
 static HEARTBEAT_EXPIRES_AT_HEIGHT_NAME: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
         iroha_data_model::name::Name::from_str("expires_at_height")
@@ -550,7 +547,7 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
     proposal_height: u64,
     time_source: &TimeSource,
 ) -> SignedTransaction {
-    let authority = AccountId::new(HEARTBEAT_DOMAIN_ID.clone(), signer.public_key().clone());
+    let authority = AccountId::new(signer.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
     if tx_params.require_height_ttl {
@@ -847,10 +844,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 expires_at_ms: expires_at.as_millis(),
                 now_ms: now.as_millis(),
             });
-        }
-
-        if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
         Self::ensure_signing_allowed(tx, crypto)?;
@@ -1207,10 +1200,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 expires_at_ms: expires_at.as_millis(),
                 now_ms: now.as_millis(),
             });
-        }
-
-        if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
         if !is_heartbeat_transaction(tx) {
@@ -3700,6 +3689,21 @@ pub mod tests {
         }
     }
 
+    fn new_account_in_domain(
+        account_id: &AccountId,
+        domain_id: &DomainId,
+    ) -> iroha_data_model::account::NewAccount {
+        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+    }
+
+    fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
+        let (authority_id, key_pair) = gen_account_in(domain);
+        let domain_id: DomainId = domain.parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
+        (World::with([domain], [account], []), authority_id, key_pair)
+    }
+
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: TestDataSpaceId,
@@ -3707,8 +3711,9 @@ pub mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain = Domain::new(authority.domain().clone()).build(&authority);
-        let account = Account::new(authority.clone())
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = new_account_in_domain(&authority, &domain_id)
             .with_uaid(Some(uaid))
             .build(&authority);
         let mut world = World::with([domain], [account], []);
@@ -3890,7 +3895,7 @@ pub mod tests {
 
         let member = MultisigMember::new(keypair.public_key().clone(), 1).expect("member is valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("policy is valid");
-        let multisig_authority = AccountId::new_multisig(authority.domain().clone(), policy);
+        let multisig_authority = AccountId::new_multisig(policy);
         let tx = tx.with_authority(multisig_authority);
 
         let limits = TransactionParameters::default();
@@ -3914,7 +3919,6 @@ pub mod tests {
     #[test]
     fn multisig_authority_accepts_mixed_curves_with_quorum() {
         let chain: ChainId = "multisig-accept".parse().unwrap();
-        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").unwrap();
         let member_ed = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let member_secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
 
@@ -3923,7 +3927,7 @@ pub mod tests {
             MultisigMember::new(member_secp.public_key().clone(), 1).expect("member secp"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let authority = AccountId::new_multisig(domain.clone(), policy.clone());
+        let authority = AccountId::new_multisig(policy.clone());
 
         let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig ok".into())]);
@@ -3967,7 +3971,7 @@ pub mod tests {
 
         let member = MultisigMember::new(keypair.public_key().clone(), 2).expect("member is valid");
         let policy = MultisigPolicy::new(2, vec![member]).expect("policy is valid");
-        let multisig_authority = AccountId::new_multisig(authority.domain().clone(), policy);
+        let multisig_authority = AccountId::new_multisig(policy);
         let mut tx = tx.with_authority(multisig_authority);
 
         // Attach a signature from an unknown signer.
@@ -3996,7 +4000,6 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_insufficient_weight_bundle() {
         let chain: ChainId = "multisig-insufficient-weight".parse().unwrap();
-        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
         let other = iroha_crypto::KeyPair::random();
 
@@ -4005,7 +4008,7 @@ pub mod tests {
             MultisigMember::new(other.public_key().clone(), 1).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let authority = AccountId::new_multisig(domain.clone(), policy);
+        let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
         builder = builder
@@ -4042,8 +4045,8 @@ pub mod tests {
         let domain_id: DomainId = "multisig".parse().unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
-        let signer1_id = AccountId::new(domain_id.clone(), signer1.public_key().clone());
-        let signer2_id = AccountId::new(domain_id.clone(), signer2.public_key().clone());
+        let signer1_id = AccountId::new(signer1.public_key().clone());
+        let signer2_id = AccountId::new(signer2.public_key().clone());
 
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
@@ -4053,7 +4056,7 @@ pub mod tests {
         };
 
         let multisig_key = KeyPair::random();
-        let multisig_id = AccountId::new(domain_id.clone(), multisig_key.public_key().clone());
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
 
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
@@ -4063,9 +4066,9 @@ pub mod tests {
 
         let domain = Domain::new(domain_id.clone()).build(&signer1_id);
         let accounts = [
-            Account::new(signer1_id.clone()).build(&signer1_id),
-            Account::new(signer2_id.clone()).build(&signer2_id),
-            Account::new(multisig_id.clone())
+            new_account_in_domain(&signer1_id, &domain_id).build(&signer1_id),
+            new_account_in_domain(&signer2_id, &domain_id).build(&signer2_id),
+            new_account_in_domain(&multisig_id, &domain_id)
                 .with_metadata(multisig_metadata)
                 .build(&multisig_id),
         ];
@@ -4111,12 +4114,12 @@ pub mod tests {
         let (authority_id, keypair) = gen_account_in("wonderland");
 
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let account = Account::new(authority_id.clone()).build(&authority_id);
+        let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         let mut world = World::with([domain], [account], []);
 
         let role_id: RoleId = format!(
             "MULTISIG_SIGNATORY/{}/{}",
-            authority_id.domain(),
+            domain_id,
             authority_id.signatory()
         )
         .parse()
@@ -4167,12 +4170,11 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
         let chain: ChainId = "multisig-disallowed".parse().unwrap();
-        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").unwrap();
         let member = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
 
         let members = vec![MultisigMember::new(member.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
-        let authority = AccountId::new_multisig(domain.clone(), policy);
+        let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(chain.clone(), authority);
         builder = builder.with_instructions([Log::new(
@@ -4198,7 +4200,6 @@ pub mod tests {
     #[test]
     fn multisig_authority_rejects_insufficient_weight() {
         let chain: ChainId = "multisig-insufficient".parse().unwrap();
-        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").unwrap();
         let member_a = iroha_crypto::KeyPair::random();
         let member_b = iroha_crypto::KeyPair::random();
 
@@ -4207,7 +4208,7 @@ pub mod tests {
             MultisigMember::new(member_b.public_key().clone(), 1).expect("member b"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let authority = AccountId::new_multisig(domain.clone(), policy);
+        let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(chain.clone(), authority);
         builder = builder
@@ -4227,12 +4228,11 @@ pub mod tests {
     #[test]
     fn multisig_signature_limit_counts_bundle_entries() {
         let chain: ChainId = "multisig-signature-limit".parse().unwrap();
-        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let members = vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
-        let authority = AccountId::new_multisig(domain.clone(), policy);
+        let authority = AccountId::new_multisig(policy);
 
         let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([Log::new(Level::INFO, "multisig too many signatures".into())])
@@ -4743,12 +4743,7 @@ pub mod tests {
         use nonzero_ext::nonzero;
 
         // Minimal state with one domain/account as authority
-        let (authority_id, kp) = gen_account_in("domain");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("domain".parse().unwrap()).build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("domain");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -4937,13 +4932,7 @@ pub mod tests {
         use nonzero_ext::nonzero;
 
         // World with a single domain and account as authority
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -4971,13 +4960,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5010,13 +4993,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5053,13 +5030,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5143,13 +5114,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5203,13 +5168,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5269,13 +5228,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5334,13 +5287,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5421,13 +5368,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5461,13 +5402,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5499,13 +5434,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5546,13 +5475,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5595,13 +5518,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5644,13 +5561,7 @@ pub mod tests {
         };
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -5703,13 +5614,7 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -6188,7 +6093,7 @@ pub mod tests {
         let chain: ChainId = "heartbeat-marker-true".parse().unwrap();
         let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let authority = AccountId::new(HEARTBEAT_DOMAIN_ID.clone(), signer.public_key().clone());
+        let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("true"));
 
@@ -6216,7 +6121,7 @@ pub mod tests {
         let chain: ChainId = "heartbeat-marker-false".parse().unwrap();
         let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let authority = AccountId::new(HEARTBEAT_DOMAIN_ID.clone(), signer.public_key().clone());
+        let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(false));
 
@@ -6254,7 +6159,7 @@ pub mod tests {
         let chain: ChainId = "heartbeat-marker-invalid".parse().unwrap();
         let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let authority = AccountId::new(HEARTBEAT_DOMAIN_ID.clone(), signer.public_key().clone());
+        let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("nope"));
 
@@ -6361,13 +6266,7 @@ pub mod tests {
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let mut world = World::with([domain], [account], []);
+        let (mut world, authority_id, kp) = world_with_authority("wonderland");
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(true, false);
         world.parameters = mv::cell::Cell::new(params);
@@ -6430,13 +6329,7 @@ pub mod tests {
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let mut world = World::with([domain], [account], []);
+        let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(false, true);
@@ -6500,13 +6393,7 @@ pub mod tests {
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let mut world = World::with([domain], [account], []);
+        let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(false, true);
@@ -6572,13 +6459,7 @@ pub mod tests {
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
@@ -6624,13 +6505,7 @@ pub mod tests {
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
-        let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
-        let account =
-            iroha_data_model::account::Account::new(authority_id.clone()).build(&authority_id);
-        let world = World::with([domain], [account], []);
+        let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
@@ -7005,10 +6880,7 @@ pub mod tests {
     #[test]
     fn state_rejects_empty_instructions_non_heartbeat() {
         let chain: ChainId = "empty-instructions-chain".parse().unwrap();
-        let (authority, keypair) = gen_account_in("wonderland");
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
-        let world = World::with([domain], [account], []);
+        let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -7086,12 +6958,10 @@ pub mod tests {
     #[test]
     fn state_manifest_quorum_requires_approvers() {
         let chain: ChainId = "lane-manifest-quorum".parse().unwrap();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
         let primary_keypair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let secondary_keypair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
-        let primary_id = AccountId::new(domain_id.clone(), primary_keypair.public_key().clone());
-        let secondary_id =
-            AccountId::new(domain_id.clone(), secondary_keypair.public_key().clone());
+        let primary_id = AccountId::new(primary_keypair.public_key().clone());
+        let secondary_id = AccountId::new(secondary_keypair.public_key().clone());
 
         let rules = GovernanceRules {
             validators: vec![primary_id.clone(), secondary_id.clone()],
@@ -7205,10 +7075,7 @@ pub mod tests {
     #[test]
     fn state_enforces_lane_compliance_engine() {
         let chain: ChainId = "lane-compliance".parse().unwrap();
-        let (authority, keypair) = gen_account_in("wonderland");
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
-        let world = World::with([domain], [account], []);
+        let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -7376,7 +7243,7 @@ pub mod tests {
             .iter()
             .map(|(name, public, private_hex)| {
                 let signatory: iroha_crypto::PublicKey = public.parse().unwrap();
-                let id = AccountId::new(DOMAIN.clone(), signatory);
+                let id = AccountId::new(signatory);
                 let key = iroha_crypto::PrivateKey::from_hex(
                     iroha_crypto::Algorithm::Ed25519,
                     private_hex,
@@ -7573,10 +7440,10 @@ pub mod tests {
     fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
         let account = asset_id.account();
         let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.signatory(), account.domain()),
-            |alias| format!("{alias}@{}", account.domain()),
+            || format!("{}@{}", account.signatory(), DOMAIN_STR),
+            |alias| format!("{alias}@{DOMAIN_STR}"),
         );
-        if asset_id.definition().domain() == account.domain() {
+        if asset_id.definition().domain() == &*DOMAIN {
             format!("{}##{}", asset_id.definition().name(), account_str)
         } else {
             format!("{}#{}", asset_id.definition(), account_str)
@@ -7707,7 +7574,10 @@ pub mod tests {
                     .clone()
                     .into_iter()
                     .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
+                    .map(|(_name, cred)| {
+                        Account::new(cred.id.clone().to_account_id(DOMAIN.clone()))
+                            .build(&GENESIS_ACCOUNT.id)
+                    });
                 let assets = INIT_BALANCE
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));

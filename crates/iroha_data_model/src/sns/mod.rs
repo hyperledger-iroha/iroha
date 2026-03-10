@@ -590,10 +590,10 @@ pub mod fixtures {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("valid steward key literal");
-        AccountId::new("sns".parse().expect("domain parses"), key)
+        AccountId::new(key)
     }
 
-    /// Minimal suffix policy covering `.sora` for unit tests and mock environments.
+    /// Deterministic default policy fixture used in docs/tests.
     pub fn default_policy() -> SuffixPolicyV1 {
         let steward = steward_account();
         SuffixPolicyV1 {

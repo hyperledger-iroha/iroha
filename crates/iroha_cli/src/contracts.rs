@@ -114,7 +114,7 @@ impl Run for CodeBytesGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
+    /// Authority account identifier (canonical IH58 account literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing
@@ -153,7 +153,7 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployActivateArgs {
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
+    /// Authority account identifier (canonical IH58 account literal)
     #[arg(long)]
     pub authority: String,
     /// Governance namespace to bind (e.g., apps)
@@ -397,10 +397,7 @@ mod tests {
     #[test]
     fn simulate_emits_gas_limit_metadata_key() {
         let key_pair = KeyPair::from_seed(vec![1u8; 32], Algorithm::Ed25519);
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            key_pair.public_key().clone(),
-        );
+        let authority = AccountId::new(key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
         let authority_literal = authority.to_string();
         let program = minimal_program();
@@ -506,7 +503,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal)
+    /// Authority account identifier (canonical IH58 account literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction

@@ -31,9 +31,7 @@ use iroha_crypto::{Algorithm, Hash as CryptoHash, KeyPair, Sm2PrivateKey};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     metadata::Metadata,
-    name::Name,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
 use iroha_primitives::numeric::Numeric;
@@ -108,16 +106,12 @@ fn account_id(name: &str) -> AccountId {
     let mut seed = digest.as_bytes().to_vec();
     seed.resize(32, 0);
     let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    AccountId::new(
-        DomainId::new(Name::from_str("sora").expect("domain label canonicalises")),
-        key_pair.public_key().clone(),
-    )
+    AccountId::new(key_pair.public_key().clone())
 }
 
 fn account_literal_from_public_key(public_key: &str) -> String {
     let public_key = public_key.parse().expect("public key");
-    let domain = DomainId::new(Name::from_str("wonderland").expect("domain label canonicalises"));
-    AccountId::new(domain, public_key).to_string()
+    AccountId::new(public_key).to_string()
 }
 
 fn alice_account_literal() -> &'static str {
@@ -143,10 +137,9 @@ fn parse_account_literal(literal: &str) -> AccountId {
         .into_account_id()
 }
 
-fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
-    let domain = DomainId::new(Name::from_str(label).expect("domain label canonicalises"));
+fn account_id_for_domain(_label: &str, seed: u8) -> AccountId {
     let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    AccountId::new(domain, key_pair.public_key().clone())
+    AccountId::new(key_pair.public_key().clone())
 }
 
 fn workspace_root() -> PathBuf {
@@ -1568,8 +1561,7 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
             iroha_crypto::Algorithm::Ed25519,
         );
         let (account_public_key, _) = account_keypair.into_parts();
-        let domain: iroha::data_model::domain::DomainId = "wonderland".parse().expect("domain id");
-        let account_id = iroha::data_model::account::AccountId::new(domain, account_public_key);
+        let account_id = iroha::data_model::account::AccountId::new(account_public_key);
         let account_id_str = account_id.to_string();
 
         let mut attempt = 0u32;
@@ -2014,11 +2006,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let state_json = read_state(&state_path);
     assert_eq!(state_json["version"].as_u64(), Some(1));
-    let treasury_json_literal = format!(
-        "{}@{}",
-        treasury.canonical_ih58().expect("treasury ih58"),
-        treasury.domain()
-    );
+    let treasury_json_literal = treasury.canonical_ih58().expect("treasury ih58");
     assert_eq!(
         state_json["treasury_account"].as_str(),
         Some(treasury_json_literal.as_str())
@@ -2282,11 +2270,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     );
 
     let treasury_account = treasury.clone();
-    let treasury_json_literal = format!(
-        "{}@{}",
-        treasury.canonical_ih58().expect("treasury ih58"),
-        treasury.domain()
-    );
+    let treasury_json_literal = treasury.canonical_ih58().expect("treasury ih58");
     assert_eq!(
         state_json["treasury_account"]
             .as_str()
@@ -4607,9 +4591,8 @@ fn zk_prover_reports_flow_against_torii_mock() {
 
 #[test]
 fn address_convert_outputs_ih58_by_default() {
-    let domain: iroha::data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
-    let account = AccountId::new(domain, key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
 
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
     let expected_ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
@@ -4632,9 +4615,8 @@ fn address_convert_outputs_ih58_by_default() {
 
 #[test]
 fn address_convert_json_summary_contains_all_formats() {
-    let domain: iroha::data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xB2; 32], Algorithm::Ed25519);
-    let account = AccountId::new(domain, key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
 
     let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
     let compressed = encode_account_id_to_compressed(&account).expect("compressed");
@@ -4707,7 +4689,7 @@ fn address_convert_json_summary_contains_all_formats() {
 fn address_convert_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId = "sora".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-    let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
     let literal = format!("{canonical}@{domain}");
 
@@ -4740,11 +4722,10 @@ fn address_convert_rejects_domain_suffix() {
 
 #[test]
 fn address_convert_json_rejects_domain_suffix() {
-    let domain: iroha::data_model::domain::DomainId = "nexus".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
-    let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
-    let literal = format!("{canonical}@{domain}");
+    let literal = format!("{canonical}@nexus");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4778,9 +4759,8 @@ fn address_convert_json_rejects_domain_suffix() {
 
 #[test]
 fn address_convert_json_summary_is_domainless() {
-    let domain: iroha::data_model::domain::DomainId = "nexus".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
-    let account = AccountId::new(domain, key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
 
     let output = Command::new(cli_binary())

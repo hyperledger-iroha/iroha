@@ -78,7 +78,7 @@ fn account_definition_test() -> Result<(), Error> {
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
     // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
-    let longhand_account_id = AccountId::new("looking_glass".parse()?, public_key.clone());
+    let longhand_account_id = AccountId::new(public_key.clone());
     // Create an AccountId instance by parsing the canonical IH58 account address form
     let canonical_account_id = longhand_account_id
         .canonical_ih58()
@@ -115,7 +115,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
     // Materialize a scoped AccountId in the domain where this registration is performed
-    let account_id = AccountId::new("looking_glass".parse()?, public_key);
+    let account_id = AccountId::new(public_key);
     // #endregion register_account_create
 
     // #region register_account_generate
@@ -172,7 +172,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
     // Materialize a scoped AccountId in the domain used for this minting example
-    let account_id = AccountId::new("looking_glass".parse()?, public_key);
+    let account_id = AccountId::new(public_key);
 
     // #region register_asset_mint_submit
     // Create a MintBox using a previous asset and account
@@ -201,10 +201,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_define_asset_account
     let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice = AccountId::new(
-        "wonderland"
-            .parse()
-            .expect("Valid, because `wonderland` is a valid domain identifier"),
+    let alice = AccountId::new(because `wonderland` is a valid domain identifier"),
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("Valid, because this is a valid public key literal"),
@@ -255,10 +252,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // Define the instances of an Asset and Account
     let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice = AccountId::new(
-        "wonderland"
-            .parse()
-            .expect("Valid, because `wonderland` is a valid domain identifier"),
+    let alice = AccountId::new(because `wonderland` is a valid domain identifier"),
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("Valid, because this is a valid public key literal"),

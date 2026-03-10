@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Ensure Torii account endpoints accept IH58 (preferred)/sora (second-best) path segments.
+//! Ensure Torii account endpoints accept canonical IH58 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
 
 use std::sync::Arc;
@@ -105,9 +105,7 @@ fn encoded_issuer_filter(literal: &str) -> String {
 #[tokio::test]
 async fn transactions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for segment in [canonical, compressed] {
+    for segment in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -175,9 +173,7 @@ async fn transactions_endpoint_accepts_address_format_param() {
 #[tokio::test]
 async fn transactions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for segment in [ih58, compressed] {
+    for segment in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -202,9 +198,7 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn transactions_query_accepts_default_domain_without_suffix() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for segment in [ih58, compressed] {
+    for segment in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -350,9 +344,7 @@ async fn local8_segments_increment_invalid_metric() {
 #[tokio::test]
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for segment in [canonical, compressed] {
+    for segment in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -521,10 +513,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
         query_envelope_with_account_filter("authority", &fixtures::TX_QUERY_ACCOUNT.canonical);
     let before = counter_total(&metrics.torii_address_invalid_total);
 
-    for segment in [
-        fixtures::TX_QUERY_ACCOUNT.canonical.clone(),
-        fixtures::TX_QUERY_ACCOUNT.compressed.clone(),
-    ] {
+    for segment in [fixtures::TX_QUERY_ACCOUNT.canonical.clone()] {
         let resp = app
             .clone()
             .oneshot(
@@ -589,9 +578,7 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
 #[tokio::test]
 async fn assets_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for segment in [canonical, compressed] {
+    for segment in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -616,9 +603,7 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn assets_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for segment in [ih58, compressed] {
+    for segment in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -725,9 +710,7 @@ async fn assets_endpoint_rejects_public_key_segments() {
 #[tokio::test]
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for segment in [canonical, compressed] {
+    for segment in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -823,9 +806,7 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
 #[tokio::test]
 async fn permissions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for segment in [canonical, compressed] {
+    for segment in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -850,9 +831,7 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn permissions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for segment in [ih58, compressed] {
+    for segment in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -912,9 +891,7 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn explorer_domains_query_accepts_encoded_account_params() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -975,9 +952,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
 #[tokio::test]
 async fn explorer_account_detail_accepts_encoded_account_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -1503,9 +1478,7 @@ async fn repo_agreements_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_encoded_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
         let resp = app
             .clone()
@@ -1533,9 +1506,7 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
         let resp = app
             .clone()
@@ -1629,9 +1600,7 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
 #[tokio::test]
 async fn offline_allowances_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -1658,9 +1627,7 @@ async fn offline_allowances_endpoint_accepts_controller_literals() {
 #[tokio::test]
 async fn offline_allowances_endpoint_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -1796,9 +1763,7 @@ async fn offline_allowances_query_accepts_address_format_param() {
 #[tokio::test]
 async fn offline_allowances_query_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("controller_id", &literal);
         let resp = app
             .clone()
@@ -1845,9 +1810,7 @@ async fn offline_allowances_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_transfers_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -1874,9 +1837,7 @@ async fn offline_transfers_endpoint_accepts_controller_literals() {
 #[tokio::test]
 async fn offline_transfers_endpoint_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -1980,9 +1941,7 @@ async fn offline_transfers_query_accepts_address_format_param() {
 #[tokio::test]
 async fn offline_transfers_query_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("controller_id", &literal);
         let resp = app
             .clone()
@@ -2029,9 +1988,7 @@ async fn offline_transfers_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_summaries_endpoint_accepts_controller_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -2058,9 +2015,7 @@ async fn offline_summaries_endpoint_accepts_controller_literals() {
 #[tokio::test]
 async fn offline_summaries_endpoint_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -2164,9 +2119,7 @@ async fn offline_summaries_query_accepts_address_format_param() {
 #[tokio::test]
 async fn offline_summaries_query_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("controller_id", &literal);
         let resp = app
             .clone()
@@ -2258,9 +2211,7 @@ async fn offline_revocations_endpoint_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_revocations_endpoint_accepts_filter_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let filter = encoded_issuer_filter(&literal);
         let resp = app
             .clone()
@@ -2286,9 +2237,7 @@ async fn offline_revocations_endpoint_accepts_filter_literals() {
 #[tokio::test]
 async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let filter = encoded_issuer_filter(&literal);
         let resp = app
             .clone()
@@ -2396,9 +2345,7 @@ async fn offline_revocations_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_revocations_query_filter_accepts_encoded_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let body = query_envelope_with_account_filter("issuer_id", &literal);
         let resp = app
             .clone()
@@ -2426,9 +2373,7 @@ async fn offline_revocations_query_filter_accepts_encoded_literals() {
 #[tokio::test]
 async fn offline_revocations_query_filter_accepts_default_domain_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("issuer_id", &literal);
         let resp = app
             .clone()
@@ -2561,9 +2506,7 @@ async fn kaigi_relays_endpoint_rejects_unknown_address_format() {
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -2706,9 +2649,7 @@ async fn kaigi_relay_detail_address_format_metric_tracks_selection() {
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
-    let (canonical, compressed) = account_segments();
-
-    for literal in [canonical, compressed] {
+    for literal in accepted_account_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -2754,9 +2695,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
     let app = test_router();
-    let (ih58, compressed) = default_domain_segments_without_domain();
-
-    for literal in [ih58, compressed] {
+    for literal in accepted_default_domain_segments() {
         let resp = app
             .clone()
             .oneshot(
@@ -2984,8 +2923,9 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let domain_id: DomainId = "wonderland".parse().expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
-    let account_id = AccountId::new(domain_id.clone(), signatory);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account_id = AccountId::new(signatory);
+    let account =
+        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -3053,42 +2993,36 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
 
 fn account_segments() -> (String, String) {
     use iroha_crypto::PublicKey;
-    use iroha_data_model::{
-        account::{AccountAddress, AccountId},
-        domain::DomainId,
-    };
-    let domain: DomainId = "wonderland".parse().expect("domain parses");
+    use iroha_data_model::account::{AccountAddress, AccountId};
     let public_key: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
-    let account = AccountId::new(domain.clone(), public_key);
+    let account = AccountId::new(public_key);
     let address = AccountAddress::from_account_id(&account).expect("address encode");
     let canonical = account.to_string();
     let compressed = address.to_compressed_sora().expect("compressed encode");
     (canonical, compressed)
 }
 
+fn accepted_account_segments() -> [String; 1] {
+    [account_segments().0]
+}
+
 fn default_domain_segments_without_domain() -> (String, String) {
     use iroha_crypto::PublicKey;
-    use iroha_data_model::account::{AccountAddress, AccountId, address};
-
-    let domain_label = address::default_domain_name();
-    let domain = domain_label
-        .as_ref()
-        .parse()
-        .expect("default domain parses");
+    use iroha_data_model::account::{AccountAddress, AccountId};
     let public_key: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
-    let account = AccountId::new(domain, public_key);
+    let account = AccountId::new(public_key);
     let address = AccountAddress::from_account_id(&account).expect("address encode");
-    let ih58 = address
-        .to_ih58(IH58_PREFIX)
-        .expect("ih58 encode for default domain");
-    let compressed = address
-        .to_compressed_sora()
-        .expect("compressed encode for default domain");
+    let ih58 = address.to_ih58(IH58_PREFIX).expect("ih58 encode");
+    let compressed = address.to_compressed_sora().expect("compressed encode");
     (ih58, compressed)
 }
 
+fn accepted_default_domain_segments() -> [String; 1] {
+    [default_domain_segments_without_domain().0]
+}
+
 fn tampered_tx_query_literal() -> String {
-    let mut mutated = fixtures::TX_QUERY_ACCOUNT.compressed.clone();
+    let mut mutated = fixtures::TX_QUERY_ACCOUNT.canonical.clone();
     let last = mutated.pop().unwrap_or('0');
     let replacement = if last == 'a' { 'b' } else { 'a' };
     mutated.push(replacement);

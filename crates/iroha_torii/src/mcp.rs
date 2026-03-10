@@ -4,7 +4,11 @@
 //! existing Torii HTTP routes. Tool definitions are derived from Torii's OpenAPI
 //! document so the MCP surface tracks the documented API.
 
-use std::{fmt::Write as _, time::Duration};
+use std::{
+    fmt::Write as _,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -12,6 +16,8 @@ use axum::{
     response::Response,
 };
 use base64::Engine as _;
+use blake3::Hasher as Blake3Hasher;
+use dashmap::DashMap;
 use http_body_util::BodyExt as _;
 use norito::json::{self, Map, Value};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
@@ -29,6 +35,10 @@ const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 const MCP_TOOL_EXECUTION_ERROR: i64 = -32001;
 const MCP_RATE_LIMITED: i64 = -32029;
+const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
+const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
+const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
+const MCP_JOB_NOT_FOUND: &str = "job_not_found";
 
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
@@ -50,6 +60,14 @@ const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
     "Expired",
 ];
 
+#[derive(Debug, Clone)]
+struct AsyncJobRecord {
+    state: Value,
+    updated_at: Instant,
+}
+
+static MCP_ASYNC_JOBS: LazyLock<DashMap<String, AsyncJobRecord>> = LazyLock::new(DashMap::new);
+
 /// OpenAPI-derived tool metadata used for MCP dispatch.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolSpec {
@@ -69,6 +87,7 @@ impl ToolSpec {
             Value::String(self.description.clone()),
         );
         obj.insert("inputSchema".into(), self.input_schema.clone());
+        obj.insert("outputSchema".into(), default_tool_output_schema());
         Value::Object(obj)
     }
 }
@@ -78,6 +97,7 @@ struct ParameterInfo {
     name: String,
     location: String,
     required: bool,
+    schema: Value,
 }
 
 /// Build the MCP tool registry from OpenAPI operations.
@@ -87,13 +107,15 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     let Some(paths) = spec.get("paths").and_then(Value::as_object) else {
         return tools;
     };
+    let allow_operator_routes = cfg.expose_operator_routes
+        || cfg.profile == iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     for (path, path_item) in paths {
         let Some(path_map) = path_item.as_object() else {
             continue;
         };
 
-        let path_parameters = parse_parameters(path_map.get("parameters"));
+        let path_parameters = parse_parameters(&spec, path_map.get("parameters"));
 
         for method_key in ["get", "post", "put", "patch", "delete", "head", "options"] {
             let Some(operation) = path_map.get(method_key).and_then(Value::as_object) else {
@@ -102,15 +124,12 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             let Some(method) = method_from_key(method_key) else {
                 continue;
             };
-            if should_skip_operation(path, operation, cfg.expose_operator_routes) {
+            if should_skip_operation(path, operation, allow_operator_routes) {
                 continue;
             }
 
-            let operation_id = operation
-                .get("operationId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .unwrap_or_else(|| fallback_operation_id(method_key, path));
+            // Keep OpenAPI-derived names stable regardless of mutable `operationId` fields.
+            let operation_id = fallback_operation_id(method_key, path);
             let description = operation
                 .get("summary")
                 .and_then(Value::as_str)
@@ -119,9 +138,9 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
                 .to_owned();
 
             let mut parameters = path_parameters.clone();
-            parameters.extend(parse_parameters(operation.get("parameters")));
+            parameters.extend(parse_parameters(&spec, operation.get("parameters")));
             let input_schema =
-                build_input_schema(path, &parameters, operation.get("requestBody").is_some());
+                build_input_schema(&spec, path, &parameters, operation.get("requestBody"));
 
             tools.push(ToolSpec {
                 name: format!("torii.{operation_id}"),
@@ -321,17 +340,29 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools
 }
 
-pub(crate) fn capabilities_payload(tool_count: usize) -> Value {
+fn visible_tools_for_policy<'a>(
+    cfg: &iroha_config::parameters::actual::ToriiMcp,
+    tools: &'a [ToolSpec],
+) -> Vec<&'a ToolSpec> {
+    tools
+        .iter()
+        .filter(|tool| is_tool_allowed_by_policy(cfg, tool))
+        .collect()
+}
+
+pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
+    let toolset_version = compute_toolset_version(tools);
     let mut server_info = Map::new();
     server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
     server_info.insert("version".into(), Value::String("0.0.0-dev".to_owned()));
 
-    let mut tools = Map::new();
-    tools.insert("listChanged".into(), Value::Bool(false));
-    tools.insert("count".into(), Value::from(tool_count as u64));
+    let mut tools_cap = Map::new();
+    tools_cap.insert("listChanged".into(), Value::Bool(false));
+    tools_cap.insert("count".into(), Value::from(tools.len() as u64));
+    tools_cap.insert("toolsetVersion".into(), Value::String(toolset_version));
 
     let mut capabilities = Map::new();
-    capabilities.insert("tools".into(), Value::Object(tools));
+    capabilities.insert("tools".into(), Value::Object(tools_cap));
 
     let mut out = Map::new();
     out.insert(
@@ -341,6 +372,92 @@ pub(crate) fn capabilities_payload(tool_count: usize) -> Value {
     out.insert("serverInfo".into(), Value::Object(server_info));
     out.insert("capabilities".into(), Value::Object(capabilities));
     Value::Object(out)
+}
+
+pub(crate) fn capabilities_payload_for_state(app: &SharedAppState) -> Value {
+    let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+    capabilities_payload(&visible_tools)
+}
+
+fn default_tool_output_schema() -> Value {
+    norito::json!({
+        "type": "object",
+        "description": "Tool structured output payload. Route-dispatched tools include status/headers/content_type/body.",
+        "properties": {
+            "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+            "headers": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            },
+            "content_type": {
+                "oneOf": [{ "type": "string" }, { "type": "null" }]
+            },
+            "body": {}
+        },
+        "additionalProperties": true
+    })
+}
+
+fn compute_toolset_version(tools: &[&ToolSpec]) -> String {
+    let mut hasher = Blake3Hasher::new();
+    for tool in tools {
+        let rendered =
+            norito::json::to_string(&tool.descriptor()).unwrap_or_else(|_| tool.name.clone());
+        hasher.update(rendered.as_bytes());
+        hasher.update(&[0x0a]);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn is_tool_allowed_by_policy(
+    cfg: &iroha_config::parameters::actual::ToriiMcp,
+    tool: &ToolSpec,
+) -> bool {
+    use iroha_config::parameters::actual::ToriiMcpProfile;
+
+    let profile_allowed = match cfg.profile {
+        ToriiMcpProfile::Operator => true,
+        ToriiMcpProfile::Writer => true,
+        ToriiMcpProfile::ReadOnly => {
+            matches!(tool.method, Method::GET | Method::HEAD | Method::OPTIONS)
+                || tool.name.contains(".query")
+                || tool.name.ends_with(".get")
+                || tool.name.ends_with(".list")
+                || tool.name.ends_with(".status")
+                || tool.name.ends_with(".health")
+                || tool.name.ends_with(".now")
+                || tool.name.ends_with(".capabilities")
+                || tool.name.ends_with(".leader")
+                || tool.name.ends_with(".phases")
+                || tool.name.ends_with(".params")
+                || tool.name.ends_with(".qc")
+                || tool.name.ends_with(".headers")
+                || tool.name.ends_with(".proof")
+        }
+    };
+    if !profile_allowed {
+        return false;
+    }
+
+    if cfg
+        .deny_tool_prefixes
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .any(|prefix| !prefix.is_empty() && tool.name.starts_with(prefix))
+    {
+        return false;
+    }
+
+    if cfg.allow_tool_prefixes.is_empty() {
+        return true;
+    }
+
+    cfg.allow_tool_prefixes
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .any(|prefix| !prefix.is_empty() && tool.name.starts_with(prefix))
 }
 
 pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
@@ -400,8 +517,14 @@ pub(crate) async fn handle_jsonrpc_request(
         .unwrap_or_default();
 
     match method {
-        "initialize" => jsonrpc_result_response(id, capabilities_payload(app.mcp_tools.len())),
+        "initialize" => {
+            let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+            jsonrpc_result_response(id, capabilities_payload(&visible_tools))
+        }
         "tools/list" => handle_tools_list(id, &app, &params),
+        "tools/call_batch" => handle_tools_call_batch(id, app, inbound_headers, &params).await,
+        "tools/call_async" => handle_tools_call_async(id, app, inbound_headers, &params).await,
+        "tools/jobs/get" => handle_tools_jobs_get(id, &app.mcp, &params),
         "tools/call" => handle_tools_call(id, app, inbound_headers, &params).await,
         _ => jsonrpc_error_response(
             id,
@@ -413,19 +536,27 @@ pub(crate) async fn handle_jsonrpc_request(
 }
 
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
-    let start = params
+    let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+    let toolset_version = compute_toolset_version(&visible_tools);
+    let list_changed = params
+        .get("toolset_version")
+        .or_else(|| params.get("toolsetVersion"))
+        .and_then(Value::as_str)
+        .is_some_and(|client| client != toolset_version);
+    let requested_start = params
         .get("cursor")
         .and_then(Value::as_str)
         .and_then(|cursor| cursor.parse::<usize>().ok())
         .unwrap_or(0);
+    let start = requested_start.min(visible_tools.len());
     let page_size = app.mcp.max_tools_per_list.max(1);
-    let end = start.saturating_add(page_size).min(app.mcp_tools.len());
+    let end = start.saturating_add(page_size).min(visible_tools.len());
 
-    let tools = app.mcp_tools[start..end]
+    let tools = visible_tools[start..end]
         .iter()
-        .map(ToolSpec::descriptor)
+        .map(|tool| tool.descriptor())
         .collect::<Vec<_>>();
-    let next_cursor = if end < app.mcp_tools.len() {
+    let next_cursor = if end < visible_tools.len() {
         Value::String(end.to_string())
     } else {
         Value::Null
@@ -435,7 +566,9 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
         id,
         norito::json!({
             "tools": tools,
-            "nextCursor": next_cursor
+            "nextCursor": next_cursor,
+            "listChanged": list_changed,
+            "toolsetVersion": toolset_version
         }),
     )
 }
@@ -454,6 +587,22 @@ async fn handle_tools_call(
             None,
         );
     };
+    let Some(tool_spec) = app.mcp_tools.iter().find(|tool| tool.name == name) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tool not found",
+            Some(norito::json!({ "name": name, "error_code": MCP_TOOL_NOT_FOUND })),
+        );
+    };
+    if !is_tool_allowed_by_policy(&app.mcp, tool_spec) {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tool is not enabled by MCP policy",
+            Some(norito::json!({ "name": name, "error_code": MCP_TOOL_NOT_ALLOWED })),
+        );
+    }
     let arguments = params
         .get("arguments")
         .and_then(Value::as_object)
@@ -1584,9 +1733,244 @@ async fn handle_tools_call(
     jsonrpc_result_response(id, tool_result)
 }
 
+async fn handle_tools_call_batch(
+    id: Option<Value>,
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    params: &Map,
+) -> Value {
+    let Some(calls) = params.get("calls").and_then(Value::as_array) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tools/call_batch params.calls must be an array",
+            None,
+        );
+    };
+
+    let mut results = Vec::with_capacity(calls.len());
+    for call in calls {
+        let Some(call_obj) = call.as_object() else {
+            results.push(norito::json!({
+                "error": {
+                    "code": JSONRPC_INVALID_PARAMS,
+                    "message": "batch item must be an object",
+                    "data": { "error_code": "invalid_params" }
+                }
+            }));
+            continue;
+        };
+
+        let Some(name) = call_obj.get("name").and_then(Value::as_str) else {
+            results.push(norito::json!({
+                "error": {
+                    "code": JSONRPC_INVALID_PARAMS,
+                    "message": "batch item `name` must be a string",
+                    "data": { "error_code": "invalid_params" }
+                }
+            }));
+            continue;
+        };
+
+        let args = call_obj
+            .get("arguments")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut call_params = Map::new();
+        call_params.insert("name".into(), Value::String(name.to_owned()));
+        call_params.insert("arguments".into(), Value::Object(args));
+
+        let response = handle_tools_call(None, app.clone(), inbound_headers, &call_params).await;
+        if let Some(result) = response.get("result") {
+            let result_value = result.clone();
+            results.push(norito::json!({ "result": result_value }));
+        } else if let Some(error) = response.get("error") {
+            let error_value = error.clone();
+            results.push(norito::json!({ "error": error_value }));
+        } else {
+            results.push(norito::json!({
+                "error": {
+                    "code": JSONRPC_INTERNAL_ERROR,
+                    "message": "batch item returned malformed response",
+                    "data": { "error_code": "internal_error" }
+                }
+            }));
+        }
+    }
+
+    jsonrpc_result_response(id, norito::json!({ "results": results }))
+}
+
+async fn handle_tools_call_async(
+    id: Option<Value>,
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    params: &Map,
+) -> Value {
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tools/call_async params.name must be a string",
+            None,
+        );
+    };
+    let arguments = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let job_id = generate_mcp_job_id();
+    upsert_async_job_state(
+        &app.mcp,
+        job_id.clone(),
+        norito::json!({ "status": "pending" }),
+    );
+
+    let mut call_params = Map::new();
+    call_params.insert("name".into(), Value::String(name.to_owned()));
+    call_params.insert("arguments".into(), Value::Object(arguments));
+    let headers = inbound_headers.clone();
+    let app_cloned = app.clone();
+    let job_id_cloned = job_id.clone();
+    tokio::spawn(async move {
+        let response = handle_tools_call(None, app_cloned.clone(), &headers, &call_params).await;
+        let job_state = if let Some(result) = response.get("result") {
+            let result_value = result.clone();
+            norito::json!({
+                "status": "completed",
+                "result": result_value
+            })
+        } else if let Some(error) = response.get("error") {
+            let error_value = error.clone();
+            norito::json!({
+                "status": "failed",
+                "error": error_value
+            })
+        } else {
+            norito::json!({
+                "status": "failed",
+                "error": {
+                    "code": JSONRPC_INTERNAL_ERROR,
+                    "message": "asynchronous call produced malformed response",
+                    "data": { "error_code": "internal_error" }
+                }
+            })
+        };
+        upsert_async_job_state(&app_cloned.mcp, job_id_cloned, job_state);
+    });
+
+    jsonrpc_result_response(
+        id,
+        norito::json!({
+            "job_id": job_id,
+            "status": "pending"
+        }),
+    )
+}
+
+fn handle_tools_jobs_get(
+    id: Option<Value>,
+    mcp_cfg: &iroha_config::parameters::actual::ToriiMcp,
+    params: &Map,
+) -> Value {
+    let Some(job_id) = params
+        .get("job_id")
+        .or_else(|| params.get("jobId"))
+        .and_then(Value::as_str)
+    else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "tools/jobs/get params.job_id must be a string",
+            None,
+        );
+    };
+
+    prune_async_jobs(mcp_cfg, Instant::now());
+
+    let Some(state) = MCP_ASYNC_JOBS.get(job_id) else {
+        return jsonrpc_error_response(
+            id,
+            JSONRPC_INVALID_PARAMS,
+            "job not found",
+            Some(norito::json!({
+                "error_code": MCP_JOB_NOT_FOUND,
+                "job_id": job_id
+            })),
+        );
+    };
+    let state_value = state.state.clone();
+
+    jsonrpc_result_response(
+        id,
+        norito::json!({
+            "job_id": job_id,
+            "state": state_value
+        }),
+    )
+}
+
+fn upsert_async_job_state(
+    mcp_cfg: &iroha_config::parameters::actual::ToriiMcp,
+    job_id: String,
+    state: Value,
+) {
+    let now = Instant::now();
+    MCP_ASYNC_JOBS.insert(
+        job_id,
+        AsyncJobRecord {
+            state,
+            updated_at: now,
+        },
+    );
+    prune_async_jobs(mcp_cfg, now);
+}
+
+fn prune_async_jobs(mcp_cfg: &iroha_config::parameters::actual::ToriiMcp, now: Instant) {
+    let ttl = Duration::from_secs(mcp_cfg.async_job_ttl_secs.max(1));
+    MCP_ASYNC_JOBS.retain(|_, entry| now.saturating_duration_since(entry.updated_at) <= ttl);
+
+    let max_entries = mcp_cfg.async_job_max_entries.max(1);
+    let current_len = MCP_ASYNC_JOBS.len();
+    if current_len <= max_entries {
+        return;
+    }
+
+    let mut by_age = MCP_ASYNC_JOBS
+        .iter()
+        .map(|entry| (entry.key().clone(), entry.value().updated_at))
+        .collect::<Vec<_>>();
+    by_age.sort_by_key(|(_, updated_at)| *updated_at);
+
+    let remove_count = current_len.saturating_sub(max_entries);
+    for (job_id, _) in by_age.into_iter().take(remove_count) {
+        MCP_ASYNC_JOBS.remove(&job_id);
+    }
+}
+
+fn generate_mcp_job_id() -> String {
+    let mut bytes = [0_u8; 20];
+    let mut rng = OsRng;
+    rng.try_fill_bytes(&mut bytes)
+        .expect("OS RNG should be available");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
 fn mcp_tool_success(structured: Value) -> Value {
     let status = structured.get("status").and_then(Value::as_u64);
     let is_http_error = status.is_some_and(|code| code >= 400);
+    let mut structured = structured;
+    if is_http_error && let Some(map) = structured.as_object_mut() {
+        let error_code = status
+            .map(http_status_error_code)
+            .unwrap_or("http_error")
+            .to_owned();
+        map.entry("error_code".into())
+            .or_insert(Value::String(error_code));
+    }
     let text = match status {
         Some(code) if is_http_error => format!("http error {code}"),
         Some(code) => format!("http {code}"),
@@ -1605,6 +1989,7 @@ fn mcp_tool_success(structured: Value) -> Value {
 }
 
 fn mcp_tool_error(message: String) -> Value {
+    let error_message = message.clone();
     norito::json!({
         "content": [
             {
@@ -1612,7 +1997,11 @@ fn mcp_tool_error(message: String) -> Value {
                 "text": message
             }
         ],
-        "isError": true
+        "isError": true,
+        "structuredContent": {
+            "error_code": MCP_TOOL_EXECUTION_ERROR_CODE,
+            "message": error_message
+        }
     })
 }
 
@@ -1630,12 +2019,23 @@ fn jsonrpc_error_response(
     message: &str,
     data: Option<Value>,
 ) -> Value {
+    let mut data_object = match data {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            let mut map = Map::new();
+            map.insert("details".into(), other);
+            map
+        }
+        None => Map::new(),
+    };
+    data_object
+        .entry("error_code".into())
+        .or_insert(Value::String(jsonrpc_error_code_label(code).to_owned()));
+
     let mut err = Map::new();
     err.insert("code".into(), Value::from(code));
     err.insert("message".into(), Value::String(message.to_owned()));
-    if let Some(data) = data {
-        err.insert("data".into(), data);
-    }
+    err.insert("data".into(), Value::Object(data_object));
     let mut obj = Map::new();
     obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
     obj.insert("id".into(), id.unwrap_or(Value::Null));
@@ -1643,13 +2043,44 @@ fn jsonrpc_error_response(
     Value::Object(obj)
 }
 
-fn parse_parameters(value: Option<&Value>) -> Vec<ParameterInfo> {
+fn jsonrpc_error_code_label(code: i64) -> &'static str {
+    match code {
+        JSONRPC_PARSE_ERROR => "parse_error",
+        JSONRPC_INVALID_REQUEST => "invalid_request",
+        JSONRPC_METHOD_NOT_FOUND => "method_not_found",
+        JSONRPC_INVALID_PARAMS => "invalid_params",
+        JSONRPC_INTERNAL_ERROR => "internal_error",
+        MCP_TOOL_EXECUTION_ERROR => MCP_TOOL_EXECUTION_ERROR_CODE,
+        MCP_RATE_LIMITED => "rate_limited",
+        _ => "unknown_error",
+    }
+}
+
+fn http_status_error_code(status: u64) -> &'static str {
+    match status {
+        400 => "bad_request",
+        401 => "unauthorized",
+        403 => "forbidden",
+        404 => "not_found",
+        405 => "method_not_allowed",
+        409 => "conflict",
+        413 => "payload_too_large",
+        415 => "unsupported_media_type",
+        422 => "unprocessable_entity",
+        429 => "rate_limited",
+        500..=599 => "server_error",
+        _ => "http_error",
+    }
+}
+
+fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
     let Some(array) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
 
     array
         .iter()
+        .map(|param| deref_openapi_value(spec, param))
         .filter_map(Value::as_object)
         .filter_map(|param| {
             let name = param.get("name").and_then(Value::as_str)?;
@@ -1658,16 +2089,26 @@ fn parse_parameters(value: Option<&Value>) -> Vec<ParameterInfo> {
                 .get("required")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let schema = param
+                .get("schema")
+                .map(|schema| deref_openapi_value(spec, schema).clone())
+                .unwrap_or_else(string_schema);
             Some(ParameterInfo {
                 name: name.to_owned(),
                 location: location.to_owned(),
                 required,
+                schema,
             })
         })
         .collect()
 }
 
-fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body: bool) -> Value {
+fn build_input_schema(
+    spec: &Value,
+    path: &str,
+    parameters: &[ParameterInfo],
+    request_body: Option<&Value>,
+) -> Value {
     let mut path_props = Map::new();
     let mut path_required = Vec::new();
     let mut query_props = Map::new();
@@ -1676,16 +2117,16 @@ fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body
     for param in parameters {
         match param.location.as_str() {
             "path" => {
-                path_props.insert(param.name.clone(), string_schema());
+                path_props.insert(param.name.clone(), param.schema.clone());
                 if param.required || path.contains(&format!("{{{}}}", param.name)) {
                     path_required.push(Value::String(param.name.clone()));
                 }
             }
             "query" => {
-                query_props.insert(param.name.clone(), string_schema());
+                query_props.insert(param.name.clone(), param.schema.clone());
             }
             "header" => {
-                header_props.insert(param.name.clone(), string_schema());
+                header_props.insert(param.name.clone(), param.schema.clone());
             }
             _ => {}
         }
@@ -1730,11 +2171,14 @@ fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body
         );
     }
 
-    if has_request_body {
+    if let Some(request_body) = request_body {
+        let body_schema = build_request_body_schema(spec, request_body);
         properties.insert(
             "body".into(),
-            norito::json!({
-                "description": "Request body payload. JSON values are encoded as application/json unless `content_type` overrides it."
+            body_schema.unwrap_or_else(|| {
+                norito::json!({
+                    "description": "Request body payload. JSON values are encoded as application/json unless `content_type` overrides it."
+                })
             }),
         );
         properties.insert(
@@ -1748,6 +2192,14 @@ fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body
 
     properties.insert("content_type".into(), string_schema());
     properties.insert("accept".into(), string_schema());
+    properties.insert(
+        "project".into(),
+        norito::json!({
+            "type": "array",
+            "description": "Optional projection keys applied to `structuredContent.body` object items.",
+            "items": { "type": "string" }
+        }),
+    );
 
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("object".to_owned()));
@@ -1757,6 +2209,54 @@ fn build_input_schema(path: &str, parameters: &[ParameterInfo], has_request_body
         schema.insert("required".into(), Value::Array(required));
     }
     Value::Object(schema)
+}
+
+fn build_request_body_schema(spec: &Value, request_body: &Value) -> Option<Value> {
+    let request_body = deref_openapi_value(spec, request_body);
+    let content = request_body.get("content").and_then(Value::as_object)?;
+    let mut schemas = Vec::new();
+    for media in content.values() {
+        let Some(media_obj) = media.as_object() else {
+            continue;
+        };
+        let Some(schema) = media_obj.get("schema") else {
+            continue;
+        };
+        schemas.push(deref_openapi_value(spec, schema).clone());
+    }
+    match schemas.len() {
+        0 => None,
+        1 => schemas.into_iter().next(),
+        _ => Some(norito::json!({ "oneOf": schemas })),
+    }
+}
+
+fn deref_openapi_value<'a>(spec: &'a Value, value: &'a Value) -> &'a Value {
+    let mut current = value;
+    for _ in 0..8 {
+        let Some(reference) = current
+            .as_object()
+            .and_then(|obj| obj.get("$ref"))
+            .and_then(Value::as_str)
+        else {
+            break;
+        };
+        let Some(resolved) = resolve_openapi_ref(spec, reference) else {
+            break;
+        };
+        current = resolved;
+    }
+    current
+}
+
+fn resolve_openapi_ref<'a>(spec: &'a Value, reference: &str) -> Option<&'a Value> {
+    let path = reference.strip_prefix("#/")?;
+    let mut current = spec;
+    for raw in path.split('/') {
+        let key = raw.replace("~1", "/").replace("~0", "~");
+        current = current.get(key.as_str())?;
+    }
+    Some(current)
 }
 
 fn string_schema() -> Value {
@@ -1837,7 +2337,7 @@ async fn dispatch_openapi_tool(
         .and_then(Value::as_str)
         .map(str::to_owned);
 
-    dispatch_route(
+    let structured = dispatch_route(
         app,
         inbound_headers,
         tool.method.clone(),
@@ -1847,7 +2347,9 @@ async fn dispatch_openapi_tool(
         content_type,
         accept,
     )
-    .await
+    .await?;
+
+    Ok(apply_body_projection(structured, arguments.get("project")))
 }
 
 async fn dispatch_connect_session_create(
@@ -7426,6 +7928,50 @@ fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> Value {
     Value::String(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
+fn apply_body_projection(mut structured: Value, projection: Option<&Value>) -> Value {
+    let Some(keys) = projection.and_then(parse_projection_keys) else {
+        return structured;
+    };
+    if keys.is_empty() {
+        return structured;
+    }
+    if let Some(body) = structured
+        .as_object_mut()
+        .and_then(|payload| payload.get_mut("body"))
+    {
+        project_value_keys(body, &keys);
+    }
+    structured
+}
+
+fn parse_projection_keys(value: &Value) -> Option<Vec<String>> {
+    let keys = value
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    Some(keys)
+}
+
+fn project_value_keys(value: &mut Value, keys: &[String]) {
+    match value {
+        Value::Object(object) => {
+            object.retain(|key, _| keys.iter().any(|needle| needle == key));
+        }
+        Value::Array(items) => {
+            for item in items {
+                if let Some(object) = item.as_object_mut() {
+                    object.retain(|key, _| keys.iter().any(|needle| needle == key));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Result<Value, String> {
     let sid = extract_connect_sid_argument(arguments)?;
     let role = arguments
@@ -12891,9 +13437,248 @@ pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests_runtime_handlers::mk_app_state_for_tests;
+    use iroha_config::parameters::actual::ToriiMcpProfile;
+
+    static MCP_ASYNC_JOBS_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
+        LazyLock::new(|| std::sync::Mutex::new(()));
 
     const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
     const TEST_ASSET_ID: &str = "norito:deadbeef";
+
+    fn sample_tool(name: &str, method: Method) -> ToolSpec {
+        ToolSpec {
+            name: name.to_owned(),
+            description: "sample".to_owned(),
+            method,
+            path_template: "/v1/sample".to_owned(),
+            input_schema: norito::json!({ "type": "object" }),
+        }
+    }
+
+    #[test]
+    fn capabilities_payload_includes_toolset_version() {
+        let tool = sample_tool("iroha.health", Method::GET);
+        let refs = vec![&tool];
+        let payload = capabilities_payload(&refs);
+        let toolset_version = payload
+            .get("capabilities")
+            .and_then(|caps| caps.get("tools"))
+            .and_then(|tools| tools.get("toolsetVersion"))
+            .and_then(Value::as_str)
+            .expect("toolsetVersion");
+        assert!(
+            !toolset_version.is_empty(),
+            "toolsetVersion must not be empty"
+        );
+    }
+
+    #[test]
+    fn jsonrpc_error_response_adds_stable_error_code() {
+        let payload = jsonrpc_error_response(None, JSONRPC_INVALID_PARAMS, "bad input", None);
+        let code = payload
+            .get("error")
+            .and_then(|err| err.get("data"))
+            .and_then(|data| data.get("error_code"))
+            .and_then(Value::as_str)
+            .expect("error_code");
+        assert_eq!(code, "invalid_params");
+    }
+
+    #[test]
+    fn read_only_policy_blocks_mutating_tools() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::ReadOnly;
+        let read_tool = sample_tool("iroha.accounts.get", Method::GET);
+        let write_tool = sample_tool("iroha.transactions.submit", Method::POST);
+        assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
+        assert!(!is_tool_allowed_by_policy(&cfg, &write_tool));
+    }
+
+    #[test]
+    fn apply_body_projection_keeps_requested_fields() {
+        let structured = norito::json!({
+            "status": 200,
+            "body": {
+                "id": 1,
+                "name": "alice",
+                "extra": true
+            }
+        });
+        let projection = norito::json!(["id", "name"]);
+        let projected = apply_body_projection(structured, Some(&projection));
+        let body = projected
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("projected body object");
+        assert!(body.contains_key("id"));
+        assert!(body.contains_key("name"));
+        assert!(!body.contains_key("extra"));
+    }
+
+    #[tokio::test]
+    async fn tools_call_batch_returns_per_call_errors_for_unknown_tools() {
+        let app = mk_app_state_for_tests();
+        let params = norito::json!({
+            "calls": [
+                { "name": "torii.missing.one" },
+                { "name": "torii.missing.two", "arguments": { "x": 1 } }
+            ]
+        });
+        let response = handle_tools_call_batch(
+            Some(Value::from(1_u64)),
+            app,
+            &HeaderMap::new(),
+            params.as_object().expect("params object"),
+        )
+        .await;
+        let results = response
+            .get("result")
+            .and_then(|value| value.get("results"))
+            .and_then(Value::as_array)
+            .expect("batch results");
+        assert_eq!(results.len(), 2);
+        for result in results {
+            let code = result
+                .get("error")
+                .and_then(|error| error.get("data"))
+                .and_then(|data| data.get("error_code"))
+                .and_then(Value::as_str)
+                .expect("error code");
+            assert_eq!(code, MCP_TOOL_NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_call_async_job_can_be_fetched_after_completion() {
+        let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
+        MCP_ASYNC_JOBS.clear();
+
+        let app = mk_app_state_for_tests();
+        let params = norito::json!({
+            "name": "torii.missing.async"
+        });
+        let response = handle_tools_call_async(
+            Some(Value::from(2_u64)),
+            app.clone(),
+            &HeaderMap::new(),
+            params.as_object().expect("params object"),
+        )
+        .await;
+        let job_id = response
+            .get("result")
+            .and_then(|value| value.get("job_id"))
+            .and_then(Value::as_str)
+            .expect("job id")
+            .to_owned();
+
+        let mut final_state = None;
+        for _ in 0..40 {
+            let mut get_params = norito::json::Map::new();
+            get_params.insert("job_id".into(), Value::String(job_id.clone()));
+            let jobs = handle_tools_jobs_get(None, &app.mcp, &get_params);
+            let state = jobs
+                .get("result")
+                .and_then(|value| value.get("state"))
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
+            if state != "pending" {
+                final_state = Some(state.to_owned());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(final_state.as_deref(), Some("failed"));
+
+        let mut get_params = norito::json::Map::new();
+        get_params.insert("job_id".into(), Value::String(job_id));
+        let jobs = handle_tools_jobs_get(None, &app.mcp, &get_params);
+        let error_code = jobs
+            .get("result")
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.get("error"))
+            .and_then(|value| value.get("data"))
+            .and_then(|value| value.get("error_code"))
+            .and_then(Value::as_str)
+            .expect("error code");
+        assert_eq!(error_code, MCP_TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn tools_list_list_changed_tracks_toolset_version() {
+        let app = mk_app_state_for_tests();
+        let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
+        let version = compute_toolset_version(&visible_tools);
+
+        let same_version = norito::json!({ "toolsetVersion": version });
+        let same_response = handle_tools_list(None, &app, same_version.as_object().expect("map"));
+        assert_eq!(
+            same_response
+                .get("result")
+                .and_then(|value| value.get("listChanged"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let different_version = norito::json!({ "toolset_version": "different" });
+        let different_response =
+            handle_tools_list(None, &app, different_version.as_object().expect("map"));
+        assert_eq!(
+            different_response
+                .get("result")
+                .and_then(|value| value.get("listChanged"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn prune_async_jobs_applies_ttl_and_capacity_limits() {
+        let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
+        MCP_ASYNC_JOBS.clear();
+
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.async_job_ttl_secs = 1;
+        cfg.async_job_max_entries = 2;
+
+        let now = Instant::now();
+        MCP_ASYNC_JOBS.insert(
+            "old".to_owned(),
+            AsyncJobRecord {
+                state: norito::json!({ "status": "completed" }),
+                updated_at: now - Duration::from_secs(3),
+            },
+        );
+        MCP_ASYNC_JOBS.insert(
+            "recent-1".to_owned(),
+            AsyncJobRecord {
+                state: norito::json!({ "status": "completed" }),
+                updated_at: now - Duration::from_millis(30),
+            },
+        );
+        MCP_ASYNC_JOBS.insert(
+            "recent-2".to_owned(),
+            AsyncJobRecord {
+                state: norito::json!({ "status": "completed" }),
+                updated_at: now - Duration::from_millis(20),
+            },
+        );
+        MCP_ASYNC_JOBS.insert(
+            "recent-3".to_owned(),
+            AsyncJobRecord {
+                state: norito::json!({ "status": "completed" }),
+                updated_at: now - Duration::from_millis(10),
+            },
+        );
+
+        prune_async_jobs(&cfg, now);
+
+        assert!(!MCP_ASYNC_JOBS.contains_key("old"));
+        assert!(!MCP_ASYNC_JOBS.contains_key("recent-1"));
+        assert!(MCP_ASYNC_JOBS.contains_key("recent-2"));
+        assert!(MCP_ASYNC_JOBS.contains_key("recent-3"));
+    }
 
     #[test]
     fn tool_registry_skips_ws_and_sse_routes() {

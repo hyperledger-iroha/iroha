@@ -274,7 +274,7 @@ fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
             .as_ref()
             .expect("single controllers provide public key");
         let public_key = ed25519_public_key(public_key_hex);
-        let account_id = AccountId::new(domain(raw_domain), public_key.clone());
+        let account_id = AccountId::new(public_key.clone());
         let rebuilt =
             AccountAddress::from_account_id(&account_id).expect("rebuild single address succeeds");
         assert_eq!(
@@ -357,7 +357,7 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
         );
     }
 
-    let account = AccountId::new_multisig(domain(domain_label), policy);
+    let account = AccountId::new_multisig(policy);
     let rebuilt =
         AccountAddress::from_account_id(&account).expect("multisig address reconstruction");
     assert_eq!(
@@ -444,6 +444,12 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
             assert!(
                 matches!(err, AccountAddressError::InvalidHexAddress),
                 "{case_id}: expected InvalidHexAddress, got {err}"
+            );
+        }
+        "UnsupportedAddressFormat" => {
+            assert!(
+                matches!(err, AccountAddressError::UnsupportedAddressFormat),
+                "{case_id}: expected UnsupportedAddressFormat, got {err}"
             );
         }
         "InvalidLength" => {

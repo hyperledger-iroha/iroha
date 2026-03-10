@@ -26,7 +26,7 @@ fn sample_hash(seed: u8) -> Hash {
 fn seeded_account(domain: &str, seed: u8) -> AccountId {
     let domain_id = DomainId::from_str(domain).expect("domain id");
     let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    AccountId::new(domain_id, key_pair.public_key().clone())
+    AccountId::new(key_pair.public_key().clone())
 }
 
 fn sample_route(seed: u8) -> StreamingPrivacyRoute {

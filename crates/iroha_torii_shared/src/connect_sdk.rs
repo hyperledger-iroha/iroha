@@ -266,7 +266,8 @@ mod approve_preimage_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key parses");
-        let acc = AccountId::new(domain, public_key).to_string();
+        let _ = domain;
+        let acc = AccountId::new(public_key).to_string();
         let perms = PermissionsV1 {
             methods: vec!["SIGN_REQUEST_RAW".into()],
             events: vec![],

@@ -62,7 +62,7 @@ fn prepare_state() -> (
         let domain_id: DomainId = "zkd".parse().unwrap();
         let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
         let owner_keypair = KeyPair::random();
-        let owner: AccountId = AccountId::of(domain_id.clone(), owner_keypair.public_key().clone());
+        let owner: AccountId = AccountId::of(owner_keypair.public_key().clone());
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -81,7 +81,8 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::account(NewAccount::new(owner.clone())).into(),
+                    Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone()))
+                        .into(),
                 )
                 .expect("register account");
             executor

@@ -36,11 +36,8 @@ pub mod isi {
             let _ = state_transaction.world.account(&source)?;
             let _ = state_transaction.world.account(&destination)?;
 
-            let authority_is_source_owner = authority == &source
-                || state_transaction.world.domain(source.domain())?.owned_by() == authority;
-            let authority_is_asset_definition_domain_owner =
-                state_transaction.world.domain(object.domain())?.owned_by() == authority;
-            if !(authority_is_source_owner || authority_is_asset_definition_domain_owner) {
+            let authority_is_source_owner = authority == &source;
+            if !authority_is_source_owner {
                 return Err(Error::InvariantViolation(
                     "Can't transfer asset definition of another account"
                         .to_owned()
@@ -341,7 +338,10 @@ pub mod query {
     };
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::StateReadOnly,
+    };
 
     impl ValidQuery for FindRolesByAccountId {
         #[metrics(+"find_roles_by_account_id")]
@@ -411,13 +411,10 @@ pub mod query {
             Ok(state_ro.world().accounts_iter().filter_map(move |entry| {
                 let has_balance = state_ro
                     .world()
-                    .assets()
-                    .get(&AssetId::new(
-                        asset_definition_id.clone(),
-                        entry.id().clone(),
-                    ))
+                    .assets_in_account_iter(entry.id())
+                    .filter(|asset| asset.id().definition() == &asset_definition_id)
                     // Skip zero-valued placeholders (including genesis seeds).
-                    .is_some_and(|amount| !(**amount).is_zero());
+                    .any(|asset| !asset.value().is_zero());
 
                 if !has_balance {
                     return None;
@@ -432,6 +429,15 @@ pub mod query {
                 };
                 filter.applies(&account).then_some(account)
             }))
+        }
+    }
+
+    impl ValidSingularQuery for FindDomainsByAccountId {
+        #[metrics(+"find_domains_by_account_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Vec<DomainId>, Error> {
+            Ok(state_ro
+                .world()
+                .domains_for_subject(&self.account_id().subject_id()))
         }
     }
 
@@ -481,10 +487,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone()))
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone()))
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -533,10 +539,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone()))
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone()))
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -579,10 +585,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone()))
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone()))
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -620,6 +626,49 @@ pub mod query {
         }
 
         #[test]
+        fn find_domains_by_account_id_returns_linked_domains_for_subject() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland: DomainId = "wonderland".parse().unwrap();
+            let acme: DomainId = "acme".parse().unwrap();
+            Register::domain(Domain::new(wonderland.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(acme.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (account_id, _) = gen_account_in("wonderland");
+            Register::account(Account::new(
+                account_id.clone().to_account_id(wonderland.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            iroha_data_model::isi::domain_link::LinkAccountDomain {
+                account: account_id.clone(),
+                domain: acme.clone(),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let domains = FindDomainsByAccountId::new(account_id)
+                .execute(&view)
+                .unwrap();
+            assert_eq!(domains, vec![acme, wonderland]);
+        }
+
+        #[test]
         fn transfer_asset_definition_rejects_unauthorized_authority() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -637,15 +686,21 @@ pub mod query {
             let (source, _) = gen_account_in("wonderland");
             let (destination, _) = gen_account_in("wonderland");
             let (intruder, _) = gen_account_in("wonderland");
-            Register::account(Account::new(source.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::account(Account::new(destination.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::account(Account::new(intruder.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::account(Account::new(
+                source.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(Account::new(
+                destination.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(Account::new(
+                intruder.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
             let asset_definition: AssetDefinitionId = "bond#wonderland".parse().unwrap();
             Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()))
@@ -678,7 +733,7 @@ pub mod query {
         }
 
         #[test]
-        fn transfer_asset_definition_allows_definition_domain_owner() {
+        fn transfer_asset_definition_allows_source_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -691,18 +746,24 @@ pub mod query {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::account(Account::new(
+                ALICE_ID.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
             let (source, _) = gen_account_in("wonderland");
             let (destination, _) = gen_account_in("wonderland");
-            Register::account(Account::new(source.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::account(Account::new(destination.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::account(Account::new(
+                source.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(Account::new(
+                destination.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
             let asset_definition: AssetDefinitionId = "bond#wonderland".parse().unwrap();
             Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()))
@@ -718,8 +779,8 @@ pub mod query {
                 asset_definition.clone(),
                 destination.clone(),
             )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("definition domain owner must be allowed to transfer ownership");
+            .execute(&source, &mut stx)
+            .expect("source owner must be allowed to transfer ownership");
             assert_eq!(
                 stx.world
                     .asset_definition(&asset_definition)

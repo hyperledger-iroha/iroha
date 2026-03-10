@@ -45,14 +45,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::space_directory"));
     let account_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let account_id = AccountId::new("cbdc".parse().unwrap(), account_key.public_key().clone());
+    let account_id = AccountId::new(account_key.public_key().clone());
     let compressed_literal = {
         account_id
             .to_account_address()
             .and_then(|address| address.to_compressed_sora())
             .expect("compressed literal")
     };
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();

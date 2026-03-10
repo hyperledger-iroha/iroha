@@ -42,9 +42,10 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
 
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let authority_id = AccountId::new(domain_id.clone(), authority_kp.public_key().clone());
+    let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+    let authority_account =
+        Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
@@ -141,7 +142,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
 
     let app = torii.api_router_for_tests();
     let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let user_id = AccountId::new(domain_id, user_kp.public_key().clone());
+    let user_id = AccountId::new(user_kp.public_key().clone());
     let body = json_object(vec![
         json_entry("alias", "p2p-user"),
         json_entry("account_id", user_id.to_string()),

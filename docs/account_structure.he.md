@@ -307,7 +307,7 @@ legacy selector segment
 - המרות IME/NFKC: ניתן לנרמל את Sora kana ברוחב חצי לצורות ברוחב המלא מבלי לשבור את הפענוח, אך ספרות/אותיות ASCII `sora` ו-IH58 חייבות להישאר ASCII. משטחים של זקיפים ברוחב מלא או מקופל מארז `ERR_MISSING_COMPRESSED_SENTINEL`, עומסי ASCII ברוחב מלא מעלים `ERR_INVALID_COMPRESSED_CHAR`, ואי-ההתאמה של סכום הבדיקה עולה כ-`ERR_CHECKSUM_MISMATCH`. בדיקות נכסים ב-`crates/iroha_data_model/src/account/address.rs` מכסות את הנתיבים האלה כך ש-SDK וארנקים יכולים להסתמך על כשלים דטרמיניסטיים.
 - ניתוח Torii ו-SDK של כינויים `address@domain` (rejected legacy form) פולטים כעת את אותם קודים של `ERR_*` כאשר קלטי IH58 (מועדף)/סורה (השני בטוב ביותר) נכשלים לפני החזרה של כינוי (למשל, חוסר התאמה של סכום בדיקה, חוסר התאמה של תקציר תחום), כך שלקוחות יכולים לנסח מחדש הסיבות מובנות.
 - עומסי בורר מקומיים קצרים מ-12 בתים משטחים `ERR_LOCAL8_DEPRECATED`, משמרים ניתוק קשה מתקציר Local-8 מדור קודם.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 וקטורים בינאריים נורמטיביים
 

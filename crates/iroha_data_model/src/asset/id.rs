@@ -20,6 +20,7 @@ use norito::{
 pub use self::model::*;
 use crate::{
     Name, account::prelude::*, common::split_nonempty, domain::prelude::*, error::ParseError,
+    nexus::DataSpaceId,
 };
 
 #[model]
@@ -60,6 +61,35 @@ mod model {
         pub name: Name,
     }
 
+    /// Balance partition used for a concrete asset ownership bucket.
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Decode,
+        Encode,
+        IntoSchema,
+        Default,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub enum AssetBalanceScope {
+        /// Unrestricted balance bucket shared across all dataspaces.
+        #[default]
+        Global,
+        /// Dataspace-restricted bucket keyed by a specific dataspace identifier.
+        Dataspace(DataSpaceId),
+    }
+
     /// Identification of an asset combines the entity identifier ([`AssetId`]) with the owner [`AccountId`].
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
@@ -69,6 +99,9 @@ mod model {
         pub account: AccountId,
         /// Entity Identification.
         pub definition: AssetDefinitionId,
+        /// Balance partition scope for this ownership bucket.
+        #[norito(default)]
+        pub scope: AssetBalanceScope,
     }
 }
 
@@ -148,12 +181,26 @@ impl AssetId {
         Self {
             account,
             definition,
+            scope: AssetBalanceScope::Global,
         }
     }
 
     /// Convenience alias for [`Self::new`]
     pub fn of(definition: AssetDefinitionId, account: AccountId) -> Self {
         Self::new(definition, account)
+    }
+
+    /// Create an [`AssetId`] with an explicit balance scope.
+    pub fn with_scope(
+        definition: AssetDefinitionId,
+        account: AccountId,
+        scope: AssetBalanceScope,
+    ) -> Self {
+        Self {
+            account,
+            definition,
+            scope,
+        }
     }
 
     /// Parse an encoded asset identifier from `norito:<hex>`.
@@ -274,7 +321,7 @@ mod tests {
     fn debug_formats_without_recursion() {
         let kp = KeyPair::random();
         let domain: DomainId = "domain".parse().unwrap();
-        let account: AccountId = AccountId::new(domain.clone(), kp.public_key().clone());
+        let account: AccountId = AccountId::new(kp.public_key().clone());
         let def: AssetDefinitionId = "xor#domain".parse().unwrap();
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
@@ -305,7 +352,7 @@ mod tests {
     fn asset_id_parse_encoded_roundtrips() {
         let kp = KeyPair::random();
         let account_domain: DomainId = "wonderland".parse().expect("domain");
-        let account = AccountId::new(account_domain.clone(), kp.public_key().clone());
+        let account = AccountId::new(kp.public_key().clone());
         let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
         let id = AssetId::new(definition, account);
 
@@ -315,10 +362,31 @@ mod tests {
     }
 
     #[test]
+    fn asset_id_with_explicit_scope_roundtrips() {
+        let kp = KeyPair::random();
+        let account_domain: DomainId = "wonderland".parse().expect("domain");
+        let account = AccountId::new(kp.public_key().clone());
+        let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
+        let id = AssetId::with_scope(
+            definition,
+            account,
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+
+        let encoded = id.canonical_encoded();
+        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
+        assert_eq!(parsed, id);
+        assert_eq!(
+            parsed.scope(),
+            &AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+        );
+    }
+
+    #[test]
     fn asset_id_parse_encoded_rejects_textual_literal() {
         let kp = KeyPair::random();
         let account_domain: DomainId = "wonderland".parse().expect("domain");
-        let account = AccountId::new(account_domain.clone(), kp.public_key().clone());
+        let account = AccountId::new(kp.public_key().clone());
         let literal = format!("xor#wonderland#{account}");
 
         let err = AssetId::parse_encoded(&literal).expect_err("textual literal must fail");

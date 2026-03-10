@@ -8,9 +8,9 @@ use std::{
 };
 
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
-pub use iroha_data_model::account::AccountSubjectId;
+pub use iroha_data_model::account::AccountId;
 pub use iroha_data_model::prelude::{
-    AccountId as ScopedAccountId, AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer,
+    AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer, ScopedAccountId,
 };
 use iroha_data_model::{
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
@@ -57,9 +57,9 @@ impl AssetDefinition {
 /// NFT state tracking the current owner, stored metadata, and the issuing authority.
 #[derive(Clone, Debug)]
 struct NftRecord {
-    owner: AccountSubjectId,
+    owner: AccountId,
     data: Vec<u8>,
-    issuer: AccountSubjectId,
+    issuer: AccountId,
 }
 
 /// Per-dataspace policy sourced from Space Directory/WSV for AXT enforcement.
@@ -227,19 +227,19 @@ pub enum PermissionToken {
     BurnAsset(AssetDefinitionId),
     TransferAsset(AssetDefinitionId),
     /// Permission to add a signatory for the given account
-    AddSignatory(AccountSubjectId),
+    AddSignatory(AccountId),
     /// Permission to remove a signatory for the given account
-    RemoveSignatory(AccountSubjectId),
+    RemoveSignatory(AccountId),
     /// Permission to update the quorum for the given account
-    SetAccountQuorum(AccountSubjectId),
+    SetAccountQuorum(AccountId),
     /// Permission to set account detail for the given account
-    SetAccountDetail(AccountSubjectId),
+    SetAccountDetail(AccountId),
     /// Permission to shield public funds for an asset
     Shield(AssetDefinitionId),
     /// Permission to unshield private funds for an asset
     Unshield(AssetDefinitionId),
     /// Permission to read balances of the given account
-    ReadAccountAssets(AccountSubjectId),
+    ReadAccountAssets(AccountId),
     /// Permission to create, delete, grant, and revoke roles.
     ManageRoles,
     /// Permission to grant and revoke direct permissions.
@@ -307,16 +307,16 @@ impl Default for Account {
 #[derive(Clone, Default)]
 pub struct MockWorldStateView {
     domains: HashMap<DomainId, ()>,
-    domain_accounts: HashMap<DomainId, HashSet<AccountSubjectId>>,
-    accounts: HashMap<AccountSubjectId, Account>,
-    permissions: HashMap<AccountSubjectId, HashSet<PermissionToken>>,
+    domain_accounts: HashMap<DomainId, HashSet<AccountId>>,
+    accounts: HashMap<AccountId, Account>,
+    permissions: HashMap<AccountId, HashSet<PermissionToken>>,
     asset_definitions: HashMap<AssetDefinitionId, AssetDefinition>,
-    balances: HashMap<(AccountSubjectId, AssetDefinitionId), Numeric>,
+    balances: HashMap<(AccountId, AssetDefinitionId), Numeric>,
     nfts: HashMap<NftId, NftRecord>,
     peers: HashSet<Peer>,
     triggers: HashMap<String, bool>,
     roles: HashMap<String, HashSet<PermissionToken>>,
-    role_assignments: HashMap<AccountSubjectId, HashSet<String>>, // account subject -> role names
+    role_assignments: HashMap<AccountId, HashSet<String>>, // account subject -> role names
     // ZK (shielded) state
     zk_assets: HashMap<AssetDefinitionId, ZkAssetState>,
     elections: HashMap<String, ElectionState>,
@@ -859,8 +859,8 @@ impl MockWorldStateView {
         true
     }
 
-    fn account_subject(account: &ScopedAccountId) -> AccountSubjectId {
-        AccountSubjectId::from_account_id(account)
+    fn account_subject(account: &ScopedAccountId) -> AccountId {
+        account.subject_id()
     }
 
     fn account_is_linked(&self, account: &ScopedAccountId) -> bool {
@@ -870,7 +870,7 @@ impl MockWorldStateView {
             .is_some_and(|subjects| subjects.contains(&subject))
     }
 
-    fn subject_has_any_domain(&self, subject: &AccountSubjectId) -> bool {
+    fn subject_has_any_domain(&self, subject: &AccountId) -> bool {
         self.domain_accounts
             .values()
             .any(|subjects| subjects.contains(subject))
@@ -880,7 +880,7 @@ impl MockWorldStateView {
     ///
     /// The returned list is sorted for deterministic test assertions.
     #[must_use]
-    pub fn linked_domains_for_subject(&self, subject: &AccountSubjectId) -> Vec<DomainId> {
+    pub fn linked_domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
         let mut domains: Vec<DomainId> = self
             .domain_accounts
             .iter()
@@ -900,8 +900,8 @@ impl MockWorldStateView {
     ///
     /// The returned list is sorted for deterministic test assertions.
     #[must_use]
-    pub fn linked_subjects_for_domain(&self, domain: &DomainId) -> Vec<AccountSubjectId> {
-        let mut subjects: Vec<AccountSubjectId> = self
+    pub fn linked_subjects_for_domain(&self, domain: &DomainId) -> Vec<AccountId> {
+        let mut subjects: Vec<AccountId> = self
             .domain_accounts
             .get(domain)
             .into_iter()
@@ -916,7 +916,7 @@ impl MockWorldStateView {
     ///
     /// Returns `true` when the link is newly created and `false` when the
     /// domain does not exist or the subject is already linked.
-    pub fn link_subject_to_domain(&mut self, subject: AccountSubjectId, domain: DomainId) -> bool {
+    pub fn link_subject_to_domain(&mut self, subject: AccountId, domain: DomainId) -> bool {
         if !self.domains.contains_key(&domain) {
             return false;
         }
@@ -932,11 +932,7 @@ impl MockWorldStateView {
     /// If this is the final domain link for the subject, non-zero balances and
     /// NFT ownership still prevent unlinking so resources are not orphaned.
     /// Subject-level account state is otherwise preserved.
-    pub fn unlink_subject_from_domain(
-        &mut self,
-        subject: &AccountSubjectId,
-        domain: &DomainId,
-    ) -> bool {
+    pub fn unlink_subject_from_domain(&mut self, subject: &AccountId, domain: &DomainId) -> bool {
         let Some(subjects) = self.domain_accounts.get_mut(domain) else {
             return false;
         };
@@ -964,10 +960,7 @@ impl MockWorldStateView {
         true
     }
 
-    fn canonical_account_id_for_subject(
-        &self,
-        subject: &AccountSubjectId,
-    ) -> Option<ScopedAccountId> {
+    fn canonical_account_id_for_subject(&self, subject: &AccountId) -> Option<ScopedAccountId> {
         let domain = self
             .domain_accounts
             .iter()
@@ -1886,7 +1879,7 @@ pub enum ZkEvent {
     /// Unshield operation credited public balance.
     Unshielded {
         asset: AssetDefinitionId,
-        to: AccountSubjectId,
+        to: AccountId,
         public_amount: Numeric,
     },
 }
@@ -1949,7 +1942,7 @@ impl WsvHost {
 
     fn materialize_subject_account(
         wsv: &mut MockWorldStateView,
-        subject: &AccountSubjectId,
+        subject: &AccountId,
     ) -> ScopedAccountId {
         if let Some(existing) = wsv.canonical_account_id_for_subject(subject) {
             return existing;
@@ -1996,8 +1989,8 @@ impl WsvHost {
     /// default domain and linked into the world.
     pub fn new_with_subject_map(
         mut wsv: MockWorldStateView,
-        caller: AccountSubjectId,
-        account_map: HashMap<u64, AccountSubjectId>,
+        caller: AccountId,
+        account_map: HashMap<u64, AccountId>,
         asset_map: HashMap<u64, AssetDefinitionId>,
     ) -> Self {
         let caller_account = Self::materialize_subject_account(&mut wsv, &caller);
@@ -2011,7 +2004,7 @@ impl WsvHost {
     /// Construct a host from a single domainless caller with no account index map.
     pub fn new_with_subject(
         wsv: MockWorldStateView,
-        caller: AccountSubjectId,
+        caller: AccountId,
         asset_map: HashMap<u64, AssetDefinitionId>,
     ) -> Self {
         Self::new_with_subject_map(wsv, caller, HashMap::new(), asset_map)
@@ -2019,15 +2012,15 @@ impl WsvHost {
 
     /// Return the current caller as a domainless account subject.
     #[must_use]
-    pub fn caller_subject(&self) -> AccountSubjectId {
-        AccountSubjectId::from(&self.caller)
+    pub fn caller_subject(&self) -> AccountId {
+        AccountId::from(&self.caller)
     }
 
     /// Switch the caller using a domainless account subject.
     ///
     /// If the subject has no existing domain linkage in the world, it is
     /// materialized under the configured default domain first.
-    pub fn set_caller_subject(&mut self, caller: AccountSubjectId) {
+    pub fn set_caller_subject(&mut self, caller: AccountId) {
         self.caller = Self::materialize_subject_account(&mut self.wsv, &caller);
     }
 
@@ -2479,10 +2472,12 @@ impl WsvHost {
             return Err(VMError::DecodeError);
         }
         for entry in batch.entries() {
+            let from = Self::materialize_subject_account(&mut self.wsv, entry.from());
+            let to = Self::materialize_subject_account(&mut self.wsv, entry.to());
             if !self.wsv.transfer(
                 &self.caller,
-                entry.from().clone(),
-                entry.to().clone(),
+                from,
+                to,
                 entry.asset_definition().clone(),
                 entry.amount().clone(),
             ) {
@@ -2856,33 +2851,23 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
     }
     if let Some(rest) = s.strip_prefix("read_assets:") {
         let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::ReadAccountAssets(
-            AccountSubjectId::from_account_id(&id),
-        ));
+        return Ok(PermissionToken::ReadAccountAssets(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("add_signatory:") {
         let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::AddSignatory(
-            AccountSubjectId::from_account_id(&id),
-        ));
+        return Ok(PermissionToken::AddSignatory(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("remove_signatory:") {
         let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::RemoveSignatory(
-            AccountSubjectId::from_account_id(&id),
-        ));
+        return Ok(PermissionToken::RemoveSignatory(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("set_account_quorum:") {
         let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountQuorum(
-            AccountSubjectId::from_account_id(&id),
-        ));
+        return Ok(PermissionToken::SetAccountQuorum(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("set_account_detail:") {
         let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountDetail(
-            AccountSubjectId::from_account_id(&id),
-        ));
+        return Ok(PermissionToken::SetAccountDetail(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("register_zk_asset:") {
         let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
@@ -2972,9 +2957,7 @@ fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String
 }
 
 fn parse_account_id_literal(raw: &str) -> Result<ScopedAccountId, VMError> {
-    ScopedAccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| VMError::NoritoInvalid)
+    ScopedAccountId::parse_encoded(raw).map_err(|_| VMError::NoritoInvalid)
 }
 
 /// Parse a peer identifier from a JSON payload that may be either a raw string or an
@@ -3023,33 +3006,23 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         }
         "read_assets" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::ReadAccountAssets(
-                AccountSubjectId::from_account_id(&account),
-            ))
+            Ok(PermissionToken::ReadAccountAssets(account.subject_id()))
         }
         "add_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::AddSignatory(
-                AccountSubjectId::from_account_id(&account),
-            ))
+            Ok(PermissionToken::AddSignatory(account.subject_id()))
         }
         "remove_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::RemoveSignatory(
-                AccountSubjectId::from_account_id(&account),
-            ))
+            Ok(PermissionToken::RemoveSignatory(account.subject_id()))
         }
         "set_account_quorum" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountQuorum(
-                AccountSubjectId::from_account_id(&account),
-            ))
+            Ok(PermissionToken::SetAccountQuorum(account.subject_id()))
         }
         "set_account_detail" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountDetail(
-                AccountSubjectId::from_account_id(&account),
-            ))
+            Ok(PermissionToken::SetAccountDetail(account.subject_id()))
         }
         "shield" => {
             let id: AssetDefinitionId = parse_target(map)?;
@@ -3550,7 +3523,6 @@ impl IVMHost for WsvHost {
                     crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
                         let acct = ScopedAccountId::parse_encoded(raw)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_err(|_| VMError::DecodeError)?;
                         let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -4967,12 +4939,10 @@ impl IVMHost for WsvHost {
                     if !self.wsv.has_permission(&self.caller, &tok) {
                         return Err(VMError::PermissionDenied);
                     }
-                    let ok = self.wsv.shield(
-                        instr.from(),
-                        instr.asset(),
-                        amount,
-                        *instr.note_commitment(),
-                    );
+                    let from = Self::materialize_subject_account(&mut self.wsv, instr.from());
+                    let ok =
+                        self.wsv
+                            .shield(&from, instr.asset(), amount, *instr.note_commitment());
                     return if ok {
                         Ok(0)
                     } else {
@@ -5011,8 +4981,9 @@ impl IVMHost for WsvHost {
                         return Err(VMError::PermissionDenied);
                     }
                     self.zk_verified_unshield = false;
+                    let to = Self::materialize_subject_account(&mut self.wsv, instr.to());
                     let ok = self.wsv.unshield(
-                        instr.to(),
+                        &to,
                         instr.asset(),
                         amount,
                         instr.inputs().as_slice(),
@@ -5710,7 +5681,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::ReadAccountAssets(id) if id == AccountSubjectId::from(&alice)
+            PermissionToken::ReadAccountAssets(id) if id == AccountId::from(&alice)
         ));
     }
 
@@ -5758,7 +5729,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::AddSignatory(id) if id == AccountSubjectId::from(&bob)
+            PermissionToken::AddSignatory(id) if id == AccountId::from(&bob)
         ));
     }
 
@@ -5773,7 +5744,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::RemoveSignatory(id) if id == AccountSubjectId::from(&bob)
+            PermissionToken::RemoveSignatory(id) if id == AccountId::from(&bob)
         ));
     }
 
@@ -5788,7 +5759,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountQuorum(id) if id == AccountSubjectId::from(&bob)
+            PermissionToken::SetAccountQuorum(id) if id == AccountId::from(&bob)
         ));
     }
 
@@ -5803,7 +5774,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountDetail(id) if id == AccountSubjectId::from(&bob)
+            PermissionToken::SetAccountDetail(id) if id == AccountId::from(&bob)
         ));
     }
 
@@ -6054,7 +6025,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "wonderland",
         );
-        let caller_subject = AccountSubjectId::from(&caller);
+        let caller_subject = AccountId::from(&caller);
 
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
@@ -6066,7 +6037,7 @@ mod tests_governance_elections {
             .parse()
             .expect("default domain id must parse");
         assert_eq!(host.caller.domain(), &default_domain);
-        assert_eq!(AccountSubjectId::from(&host.caller), caller_subject);
+        assert_eq!(AccountId::from(&host.caller), caller_subject);
         assert!(host.wsv.account_signatories(&host.caller).is_some());
     }
 
@@ -6080,8 +6051,8 @@ mod tests_governance_elections {
             "ed012021F5A4D9D9476A9C9B4F7A7E377B2F756D3A6B7CD57E9C535C84D0D4D716D404",
             "finance",
         );
-        let caller_subject = AccountSubjectId::from(&caller);
-        let mapped_subject = AccountSubjectId::from(&mapped);
+        let caller_subject = AccountId::from(&caller);
+        let mapped_subject = AccountId::from(&mapped);
         let mut account_map = HashMap::new();
         account_map.insert(7_u64, mapped_subject.clone());
 
@@ -6093,9 +6064,9 @@ mod tests_governance_elections {
         );
 
         let materialized = host.account_map.get(&7).expect("mapped account id");
-        assert_eq!(AccountSubjectId::from(materialized), mapped_subject);
+        assert_eq!(AccountId::from(materialized), mapped_subject);
         assert!(host.wsv.account_signatories(materialized).is_some());
-        assert_eq!(AccountSubjectId::from(&host.caller), caller_subject);
+        assert_eq!(AccountId::from(&host.caller), caller_subject);
     }
 
     #[test]
@@ -6108,8 +6079,8 @@ mod tests_governance_elections {
             "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "finance",
         );
-        let alice_subject = AccountSubjectId::from(&alice);
-        let bob_subject = AccountSubjectId::from(&bob);
+        let alice_subject = AccountId::from(&alice);
+        let bob_subject = AccountId::from(&bob);
         let mut host =
             WsvHost::new_with_subject(MockWorldStateView::new(), alice_subject, HashMap::new());
 
@@ -6127,8 +6098,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host =
-            WsvHost::new_with_subject(wsv, AccountSubjectId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
         host.__test_set_verified_tally([0xAB; 32]);
 
         let fin = iroha_data_model::isi::zk::FinalizeElection {
@@ -6163,8 +6133,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host =
-            WsvHost::new_with_subject(wsv, AccountSubjectId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
         host.__test_set_verified_tally([0xFE; 32]);
 
         let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_inline(
@@ -6200,7 +6169,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountSubjectId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6271,7 +6240,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountSubjectId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6346,7 +6315,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountSubjectId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6462,7 +6431,7 @@ mod tests_nft_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
 
@@ -6509,7 +6478,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
         let mut vm = IVM::new(u64::MAX);
@@ -6539,7 +6508,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         )
         .with_zk_halo2_config(crate::host::ZkHalo2Config {
@@ -6567,7 +6536,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         )
         .with_zk_halo2_config(crate::host::ZkHalo2Config {
@@ -6612,7 +6581,7 @@ mod tests_null_decode {
         let payload = norito::to_bytes(&29_i64).expect("encode i64");
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
         let mut vm = IVM::new(u64::MAX);
@@ -6642,7 +6611,7 @@ mod tests_null_decode {
         for (label, payload) in cases {
             let host = WsvHost::new_with_subject(
                 MockWorldStateView::new(),
-                AccountSubjectId::from(&caller.clone()),
+                AccountId::from(&caller.clone()),
                 HashMap::new(),
             );
             let mut vm = IVM::new(u64::MAX);
@@ -6668,7 +6637,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
         let mut vm = IVM::new(u64::MAX);
@@ -6693,7 +6662,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
         let mut vm = IVM::new(u64::MAX);
@@ -6719,7 +6688,7 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
-            AccountSubjectId::from(&caller),
+            AccountId::from(&caller),
             HashMap::new(),
         );
         let mut vm = IVM::new(u64::MAX);

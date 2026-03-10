@@ -9,9 +9,8 @@ use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn program_with_scall(sys: u8) -> Vec<u8> {
@@ -94,9 +93,9 @@ fn unknown_syscall_is_rejected_at_admission() {
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
     let world =
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);

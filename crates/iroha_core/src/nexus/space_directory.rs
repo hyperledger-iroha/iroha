@@ -366,8 +366,9 @@ mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain = Domain::new(authority.domain().clone()).build(&authority);
-        let account = Account::new(authority.clone())
+        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id))
             .with_uaid(Some(uaid))
             .build(&authority);
         let mut world = World::with([domain], [account], []);

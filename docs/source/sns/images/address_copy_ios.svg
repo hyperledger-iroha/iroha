@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
   <rect x="10" y="10" width="700" height="340" rx="32" ry="32" fill="#ffffff" stroke="#d7d7d7" stroke-width="2" />
   <text x="40" y="48" font-family="SanFrancisco,Helvetica,Arial,sans-serif" font-size="22" font-weight="600" fill="#111">iOS Norito demo — address preview card</text>
-  <text x="40" y="82" font-size="14" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#555">Implicit default domain: default (no suffix required when sharing IH58).</text>
+  <text x="40" y="82" font-size="14" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#555">Domainless account literal: render domain context separately when a workflow requires it.</text>
   <text x="40" y="110" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#444">IH58 (preferred, prefix 753)</text>
   <rect x="40" y="120" width="640" height="40" rx="10" ry="10" fill="#f8f8f8" stroke="#e2e2e2" />
   <text x="50" y="147" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">ih58:sora1hjwa8c6ppf2l0n5s3ex7dwcd4m93q2m7q5pc4l5ca8xx7sc</text>

@@ -261,11 +261,11 @@ fn build_harness() -> Harness {
 fn build_fixtures(chain_id: &ChainId) -> Fixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
+    let operator = AccountId::of(operator_keys.public_key().clone());
     let controller_keys = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
-    let controller = AccountId::of(domain.clone(), controller_keys.public_key().clone());
+    let controller = AccountId::of(controller_keys.public_key().clone());
     let receiver_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let receiver = AccountId::of(domain.clone(), receiver_keys.public_key().clone());
+    let receiver = AccountId::of(receiver_keys.public_key().clone());
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
 
     let asset_definition =
@@ -440,7 +440,13 @@ fn build_receipt(
 }
 
 fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
-    let domain_id = fixtures.operator.domain().clone();
+    let domain_id = fixtures
+        .certificate
+        .allowance
+        .asset
+        .definition()
+        .domain()
+        .clone();
     let asset_definition_id = fixtures.certificate.allowance.asset.definition().clone();
 
     let header_one = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_321, 0);
@@ -457,9 +463,11 @@ fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
             .execute(&fixtures.operator, &mut tx)
             .expect("domain registration");
         for account_id in [&fixtures.operator, &fixtures.controller, &fixtures.receiver] {
-            Register::account(iroha_data_model::account::Account::new(account_id.clone()))
-                .execute(&fixtures.operator, &mut tx)
-                .expect("account registration");
+            Register::account(iroha_data_model::account::Account::new(
+                account_id.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&fixtures.operator, &mut tx)
+            .expect("account registration");
         }
         Register::asset_definition(NewAssetDefinition {
             id: asset_definition_id.clone(),
@@ -467,6 +475,7 @@ fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
             mintable: Mintable::Infinitely,
             logo: None,
             metadata: asset_definition_metadata,
+            balance_scope_policy: Default::default(),
             confidential_policy: AssetConfidentialPolicy::default(),
         })
         .execute(&fixtures.operator, &mut tx)

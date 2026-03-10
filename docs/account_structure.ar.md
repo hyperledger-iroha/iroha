@@ -172,15 +172,19 @@ payload bit: │version  │ class  │  norm  │ext │
 المعيار v1، تم مسح علامة الامتداد) و`0x0A` لوحدات التحكم المتعددة (الإصدار 0،
 الفئة 1، القاعدة v1، تم مسح علامة الامتداد).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -307,7 +311,7 @@ tag-specific payload, then move on to the controller bytes.
 - تحويلات IME/NFKC: يمكن تسوية Sora kana بنصف العرض إلى أشكال العرض الكامل الخاصة بها دون كسر فك التشفير، ولكن يجب أن يظل ASCII `sora` وأرقام/حروف IH58 ASCII. سطح حراس كامل العرض أو مطوي على الحالة `ERR_MISSING_COMPRESSED_SENTINEL`، وترفع حمولات ASCII كاملة العرض `ERR_INVALID_COMPRESSED_CHAR`، وتظهر حالات عدم تطابق المجموع الاختباري كـ `ERR_CHECKSUM_MISMATCH`. تغطي اختبارات الخصائص في `crates/iroha_data_model/src/account/address.rs` هذه المسارات حتى تتمكن مجموعات SDK والمحافظ من الاعتماد على حالات الفشل الحتمية.
 - يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` (rejected legacy form) بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات IH58 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
 - حمولات المحدد المحلي التي يقل حجمها عن 12 بايت `ERR_LOCAL8_DEPRECATED`، مع الحفاظ على التحويل الثابت من ملخصات Local‑8 القديمة.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 المتجهات الثنائية المعيارية
 

@@ -1559,7 +1559,7 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best) literals).",
+        "Filter assets by account owner (accepts canonical IH58 account literals).",
     ));
     params.push(string_query_param(
         "definition",
@@ -1576,7 +1576,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best) literals).",
+        "Filter transactions by authority account (accepts canonical IH58 account literals).",
     ));
     params.push(integer_query_param(
         "block",
@@ -1598,11 +1598,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best) literals).",
+        "Filter instructions by authority account (accepts canonical IH58 account literals).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best) literals).",
+        "Filter transfer instructions by participant account (source or destination; accepts canonical IH58 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -1661,7 +1661,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter allowances by controller account (accepts canonical IH58 account literals).",
         ),
         string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
@@ -1721,15 +1721,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter bundles by originating controller account (accepts canonical IH58 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter bundles by receiver account (accepts canonical IH58 account literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter bundles by deposit account (accepts canonical IH58 account literals).",
         ),
         string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
@@ -1793,11 +1793,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter receipts by sender/controller account (accepts canonical IH58 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best) literals).",
+            "Filter receipts by receiver account (accepts canonical IH58 account literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -6181,7 +6181,7 @@ fn nexus_public_lane_stake_operation() -> Map {
             address_format_query_param(),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (IH58 (preferred)/sora (second-best)).",
+                "Optional validator account literal to filter stake entries (canonical IH58 only).",
             ),
         ]),
     );
@@ -6227,7 +6227,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and \
+             given public lane. Requires an `account` query parameter (canonical IH58) and \
              accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
@@ -6255,12 +6255,9 @@ fn nexus_public_lane_rewards_operation() -> Map {
             address_format_query_param(),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
+                "Account literal to evaluate pending rewards for (canonical IH58 only).",
             ),
-            string_query_param(
-                "asset_id",
-                "Filter pending rewards by asset identifier.",
-            ),
+            string_query_param("asset_id", "Filter pending rewards by asset identifier."),
             Value::Object(upto_epoch_param),
         ]),
     );
@@ -6305,7 +6302,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)) \
+            "Resolves the supplied canonical IH58 account literal \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -6320,7 +6317,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
         Value::Array(vec![
             string_path_param(
                 "literal",
-                "Account literal to resolve (IH58 (preferred)/sora (second-best)).",
+                "Account literal to resolve (canonical IH58 only).",
             ),
             address_format_query_param(),
         ]),
@@ -6394,8 +6391,7 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as IH58 (preferred) or compressed sora literal."
-                .to_owned(),
+            "Relay account identifier encoded as a canonical IH58 account literal.".to_owned(),
         ),
     );
     let mut schema = Map::new();

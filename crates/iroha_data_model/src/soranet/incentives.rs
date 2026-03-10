@@ -447,7 +447,7 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let domain = DomainId::from_str("sora").expect("domain id");
         let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

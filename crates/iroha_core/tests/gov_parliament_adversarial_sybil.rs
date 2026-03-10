@@ -34,8 +34,7 @@ const MULTI_BEACON_SAMPLES: u64 = 32;
 fn mk_account(seed: u8) -> AccountId {
     let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
     let (public_key, _) = keypair.into_parts();
-    let domain = "wonderland".parse().expect("domain id");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn canonical_abi_hash_bytes() -> [u8; 32] {

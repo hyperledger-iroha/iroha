@@ -186,7 +186,7 @@ fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
 
 fn random_authority() -> iroha_data_model::account::AccountId {
     let kp = iroha_crypto::KeyPair::random();
-    iroha_data_model::account::AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone())
+    iroha_data_model::account::AccountId::of(kp.public_key().clone())
 }
 
 #[test]
@@ -195,8 +195,11 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
         return;
     }
 
-    let state = new_state();
+    let mut state = new_state();
     let alice = random_authority();
+    let mut cfg = state.gov.clone();
+    cfg.plain_voting_enabled = true;
+    state.set_gov(cfg);
 
     let mut block = state.block(block_header(1));
     {

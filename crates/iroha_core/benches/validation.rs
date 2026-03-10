@@ -23,7 +23,7 @@ use iroha_test_samples::gen_account_in;
 static STARTER_DOMAIN: LazyLock<DomainId> = LazyLock::new(|| "start".parse().unwrap());
 static STARTER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);
 static STARTER_ID: LazyLock<AccountId> =
-    LazyLock::new(|| AccountId::new(STARTER_DOMAIN.clone(), STARTER_KEYPAIR.public_key().clone()));
+    LazyLock::new(|| AccountId::new(STARTER_KEYPAIR.public_key().clone()));
 
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {

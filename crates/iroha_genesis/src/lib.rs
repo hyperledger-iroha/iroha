@@ -1224,9 +1224,9 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_structured_instructions_roundtrip() {
             let account_id = ALICE_ID.clone();
-            let domain = Domain::new(account_id.domain().clone());
-            let asset_def_id: AssetDefinitionId =
-                format!("coin#{}", account_id.domain()).parse().unwrap();
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain = Domain::new(domain_id.clone());
+            let asset_def_id: AssetDefinitionId = format!("coin#{domain_id}").parse().unwrap();
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
 
             let parameter = Parameter::Transaction(TransactionParameter::MaxInstructions(
@@ -3663,15 +3663,8 @@ impl RawGenesisTransaction {
         da_proof_policies: Option<DaProofPolicyBundle>,
     ) -> Result<GenesisBlock> {
         let chain = self.chain.clone();
-        let genesis_account = AccountId::new(
-            GENESIS_DOMAIN_ID.clone(),
-            genesis_key_pair.public_key().clone(),
-        );
+        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
-        let vk_set_hash =
-            compute_genesis_vk_set_hash(instruction_batches.iter().flat_map(|batch| batch.iter()))?;
-        let confidential_digest =
-            ConfidentialFeatureDigest::new(vk_set_hash, None, None, Some(RULES_VERSION));
 
         let mut transactions = Vec::new();
         for (tx_index, instructions) in instruction_batches.into_iter().enumerate() {
@@ -3694,6 +3687,8 @@ impl RawGenesisTransaction {
             let transaction = builder.sign(genesis_key_pair.private_key());
             transactions.push(transaction);
         }
+        let confidential_digest =
+            ConfidentialFeatureDigest::new(None, None, None, Some(RULES_VERSION));
         let block = SignedBlock::genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
@@ -4354,8 +4349,10 @@ impl GenesisDomainBuilder {
 
     /// Add an account (having provided `metadata`) to this domain.
     pub fn account_with_metadata(mut self, signatory: PublicKey, metadata: Metadata) -> Self {
-        let account_id = AccountId::new(self.domain_id.clone(), signatory);
-        let register = Register::account(Account::new(account_id).with_metadata(metadata));
+        let account_id = AccountId::new(signatory);
+        let register = Register::account(
+            Account::new(account_id.to_account_id(self.domain_id.clone())).with_metadata(metadata),
+        );
         self.current_tx_mut().instructions.push(register.into());
         self
     }
@@ -4591,7 +4588,7 @@ mod tests {
         let (public_key, _) = KeyPair::random().into_parts();
         let domain_name: Name = "wonderland".parse()?;
         let domain_id = DomainId::new(domain_name.clone());
-        let account_id = AccountId::new(domain_id, public_key.clone());
+        let account_id = AccountId::new(public_key.clone());
 
         let genesis = builder
             .domain(domain_name)
@@ -5389,18 +5386,16 @@ mod tests {
             );
             assert_eq!(
                 instructions[1],
-                Register::account(Account::new(AccountId::new(
-                    domain_id.clone(),
-                    public_key["alice"].clone()
-                ),))
+                Register::account(Account::new(
+                    AccountId::new(public_key["alice"].clone()).to_account_id(domain_id.clone()),
+                ))
                 .into()
             );
             assert_eq!(
                 instructions[2],
-                Register::account(Account::new(AccountId::new(
-                    domain_id,
-                    public_key["bob"].clone()
-                ),))
+                Register::account(Account::new(
+                    AccountId::new(public_key["bob"].clone()).to_account_id(domain_id.clone()),
+                ))
                 .into()
             );
         }
@@ -5412,10 +5407,10 @@ mod tests {
             );
             assert_eq!(
                 instructions[4],
-                Register::account(Account::new(AccountId::new(
-                    domain_id,
-                    public_key["cheshire_cat"].clone()
-                ),))
+                Register::account(Account::new(
+                    AccountId::new(public_key["cheshire_cat"].clone())
+                        .to_account_id(domain_id.clone()),
+                ))
                 .into()
             );
         }
@@ -5427,10 +5422,10 @@ mod tests {
             );
             assert_eq!(
                 instructions[6],
-                Register::account(Account::new(AccountId::new(
-                    domain_id,
-                    public_key["mad_hatter"].clone()
-                ),))
+                Register::account(Account::new(
+                    AccountId::new(public_key["mad_hatter"].clone())
+                        .to_account_id(domain_id.clone()),
+                ))
                 .into()
             );
             assert_eq!(

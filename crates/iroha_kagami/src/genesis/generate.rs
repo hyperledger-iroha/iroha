@@ -19,7 +19,7 @@ use iroha_executor_data_model::permission::{
     account::CanRegisterAccount, asset_definition::CanRegisterAssetDefinition,
     domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
+use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use iroha_version::BuildLine;
@@ -579,9 +579,7 @@ pub fn generate_default(
     profile_vrf_seed: Option<[u8; 32]>,
     da_rbc_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
-    let genesis_account_id = AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_public_key);
-    let mut meta = Metadata::default();
-    meta.insert("key".parse()?, Json::new("value"));
+    let genesis_account_id = AccountId::new(Json::new("value"));
     let wonderland_name: Name = "wonderland".parse()?;
     let wonderland_domain = DomainId::new(wonderland_name.clone());
 
@@ -1364,8 +1362,9 @@ fn generate_synthetic(
 
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
-            builder =
-                builder.append_instruction(Register::account(Account::new(account_id.clone())));
+            builder = builder.append_instruction(Register::account(Account::new(
+                account_id.to_account_id(domain_id.clone()),
+            )));
 
             for asset_definition in 0..asset_definitions_per_domain {
                 let mint = Mint::asset_numeric(

@@ -184,15 +184,19 @@ Rust 編碼器為單鍵控制器寫入 `0x02`（版本 0、類別 0、
 標準 v1，擴展標誌已清除）和多重簽名控制器的 `0x0A`（版本 0，
 1 類，規範 v1，擴展標誌已清除）。
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -317,7 +321,7 @@ tag-specific payload, then move on to the controller bytes.
 - IME/NFKC 轉換：半角 Sora 假名可以標準化為其全角形式，而不會破壞解碼，但 ASCII `sora` 哨兵和 IH58 數字/字母必須保持 ASCII。全角或大小寫折疊標記表面為 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效負載引發 `ERR_INVALID_COMPRESSED_CHAR`，校驗和不匹配冒泡為 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的屬性測試涵蓋了這些路徑，因此 SDK 和錢包可以依賴確定性故障。
 - 當 IH58（首選）/sora（第二佳）輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `address@domain` (rejected legacy form) 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
 - 本地選擇器有效負載短於 12 字節表面 `ERR_LOCAL8_DEPRECATED`，保留傳統 Local-8 摘要的硬切換。
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 規範二元向量
 

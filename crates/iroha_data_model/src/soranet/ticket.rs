@@ -279,7 +279,7 @@ mod tests {
     fn sample_body() -> TicketBodyV1 {
         let domain = DomainId::from_str("wonderland").expect("static domain is valid");
         let issuer_key = KeyPair::from_seed(vec![0_u8; 32], Algorithm::Ed25519);
-        let issuer_id = AccountId::new(domain, issuer_key.public_key().clone());
+        let issuer_id = AccountId::new(issuer_key.public_key().clone());
         TicketBodyV1 {
             blinded_cid: [0xBA; 32],
             scope: TicketScopeV1::Read,

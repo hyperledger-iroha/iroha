@@ -26,14 +26,8 @@ translator: machine-google-reviewed
 行動項目：
 1. **規範輸出：** `AccountId::to_string()`/顯示器必須僅發出 IH58
    （無 `@domain` 後綴）。規範十六進制用於調試 (`0x...`)。
-2. **接受的輸入：**解析器必須接受 IH58（首選），`sora` 壓縮，
-   和規範十六進制（僅限 `0x...`；裸十六進制被拒絕）。輸入可以攜帶
-   `@<domain>` 路由提示後綴； `<label>@<domain>` (rejected legacy form) 別名需要
-   解析器。原始 
-3. **解析器：**無域IH58/sora解析需要域選擇器
-   解析器，除非選擇器是隱式默認的（使用配置的默認值
-   域標籤）。 UAID (`uaid:...`) 和不透明 (`opaque:...`) 文字需要
-   解析器。
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58校驗和：**使用Blake2b-512 over `IH58PRE || prefix || payload`，取
    前 2 個字節。壓縮字母基數為 **105**。
 5. **曲線選通：** SDK 默認僅適用於 Ed25519。提供明確的選擇加入

@@ -172,15 +172,19 @@ payload bit: │version  │ class  │  norm  │ext │
 норма v1, флаг расширения снят) и `0x0A` для мультиподписных контроллеров (версия 0,
 класс 1, норма v1, флаг расширения снят).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -307,7 +311,7 @@ tag-specific payload, then move on to the controller bytes.
 - Преобразования IME/NFKC: сора-кана половинной ширины можно нормализовать до их полноширинных форм без нарушения декодирования, но сигнальный индикатор ASCII `sora` и цифры/буквы IH58 ДОЛЖНЫ оставаться ASCII. Полноэкранные индикаторы или свернутые в регистр символы отображают `ERR_MISSING_COMPRESSED_SENTINEL`, полезные данные ASCII во всю ширину поднимают `ERR_INVALID_COMPRESSED_CHAR`, а несовпадения контрольных сумм появляются как `ERR_CHECKSUM_MISMATCH`. Тесты свойств в `crates/iroha_data_model/src/account/address.rs` охватывают эти пути, поэтому SDK и кошельки могут полагаться на детерминированные сбои.
 - При анализе псевдонимов `address@domain` (rejected legacy form) Torii и SDK теперь выдаются одни и те же коды `ERR_*`, когда входные данные IH58 (предпочтительный)/sora (второй лучший) терпят неудачу перед откатом псевдонима (например, несовпадение контрольной суммы, несоответствие дайджеста домена), поэтому клиенты могут передавать структурированные причины, не догадываясь из прозаических строк.
 - Полезные данные локального селектора длиной менее 12 байт отображаются `ERR_LOCAL8_DEPRECATED`, сохраняя жесткое переключение по сравнению с устаревшими дайджестами Local‑8.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Нормативные бинарные векторы
 

@@ -1,29 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="789" height="369" viewBox="0 0 789 369">
+<svg xmlns="http://www.w3.org/2000/svg" width="924" height="744" viewBox="0 0 924 744">
   <defs/>
   <rect width="100%" height="100%" fill="#070312" rx="6"/>
   <g font-family="'JetBrains Mono','Fira Code','Menlo',monospace" font-size="12" fill="#f6f6f6" xml:space="preserve">
-    <text x="12" y="14">+----------------------------------------------------------------------------------------------------+</text>
-    <text x="12" y="29">| IROHA MONITOR :: Pipeline Deck                        uptime 00:00:12   refresh 500 ms       |</text>
-    <text x="12" y="44">| Focus: p0 (leader)   CRT: on   VRF: on   Auto-rotate: on                                        |</text>
-    <text x="12" y="59">|----------------------------------------------------------------------------------------------------|</text>
-    <text x="12" y="74">| NETWORK COUNTERS                            | DAG / LAYERS                                       |</text>
-    <text x="12" y="89">| gossip sent      : 128                      | Layer 0  ▒▒▒▒▒▒▒▒▒▒▒▒ (12 tx)                      |</text>
-    <text x="12" y="104">| gossip received  : 120                      | Layer 1  ▒▒▒▒▒▒▒▒▒ (8 tx)                           |</text>
-    <text x="12" y="119">| dropped posts    : 0                        | Layer 2  ▒▒▒▒▒ (4 tx)                               |</text>
-    <text x="12" y="134">| retries          : 1                        | Layer 3  ▒▒ (2 tx)                                  |</text>
-    <text x="12" y="149">|----------------------------------------------------------------------------------------------------|</text>
-    <text x="12" y="164">| VRF / NPoS SUMMARY                                                                                |</text>
-    <text x="12" y="179">| Slot winners: p0  p2  p1  p0                | penalties: none                                    |</text>
-    <text x="12" y="194">| Next slots:  p1 → p2 → p0 → p1              | randomness: 0x41ec…                                |</text>
-    <text x="12" y="209">|----------------------------------------------------------------------------------------------------|</text>
-    <text x="12" y="224">| GAS + FINALITY                                                                                     |</text>
-    <text x="12" y="239">| recent gas avg: 1.32 M    | max 1.98 M     | commit latency p0: 128 ms                           |</text>
-    <text x="12" y="254">| finality depth: 2 blocks  | notarised     | commit latency p1: 134 ms                           |</text>
-    <text x="12" y="269">|----------------------------------------------------------------------------------------------------|</text>
-    <text x="12" y="284">| ALERT TICKER                                                                                      |</text>
-    <text x="12" y="299">| ▲ info    CRT mode enabled for overview deck                                                       |</text>
-    <text x="12" y="314">|----------------------------------------------------------------------------------------------------|</text>
-    <text x="12" y="329">| QUICK ACTIONS: auto-rotate [✓]  beep [ ]  CRT [✓]  CRT★ [ ]  pipeline overlay [✓]  VRF [✓]        |</text>
-    <text x="12" y="344">+----------------------------------------------------------------------------------------------------+</text>
+    <text x="12" y="14">┌Iroha Monitor───────────────────────────────────────────────────────────────────────┐┌Festival Signal─────────────────┐</text>
+    <text x="12" y="29">│Peers 3/3 online  Healthy 3  Degraded 0  Down 0  Reported 3                         ││                   /\           │</text>
+    <text x="12" y="44">│Blocks 132 total / 126 non-empty  Tx 984 ok / 6 rej                                 ││          ________/  \_______   │</text>
+    <text x="12" y="59">│Queue 3  Gas 402  Avg latency 5 ms  Refresh 500 ms                                  ││         /                    \ │</text>
+    <text x="12" y="74">│Sort height  Filter all  search /2                                                  ││=ˍ~======~==ˍ===~≋&gt;&lt;===~======~=│</text>
+    <text x="12" y="89">│Focus 祭 り ノ ー ド   OK  commit 95 ms                                                  ││-~-~--~=|-~=-~-~-~-~--~=|-~=-~-~│</text>
+    <text x="12" y="104">│                                                                                    ││~-~-~~-~|~-~~-~-~-~-~~-~|~-~~-~-│</text>
+    <text x="12" y="119">└────────────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────┘</text>
+    <text x="12" y="134">┌Peers 1-1/1  sort height───────────────────────────────────────────────────┐┌Selected Peer────────────────────────────┐</text>
+    <text x="12" y="149">│Peer          Height  Tx       Queue   Gas      Latency Status             ││Peer 祭 り ノ ー ド   OK  (2/3)               │</text>
+    <text x="12" y="164">│祭 り ノ ー ド     44      328/2    2       134      5ms     OK commit 95 ms    ││Endpoint stub://peer/2/3                 │</text>
+    <text x="12" y="179">│                                                                           ││Height 44  Tx 328 / 2  Queue 2           │</text>
+    <text x="12" y="194">│                                                                           ││Latency 5 ms  Commit 95 ms  Views 0      │</text>
+    <text x="12" y="209">│                                                                           ││Uptime 1 s  Gas 134  Fees 64             │</text>
+    <text x="12" y="224">│                                                                           │└─────────────────────────────────────────┘</text>
+    <text x="12" y="239">│                                                                           │┌Alerts &amp; Activity────────────────────────┐</text>
+    <text x="12" y="254">│                                                                           ││[OK] 祭 り ノ ー ド : telemetry online        │</text>
+    <text x="12" y="269">│                                                                           ││[OK] 祭 り ノ ー ド : telemetry online        │</text>
+    <text x="12" y="284">│                                                                           ││[OK] 祭 り ノ ー ド : telemetry online        │</text>
+    <text x="12" y="299">│                                                                           ││[INFO] UPLINK ESTABLISHED. 3 TARGETS     │</text>
+    <text x="12" y="314">│                                                                           ││ACQUIRED.                                │</text>
+    <text x="12" y="329">│                                                                           ││                                         │</text>
+    <text x="12" y="344">│                                                                           ││                                         │</text>
+    <text x="12" y="359">│                                                                           ││                                         │</text>
+    <text x="12" y="374">│                                                                           ││                                         │</text>
+    <text x="12" y="389">│                                                                           ││                                         │</text>
+    <text x="12" y="404">│                                                                           ││                                         │</text>
+    <text x="12" y="419">│                                                                           ││                                         │</text>
+    <text x="12" y="434">│                                                                           ││                                         │</text>
+    <text x="12" y="449">│                                                                           ││                                         │</text>
+    <text x="12" y="464">│                                                                           ││                                         │</text>
+    <text x="12" y="479">│                                                                           ││                                         │</text>
+    <text x="12" y="494">│                                                                           ││                                         │</text>
+    <text x="12" y="509">│                                                                           ││                                         │</text>
+    <text x="12" y="524">│                                                                           ││                                         │</text>
+    <text x="12" y="539">│                                                                           ││                                         │</text>
+    <text x="12" y="554">│                                                                           ││                                         │</text>
+    <text x="12" y="569">│                                                                           ││                                         │</text>
+    <text x="12" y="584">│                                                                           ││                                         │</text>
+    <text x="12" y="599">│                                                                           ││                                         │</text>
+    <text x="12" y="614">│                                                                           ││                                         │</text>
+    <text x="12" y="629">│                                                                           ││                                         │</text>
+    <text x="12" y="644">│                                                                           ││                                         │</text>
+    <text x="12" y="659">│                                                                           ││                                         │</text>
+    <text x="12" y="674">│                                                                           ││                                         │</text>
+    <text x="12" y="689">│                                                                           ││                                         │</text>
+    <text x="12" y="704">└───────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────┘</text>
+    <text x="12" y="719">q quit | arrows n/p focus | s sort:height | f issues:off | / search | x clear | selected 祭 り ノ ー ド  | search /2 | body l</text>
   </g>
 </svg>

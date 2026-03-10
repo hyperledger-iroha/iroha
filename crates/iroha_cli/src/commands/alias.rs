@@ -273,7 +273,7 @@ mod tests {
         config::{self, Config},
         crypto::KeyPair,
         data_model::{
-            DomainId, Metadata,
+            Metadata,
             prelude::{AccountId, ChainId},
         },
     };
@@ -311,8 +311,7 @@ mod tests {
     impl TestContext {
         fn new(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
-            let domain: DomainId = "wonderland".parse().expect("domain");
-            let account = AccountId::new(domain, kp.public_key().clone());
+            let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,

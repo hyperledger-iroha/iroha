@@ -360,6 +360,16 @@ impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for Instruc
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::domain_link::LinkAccountDomain> for InstructionBox {
+    fn from(i: crate::isi::domain_link::LinkAccountDomain) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
+    fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of offline allowance instructions.
 impl From<crate::isi::offline::RegisterOfflineAllowance> for InstructionBox {
@@ -1311,6 +1321,8 @@ pub mod bridge;
 pub mod confidential;
 /// Content lane instructions.
 pub mod content;
+/// Account subject and domain link instructions.
+pub mod domain_link;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1352,6 +1364,7 @@ pub mod verifying_keys;
 pub mod zk;
 
 pub use confidential::*;
+pub use domain_link::*;
 pub use kaigi::*;
 pub use mint_burn::*;
 pub use nexus::*;
@@ -1655,8 +1668,8 @@ pub mod error {
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub enum AccountAdmissionError {
-            /// Implicit account creation is disabled in domain `{0}`.
-            ImplicitAccountCreationDisabled(crate::domain::DomainId),
+            /// Implicit account creation is disabled.
+            ImplicitAccountCreationDisabled,
             /// Account admission policy is invalid: {0}.
             InvalidPolicy(AccountAdmissionInvalidPolicy),
             /// Failed to assign the configured default role: {0}.
@@ -1673,7 +1686,7 @@ pub mod error {
             MinInitialAmountUnsatisfied(AccountAdmissionMinInitialAmountUnsatisfied),
         }
 
-        /// Account admission policy payload is invalid for domain `{domain}`: {reason}.
+        /// Account admission policy payload is invalid: {reason}.
         #[derive(
             Debug,
             displaydoc::Display,
@@ -1694,8 +1707,6 @@ pub mod error {
         #[derive(thiserror::Error)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountAdmissionInvalidPolicy {
-            /// Domain for which the policy was evaluated.
-            pub domain: crate::domain::DomainId,
             /// Human-readable reason describing the invalid payload.
             pub reason: String,
         }
@@ -2131,6 +2142,7 @@ pub mod prelude {
         },
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
+        domain_link::{LinkAccountDomain, UnlinkAccountDomain},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
@@ -2451,7 +2463,6 @@ mod tests {
         // Build a small suite of representative instructions
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(
-            domain_id.clone(),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .unwrap(),
@@ -2510,7 +2521,7 @@ mod tests {
         let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .unwrap();
-        let account_id = AccountId::new(domain, signatory);
+        let account_id = AccountId::new(signatory);
         let permission = Permission::new("dummy".parse().unwrap(), Json::new(()));
         let revoke = Revoke::account_permission(permission, account_id);
         let expected = revoke.encode();
@@ -2591,7 +2602,6 @@ mod tests {
 
         let domain_id: DomainId = "alice".parse().unwrap();
         let account_id = AccountId::new(
-            domain_id.clone(),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
@@ -2640,13 +2650,11 @@ mod tests {
         // Common fixtures
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let account_a = AccountId::new(
-            domain_id.clone(),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .unwrap(),
         );
         let account_b = AccountId::new(
-            domain_id.clone(),
             "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
                 .parse()
                 .unwrap(),

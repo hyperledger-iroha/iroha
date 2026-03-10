@@ -77,8 +77,9 @@ fn participant_commitment_roundtrip_preserves_payload() {
 #[test]
 fn relay_registration_summary_roundtrips_via_norito() {
     let domain_id = sample_domain_id();
-    let relay_id = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+    let relay_id = AccountId::new(KeyPair::random().public_key().clone());
     let summary = DomainEvent::KaigiRelayRegistered(KaigiRelayRegistrationSummary::new(
+        domain_id,
         relay_id.clone(),
         9,
         Hash::prehashed([0xAB; 32]),
@@ -99,10 +100,7 @@ fn relay_registration_summary_roundtrips_via_norito() {
 #[test]
 fn relay_health_summary_roundtrips_via_norito() {
     let call = sample_call_id();
-    let relay = AccountId::new(
-        call.domain_id.clone(),
-        KeyPair::random().public_key().clone(),
-    );
+    let relay = AccountId::new(KeyPair::random().public_key().clone());
     let summary = DomainEvent::KaigiRelayHealthUpdated(KaigiRelayHealthSummary::new(
         call.clone(),
         relay.clone(),

@@ -43,10 +43,8 @@ async fn gov_proposal_get_router_mapping() {
         let _ = raw_state.block(header);
     }
     let kp = iroha_crypto::KeyPair::random();
-    let proposer: iroha_data_model::account::AccountId = iroha_data_model::account::AccountId::of(
-        "wonderland".parse().unwrap(),
-        kp.public_key().clone(),
-    );
+    let proposer: iroha_data_model::account::AccountId =
+        iroha_data_model::account::AccountId::of(kp.public_key().clone());
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer,
         kind: ProposalKind::DeployContract(DeployContractProposal {

@@ -3911,10 +3911,7 @@ mod tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key literal");
-        let owner = iroha_data_model::account::AccountId::new(
-            sample_domain_id("streaming-owner"),
-            owner_key,
-        );
+        let owner = iroha_data_model::account::AccountId::new(owner_key);
         let ticket = data_events::StreamingTicketRecord {
             ticket_id: iroha_crypto::Hash::prehashed(hash_with(ticket_seed)),
             owner,

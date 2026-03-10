@@ -44,24 +44,6 @@ impl JsonKeyCodec for crate::account::AccountId {
     }
 }
 
-impl JsonKeyCodec for crate::account::AccountSubjectId {
-    fn encode_json_key(&self, out: &mut String) {
-        let default_domain: crate::domain::DomainId =
-            crate::account::address::default_domain_name()
-                .as_ref()
-                .parse()
-                .expect("default account domain name must parse as DomainId");
-        let scoped = self.to_account_id(default_domain);
-        <crate::account::AccountId as JsonKeyCodec>::encode_json_key(&scoped, out);
-    }
-
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        crate::account::AccountId::parse_encoded(encoded)
-            .map(|parsed| parsed.into_account_id().subject_id())
-            .map_err(|err| json::Error::Message(err.to_string()))
-    }
-}
-
 impl JsonKeyCodec for crate::name::Name {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
@@ -213,32 +195,28 @@ impl JsonKeyCodec for crate::nexus::UniversalAccountId {
 #[cfg(test)]
 mod tests {
     use mv::json::JsonKeyCodec;
+    use norito::json::Parser;
 
-    use crate::{account::AccountId, domain::DomainId};
+    use crate::account::AccountId;
 
     #[test]
-    fn account_subject_id_json_key_codec_roundtrip() {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+    fn account_id_json_key_codec_roundtrip() {
         let keypair = iroha_crypto::KeyPair::random();
-        let account = AccountId::new(domain, keypair.public_key().clone());
-        let subject = account.subject_id();
-
-        let mut encoded_json = String::new();
-        subject.encode_json_key(&mut encoded_json);
-        let encoded: String = norito::json::from_str(&encoded_json).expect("encoded JSON string");
-
-        let decoded = crate::account::AccountSubjectId::decode_json_key(&encoded)
-            .expect("subject key must decode");
-        assert_eq!(decoded, subject);
+        let account = AccountId::new(keypair.public_key().clone());
+        let mut encoded = String::new();
+        account.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse encoded json key");
+        let decoded = AccountId::decode_json_key(&raw_key).expect("decode json key");
+        assert_eq!(decoded, account);
     }
 
     #[test]
-    fn account_subject_id_json_key_codec_rejects_domain_suffix_literal() {
-        let err = crate::account::AccountSubjectId::decode_json_key("alice@wonderland")
+    fn account_id_json_key_codec_rejects_domain_suffix_literal() {
+        let err = crate::account::AccountId::decode_json_key("alice@wonderland")
             .expect_err("domain suffix literal must be rejected");
         assert!(
-            err.to_string()
-                .contains("IH58 (preferred) or sora compressed"),
+            err.to_string().contains("canonical IH58"),
             "unexpected error: {err}"
         );
     }

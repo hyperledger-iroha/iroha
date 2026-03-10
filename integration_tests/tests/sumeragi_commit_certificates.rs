@@ -195,11 +195,8 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
-            let gas_account_str = AccountId::new(
-                ivm_domain,
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-            )
-            .to_string();
+            let gas_account_str =
+                AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
@@ -517,10 +514,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = AccountId::new(
-        ivm_domain.clone(),
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
         .with_metadata(Metadata::default());
@@ -532,7 +526,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         Register::asset_definition(definition).into(),
     ];
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        let validator_id = AccountId::new(peer.public_key().clone());
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
@@ -542,7 +536,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
 
     let mut validator_tx = Vec::new();
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        let validator_id = AccountId::new(peer.public_key().clone());
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         validator_tx.push(
             RegisterPublicLaneValidator {

@@ -231,7 +231,7 @@ mod tests {
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(account);
-        let account_value = Account::new(account.clone()).build(account);
+        let account_value = Account::new(account.to_account_id(domain_id)).build(account);
         Arc::new(State::new_for_testing(
             World::with([domain], [account_value], []),
             Kura::blank_kura_for_testing(),
@@ -263,10 +263,7 @@ mod tests {
     #[test]
     fn verify_accepts_valid_signature() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=10")
@@ -290,10 +287,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_signature() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")
@@ -320,14 +314,8 @@ mod tests {
     #[tokio::test]
     async fn verify_rejects_mismatched_path_account() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
-        let other: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
+        let other: AccountId = AccountId::new(KeyPair::random().public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")

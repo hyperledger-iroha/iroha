@@ -55,6 +55,7 @@ const ACCOUNT_QR_ERROR_CORRECTION_LABEL: &str = "M";
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExplorerAggregates {
     account_counters: BTreeMap<AccountId, AccountCounters>,
+    account_domains: BTreeMap<AccountId, BTreeSet<DomainId>>,
     domain_counters: BTreeMap<DomainId, DomainCounters>,
     definition_instances: BTreeMap<AssetDefinitionId, u32>,
     definition_holders: BTreeMap<AssetDefinitionId, BTreeSet<AccountId>>,
@@ -79,14 +80,14 @@ impl ExplorerAggregates {
         let mut agg = Self::default();
 
         for account in world.accounts_iter() {
-            let entry = agg
-                .domain_counters
-                .entry(account.id().domain().clone())
-                .or_default();
-            entry.accounts = entry.accounts.saturating_add(1);
-            agg.account_counters
-                .entry(account.id().clone())
-                .or_default();
+            let account_id = account.id().clone();
+            agg.account_counters.entry(account_id.clone()).or_default();
+            let account_domains = agg.account_domains.entry(account_id).or_default();
+            for domain_id in world.domains_for_subject(account.id()) {
+                account_domains.insert(domain_id.clone());
+                let entry = agg.domain_counters.entry(domain_id).or_default();
+                entry.accounts = entry.accounts.saturating_add(1);
+            }
         }
 
         for domain in world.domains_iter() {
@@ -145,6 +146,12 @@ impl ExplorerAggregates {
 
     pub(crate) fn definition_instance_count(&self, id: &AssetDefinitionId) -> u32 {
         self.definition_instances.get(id).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn account_linked_to_domain(&self, account: &AccountId, domain: &DomainId) -> bool {
+        self.account_domains
+            .get(account)
+            .is_some_and(|domains| domains.contains(domain))
     }
 
     pub(crate) fn account_holds_definition(
@@ -1258,7 +1265,7 @@ where
     let mut items = Vec::new();
     for entry in accounts {
         if let Some(domain) = domain_filter {
-            if entry.id().domain() != domain {
+            if !aggregates.account_linked_to_domain(entry.id(), domain) {
                 continue;
             }
         }
@@ -1782,7 +1789,12 @@ mod tests {
         ));
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
-        let domain_filter = alice_id.domain().clone();
+        let domain_filter: DomainId = "wonderland".parse().expect("domain id");
+        aggregates
+            .account_domains
+            .entry(alice_id.clone())
+            .or_default()
+            .insert(domain_filter.clone());
         let accounts = vec![
             Ref::new(&alice_id, &alice_details),
             Ref::new(&bob_id, &bob_details),

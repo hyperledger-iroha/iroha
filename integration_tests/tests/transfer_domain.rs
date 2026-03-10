@@ -475,8 +475,8 @@ fn domain_owner_transfer() -> Result<()> {
 fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let users_domain: DomainId = "users".parse()?;
     let foo_domain: DomainId = "foo".parse()?;
-    let user1 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
-    let user2 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
+    let user1 = AccountId::new(KeyPair::random().into_parts().0);
+    let user2 = AccountId::new(KeyPair::random().into_parts().0);
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
     let builder = NetworkBuilder::new()

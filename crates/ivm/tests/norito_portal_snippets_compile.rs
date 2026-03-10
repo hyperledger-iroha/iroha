@@ -215,7 +215,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let asset_id_clone = asset_id.clone();
@@ -260,7 +260,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let asset_id_clone = asset_id.clone();
@@ -324,7 +324,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         &program,
         WsvHost::new_with_subject(
             wsv,
-            ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+            ivm::mock_wsv::AccountId::from(&caller.clone()),
             HashMap::new(),
         ),
         move |host| {
@@ -362,7 +362,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     ));
     vm.load_program(&program)

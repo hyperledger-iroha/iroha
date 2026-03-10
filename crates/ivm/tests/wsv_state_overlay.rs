@@ -69,7 +69,7 @@ fn overlay_stages_and_flushes_on_finish() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
+        ivm::mock_wsv::AccountId::from(&sample_account()),
         HashMap::new(),
     );
     vm.set_host(host);
@@ -123,7 +123,7 @@ fn overlay_restores_snapshot_on_rollback() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
+        ivm::mock_wsv::AccountId::from(&sample_account()),
         HashMap::new(),
     );
     vm.set_host(host);
@@ -188,7 +188,7 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&sample_account()),
+        ivm::mock_wsv::AccountId::from(&sample_account()),
         HashMap::new(),
     );
     vm.set_host(host);

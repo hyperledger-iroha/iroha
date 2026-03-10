@@ -19,12 +19,13 @@ fn run_with_ready_heap(
     // Build world: two accounts, one asset def, balances seeded
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
     // Seed asset balances
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());

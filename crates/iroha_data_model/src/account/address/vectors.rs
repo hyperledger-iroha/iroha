@@ -425,11 +425,10 @@ fn build_single_key_vectors(network_prefix: u16) -> Vec<SingleKeyVector> {
     VECTOR_SINGLE_DOMAINS
         .iter()
         .map(|(label, seed)| {
-            let domain = domain_id(label);
             let public_key = ed25519_pk_with(*seed);
-            let account = AccountId::new(domain, public_key);
+            let account = AccountId::new(public_key);
             let address = AccountAddress::from_account_id(&account)
-                .expect("account should encode into AccountAddress");
+                .expect("single-key account should encode into AccountAddress");
             build_single_vector(label, *seed, &account, &address, network_prefix)
         })
         .collect()
@@ -492,7 +491,6 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
     MULTISIG_FIXTURES
         .iter()
         .map(|spec| {
-            let domain = domain_id(spec.domain);
             let members = spec
                 .members
                 .iter()
@@ -502,7 +500,7 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                 })
                 .collect::<Vec<_>>();
             let policy = MultisigPolicy::new(spec.threshold, members).expect("valid policy");
-            let account = AccountId::new_multisig(domain, policy.clone());
+            let account = AccountId::new_multisig(policy.clone());
             let address = AccountAddress::from_account_id(&account)
                 .expect("multisig account should encode into AccountAddress");
             let canonical_bytes = address
@@ -571,20 +569,18 @@ struct ErrorHarness {
 
 impl ErrorHarness {
     fn new(network_prefix: u16) -> Self {
-        let domain = domain_id("default");
-        let account = AccountId::new(domain, ed25519_pk_with(0x00));
+        let account = AccountId::new(ed25519_pk_with(0x2A));
         let address = AccountAddress::from_account_id(&account)
-            .expect("base account should encode successfully");
+            .expect("single-key account should encode into AccountAddress");
         let compressed = address
             .to_compressed_sora()
-            .expect("compressed encoding must succeed for base error harness");
+            .expect("compressed encoding must succeed");
         let ih58 = address
             .to_ih58(network_prefix)
-            .expect("IH58 encoding must succeed for error harness");
+            .expect("IH58 encoding must succeed");
         let canonical_hex = address
             .canonical_hex()
-            .expect("canonical hex must succeed for error harness");
-
+            .expect("canonical hex must encode for error harness");
         Self {
             network_prefix,
             address,
@@ -708,7 +704,8 @@ impl ErrorHarness {
 
     fn canonical_invalid_hex() -> ErrorVector {
         let invalid_hex = "0xnothex";
-        let err = AccountAddress::from_str(invalid_hex).expect_err("invalid hex must fail");
+        let err = AccountAddress::parse_encoded(invalid_hex, None)
+            .expect_err("invalid canonical_hex strict decode must fail");
 
         ErrorVector {
             label: "canonical_invalid_hex",
@@ -1019,7 +1016,6 @@ mod tests {
         assert!(variants.contains(&"MissingCompressedSentinel"));
         assert!(variants.contains(&"CompressedTooShort"));
         assert!(variants.contains(&"UnexpectedNetworkPrefix"));
-        assert!(variants.contains(&"InvalidHexAddress"));
         assert!(variants.contains(&"UnsupportedAddressFormat"));
         assert!(variants.contains(&"DomainMismatch"));
         assert!(codes.contains(&"ERR_INVALID_COMPRESSED_CHAR"));
@@ -1027,7 +1023,6 @@ mod tests {
         assert!(codes.contains(&"ERR_MISSING_COMPRESSED_SENTINEL"));
         assert!(codes.contains(&"ERR_COMPRESSED_TOO_SHORT"));
         assert!(codes.contains(&"ERR_UNEXPECTED_NETWORK_PREFIX"));
-        assert!(codes.contains(&"ERR_INVALID_HEX_ADDRESS"));
         assert!(codes.contains(&"ERR_UNSUPPORTED_ADDRESS_FORMAT"));
         assert!(codes.contains(&"ERR_DOMAIN_MISMATCH"));
     }
@@ -1059,7 +1054,7 @@ mod tests {
             let _guard = default_domain_guard(Some("default"));
             let label = VECTOR_SINGLE_DOMAINS[domain_index].0;
             let domain = domain_id(label);
-            let account = AccountId::new(domain, ed25519_pk_with(seed));
+            let account = AccountId::new(ed25519_pk_with(seed));
             let address = AccountAddress::from_account_id(&account)
                 .expect("account must encode into AccountAddress");
             let compressed = address.to_compressed_sora().expect("compressed encoding succeeds");

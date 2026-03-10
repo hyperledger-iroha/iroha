@@ -4,12 +4,11 @@
     clippy::cast_sign_loss
 )]
 
-//! Etenraku scheduling derived from “MIDI synth design in Rust”.
+//! Etenraku scheduling for the monitor's gagaku-inspired intro.
 //!
-//! The original design document focused on modelling the hichiriki, ryūteki, and shō parts of
-//! Etenraku using a lightweight Rust soft-synth.  This module adapts that score for the monitor by
-//! providing timed events, MIDI export helpers, and small helpers that keep the ASCII prologue in
-//! sync with the audio rendition.
+//! The score focuses on hichiriki melodic primacy, slower shō breathing, lighter heterophonic
+//! ryūteki support, and sparse string/percussion punctuation. It provides timed events, MIDI export
+//! helpers, and small helpers that keep the ASCII prologue in sync with the audio rendition.
 
 use std::{
     cmp::Ordering,
@@ -117,6 +116,21 @@ const TAIKO_ACCENTS: &[(f32, u8)] = &[
 ];
 
 const SHOKO_STRIKES: &[f32] = &[13.0, 29.0, 45.0];
+const KAKKO_STRIKES: &[(f32, bool)] = &[
+    (0.0, true),
+    (4.0, false),
+    (8.0, true),
+    (12.0, false),
+    (16.0, true),
+    (20.0, false),
+    (24.0, true),
+    (28.0, false),
+    (32.0, true),
+    (36.0, false),
+    (40.0, true),
+    (44.0, false),
+    (46.0, true),
+];
 
 const TAIKO_NOTE: u8 = 48;
 const SHOKO_NOTE: u8 = 81;
@@ -315,9 +329,29 @@ fn base_hichiriki_specs() -> Vec<NoteSpec> {
 
 fn base_ryuteki_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
-    for &(start_beats, duration_beats, name) in HICHIRIKI_EVENTS {
-        let start = start_beats.max(0.0);
-        let duration = duration_beats.max(0.25);
+    for (idx, &(start_beats, duration_beats, name)) in HICHIRIKI_EVENTS.iter().enumerate() {
+        let section = ScoreSection::from_beat(start_beats);
+        if matches!(section, ScoreSection::Jo) && matches!(idx % 6, 1 | 4) {
+            continue;
+        }
+        let entry_delay = match section {
+            ScoreSection::Jo => {
+                if idx % 3 == 0 {
+                    0.22
+                } else {
+                    0.14
+                }
+            }
+            ScoreSection::Ha => 0.11,
+            ScoreSection::Kyu => 0.06,
+        };
+        let duration_scale = match section {
+            ScoreSection::Jo => 0.78,
+            ScoreSection::Ha => 0.72,
+            ScoreSection::Kyu => 0.66,
+        };
+        let start = (start_beats + entry_delay).max(0.0);
+        let duration = (duration_beats * duration_scale).max(0.25);
         let note = note_name_to_midi(name).saturating_add(12);
         let ornaments = ornaments_for_ryuteki_beats(duration);
         specs.push(NoteSpec {
@@ -369,12 +403,18 @@ fn base_sho_specs() -> Vec<NoteSpec> {
 
 fn base_koto_specs() -> Vec<NoteSpec> {
     let mut specs = Vec::new();
+    let voice_offsets = [0.0_f32, 0.23, 0.49];
     for &(start_beats, sustain_beats, chord) in KOTO_ARPEGGIOS {
         let sustain = sustain_beats.max(1.5);
-        for (voice_idx, name) in chord.iter().enumerate() {
-            let voice_start = 0.07f32.mul_add(voice_idx as f32, start_beats).max(0.0);
-            let duration = 0.08f32.mul_add(-(voice_idx as f32), sustain).max(1.25);
-            let velocity = 86u8.saturating_sub((voice_idx as u8) * 6);
+        for (voice_idx, name) in chord.iter().take(3).enumerate() {
+            let voice_start = voice_offsets
+                .get(voice_idx)
+                .copied()
+                .unwrap_or_default()
+                .mul_add(1.0, start_beats)
+                .max(0.0);
+            let duration = (sustain - voice_offsets[voice_idx] * 0.6).max(0.95);
+            let velocity = 78u8.saturating_sub((voice_idx as u8) * 8);
             specs.push(NoteSpec {
                 start_beats: voice_start,
                 duration_beats: duration,
@@ -447,26 +487,22 @@ fn base_shoko_specs() -> Vec<NoteSpec> {
 }
 
 fn base_kakko_specs() -> Vec<NoteSpec> {
-    let mut specs = Vec::new();
-    let mut beat = 0.0;
-    let mut high = true;
-    while beat < TOTAL_BEATS - 0.5 {
+    let mut specs = Vec::with_capacity(KAKKO_STRIKES.len());
+    for &(beat, high) in KAKKO_STRIKES {
         let note = if high {
             KAKKO_HIGH_NOTE
         } else {
             KAKKO_LOW_NOTE
         };
-        let velocity = if high { 92 } else { 86 };
+        let velocity = if high { 92 } else { 84 };
         specs.push(NoteSpec {
             start_beats: beat.max(0.0),
-            duration_beats: 0.18,
+            duration_beats: 0.16,
             note,
             layer: SequenceLayer::Kakko,
             velocities: (velocity, 0),
             ornaments: Ornaments::empty(),
         });
-        beat += 0.85;
-        high = !high;
     }
     specs
 }
@@ -762,111 +798,152 @@ pub fn total_beats() -> f32 {
 #[derive(Clone)]
 struct MidiEvent {
     tick: u32,
+    order: u8,
     data: Vec<u8>,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MidiTrackId {
+    Hichiriki,
+    Ryuteki,
+    Sho,
+    Koto,
+    Biwa,
+    Percussion,
+}
+
+#[derive(Clone, Copy)]
+struct MidiTrackConfig {
+    id: MidiTrackId,
+    name: &'static str,
+    channel: u8,
+    program: Option<u8>,
+    volume: u8,
+    pan: u8,
+    reverb: u8,
+    expression: u8,
+}
+
+const MIDI_TRACKS: [MidiTrackConfig; 6] = [
+    MidiTrackConfig {
+        id: MidiTrackId::Hichiriki,
+        name: "Hichiriki",
+        channel: 0,
+        program: Some(69), // English horn
+        volume: 98,
+        pan: 54,
+        reverb: 46,
+        expression: 112,
+    },
+    MidiTrackConfig {
+        id: MidiTrackId::Ryuteki,
+        name: "Ryuteki",
+        channel: 1,
+        program: Some(75), // Pan flute
+        volume: 92,
+        pan: 78,
+        reverb: 38,
+        expression: 106,
+    },
+    MidiTrackConfig {
+        id: MidiTrackId::Sho,
+        name: "Sho",
+        channel: 2,
+        program: Some(20), // Reed organ
+        volume: 84,
+        pan: 64,
+        reverb: 58,
+        expression: 102,
+    },
+    MidiTrackConfig {
+        id: MidiTrackId::Koto,
+        name: "Koto",
+        channel: 3,
+        program: Some(107), // Koto
+        volume: 88,
+        pan: 86,
+        reverb: 26,
+        expression: 104,
+    },
+    MidiTrackConfig {
+        id: MidiTrackId::Biwa,
+        name: "Biwa",
+        channel: 4,
+        program: Some(105), // Shamisen
+        volume: 86,
+        pan: 46,
+        reverb: 18,
+        expression: 100,
+    },
+    MidiTrackConfig {
+        id: MidiTrackId::Percussion,
+        name: "Percussion",
+        channel: 9,
+        program: None,
+        volume: 108,
+        pan: 64,
+        reverb: 20,
+        expression: 112,
+    },
+];
 
 pub fn write_demo_midi_file() -> Result<String> {
     let (events, timeline) = synth_events();
     let ticks_per_beat = MIDI_TICKS_PER_BEAT;
     let seconds_per_beat = timeline.average_seconds_per_beat().max(1.0e-3);
     let tempo_micros = (seconds_per_beat * 1_000_000.0).round() as u32;
-
-    let mut track_events: Vec<MidiEvent> = vec![
-        MidiEvent {
-            tick: 0,
-            data: vec![
-                0xFF,
-                0x51,
-                0x03,
-                (tempo_micros >> 16) as u8,
-                (tempo_micros >> 8) as u8,
-                tempo_micros as u8,
-            ],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xC0, 68],
-        }, // Hichiriki → oboe
-        MidiEvent {
-            tick: 0,
-            data: vec![0xC1, 73],
-        }, // Ryūteki → flute
-        MidiEvent {
-            tick: 0,
-            data: vec![0xC2, 19],
-        }, // Shō → organ
-        MidiEvent {
-            tick: 0,
-            data: vec![0xC3, 107],
-        }, // Koto → koto
-        MidiEvent {
-            tick: 0,
-            data: vec![0xC4, 106],
-        }, // Biwa → shamisen
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB0, 0x07, 100],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB1, 0x07, 96],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB2, 0x07, 88],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB3, 0x07, 92],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB4, 0x07, 90],
-        },
-        MidiEvent {
-            tick: 0,
-            data: vec![0xB9, 0x07, 118],
-        },
-    ];
-
-    for event in events {
-        let channel = midi_channel(event.layer);
-        let status = if event.on {
-            0x90 | channel
-        } else {
-            0x80 | channel
-        };
-        let tick = seconds_to_ticks(event.t, seconds_per_beat, ticks_per_beat);
-        track_events.push(MidiEvent {
-            tick,
-            data: vec![status, event.note, event.vel.min(127)],
-        });
-    }
-
     let end_tick = seconds_to_ticks(timeline.total_seconds(), seconds_per_beat, ticks_per_beat);
-    track_events.push(MidiEvent {
-        tick: end_tick,
-        data: vec![0xFF, 0x2F, 0x00],
+    let mut conductor = vec![
+        track_name_event(0, "Conductor"),
+        tempo_event(0, tempo_micros),
+        time_signature_event(0),
+        end_of_track_event(end_tick),
+    ];
+    conductor.sort_by(|left, right| {
+        left.tick
+            .cmp(&right.tick)
+            .then_with(|| left.order.cmp(&right.order))
     });
-
-    track_events.sort_by(|a, b| a.tick.cmp(&b.tick));
-    let mut track_bytes = Vec::new();
-    let mut last_tick = 0;
-    for event in track_events {
-        write_var_len(event.tick.saturating_sub(last_tick), &mut track_bytes);
-        track_bytes.extend_from_slice(&event.data);
-        last_tick = event.tick;
-    }
 
     let mut file = Vec::new();
     file.extend_from_slice(b"MThd");
     file.extend_from_slice(&6u32.to_be_bytes());
-    file.extend_from_slice(&0u16.to_be_bytes());
     file.extend_from_slice(&1u16.to_be_bytes());
+    file.extend_from_slice(
+        &u16::try_from(MIDI_TRACKS.len() + 1)
+            .unwrap_or(1)
+            .to_be_bytes(),
+    );
     file.extend_from_slice(&ticks_per_beat.to_be_bytes());
-    file.extend_from_slice(b"MTrk");
-    file.extend_from_slice(&(track_bytes.len() as u32).to_be_bytes());
-    file.extend_from_slice(&track_bytes);
+    write_track_chunk(&mut file, &encode_midi_track(conductor));
+
+    for track in MIDI_TRACKS {
+        let mut track_events = vec![track_name_event(0, track.name)];
+        if let Some(program) = track.program {
+            track_events.push(program_event(0, track.channel, program));
+        }
+        track_events.push(controller_event(0, track.channel, 0x07, track.volume));
+        track_events.push(controller_event(0, track.channel, 0x0A, track.pan));
+        track_events.push(controller_event(0, track.channel, 0x0B, track.expression));
+        track_events.push(controller_event(0, track.channel, 0x5B, track.reverb));
+
+        for event in &events {
+            if midi_track_id(event.layer) != track.id {
+                continue;
+            }
+            let tick = seconds_to_ticks(event.t, seconds_per_beat, ticks_per_beat);
+            track_events.push(note_event(
+                tick,
+                event.on,
+                track.channel,
+                event.note,
+                event.vel.min(127),
+            ));
+        }
+        track_events.push(end_of_track_event(end_tick));
+        let encoded = encode_midi_track(track_events);
+        write_track_chunk(&mut file, &encoded);
+    }
 
     let path = std::env::temp_dir().join("iroha_monitor_etenraku.mid");
     std::fs::write(&path, &file)?;
@@ -881,16 +958,16 @@ pub fn synth_events() -> (Vec<SequenceEvent>, ScoreTimeline) {
     apply_hichiriki_phrasing(&mut hichiriki);
     apply_hichiriki_tataku_timing(&mut hichiriki);
     apply_obachi_anchor(&mut hichiriki, 0.05, -0.005);
-    apply_jitter(&mut hichiriki, [0.015, 0.012, 0.010], 0.02, 0xB137_1F11);
+    apply_jitter(&mut hichiriki, [0.008, 0.006, 0.005], 0.015, 0xB137_1F11);
 
     let mut ryuteki = base_ryuteki_specs();
     apply_obachi_anchor(&mut ryuteki, 0.05, 0.003);
-    apply_jitter(&mut ryuteki, [0.012, 0.010, 0.012], 0.02, 0xC001_FEED);
+    apply_jitter(&mut ryuteki, [0.007, 0.006, 0.005], 0.015, 0xC001_FEED);
 
     let mut sho = base_sho_specs();
     apply_sho_member_stagger(&mut sho);
     apply_obachi_anchor(&mut sho, 0.04, 0.0);
-    apply_jitter(&mut sho, [0.008, 0.006, 0.004], 0.015, 0xA11D_CAFE);
+    apply_jitter(&mut sho, [0.004, 0.003, 0.002], 0.012, 0xA11D_CAFE);
 
     let mut koto = base_koto_specs();
     apply_obachi_anchor(&mut koto, 0.08, 0.012);
@@ -949,26 +1026,124 @@ pub fn synth_events() -> (Vec<SequenceEvent>, ScoreTimeline) {
     (events, timeline)
 }
 
-fn midi_channel(layer: SequenceLayer) -> u8 {
+fn midi_track_id(layer: SequenceLayer) -> MidiTrackId {
     match layer {
-        SequenceLayer::Hichiriki => 0,
-        SequenceLayer::Ryuteki => 1,
-        SequenceLayer::Sho => 2,
-        SequenceLayer::Koto => 3,
-        SequenceLayer::Biwa => 4,
-        SequenceLayer::Taiko | SequenceLayer::Shoko | SequenceLayer::Kakko => 9,
+        SequenceLayer::Hichiriki => MidiTrackId::Hichiriki,
+        SequenceLayer::Ryuteki => MidiTrackId::Ryuteki,
+        SequenceLayer::Sho => MidiTrackId::Sho,
+        SequenceLayer::Koto => MidiTrackId::Koto,
+        SequenceLayer::Biwa => MidiTrackId::Biwa,
+        SequenceLayer::Taiko | SequenceLayer::Shoko | SequenceLayer::Kakko => {
+            MidiTrackId::Percussion
+        }
     }
+}
+
+fn track_name_event(tick: u32, name: &str) -> MidiEvent {
+    let mut data = vec![0xFF, 0x03, u8::try_from(name.len()).unwrap_or(0)];
+    data.extend_from_slice(name.as_bytes());
+    MidiEvent {
+        tick,
+        order: 0,
+        data,
+    }
+}
+
+fn tempo_event(tick: u32, tempo_micros: u32) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: 0,
+        data: vec![
+            0xFF,
+            0x51,
+            0x03,
+            (tempo_micros >> 16) as u8,
+            (tempo_micros >> 8) as u8,
+            tempo_micros as u8,
+        ],
+    }
+}
+
+fn time_signature_event(tick: u32) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: 0,
+        data: vec![0xFF, 0x58, 0x04, 4, 2, 24, 8],
+    }
+}
+
+fn program_event(tick: u32, channel: u8, program: u8) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: 0,
+        data: vec![0xC0 | channel, program],
+    }
+}
+
+fn controller_event(tick: u32, channel: u8, controller: u8, value: u8) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: 0,
+        data: vec![0xB0 | channel, controller, value],
+    }
+}
+
+fn note_event(tick: u32, on: bool, channel: u8, note: u8, velocity: u8) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: if on { 2 } else { 1 },
+        data: vec![
+            if on { 0x90 | channel } else { 0x80 | channel },
+            note,
+            velocity,
+        ],
+    }
+}
+
+fn end_of_track_event(tick: u32) -> MidiEvent {
+    MidiEvent {
+        tick,
+        order: 3,
+        data: vec![0xFF, 0x2F, 0x00],
+    }
+}
+
+fn encode_midi_track(mut events: Vec<MidiEvent>) -> Vec<u8> {
+    events.sort_by(|left, right| {
+        left.tick
+            .cmp(&right.tick)
+            .then_with(|| left.order.cmp(&right.order))
+    });
+
+    let mut bytes = Vec::new();
+    let mut last_tick = 0;
+    for event in events {
+        write_var_len(event.tick.saturating_sub(last_tick), &mut bytes);
+        bytes.extend_from_slice(&event.data);
+        last_tick = event.tick;
+    }
+    bytes
+}
+
+fn write_track_chunk(file: &mut Vec<u8>, track_bytes: &[u8]) {
+    file.extend_from_slice(b"MTrk");
+    file.extend_from_slice(&(track_bytes.len() as u32).to_be_bytes());
+    file.extend_from_slice(track_bytes);
 }
 
 fn ornaments_for_hichiriki_beats(duration_beats: f32) -> Ornaments {
     let long_threshold = approx_seconds_to_beats(6.0);
     let short_threshold = approx_seconds_to_beats(2.0);
     if duration_beats >= long_threshold {
-        Ornaments::with(&[OrnamentMark::Fukura, OrnamentMark::Mawashi])
+        Ornaments::with(&[
+            OrnamentMark::Seme,
+            OrnamentMark::Fukura,
+            OrnamentMark::Mawashi,
+        ])
     } else if duration_beats <= short_threshold {
         Ornaments::with(&[OrnamentMark::Tataku])
     } else {
-        Ornaments::with(&[OrnamentMark::Fukura])
+        Ornaments::with(&[OrnamentMark::Seme, OrnamentMark::Fukura])
     }
 }
 
@@ -1106,7 +1281,19 @@ mod tests {
     #[test]
     fn midi_file_is_written() {
         let path = write_demo_midi_file().expect("midi generation");
-        assert!(std::path::Path::new(&path).exists());
+        let midi_path = std::path::Path::new(&path);
+        assert!(midi_path.exists());
+
+        let bytes = std::fs::read(midi_path).expect("read generated midi");
+        assert!(bytes.starts_with(b"MThd"), "midi header must be present");
+        assert_eq!(u16::from_be_bytes([bytes[8], bytes[9]]), 1);
+        assert_eq!(u16::from_be_bytes([bytes[10], bytes[11]]), 7);
+        assert!(
+            bytes
+                .windows("Hichiriki".len())
+                .any(|window| window == b"Hichiriki"),
+            "multitrack export should name melodic tracks"
+        );
     }
 
     #[test]
@@ -1197,8 +1384,8 @@ mod tests {
             .filter(|event| event.on && matches!(event.layer, SequenceLayer::Kakko))
             .count();
         assert!(
-            kakko_hits >= 20,
-            "kakko pulse train should provide ongoing subdivision (found {kakko_hits})"
+            kakko_hits >= 12,
+            "kakko cadence should remain present without becoming grid-like (found {kakko_hits})"
         );
     }
 

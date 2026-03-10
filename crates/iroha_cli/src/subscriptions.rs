@@ -74,7 +74,7 @@ fn resolve_optional_account_id<C: RunContext>(
 
 #[derive(clap::Args, Debug)]
 pub struct PlanCreateArgs {
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal).
+    /// Authority account identifier (canonical IH58 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
     /// Hex-encoded private key for signing.
@@ -220,7 +220,7 @@ impl Run for SubscriptionCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionCreateArgs {
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal).
+    /// Authority account identifier (canonical IH58 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
     /// Hex-encoded private key for signing.
@@ -342,7 +342,7 @@ pub struct SubscriptionActionArgs {
     /// Subscription NFT id.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal).
+    /// Authority account identifier (canonical IH58 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
     /// Hex-encoded private key for signing.
@@ -375,7 +375,7 @@ pub struct SubscriptionUsageArgs {
     /// Subscription NFT id.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
-    /// Authority account identifier (IH58 (preferred) or sora compressed literal).
+    /// Authority account identifier (canonical IH58 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
     /// Hex-encoded private key for signing.
@@ -495,9 +495,8 @@ mod tests {
     }
 
     fn sample_account_id(seed: u8) -> AccountId {
-        let domain = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        AccountId::new(domain, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_plan(provider: AccountId, asset_definition: AssetDefinitionId) -> SubscriptionPlan {

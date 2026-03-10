@@ -2170,7 +2170,7 @@ mod network_relay_tests {
             .expect("valid chain id");
         let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random();
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
@@ -3858,9 +3858,7 @@ impl Iroha {
                     );
                 } else {
                     let expected_hash = config.genesis.expected_hash;
-                    let genesis_account = AccountId::new(
-                        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                        effective_genesis_public_key.clone(),
+                    let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
                     );
                     match bootstrapper
                         .fetch_genesis(&candidates, &genesis_account, expected_hash)
@@ -3934,9 +3932,7 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let genesis_account = AccountId::new(
-                    iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                    effective_genesis_public_key.clone(),
+                let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
                 );
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
@@ -5168,11 +5164,6 @@ fn genesis_public_key_from_genesis_block(
         Report::new(StartError::InitKura).attach("stored genesis block contains no transactions")
     })?;
     let authority = first.authority();
-    if authority.domain() != &*iroha_genesis::GENESIS_DOMAIN_ID {
-        return Err(Report::new(StartError::InitKura).attach(format!(
-            "stored genesis transaction authority is not in genesis domain (authority={authority})",
-        )));
-    }
     authority.try_signatory().cloned().ok_or_else(|| {
         Report::new(StartError::InitKura)
             .attach("stored genesis transaction authority is not a single-key account")
@@ -5180,8 +5171,9 @@ fn genesis_public_key_from_genesis_block(
 }
 
 fn genesis_account(public_key: PublicKey) -> Account {
-    let genesis_account_id = AccountId::new(iroha_genesis::GENESIS_DOMAIN_ID.clone(), public_key);
-    Account::new(genesis_account_id.clone()).build(&genesis_account_id)
+    let genesis_account_id = AccountId::new(public_key);
+    Account::new(genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()))
+        .build(&genesis_account_id)
 }
 
 fn genesis_domain(public_key: PublicKey) -> Domain {
@@ -7887,7 +7879,7 @@ mod tests {
         ) -> PublicLaneValidatorRecord {
             let domain: DomainId = "nexus".parse().expect("domain id");
             let keypair = KeyPair::random_with_algorithm(algorithm);
-            let account_id = AccountId::new(domain, keypair.public_key().clone());
+            let account_id = AccountId::new(keypair.public_key().clone());
             let stake = Numeric::from(10_u64);
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
@@ -8220,7 +8212,7 @@ mod tests {
             let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id =
-                AccountId::new(domain_id.clone(), bls_keypair.public_key().clone());
+                AccountId::new(bls_keypair.public_key().clone());
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([

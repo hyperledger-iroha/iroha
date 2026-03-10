@@ -27,11 +27,11 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountController, AccountDomainSelector, AccountEntry, AccountSubjectId, AccountValue,
-        OpaqueAccountId,
+        AccountDomainSelector, AccountEntry, AccountId, AccountValue, OpaqueAccountId,
+        ScopedAccountId,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
-    asset::{Asset, AssetEntry, AssetValue, Mintable},
+    asset::{Asset, AssetBalancePolicy, AssetBalanceScope, AssetEntry, AssetValue, Mintable},
     block::{
         BlockHeader, SignedBlock,
         consensus::EvidenceRecord,
@@ -109,7 +109,6 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
-    asset_definition::CanRegisterAssetDefinition,
     nft::{CanModifyNftMetadata, CanTransferNft},
     sorafs::CanOperateSorafsRepair,
     trigger::CanExecuteTrigger,
@@ -562,6 +561,7 @@ macro_rules! build_world_transaction {
             merge_global_state_root: $state.merge_global_state_root.transaction(),
             axt_lane_config: $axt_lane_config,
             axt_current_slot: $axt_current_slot,
+            current_dataspace_id: None,
             external_event_buf: $state.external_event_buf.transaction(),
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
@@ -765,7 +765,6 @@ struct AccountPermissionSummary {
     hydrated: bool,
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
-    reg_asset_domains: std::collections::BTreeSet<iroha_data_model::domain::DomainId>,
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
@@ -784,7 +783,7 @@ fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, literal)
+    crate::block::parse_account_literal_with_world(world, literal).map(Into::into)
 }
 
 impl AccountPermissionSummary {
@@ -792,7 +791,6 @@ impl AccountPermissionSummary {
         self.hydrated = false;
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
-        self.reg_asset_domains.clear();
         self.fee_sponsors.clear();
     }
 
@@ -811,14 +809,6 @@ impl AccountPermissionSummary {
                     .try_into_any_norito::<CanExecuteTrigger>()
                 {
                     self.exec_trigger_ids.insert(decoded.trigger.clone());
-                }
-            }
-            "CanRegisterAssetDefinition" => {
-                if let Ok(decoded) = permission
-                    .payload()
-                    .try_into_any_norito::<CanRegisterAssetDefinition>()
-                {
-                    self.reg_asset_domains.insert(decoded.domain.clone());
                 }
             }
             "CanUseFeeSponsor" => {
@@ -1223,9 +1213,9 @@ pub struct World {
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>>,
+    pub(crate) account_subject_domains: Storage<AccountId, BTreeSet<DomainId>>,
     /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>>,
+    pub(crate) domain_account_subjects: Storage<DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
@@ -1539,9 +1529,9 @@ pub struct WorldBlock<'world> {
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageBlock<'world, AccountSubjectId, BTreeSet<DomainId>>,
+    pub(crate) account_subject_domains: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
     /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountSubjectId>>,
+    pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -1963,10 +1953,10 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Domain memberships keyed by domainless account subject.
     pub(crate) account_subject_domains:
-        StorageTransaction<'block, 'world, AccountSubjectId, BTreeSet<DomainId>>,
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
     /// Subject memberships keyed by domain.
     pub(crate) domain_account_subjects:
-        StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountSubjectId>>,
+        StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -2265,6 +2255,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) axt_lane_config: LaneConfig,
     /// Current slot snapshot used when deriving AXT policy caches.
     pub(crate) axt_current_slot: u64,
+    /// Dataspace context for this world-transaction execution scope.
+    pub(crate) current_dataspace_id: Option<DataSpaceId>,
     /// State telemetry handle used to mirror data events into metrics.
     #[cfg(feature = "telemetry")]
     telemetry: Option<&'world StateTelemetry>,
@@ -2312,9 +2304,9 @@ pub struct WorldView<'world> {
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageView<'world, AccountSubjectId, BTreeSet<DomainId>>,
+    pub(crate) account_subject_domains: StorageView<'world, AccountId, BTreeSet<DomainId>>,
     /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountSubjectId>>,
+    pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical account id.
@@ -5289,6 +5281,8 @@ pub struct StateTransaction<'block, 'state> {
     implicit_account_creations_in_block: &'block mut u32,
     /// Lane context for the current transaction (used by AXT exports).
     pub current_lane_id: Option<LaneId>,
+    /// Dataspace context for the current transaction (used by dataspace-restricted asset buckets).
+    pub current_dataspace_id: Option<DataSpaceId>,
     /// Gas used by the last executed transaction (IVM path). Set by executor.
     pub last_tx_gas_used: u64,
     /// Block-level gas limit, captured at the beginning of this block.
@@ -6078,7 +6072,6 @@ mod stake_snapshot_tests {
     use iroha_data_model::{
         account::AccountId as DMAccountId,
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
-        domain::DomainId,
         metadata::Metadata,
         nexus::{LaneCatalog, LaneConfig, LaneVisibility},
     };
@@ -6200,10 +6193,9 @@ mod stake_snapshot_tests {
             seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Active, 0);
         }
         // Build a council state with member accounts whose signatories match peers [1,0]
-        let domain: DomainId = "wonderland".parse().unwrap();
         let members = vec![
-            DMAccountId::of(domain.clone(), kp[1].public_key().clone()),
-            DMAccountId::of(domain.clone(), kp[0].public_key().clone()),
+            DMAccountId::of(kp[1].public_key().clone()),
+            DMAccountId::of(kp[0].public_key().clone()),
         ];
         let council = CouncilState {
             epoch: 0,
@@ -6236,11 +6228,10 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 500;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let active_kp = KeyPair::random();
         let jailed_kp = KeyPair::random();
-        let active_validator = DMAccountId::of(domain.clone(), active_kp.public_key().clone());
-        let jailed_validator = DMAccountId::of(domain.clone(), jailed_kp.public_key().clone());
+        let active_validator = DMAccountId::of(active_kp.public_key().clone());
+        let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
 
         let mut wb = state.world.block();
         {
@@ -6300,11 +6291,10 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let present_kp = KeyPair::random();
         let missing_kp = KeyPair::random();
-        let present_validator = DMAccountId::of(domain.clone(), present_kp.public_key().clone());
-        let missing_validator = DMAccountId::of(domain.clone(), missing_kp.public_key().clone());
+        let present_validator = DMAccountId::of(present_kp.public_key().clone());
+        let missing_validator = DMAccountId::of(missing_kp.public_key().clone());
 
         let mut wb = state.world.block();
         {
@@ -6364,7 +6354,6 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let keypairs: Vec<KeyPair> = (0..3).map(|_| KeyPair::random()).collect();
 
         let mut wb = state.world.block();
@@ -6379,7 +6368,7 @@ mod stake_snapshot_tests {
             seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
         }
         for kp in &keypairs {
-            let validator = DMAccountId::of(domain.clone(), kp.public_key().clone());
+            let validator = DMAccountId::of(kp.public_key().clone());
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, validator.clone()),
                 PublicLaneValidatorRecord {
@@ -6423,11 +6412,10 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 100;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let live_kp = KeyPair::random();
         let expired_kp = KeyPair::random();
-        let live_validator = DMAccountId::of(domain.clone(), live_kp.public_key().clone());
-        let expired_validator = DMAccountId::of(domain.clone(), expired_kp.public_key().clone());
+        let live_validator = DMAccountId::of(live_kp.public_key().clone());
+        let expired_validator = DMAccountId::of(expired_kp.public_key().clone());
 
         let mut wb = state.world.block();
         let live_peer = PeerId::from(live_kp.public_key().clone());
@@ -6505,9 +6493,8 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 1;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let kp = KeyPair::random();
-        let validator = DMAccountId::of(domain.clone(), kp.public_key().clone());
+        let validator = DMAccountId::of(kp.public_key().clone());
 
         let mut wb = state.world.block();
         {
@@ -6521,7 +6508,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator,
-                stake_account: DMAccountId::of(domain, kp.public_key().clone()),
+                stake_account: DMAccountId::of(kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
@@ -6571,11 +6558,10 @@ mod stake_snapshot_tests {
             nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let stake_kp = KeyPair::random();
         let admin_kp = KeyPair::random();
-        let stake_validator = DMAccountId::of(domain.clone(), stake_kp.public_key().clone());
-        let admin_validator = DMAccountId::of(domain.clone(), admin_kp.public_key().clone());
+        let stake_validator = DMAccountId::of(stake_kp.public_key().clone());
+        let admin_validator = DMAccountId::of(admin_kp.public_key().clone());
 
         let stake_peer = PeerId::from(stake_kp.public_key().clone());
         let admin_peer = PeerId::from(admin_kp.public_key().clone());
@@ -6593,7 +6579,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: stake_validator,
-                stake_account: DMAccountId::of(domain.clone(), stake_kp.public_key().clone()),
+                stake_account: DMAccountId::of(stake_kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
@@ -6608,7 +6594,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(1),
                 validator: admin_validator,
-                stake_account: DMAccountId::of(domain, admin_kp.public_key().clone()),
+                stake_account: DMAccountId::of(admin_kp.public_key().clone()),
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
                 metadata: Metadata::default(),
@@ -6648,7 +6634,6 @@ mod stake_snapshot_tests {
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
         }
 
-        let domain: DomainId = "wonderland".parse().unwrap();
         let kp_a = KeyPair::random();
         let kp_b = KeyPair::random();
         let peer_a = PeerId::from(kp_a.public_key().clone());
@@ -6663,7 +6648,7 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
         seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
         // Stray validator entry should not affect admin-managed rosters.
-        let validator_id = DMAccountId::of(domain.clone(), kp_a.public_key().clone());
+        let validator_id = DMAccountId::of(kp_a.public_key().clone());
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, validator_id.clone()),
             PublicLaneValidatorRecord {
@@ -6858,9 +6843,8 @@ mod storage_migration_tests {
         let uaid = UniversalAccountId::from_hash(Hash::new("space-migration"));
         let dataspace = DataSpaceId::new(7);
 
-        let domain_id: DomainId = "space.migration".parse().expect("domain id");
         let signatory = KeyPair::random();
-        let account_id = AccountId::new(domain_id, signatory.public_key().clone());
+        let account_id = AccountId::new(signatory.public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
             .accounts
@@ -6925,9 +6909,8 @@ mod storage_migration_tests {
         let uaid = UniversalAccountId::from_hash(Hash::new("space-scheduler"));
         let dataspace = DataSpaceId::new(11);
 
-        let domain_id: DomainId = "space.scheduler".parse().expect("domain id");
         let signatory = KeyPair::random();
-        let account_id = AccountId::new(domain_id, signatory.public_key().clone());
+        let account_id = AccountId::new(signatory.public_key().clone());
         let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         world
             .accounts
@@ -6996,9 +6979,8 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::dup-index"));
-        let domain_id: DomainId = "uaid.index".parse().expect("domain id");
-        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let first = AccountId::new(KeyPair::random().public_key().clone());
+        let second = AccountId::new(KeyPair::random().public_key().clone());
 
         let first_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
         let second_details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
@@ -7021,8 +7003,7 @@ mod storage_migration_tests {
     #[test]
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
-        let owner_domain: DomainId = "owners".parse().expect("owner domain");
-        let owner = AccountId::new(owner_domain, KeyPair::random().public_key().clone());
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
         let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
             .parse()
             .expect("default domain id");
@@ -7079,8 +7060,8 @@ mod storage_migration_tests {
             domain_id.clone(),
             "primary".parse::<Name>().expect("label name"),
         );
-        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let first = AccountId::new(KeyPair::random().public_key().clone());
+        let second = AccountId::new(KeyPair::random().public_key().clone());
 
         let first_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
@@ -7111,7 +7092,7 @@ mod storage_migration_tests {
             domain_id.clone(),
             "+819398553445".parse::<Name>().expect("label name"),
         );
-        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
         let details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
         world
@@ -7130,8 +7111,7 @@ mod storage_migration_tests {
     #[test]
     fn opaque_id_index_rejects_missing_uaid() {
         let mut world = World::default();
-        let domain_id: DomainId = "opaque.world".parse().expect("domain id");
-        let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let details = AccountDetails::new(Metadata::default(), None, None, vec![opaque]);
         world
@@ -7150,12 +7130,11 @@ mod storage_migration_tests {
     #[test]
     fn opaque_id_index_rejects_duplicate_entries() {
         let mut world = World::default();
-        let domain_id: DomainId = "opaque.dupes".parse().expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid::opaque-dupe"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
 
-        let first = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-        let second = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let first = AccountId::new(KeyPair::random().public_key().clone());
+        let second = AccountId::new(KeyPair::random().public_key().clone());
 
         let first_details =
             AccountDetails::new(Metadata::default(), None, Some(uaid), vec![opaque]);
@@ -8076,18 +8055,6 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        let domain_owner = match self.domain_owner_transfer.get(account_id.domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(account_id.domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-
-        if &domain_owner == authority {
-            return Ok(true);
-        }
-
         let target_perm: Permission =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                 account: account_id.clone(),
@@ -8161,17 +8128,6 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.source().domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        if &source_domain_owner == authority {
-            return Ok(true);
-        }
-
         let transferred_domain_owner = match self.domain_owner_transfer.get(transfer.object()) {
             Some((_, to)) => to.clone(),
             None => world
@@ -8198,26 +8154,14 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
+        let transferred_owner = match self.asset_def_owner_transfer.get(transfer.object()) {
             Some((_, to)) => to.clone(),
             None => world
-                .domain(transfer.source().domain())
-                .map(|domain| domain.owned_by().clone())
+                .asset_definition(transfer.object())
+                .map(|definition| definition.owned_by().clone())
                 .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
         };
-        if &source_domain_owner == authority {
-            return Ok(true);
-        }
-
-        let definition_domain_owner =
-            match self.domain_owner_transfer.get(transfer.object().domain()) {
-                Some((_, to)) => to.clone(),
-                None => world
-                    .domain(transfer.object().domain())
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-            };
-        Ok(&definition_domain_owner == authority)
+        Ok(&transferred_owner == authority)
     }
 
     /// Check whether `authority` may transfer `transfer.object()` under the current delta.
@@ -8232,17 +8176,6 @@ impl DetachedStateTransactionDelta {
         >,
     ) -> Result<bool, ValidationFail> {
         if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        let source_domain_owner = match self.domain_owner_transfer.get(transfer.source().domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.source().domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        if &source_domain_owner == authority {
             return Ok(true);
         }
 
@@ -9298,25 +9231,32 @@ impl World {
     }
 
     fn rebuild_account_subject_domain_indexes(&mut self) {
-        let mut subject_domains = BTreeMap::<AccountSubjectId, BTreeSet<DomainId>>::new();
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountSubjectId>>::new();
-        let view = self.accounts.view();
-        for (account_id, _) in view.iter() {
-            let subject = account_id.subject_id();
-            let domain = account_id.domain().clone();
-            subject_domains
-                .entry(subject.clone())
-                .or_default()
-                .insert(domain.clone());
-            domain_subjects.entry(domain).or_default().insert(subject);
+        let mut subject_domains = BTreeMap::<AccountId, BTreeSet<DomainId>>::new();
+        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
+        let accounts = self.accounts.view();
+        let domains = self.domains.view();
+
+        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
+            if accounts.get(subject).is_none() {
+                continue;
+            }
+
+            let filtered_domains: BTreeSet<_> = linked_domains
+                .iter()
+                .filter(|domain| domains.get(*domain).is_some())
+                .cloned()
+                .collect();
+            for domain in &filtered_domains {
+                domain_subjects
+                    .entry(domain.clone())
+                    .or_default()
+                    .insert(subject.clone());
+            }
+            subject_domains.insert(subject.clone(), filtered_domains);
         }
 
-        // Preserve explicitly materialized subject records that intentionally carry no linked
-        // domains (`subject -> {}`), for example after unlinking a subject from its last domain.
-        for (subject, domains) in self.account_subject_domains.view().iter() {
-            if domains.is_empty() {
-                subject_domains.entry(subject.clone()).or_default();
-            }
+        for (subject, _) in accounts.iter() {
+            subject_domains.entry(subject.clone()).or_default();
         }
 
         self.account_subject_domains = subject_domains.into_iter().collect();
@@ -9630,13 +9570,9 @@ pub trait WorldReadOnly {
     /// Account storage (read-only).
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
     /// Domain memberships keyed by account subject (read-only).
-    fn account_subject_domains(
-        &self,
-    ) -> &impl StorageReadOnly<AccountSubjectId, BTreeSet<DomainId>>;
+    fn account_subject_domains(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>>;
     /// Account-subject memberships keyed by domain (read-only).
-    fn domain_account_subjects(
-        &self,
-    ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountSubjectId>>;
+    fn domain_account_subjects(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>>;
     /// UAID to account index (read-only).
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
@@ -9978,21 +9914,11 @@ pub trait WorldReadOnly {
     /// Iterate accounts in domain
     #[allow(clippy::type_complexity)]
     fn accounts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AccountEntry<'_>> {
-        let mut account_ids = BTreeSet::new();
-        if let Some(subjects) = self.domain_account_subjects().get(id) {
-            for subject in subjects {
-                account_ids.insert(subject.to_account_id(id.clone()));
-            }
-        }
-        for (account_id, _) in self
-            .accounts()
-            .range::<dyn AsAccountIdDomainCompare>(AccountByDomainBounds::new(id))
-        {
-            account_ids.insert(account_id.clone());
-        }
+        let subjects: BTreeSet<AccountId> =
+            self.account_subjects_in_domain(id).into_iter().collect();
         self.accounts()
             .iter()
-            .filter(move |(account_id, _)| account_ids.contains(*account_id))
+            .filter(move |(account_id, _)| subjects.contains(*account_id))
             .map(|(account_id, value)| AccountEntry::new(account_id, value))
     }
 
@@ -10005,49 +9931,30 @@ pub trait WorldReadOnly {
     }
 
     /// Iterate scoped accounts that belong to a domainless account subject.
-    fn accounts_for_subject_iter(
-        &self,
-        subject: &AccountSubjectId,
-    ) -> impl Iterator<Item = AccountEntry<'_>> {
-        let mut account_ids = BTreeSet::new();
-        if let Some(domains) = self.account_subject_domains().get(subject) {
-            for domain in domains {
-                account_ids.insert(subject.to_account_id(domain.clone()));
-            }
-        }
-        for account in self.accounts_iter() {
-            if account.id().subject_id() == *subject {
-                account_ids.insert(account.id().clone());
-            }
-        }
+    fn accounts_for_subject_iter<'a>(
+        &'a self,
+        subject: &'a AccountId,
+    ) -> impl Iterator<Item = AccountEntry<'a>> {
         self.accounts()
-            .iter()
-            .filter(move |(account_id, _)| account_ids.contains(*account_id))
-            .map(|(account_id, value)| AccountEntry::new(account_id, value))
+            .get(subject)
+            .into_iter()
+            .map(move |value| AccountEntry::new(subject, value))
     }
 
     /// List linked domains for a domainless account subject.
-    fn domains_for_subject(&self, subject: &AccountSubjectId) -> Vec<DomainId> {
-        let mut domains = BTreeSet::new();
-        if let Some(linked_domains) = self.account_subject_domains().get(subject) {
-            domains.extend(linked_domains.iter().cloned());
-        }
-        for account in self.accounts_for_subject_iter(subject) {
-            domains.insert(account.id().domain().clone());
-        }
-        domains.into_iter().collect()
+    fn domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
+        self.account_subject_domains()
+            .get(subject)
+            .map(|linked_domains| linked_domains.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// List account subjects linked to a specific domain.
-    fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountSubjectId> {
-        let mut subjects = BTreeSet::new();
-        if let Some(linked_subjects) = self.domain_account_subjects().get(id) {
-            subjects.extend(linked_subjects.iter().cloned());
-        }
-        for account in self.accounts_in_domain_iter(id) {
-            subjects.insert(account.id().subject_id());
-        }
-        subjects.into_iter().collect()
+    fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountId> {
+        self.domain_account_subjects()
+            .get(id)
+            .map(|linked_subjects| linked_subjects.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Iterate asset definitions in domain
@@ -10089,17 +9996,15 @@ pub trait WorldReadOnly {
         })
     }
 
-    /// Iterate assets matching a specific definition by probing accounts directly.
+    /// Iterate assets matching a specific definition.
     ///
-    /// This avoids scanning every asset entry and instead walks the account set, attempting to
-    /// fetch the balance for the provided definition identifier.
+    /// Asset ownership is keyed by `(owner subject, definition, scope)`, so definition queries
+    /// must walk the asset store directly to preserve all balance partitions.
     fn assets_by_definition_iter(&self, id: &AssetDefinitionId) -> impl Iterator<Item = Asset> {
         let definition_id = id.clone();
-        self.accounts_iter().filter_map(move |account| {
-            let asset_id = AssetId::new(definition_id.clone(), account.id().clone());
-            self.assets()
-                .get(&asset_id)
-                .map(|value| Asset::new(asset_id, value.clone().into_inner()))
+        self.assets().iter().filter_map(move |(asset_id, value)| {
+            (asset_id.definition() == &definition_id)
+                .then(|| Asset::new(asset_id.clone(), value.clone().into_inner()))
         })
     }
 
@@ -10321,12 +10226,12 @@ macro_rules! impl_world_ro {
             }
             fn account_subject_domains(
                 &self,
-            ) -> &impl StorageReadOnly<AccountSubjectId, BTreeSet<DomainId>> {
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>> {
                 &self.account_subject_domains
             }
             fn domain_account_subjects(
                 &self,
-            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountSubjectId>> {
+            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>> {
                 &self.domain_account_subjects
             }
             fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
@@ -12047,7 +11952,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_id: AccountId,
         account_value: AccountValue,
     ) -> Option<AccountValue> {
-        self.link_account_subject_domain(&account_id);
         self.accounts.insert(account_id, account_value)
     }
 
@@ -12055,13 +11959,27 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn remove_account_with_links(&mut self, account_id: &AccountId) -> Option<AccountValue> {
         let removed = self.accounts.remove(account_id.clone());
         if removed.is_some() {
-            self.unlink_account_subject_domain(account_id);
+            let subject = account_id.subject_id();
+            if let Some(domains) = self.account_subject_domains.remove(subject.clone()) {
+                for domain in domains {
+                    let drop_domain_entry = self
+                        .domain_account_subjects
+                        .get_mut(&domain)
+                        .is_some_and(|subjects| {
+                            subjects.remove(&subject);
+                            subjects.is_empty()
+                        });
+                    if drop_domain_entry {
+                        self.domain_account_subjects.remove(domain);
+                    }
+                }
+            }
         }
         removed
     }
 
     /// Link a domain-scoped account subject to its domain membership indexes.
-    pub fn link_account_subject_domain(&mut self, account_id: &AccountId) {
+    pub fn link_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
         let subject = account_id.subject_id();
         let domain = account_id.domain().clone();
 
@@ -12081,7 +11999,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     /// Unlink a domain-scoped account subject from its domain membership indexes.
-    pub fn unlink_account_subject_domain(&mut self, account_id: &AccountId) {
+    pub fn unlink_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
         let subject = account_id.subject_id();
         let domain = account_id.domain().clone();
 
@@ -12147,10 +12065,68 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// # Errors
     /// If domain, account or asset not found
     pub fn asset_mut(&mut self, id: &AssetId) -> Result<&mut AssetValue, FindError> {
-        let _ = self.account(id.account())?;
+        let resolved_id = self
+            .resolve_asset_id_for_current_scope(id)
+            .unwrap_or_else(|_| id.clone());
+        let _ = self.account(resolved_id.account())?;
         self.assets
-            .get_mut(id)
-            .ok_or_else(|| FindError::Asset(id.clone().into()))
+            .get_mut(&resolved_id)
+            .ok_or_else(|| FindError::Asset(resolved_id.into()))
+    }
+
+    /// Resolve the balance partition scope for an asset definition in the current execution context.
+    ///
+    /// # Errors
+    /// Returns an error when the definition is missing or when a dataspace-restricted definition
+    /// is accessed without an execution dataspace context.
+    pub fn resolve_asset_balance_scope(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalanceScope, Error> {
+        let definition = self.asset_definition(definition_id).map_err(Error::from)?;
+        match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => Ok(AssetBalanceScope::Global),
+            AssetBalancePolicy::DataspaceRestricted => self
+                .current_dataspace_id
+                .map(AssetBalanceScope::Dataspace)
+                .ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "dataspace-restricted asset access requires transaction dataspace context"
+                            .into(),
+                    )
+                }),
+        }
+    }
+
+    /// Canonicalize an [`AssetId`] into the current execution scope.
+    ///
+    /// # Errors
+    /// Returns an error when the requested id contradicts the active scope policy
+    /// (for example, cross-dataspace access for restricted assets).
+    pub fn resolve_asset_id_for_current_scope(&self, id: &AssetId) -> Result<AssetId, Error> {
+        let expected_scope = self.resolve_asset_balance_scope(id.definition())?;
+        match (id.scope(), &expected_scope) {
+            (AssetBalanceScope::Global, AssetBalanceScope::Global) => {}
+            (AssetBalanceScope::Global, AssetBalanceScope::Dataspace(_)) => {}
+            (AssetBalanceScope::Dataspace(_), AssetBalanceScope::Global) => {
+                return Err(Error::InvariantViolation(
+                    "global assets cannot be addressed with dataspace scope".into(),
+                ));
+            }
+            (AssetBalanceScope::Dataspace(actual), AssetBalanceScope::Dataspace(expected)) => {
+                if actual != expected {
+                    return Err(Error::InvariantViolation(
+                        "dataspace-restricted assets cannot move across dataspaces in normal transfer/mint paths".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(AssetId::with_scope(
+            id.definition().clone(),
+            id.account().clone(),
+            expected_scope,
+        ))
     }
 
     /// Get asset or inserts new with `default_asset_value`.
@@ -12163,12 +12139,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_id: &AssetId,
         default_asset_value: impl Into<Numeric>,
     ) -> Result<&mut AssetValue, Error> {
-        self.domain(asset_id.definition().domain())?;
-        self.asset_definition(asset_id.definition())?;
-        self.account(asset_id.account())?;
+        let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
+        self.asset_definition(resolved_id.definition())?;
+        self.account(resolved_id.account())?;
 
-        if self.assets.get(asset_id).is_none() {
-            let asset = Asset::new(asset_id.clone(), default_asset_value.into());
+        if self.assets.get(&resolved_id).is_none() {
+            let asset = Asset::new(resolved_id.clone(), default_asset_value.into());
 
             self.emit_events(Some(AssetEvent::Created(asset.clone())));
             let (asset_id, asset_value) = asset.into_key_value();
@@ -12176,7 +12152,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         Ok(self
             .assets
-            .get_mut(asset_id)
+            .get_mut(&resolved_id)
             .expect("Just inserted, cannot fail."))
     }
 
@@ -12399,7 +12375,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 DataEvent::Domain(data_pre::DomainEvent::Account(
                     data_pre::AccountEvent::Created(account),
                 )) => {
-                    if let Some(uaid) = account.uaid() {
+                    if let Some(uaid) = account.account.uaid() {
                         self.rebuild_space_directory_bindings(*uaid);
                         axt_policy_dirty = true;
                     }
@@ -15924,7 +15900,7 @@ impl State {
         self.commit_crypto_snapshot(crypto);
     }
 
-    /// Update the implicit account-domain label used when encoding addresses.
+    /// Update the default domain label used when encoding/compressing account addresses.
     ///
     /// # Errors
     /// Returns `DefaultDomainLabelError` if the provided label is not a valid domain name.
@@ -18167,6 +18143,7 @@ impl<'state> StateBlock<'state> {
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
             current_lane_id: None,
+            current_dataspace_id: None,
             last_tx_gas_used: 0,
             gas_limit_per_block: self.gas_limit_per_block,
             gas_used_in_block_so_far: self.gas_used_in_block,
@@ -19732,9 +19709,9 @@ mod fastpq_tx_set_hash_tests {
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id = "wonderland".parse().expect("valid domain");
-        let domain = Domain::new(domain_id).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -19949,7 +19926,7 @@ mod block_proof_tests {
         let keypair = KeyPair::random();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
         let domain: DomainId = "wonderland".parse().expect("domain id");
-        let authority = AccountId::new(domain, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
             TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
@@ -20215,10 +20192,9 @@ pub fn replay_blocks_from_kura_range(
         let view = state.view();
         let maybe = view
             .world()
-            .accounts()
-            .iter()
-            .find(|(id, _)| id.domain() == &*iroha_genesis::GENESIS_DOMAIN_ID)
-            .map(|(id, _)| id.clone());
+            .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+            .ok()
+            .map(|domain| domain.owned_by().clone());
         drop(view);
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
@@ -20453,11 +20429,20 @@ mod replay_validation_tests {
 
     use super::*;
 
+    fn new_genesis_account(
+        account_id: &iroha_data_model::account::AccountId,
+    ) -> iroha_data_model::account::NewAccount {
+        Account::new(
+            account_id
+                .clone()
+                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )
+    }
+
     #[test]
     fn replay_rejects_corrupted_genesis_block() {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let genesis_account = iroha_data_model::account::AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
         );
 
@@ -20476,7 +20461,7 @@ mod replay_validation_tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let world = World::with(
             [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
-            [Account::new(genesis_account.clone()).build(&genesis_account)],
+            [new_genesis_account(&genesis_account).build(&genesis_account)],
             [],
         );
         let mut state = State::new(world, Arc::clone(&kura), query_handle);
@@ -20512,10 +20497,7 @@ mod replay_validation_tests {
 
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = "users".parse().expect("domain id");
-        let user_id = iroha_data_model::account::AccountId::new(
-            user_domain_id.clone(),
-            user_keypair.public_key().clone(),
-        );
+        let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
@@ -20559,11 +20541,11 @@ mod replay_validation_tests {
         let world = World::with(
             [
                 Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain_id).build(&genesis_id),
+                Domain::new(user_domain_id.clone()).build(&genesis_id),
             ],
             [
-                Account::new(genesis_id.clone()).build(&genesis_id),
-                Account::new(user_id.clone()).build(&genesis_id),
+                new_genesis_account(&genesis_id).build(&genesis_id),
+                Account::new(user_id.clone().to_account_id(user_domain_id)).build(&genesis_id),
             ],
             [],
         );
@@ -20670,7 +20652,7 @@ mod replay_validation_tests {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
             [],
         );
         let mut state =
@@ -20795,7 +20777,7 @@ mod replay_validation_tests {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
             [],
         );
         let state = State::new_with_chain(
@@ -20897,7 +20879,7 @@ mod replay_validation_tests {
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
             [],
         );
         let mut replay_state = State::new_with_chain(
@@ -20940,7 +20922,7 @@ mod replay_validation_tests {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let user_domain: DomainId = "users".parse().expect("domain id");
-        let user_id = AccountId::new(user_domain.clone(), user_keypair.public_key().clone());
+        let user_id = AccountId::new(user_keypair.public_key().clone());
 
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
@@ -20970,8 +20952,8 @@ mod replay_validation_tests {
                 Domain::new(user_domain.clone()).build(&genesis_id),
             ],
             [
-                Account::new(genesis_id.clone()).build(&genesis_id),
-                Account::new(user_id.clone()).build(&genesis_id),
+                new_genesis_account(&genesis_id).build(&genesis_id),
+                Account::new(user_id.clone().to_account_id(user_domain.clone())).build(&genesis_id),
             ],
             [],
         );
@@ -21032,11 +21014,11 @@ mod replay_validation_tests {
         let replay_world = World::with(
             [
                 Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain).build(&genesis_id),
+                Domain::new(user_domain.clone()).build(&genesis_id),
             ],
             [
-                Account::new(genesis_id.clone()).build(&genesis_id),
-                Account::new(user_id).build(&genesis_id),
+                new_genesis_account(&genesis_id).build(&genesis_id),
+                Account::new(user_id.to_account_id(user_domain)).build(&genesis_id),
             ],
             [],
         );
@@ -21071,6 +21053,7 @@ mod replay_validation_tests {
 #[cfg(test)]
 mod permission_cache_tests {
     use iroha_data_model::{
+        account::AccountId,
         domain::DomainId,
         isi::{Grant, Revoke},
         prelude::{Account, Domain},
@@ -21078,7 +21061,6 @@ mod permission_cache_tests {
         trigger::TriggerId,
     };
     use iroha_executor_data_model::permission::{
-        asset_definition::CanRegisterAssetDefinition,
         nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
@@ -21092,14 +21074,30 @@ mod permission_cache_tests {
         smartcontracts::Execute,
     };
 
+    fn wonderland_domain_id() -> DomainId {
+        "wonderland".parse().expect("domain id")
+    }
+
+    fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
+        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+    }
+
+    fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
+        Account::new(
+            account_id
+                .clone()
+                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )
+    }
+
     #[test]
     fn revoke_permission_invalidates_trigger_cache() {
         let (registrar, _) = gen_account_in("wonderland");
         let (owner, _) = gen_account_in("wonderland");
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&registrar);
-        let registrar_account = Account::new(registrar.clone()).build(&registrar);
-        let owner_account = Account::new(owner.clone()).build(&registrar);
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
+        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
+        let owner_account = new_wonderland_account(&owner).build(&registrar);
         let world = World::with([domain], [registrar_account, owner_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -21138,8 +21136,8 @@ mod permission_cache_tests {
 
         let (registrar, _) = gen_account_in("wonderland");
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&registrar);
-        let registrar_account = Account::new(registrar.clone()).build(&registrar);
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
+        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
         let world = World::with([domain], [registrar_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -21172,9 +21170,9 @@ mod permission_cache_tests {
         let (registrar, _) = gen_account_in("wonderland");
         let (owner, _) = gen_account_in("wonderland");
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&registrar);
-        let registrar_account = Account::new(registrar.clone()).build(&registrar);
-        let owner_account = Account::new(owner.clone()).build(&registrar);
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
+        let registrar_account = new_wonderland_account(&registrar).build(&registrar);
+        let owner_account = new_wonderland_account(&owner).build(&registrar);
 
         let role_id: RoleId = "trigger_role".parse().unwrap();
         let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
@@ -21240,59 +21238,13 @@ mod permission_cache_tests {
     }
 
     #[test]
-    fn asset_definition_permission_cache_grant_and_revoke() {
-        let (registrar, _) = gen_account_in("wonderland");
-        let (delegate, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&registrar);
-        let registrar_account = Account::new(registrar.clone()).build(&registrar);
-        let delegate_account = Account::new(delegate.clone()).build(&registrar);
-        let world = World::with([domain], [registrar_account, delegate_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        let domain_id: DomainId = "wonderland".parse().unwrap();
-
-        assert!(
-            !stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "permissions should deny asset-definition registration by default"
-        );
-
-        let permission = CanRegisterAssetDefinition {
-            domain: domain_id.clone(),
-        };
-        Grant::account_permission(permission.clone(), delegate.clone())
-            .execute(&registrar, &mut stx)
-            .expect("grant asset-definition permission");
-
-        assert!(
-            stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "granting permission should allow registration"
-        );
-
-        Revoke::account_permission(permission, delegate.clone())
-            .execute(&registrar, &mut stx)
-            .expect("revoke asset-definition permission");
-
-        assert!(
-            !stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "revoking permission should invalidate cache and deny registration"
-        );
-    }
-
-    #[test]
     fn fee_sponsor_permission_cache_grant_and_revoke() {
         let (sponsor, _) = gen_account_in("wonderland");
         let (caller, _) = gen_account_in("wonderland");
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&sponsor);
-        let sponsor_account = Account::new(sponsor.clone()).build(&sponsor);
-        let caller_account = Account::new(caller.clone()).build(&sponsor);
+        let domain: Domain = Domain::new(wonderland_domain_id()).build(&sponsor);
+        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
+        let caller_account = new_wonderland_account(&caller).build(&sponsor);
         let world = World::with([domain], [sponsor_account, caller_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -21327,62 +21279,6 @@ mod permission_cache_tests {
         assert!(
             !stx.can_use_fee_sponsor(&caller, &sponsor),
             "revoking permission should invalidate cache and deny sponsorship"
-        );
-    }
-
-    #[test]
-    fn asset_definition_permission_cache_role_membership() {
-        let (registrar, _) = gen_account_in("wonderland");
-        let (delegate, _) = gen_account_in("wonderland");
-
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&registrar);
-        let registrar_account = Account::new(registrar.clone()).build(&registrar);
-        let delegate_account = Account::new(delegate.clone()).build(&registrar);
-        let role_id: RoleId = "asset_role".parse().unwrap();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
-
-        let role = Role::new(role_id.clone(), registrar.clone())
-            .add_permission(CanRegisterAssetDefinition {
-                domain: domain_id.clone(),
-            })
-            .build(&registrar);
-
-        let mut world = World::with([domain], [registrar_account, delegate_account], []);
-        assert!(world.roles.insert(role_id.clone(), role).is_none());
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-
-        assert!(
-            !stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "role permissions should not apply before membership"
-        );
-
-        Grant::account_role(role_id.clone(), delegate.clone())
-            .execute(&registrar, &mut stx)
-            .expect("grant account role");
-
-        assert!(
-            stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "granting role should allow registration"
-        );
-        assert!(
-            stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "cached value should remain true while membership is present"
-        );
-
-        Revoke::account_role(role_id, delegate.clone())
-            .execute(&registrar, &mut stx)
-            .expect("revoke account role");
-
-        assert!(
-            !stx.can_register_asset_definition_in_domain(&delegate, &domain_id),
-            "revoking role should invalidate cache and deny registration"
         );
     }
 
@@ -21542,7 +21438,6 @@ mod permission_cache_tests {
         };
         use iroha_data_model::{
             ChainId,
-            account::Account,
             block::{BlockHeader, SignedBlock},
             domain::Domain,
             isi::{Grant, InstructionBox},
@@ -21597,7 +21492,7 @@ mod permission_cache_tests {
         let make_world = || {
             World::with(
                 [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-                [Account::new(genesis_id.clone()).build(&genesis_id)],
+                [new_genesis_account(&genesis_id).build(&genesis_id)],
                 [],
             )
         };
@@ -22989,7 +22884,6 @@ impl StateTransaction<'_, '_> {
             let asset_definition_name = asset_id.definition().name().as_ref().to_owned();
             let asset_definition_domain = asset_id.definition().domain().to_string();
             let account_id = asset_id.account().to_string();
-            let account_domain = asset_id.account().domain().to_string();
             if let Ok(amount_i64) = amount_str.parse::<i64>() {
                 let mut details = norito::json::Map::new();
                 details.insert("kind".to_owned(), norito::json!("asset_change"));
@@ -23003,7 +22897,6 @@ impl StateTransaction<'_, '_> {
                     norito::json!(asset_definition_domain),
                 );
                 details.insert("account_id".to_owned(), norito::json!(account_id));
-                details.insert("account_domain".to_owned(), norito::json!(account_domain));
                 details.insert("amount".to_owned(), norito::json!(amount_str));
                 details.insert("amount_i64".to_owned(), norito::json!(amount_i64));
                 payload = norito::json::Value::Object(details);
@@ -23023,7 +22916,6 @@ impl StateTransaction<'_, '_> {
                     norito::json!(asset_definition_domain),
                 );
                 details.insert("account_id".to_owned(), norito::json!(account_id));
-                details.insert("account_domain".to_owned(), norito::json!(account_domain));
                 details.insert("amount".to_owned(), norito::json!(amount_str));
                 payload = norito::json::Value::Object(details);
             }
@@ -23297,15 +23189,8 @@ impl StateTransaction<'_, '_> {
     /// Fast check: does `caller` have `CanRegisterTrigger{authority}` for `owner`?
     pub fn can_register_trigger_for(&mut self, caller: &AccountId, owner: &AccountId) -> bool {
         let set = self.cached_reg_trigger_authorities(caller);
-        set.contains(owner)
-    }
-
-    /// Build or fetch cached set of domains this account can register asset definitions in.
-    fn cached_reg_asset_domains(
-        &mut self,
-        account: &AccountId,
-    ) -> &std::collections::BTreeSet<iroha_data_model::domain::DomainId> {
-        &self.ensure_permission_summary(account).reg_asset_domains
+        set.iter()
+            .any(|authority| authority.subject_id() == owner.subject_id())
     }
 
     /// Build or fetch cached set of sponsor accounts this account can charge fees to.
@@ -23314,16 +23199,6 @@ impl StateTransaction<'_, '_> {
         account: &AccountId,
     ) -> &std::collections::BTreeSet<iroha_data_model::account::AccountId> {
         &self.ensure_permission_summary(account).fee_sponsors
-    }
-
-    /// Fast check: does `caller` have `CanRegisterAssetDefinition{domain}`?
-    pub fn can_register_asset_definition_in_domain(
-        &mut self,
-        caller: &AccountId,
-        domain: &iroha_data_model::domain::DomainId,
-    ) -> bool {
-        let set = self.cached_reg_asset_domains(caller);
-        set.contains(domain)
     }
 
     /// Fast check: does `caller` have `CanExecuteTrigger{trigger_id}` for `id`?
@@ -23335,7 +23210,8 @@ impl StateTransaction<'_, '_> {
     /// Fast check: does `caller` have `CanUseFeeSponsor{sponsor}` for `sponsor`?
     pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
         let set = self.cached_fee_sponsors(caller);
-        set.contains(sponsor)
+        set.iter()
+            .any(|allowed| allowed.subject_id() == sponsor.subject_id())
     }
 
     fn ensure_synthetic_batch_hash_with<F>(&mut self, extra: F) -> iroha_crypto::Hash
@@ -23374,44 +23250,12 @@ impl StateTransaction<'_, '_> {
 
 /// Bounds for `range` queries
 mod range_bounds {
-    use core::{
-        cmp::Ordering,
-        ops::{Bound, RangeBounds},
-    };
+    use core::ops::{Bound, RangeBounds};
 
     use iroha_primitives::{cmpext::MinMaxExt, impl_as_dyn_key};
 
     use super::*;
     use crate::role::RoleIdWithOwner;
-
-    #[derive(Clone, Copy)]
-    struct AccountControllerKeyRef<'a>(&'a AccountController);
-
-    impl<'a> AccountControllerKeyRef<'a> {
-        const fn new(controller: &'a AccountController) -> Self {
-            Self(controller)
-        }
-    }
-
-    impl PartialEq for AccountControllerKeyRef<'_> {
-        fn eq(&self, other: &Self) -> bool {
-            self.0 == other.0
-        }
-    }
-
-    impl Eq for AccountControllerKeyRef<'_> {}
-
-    impl PartialOrd for AccountControllerKeyRef<'_> {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Ord for AccountControllerKeyRef<'_> {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.0.cmp(other.0)
-        }
-    }
 
     /// Key for range queries over account for roles
     #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
@@ -23465,60 +23309,6 @@ mod range_bounds {
         target: RoleIdWithOwner,
         key: RoleIdByAccount<'_>,
         trait: AsRoleIdByAccount
-    }
-
-    /// `DomainId` wrapper for fetching accounts beloning to a domain from the global store
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct AccountIdDomainCompare<'a> {
-        domain_id: &'a DomainId,
-        controller: MinMaxExt<AccountControllerKeyRef<'a>>,
-    }
-
-    /// Bounds for range quired over accounts by domain
-    pub struct AccountByDomainBounds<'a> {
-        start: AccountIdDomainCompare<'a>,
-        end: AccountIdDomainCompare<'a>,
-    }
-
-    impl<'a> AccountByDomainBounds<'a> {
-        /// Create range bounds for range quires over accounts by domain
-        pub fn new(domain_id: &'a DomainId) -> Self {
-            Self {
-                start: AccountIdDomainCompare {
-                    domain_id,
-                    controller: MinMaxExt::Min,
-                },
-                end: AccountIdDomainCompare {
-                    domain_id,
-                    controller: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsAccountIdDomainCompare + 'a> for AccountByDomainBounds<'a> {
-        fn start_bound(&self) -> Bound<&(dyn AsAccountIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsAccountIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsAccountIdDomainCompare for AccountId {
-        fn as_key(&self) -> AccountIdDomainCompare<'_> {
-            AccountIdDomainCompare {
-                domain_id: self.domain(),
-                controller: AccountControllerKeyRef::new(self.controller()).into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: AccountId,
-        key: AccountIdDomainCompare<'_>,
-        trait: AsAccountIdDomainCompare
     }
 
     /// `DomainId` wrapper for fetching asset definitions beloning to a domain from the global store
@@ -23805,12 +23595,30 @@ pub(crate) mod deserialize {
             .remove(key)
             .ok_or_else(|| json::Error::missing_field(key))?;
         if let json::Value::Object(parameters) = &value
-            && (parameters.contains_key("blocks") || parameters.contains_key("revert"))
+            && let Some(blocks) = parameters.get("blocks")
         {
-            return Err(json::Error::InvalidField {
-                field: key.to_owned(),
-                message: "legacy parameters envelope is not supported".to_owned(),
-            });
+            let revert_is_null_or_missing = parameters
+                .get("revert")
+                .is_none_or(norito::json::Value::is_null);
+            let allowed_shape = revert_is_null_or_missing
+                && parameters
+                    .keys()
+                    .all(|field| field == "blocks" || field == "revert");
+            if !allowed_shape {
+                return Err(json::Error::InvalidField {
+                    field: key.to_owned(),
+                    message:
+                        "unsupported parameters envelope shape; expected `{ \"blocks\": ... }`"
+                            .to_owned(),
+                });
+            }
+            let parsed: Parameters = json::value::from_value(blocks.clone()).map_err(|err| {
+                json::Error::InvalidField {
+                    field: key.to_owned(),
+                    message: err.to_string(),
+                }
+            })?;
+            return Ok(Cell::new(parsed));
         }
         json::value::from_value(value).map_err(|err| json::Error::InvalidField {
             field: key.to_owned(),
@@ -24507,7 +24315,7 @@ pub(crate) mod deserialize {
         use super::*;
 
         #[test]
-        fn take_parameters_cell_rejects_legacy_blocks_envelope() {
+        fn take_parameters_cell_accepts_legacy_blocks_envelope() {
             let expected = Parameters::default();
             let blocks = norito::json::to_value(&expected).expect("serialize parameters");
             let mut legacy_map = json::native::Map::new();
@@ -24518,28 +24326,20 @@ pub(crate) mod deserialize {
             let mut map = json::native::Map::new();
             map.insert("parameters".to_owned(), legacy);
 
-            let err = match take_parameters_cell(&mut map, "parameters") {
-                Ok(_) => panic!("legacy parameters envelope must be rejected"),
-                Err(err) => err,
-            };
-            let message = err.to_string();
-            assert!(
-                message.contains("parameters"),
-                "unexpected decode error: {message}"
-            );
+            let parsed = take_parameters_cell(&mut map, "parameters")
+                .expect("legacy envelope should decode into parameters cell");
+            assert_eq!(parsed.view().get(), &expected);
         }
 
         #[test]
         fn take_optional_default_decodes_subject_domain_index_storages() {
             let domain_id: DomainId = "wonderland".parse().expect("domain id");
-            let account = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+            let account = AccountId::new(KeyPair::random().public_key().clone());
             let subject = account.subject_id();
 
-            let mut subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>> =
-                Storage::default();
+            let mut subject_domains: Storage<AccountId, BTreeSet<DomainId>> = Storage::default();
             subject_domains.insert(subject.clone(), BTreeSet::new());
-            let mut domain_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>> =
-                Storage::default();
+            let mut domain_subjects: Storage<DomainId, BTreeSet<AccountId>> = Storage::default();
             domain_subjects.insert(domain_id.clone(), BTreeSet::from([subject.clone()]));
 
             let mut map = json::native::Map::new();
@@ -24552,10 +24352,10 @@ pub(crate) mod deserialize {
                 norito::json::to_value(&domain_subjects).expect("serialize domain subjects"),
             );
 
-            let decoded_subject_domains: Storage<AccountSubjectId, BTreeSet<DomainId>> =
+            let decoded_subject_domains: Storage<AccountId, BTreeSet<DomainId>> =
                 take_optional_default(&mut map, "account_subject_domains")
                     .expect("decode subject domains");
-            let decoded_domain_subjects: Storage<DomainId, BTreeSet<AccountSubjectId>> =
+            let decoded_domain_subjects: Storage<DomainId, BTreeSet<AccountId>> =
                 take_optional_default(&mut map, "domain_account_subjects")
                     .expect("decode domain subjects");
 
@@ -24768,6 +24568,21 @@ mod tests {
         tx::AcceptedTransaction,
     };
 
+    fn sample_domain_id() -> DomainId {
+        "wonderland".parse().expect("sample domain id")
+    }
+
+    fn new_account_in_domain(
+        account_id: &AccountId,
+        domain_id: &DomainId,
+    ) -> iroha_data_model::account::NewAccount {
+        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+    }
+
+    fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
+        new_account_in_domain(account_id, &sample_domain_id())
+    }
+
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
         tlv.extend_from_slice(&(ty as u16).to_be_bytes());
@@ -24782,9 +24597,8 @@ mod tests {
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
         let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
-        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder
@@ -25076,10 +24890,10 @@ mod tests {
         };
 
         let (account_id, _keypair) = gen_account_in("wonderland");
-        let domain_id = account_id.domain().clone();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
-            [Account::new(account_id.clone()).build(&account_id)],
+            [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
             [],
         );
         let world_view = world.view();
@@ -25108,24 +24922,32 @@ mod tests {
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
         let acme: DomainId = "acme".parse().expect("domain id");
 
-        let wonderland_account = AccountId::new(wonderland.clone(), keypair.public_key().clone());
-        let acme_account = AccountId::new(acme.clone(), keypair.public_key().clone());
-        let second_subject_account =
-            AccountId::new(wonderland.clone(), KeyPair::random().public_key().clone());
+        let wonderland_account = AccountId::new(keypair.public_key().clone());
+        let second_subject_account = AccountId::new(KeyPair::random().public_key().clone());
         let shared_subject = wonderland_account.subject_id();
+        let acme_account = shared_subject.to_account_id(acme.clone());
 
         let world = World::with(
             [
                 Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(&acme_account),
+                Domain::new(acme.clone()).build(acme_account.account()),
             ],
             [
-                Account::new(wonderland_account.clone()).build(&wonderland_account),
-                Account::new(acme_account.clone()).build(&acme_account),
-                Account::new(second_subject_account.clone()).build(&second_subject_account),
+                new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account),
+                new_account_in_domain(&second_subject_account, &wonderland)
+                    .build(&second_subject_account),
             ],
             [],
         );
+        let mut block = world.block();
+        #[cfg(feature = "telemetry")]
+        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
+        #[cfg(not(feature = "telemetry"))]
+        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
+        tx.link_account_subject_domain(&acme_account);
+        tx.apply();
+        block.commit();
+
         let world_view = world.view();
 
         let linked_domains = world_view.domains_for_subject(&shared_subject);
@@ -25135,18 +24957,21 @@ mod tests {
         assert!(subjects_in_wonderland.contains(&shared_subject));
         assert!(subjects_in_wonderland.contains(&second_subject_account.subject_id()));
         assert_eq!(subjects_in_wonderland.len(), 2);
+
+        let subjects_in_acme = world_view.account_subjects_in_domain(&acme);
+        assert_eq!(subjects_in_acme, vec![shared_subject]);
     }
 
     #[test]
     fn unlink_last_domain_keeps_subject_record_materialized() {
         let keypair = KeyPair::random();
         let solo: DomainId = "solo".parse().expect("domain id");
-        let scoped = AccountId::new(solo.clone(), keypair.public_key().clone());
+        let scoped = AccountId::new(keypair.public_key().clone());
         let subject = scoped.subject_id();
 
         let world = World::with(
             [Domain::new(solo.clone()).build(&scoped)],
-            [Account::new(scoped.clone()).build(&scoped)],
+            [new_account_in_domain(&scoped, &solo).build(&scoped)],
             [],
         );
 
@@ -25190,19 +25015,16 @@ mod tests {
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
         let acme: DomainId = "acme".parse().expect("domain id");
 
-        let wonderland_account = AccountId::new(wonderland.clone(), keypair.public_key().clone());
-        let acme_account = AccountId::new(acme.clone(), keypair.public_key().clone());
+        let wonderland_account = AccountId::new(keypair.public_key().clone());
         let subject = wonderland_account.subject_id();
+        let acme_account = subject.to_account_id(acme.clone());
 
         let world = World::with(
             [
                 Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(&acme_account),
+                Domain::new(acme.clone()).build(acme_account.account()),
             ],
-            [
-                Account::new(wonderland_account.clone()).build(&wonderland_account),
-                Account::new(acme_account.clone()).build(&acme_account),
-            ],
+            [new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account)],
             [],
         );
 
@@ -25211,6 +25033,7 @@ mod tests {
         let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
         #[cfg(not(feature = "telemetry"))]
         let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
+        tx.link_account_subject_domain(&acme_account);
         let removed = tx.remove_account_with_links(&wonderland_account);
         assert!(removed.is_some(), "linked scoped account must be removed");
         let linked_domains = tx
@@ -25232,7 +25055,7 @@ mod tests {
 
         let view = world.view();
         assert!(view.accounts.get(&wonderland_account).is_none());
-        assert!(view.accounts.get(&acme_account).is_some());
+        assert!(view.accounts.get(acme_account.account()).is_none());
         assert_eq!(view.domains_for_subject(&subject), vec![acme]);
     }
 
@@ -25383,7 +25206,7 @@ mod tests {
         let mut world = World::default();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let owner_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let owner_id = AccountId::new(keypair.public_key().clone());
         let domain = iroha_data_model::domain::Domain {
             id: domain_id.clone(),
             logo: None,
@@ -25441,9 +25264,8 @@ mod tests {
     #[test]
     fn world_rebuild_account_indexes_preserves_materialized_empty_subject_records() {
         let mut world = World::default();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let scoped = AccountId::new(domain_id, keypair.public_key().clone());
+        let scoped = AccountId::new(keypair.public_key().clone());
         let subject = scoped.subject_id();
 
         world
@@ -25478,14 +25300,14 @@ mod tests {
         let provider_id = ProviderId::new([9_u8; 32]);
         let keypair = KeyPair::random();
         let domain_id: DomainId = "providers".parse().expect("domain id");
-        let owner_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let owner_id = AccountId::new(keypair.public_key().clone());
         let owner_domain = iroha_data_model::domain::Domain {
-            id: owner_id.domain().clone(),
+            id: domain_id.clone(),
             logo: None,
             metadata: Metadata::default(),
             owned_by: owner_id.clone(),
         };
-        let owner_account = Account::new(owner_id.clone()).build(&owner_id);
+        let owner_account = new_account_in_domain(&owner_id, &domain_id).build(&owner_id);
         let mut state = State::new(
             World::with([owner_domain], [owner_account], []),
             Arc::clone(&kura),
@@ -25518,10 +25340,7 @@ mod tests {
 
         let provider_id = ProviderId::new([7_u8; 32]);
         let keypair = KeyPair::random();
-        let missing_owner = AccountId::new(
-            "providers".parse().expect("domain id"),
-            keypair.public_key().clone(),
-        );
+        let missing_owner = AccountId::new(keypair.public_key().clone());
 
         let mut gov = iroha_config::parameters::actual::Governance::default();
         gov.sorafs_provider_owners
@@ -27214,10 +27033,9 @@ mod tests {
         state.install_lane_manifests(&registry);
     }
 
-    fn bls_account_in(domain: &str) -> (AccountId, KeyPair) {
-        let domain_id: DomainId = domain.parse().expect("domain id");
+    fn bls_account_in(_domain: &str) -> (AccountId, KeyPair) {
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_id = AccountId::new(domain_id, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         (account_id, keypair)
     }
 
@@ -27713,16 +27531,16 @@ mod tests {
             })
             .collect();
         let multisig_policy = MultisigPolicy::new(3, multisig_members).expect("multisig policy");
-        let emergency_authority = AccountId::new_multisig(domain.clone(), multisig_policy);
+        let emergency_authority = AccountId::new_multisig(multisig_policy);
         let world = World::with(
-            [Domain::new(domain).build(&ALICE_ID)],
+            [Domain::new(domain.clone()).build(&ALICE_ID)],
             [
-                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
-                Account::new(emergency_authority.clone()).build(&ALICE_ID),
-                Account::new(base_1.clone()).build(&ALICE_ID),
-                Account::new(base_2.clone()).build(&ALICE_ID),
-                Account::new(extra_1.clone()).build(&ALICE_ID),
-                Account::new(extra_2.clone()).build(&ALICE_ID),
+                new_sample_account(&ALICE_ID).build(&ALICE_ID),
+                new_account_in_domain(&emergency_authority, &domain).build(&ALICE_ID),
+                new_account_in_domain(&base_1, &domain).build(&ALICE_ID),
+                new_account_in_domain(&base_2, &domain).build(&ALICE_ID),
+                new_account_in_domain(&extra_1, &domain).build(&ALICE_ID),
+                new_account_in_domain(&extra_2, &domain).build(&ALICE_ID),
             ],
             [],
         );
@@ -27870,13 +27688,13 @@ mod tests {
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let world = World::with(
-            [Domain::new(domain).build(&ALICE_ID)],
+            [Domain::new(domain.clone()).build(&ALICE_ID)],
             [
-                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
-                Account::new(base_1.clone()).build(&ALICE_ID),
-                Account::new(base_2.clone()).build(&ALICE_ID),
-                Account::new(extra_1.clone()).build(&ALICE_ID),
-                Account::new(extra_2.clone()).build(&ALICE_ID),
+                new_sample_account(&ALICE_ID).build(&ALICE_ID),
+                new_account_in_domain(&base_1, &domain).build(&ALICE_ID),
+                new_account_in_domain(&base_2, &domain).build(&ALICE_ID),
+                new_account_in_domain(&extra_1, &domain).build(&ALICE_ID),
+                new_account_in_domain(&extra_2, &domain).build(&ALICE_ID),
             ],
             [],
         );
@@ -31160,8 +30978,8 @@ mod tests {
 
         let domain_id: DomainId = "zero-snapshot".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -31330,7 +31148,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn axt_replay_ledger_survives_state_restart() {
         let authority: AccountId = AccountId::new(
-            "wonder".parse().expect("domain id"),
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
                 .expect("public key"),
@@ -31569,7 +31386,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn axt_replay_ledger_prunes_after_retention_window() {
         let authority: AccountId = AccountId::new(
-            "wonder".parse().expect("domain id"),
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
                 .expect("public key"),
@@ -31990,8 +31806,8 @@ mod tests {
 
         let domain_id: DomainId = "preserve".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -32114,8 +31930,8 @@ mod tests {
 
         let domain_id: DomainId = "lane-change".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -32509,7 +32325,6 @@ mod tests {
         }
 
         let authority: AccountId = AccountId::new(
-            "wonder".parse().expect("domain id"),
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
                 .expect("public key"),
@@ -32718,8 +32533,8 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -32833,8 +32648,8 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -32936,8 +32751,8 @@ mod tests {
 
         let domain_id: DomainId = "rotate".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -33058,8 +32873,8 @@ mod tests {
 
         let domain_id: DomainId = "zero-hash".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -33145,8 +32960,8 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-        let account = Account::new(account_id.clone())
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
@@ -33250,8 +33065,8 @@ mod tests {
     fn detached_can_modify_nft_metadata_allows_domain_owner() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let nft_id: NftId = "nft_perm_owner$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
@@ -33271,8 +33086,8 @@ mod tests {
     fn detached_can_modify_nft_metadata_checks_grants_and_revokes() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let nft_id: NftId = "nft_perm_grant$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
@@ -33320,8 +33135,8 @@ mod tests {
     fn detached_can_modify_account_metadata_allows_domain_owner() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
 
         let world = World::with([domain], [alice_account, bob_account], []);
         let view = world.view();
@@ -33339,15 +33154,15 @@ mod tests {
     fn detached_can_transfer_domain_denies_non_owner() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
             [alice_domain, users_domain, transferred_domain],
@@ -33371,15 +33186,15 @@ mod tests {
     fn detached_can_transfer_domain_considers_pending_domain_transfers() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
             [
@@ -33427,15 +33242,15 @@ mod tests {
     fn detached_can_transfer_asset_definition_denies_non_owner() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let asset_definition_id =
             AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
@@ -33454,23 +33269,23 @@ mod tests {
             !delta
                 .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
                 .expect("permission check"),
-            "authority that owns neither source account/domain nor definition domain must be denied"
+            "authority that owns neither source account nor asset definition must be denied"
         );
     }
 
     #[test]
-    fn detached_can_transfer_asset_definition_considers_pending_domain_transfers() {
+    fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
         let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let asset_definition_id =
             AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
@@ -33499,35 +33314,26 @@ mod tests {
             "baseline should deny authority before pending owner updates"
         );
 
-        delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
+        delta.transfer_asset_def(transfer.object().clone(), user1.clone(), ALICE_ID.clone());
         assert!(
             delta
                 .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
                 .expect("permission check"),
-            "pending source-domain transfer should authorize subsequent transfer"
-        );
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.transfer_domain(definition_domain_id, user1, ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "pending definition-domain transfer should authorize subsequent transfer"
+            "pending asset-definition owner transfer should authorize subsequent transfer"
         );
     }
 
     #[test]
     fn detached_can_transfer_nft_denies_non_owner() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -33553,14 +33359,14 @@ mod tests {
     #[test]
     fn detached_can_transfer_nft_considers_pending_domain_transfers() {
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let user1 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
-        let user2 = AccountId::new(users_domain_id.clone(), KeyPair::random().into_parts().0);
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(ALICE_ID.domain().clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
+        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -33595,8 +33401,8 @@ mod tests {
     fn detached_can_modify_account_metadata_respects_role_permission_ops() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let role_id: RoleId = "account_editor_perm".parse().expect("role id");
         let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
 
@@ -33655,8 +33461,8 @@ mod tests {
     fn detached_can_modify_nft_metadata_respects_role_grant_order() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let nft_id: NftId = "nft_role_grant$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor".parse().expect("role id");
@@ -33715,8 +33521,8 @@ mod tests {
     fn detached_can_modify_nft_metadata_respects_role_permission_ops() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let nft_id: NftId = "nft_role_perm$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor_perm".parse().expect("role id");
@@ -33778,7 +33584,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
         let state = State::new(world, kura, query_handle);
 
@@ -33822,7 +33628,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset id");
@@ -33869,7 +33675,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
 
@@ -33921,7 +33727,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
@@ -33960,7 +33766,7 @@ mod tests {
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
             let domain_id: DomainId = "wonderland".parse().expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
             let asset_def_id: AssetDefinitionId =
                 "rose#wonderland".parse().expect("asset definition id");
             let asset_def =
@@ -34187,7 +33993,7 @@ mod tests {
             let domain_id: DomainId = "wonderland".parse()?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse()?))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
@@ -34293,7 +34099,7 @@ mod tests {
             let domain_id: DomainId = "wonderland".parse()?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             let trigger = Trigger::new(
                 "precommit_probe".parse()?,
@@ -34385,7 +34191,7 @@ mod tests {
             Register::domain(Domain::new(domain_id))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
                 .expect("register domain");
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
                 .expect("register account");
             let perm = Permission::new(
@@ -34520,7 +34326,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -34614,7 +34420,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -34693,7 +34499,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -34868,7 +34674,7 @@ mod tests {
         );
 
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
         let mut executor_block = world.executor.block();
         *executor_block.get_mut() = executor;
@@ -34939,7 +34745,7 @@ mod tests {
 
         // Seed the world with a domain and ALICE account to author the trigger.
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -35975,7 +35781,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -36173,7 +35979,7 @@ mod tests {
         Register::domain(Domain::new("wonderland".parse().unwrap()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let tkey: Name = "tick".parse().unwrap();
@@ -36346,7 +36152,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -36415,7 +36221,7 @@ mod tests {
         Register::domain(Domain::new("wonderland".parse().unwrap()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -36493,7 +36299,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -36565,7 +36371,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -36644,7 +36450,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -36716,7 +36522,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -36787,7 +36593,7 @@ mod tests {
         Register::domain(Domain::new("wonderland".parse().unwrap()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let flag_key: Name = "flag".parse().expect("valid name");
@@ -36845,7 +36651,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -36980,7 +36786,7 @@ mod tests {
 
         let holder_domain_id: DomainId = "holders".parse().unwrap();
         let nft_domain_id: DomainId = "nfts".parse().unwrap();
-        let holder_id = AccountId::new(holder_domain_id.clone(), KeyPair::random().into_parts().0);
+        let holder_id = AccountId::new(KeyPair::random().into_parts().0);
         let nft_id: NftId = "ticket$nfts".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
@@ -36990,19 +36796,19 @@ mod tests {
 
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+            Register::domain(Domain::new(sample_domain_id()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::domain(Domain::new(holder_domain_id))
+            Register::domain(Domain::new(holder_domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Register::domain(Domain::new(nft_domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(holder_id.clone()))
+            Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -37186,7 +36992,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -37313,7 +37119,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -37387,8 +37193,8 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&BOB_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&BOB_ID);
-        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let alice_account = new_sample_account(&ALICE_ID).build(&BOB_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let world = World::with([domain], [alice_account, bob_account], []);
         let state = State::new(world, kura, query_handle);
 
@@ -37691,35 +37497,6 @@ mod tests {
     }
 
     #[test]
-    fn account_domain_range() {
-        let accounts = [
-            gen_account_in("wonderland").0,
-            gen_account_in("wonderland").0,
-            gen_account_in("a").0,
-            gen_account_in("b").0,
-            gen_account_in("z").0,
-            gen_account_in("z").0,
-        ]
-        .map(|account| (account, ()));
-        let map = Storage::from_iter(accounts);
-
-        let domain_id = "kingdom".parse().unwrap();
-        let view = map.view();
-        let range = view.range(AccountByDomainBounds::new(&domain_id));
-        assert_eq!(range.count(), 0);
-
-        let domain_id = "wonderland".parse().unwrap();
-        let view = map.view();
-        let range = view
-            .range(AccountByDomainBounds::new(&domain_id))
-            .collect::<Vec<_>>();
-        assert_eq!(range.len(), 2);
-        for (account, ()) in range {
-            assert_eq!(account.domain(), &domain_id);
-        }
-    }
-
-    #[test]
     fn asset_account_range() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
 
@@ -37768,7 +37545,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -37819,7 +37596,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -37875,7 +37652,7 @@ mod tests {
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let asset_def = AssetDefinition::numeric(asset_def_id).build(&ALICE_ID);
         let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
 

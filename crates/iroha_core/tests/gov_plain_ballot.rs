@@ -10,6 +10,7 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
+    domain::DomainId,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
@@ -24,8 +25,9 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     // Build minimal state/transaction
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain: Domain = Domain::new(ALICE_ID.domain.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
     let world = World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();

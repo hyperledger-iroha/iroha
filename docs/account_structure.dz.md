@@ -184,15 +184,19 @@ payload bit: │version  │ class  │  norm  │ext │
 ནོར་མ་ཝི་༡, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ་) དང་ སྣ་མང་སིག་ཚད་འཛིན་ (ཐོན་རིམ་༠,
 class 1, སྒྲིག་གཞི་ v1, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ།).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -319,7 +323,7 @@ decoders ཉམས་སྲུང་འབད་ནི་ལུ་ `ERR_UNKNOWN_
 - IME5NFKC བསྒྱུར་བཅོས: ཕྱེད་ཀ་ སོ་ར་ཀ་ན་འདི་ ཌིཀ་མ་བཅད་པར་ ཁོང་རའི་ རྒྱ་ཚད་ཆ་ཚང་སྦེ་ སྤྱིར་བཏང་བཟོ་ཚུགས་ནི་ཨིན་རུང་ ཨེ་ཨེསི་སི་ཨའི་ `sora` sensinel དང་ IH58 ཨང་གྲངས་/ཡི་གུ་ཚུ་ ASCI ལུ་སྡོད་དགོ། རྒྱ་ཚད་ཡང་ན་ གནས་སྟངས་ཀྱིས་ བཀབ་ཡོད་པའི་ བརྡ་མཚོན་ཚུ་ ཁ་ཐོག་ལུ་ `ERR_MISSING_COMPRESSED_SENTINEL`, རྒྱ་ཚད་ཆ་ཚང་ ASCII གིས་ I18NI000000264X ཡར་སེང་འབདཝ་ཨིནམ་དང་ ཞིབ་དཔྱད་མ་མཐུནམ་ཚུ་ I18NI000000265X སྦེ་ ཡར་སེང་འབདཝ་ཨིན། `crates/iroha_data_model/src/account/address.rs` ནང་ རྒྱུ་དངོས་བརྟག་དཔྱད་ཚུ་གིས་ ལམ་འདི་ཚུ་ ཁྱབ་ཚུགསཔ་ལས་ SDKs དང་ དངུལ་ཁུག་ཚུ་ ཐག་བཅད་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ལུ་ བློ་གཏད་ཚུགས།
 - Torii དང་ I18NI000000267X གི་ IH58 (porder)/sora (secd-beest) ཨིན་པུཊི་ཚུ་ འདྲ་མཚུངས་སྦེ་ བཏོནམ་ཨིན། ༼དཔེར་ན་ མ་མཐུནམ་, dight digest digest༽ མཉེན་ཆས་ཚུ་ འབད་ཚུགས། བརྡ་དོན་གྱི་ཡིག་རྒྱུན་ཚུ་ལས་ ཕོ་ཚོད་དཔག་མ་དགོ་པར་ བཟོ་བཀོད་འབད་ཡོད་པའི་རྒྱུ་མཚན་ཚུ་ རི་ལེ་ཨིན།
 - ས་གནས་ཀྱི་འདེམས་སྒྲུག་འབད་མི་ཚུ་གིས་ བཱའིཊི་༡༢ ལས་ཐུང་ཀུ་སྦེ་ཡོད་མི་ `ERR_LOCAL8_DEPRECATED` གིས་ སྲོལ་རྒྱུན་ལས་ ཧརཌི་སིཊི་ཝར་ཅིག་ ཉམས་སྲུང་འབདཝ་ཨིན།
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 རྒྱུན་སྐྱོང་གཉིས་ལྡན་བེག་ཊར་ཚུ།
 

@@ -16,7 +16,7 @@ fn main() {
     let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
     let domain = DomainId::from_str("wonderland").expect("static domain id");
     let key_pair = KeyPair::random();
-    let authority = AccountId::new(domain, key_pair.public_key().clone());
+    let authority = AccountId::new(key_pair.public_key().clone());
 
     let tx = TransactionBuilder::new(chain, authority)
         .with_instructions([Log::new(Level::INFO, payload)])

@@ -70,13 +70,14 @@ fn setup_state(authority: &AccountId, asset_def: &AssetDefinitionId) -> State {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let domain_id = authority.domain().clone();
+    let domain_id = asset_def.domain().clone();
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let executor = tx.world.executor().clone();
-        let reg_domain = Register::domain(Domain::new(domain_id));
-        let reg_account = Register::account(NewAccount::new(authority.clone()));
+        let reg_domain = Register::domain(Domain::new(domain_id.clone()));
+        let reg_account =
+            Register::account(NewAccount::new_in_domain(authority.clone(), domain_id));
         let reg_asset = Register::asset_definition(AssetDefinition::numeric(asset_def.clone()));
         for instr in [
             InstructionBox::from(reg_domain),

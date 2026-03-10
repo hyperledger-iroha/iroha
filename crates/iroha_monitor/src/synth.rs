@@ -1,11 +1,9 @@
-//! Retro-inspired soft synth for the monitor's Etenraku theme.
+//! Gagaku-inspired soft synth for the monitor's Etenraku theme.
 //!
-//! The implementation follows the design notes from
-//! “Designing a Retro Synthesizer for Etenraku (Gagaku Melody)” and maps the
-//! score to four voices: shō, hichiriki, ryūteki, and koto. The arrangement
-//! keeps the full timing from `etenraku::synth_events` but renders it with
-//! retro-synth techniques (additive pads, subtractive reeds, breathy flute,
-//! and an FM plucked string).
+//! The implementation keeps the monitor self-contained while aiming closer to
+//! court-music timbre than a chiptune arrangement: shō is rendered as a soft
+//! breathing aitake cloud, hichiriki as a nasal reed, ryūteki as an airy
+//! transverse flute, and the plucked layers are sparse supportive punctuation.
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -18,12 +16,16 @@ use crate::etenraku::{
     self, OrnamentMark, Ornaments, SequenceEvent, SequenceLayer, layer_intonation_cents,
 };
 
-const MASTER_GAIN: f32 = 0.22;
+const MASTER_GAIN: f32 = 0.26;
 const TAIL_SECONDS: f32 = 3.5;
 const PAN_SHO: f32 = 0.0;
 const PAN_HICHIRIKI: f32 = -0.18;
 const PAN_RYUTEKI: f32 = 0.18;
-const PAN_KOTO: f32 = 0.1;
+const PAN_KOTO: f32 = 0.12;
+const PAN_BIWA: f32 = -0.08;
+const PAN_TAIKO: f32 = -0.05;
+const PAN_SHOKO: f32 = 0.14;
+const PAN_KAKKO: f32 = 0.05;
 
 fn saturating_samples(value: f32) -> u32 {
     if !value.is_finite() {
@@ -170,6 +172,9 @@ pub fn prepare(sample_rate: u32, channels: usize) -> SynthState {
                     | SequenceLayer::Ryuteki
                     | SequenceLayer::Koto
                     | SequenceLayer::Biwa
+                    | SequenceLayer::Taiko
+                    | SequenceLayer::Shoko
+                    | SequenceLayer::Kakko
             )
         })
         .map(|event| {
@@ -217,6 +222,10 @@ struct RetroVoices {
     hichiriki: HichirikiVoice,
     ryuteki: RyutekiVoice,
     koto: KotoVoice,
+    biwa: BiwaVoice,
+    taiko: PercussionVoice,
+    shoko: PercussionVoice,
+    kakko: PercussionVoice,
 }
 
 impl RetroVoices {
@@ -226,6 +235,10 @@ impl RetroVoices {
             hichiriki: HichirikiVoice::new(sample_rate),
             ryuteki: RyutekiVoice::new(sample_rate),
             koto: KotoVoice::new(sample_rate),
+            biwa: BiwaVoice::new(sample_rate),
+            taiko: PercussionVoice::new(sample_rate, PercussionInstrument::Taiko),
+            shoko: PercussionVoice::new(sample_rate, PercussionInstrument::Shoko),
+            kakko: PercussionVoice::new(sample_rate, PercussionInstrument::Kakko),
         }
     }
 
@@ -240,10 +253,11 @@ impl RetroVoices {
                 self.ryuteki
                     .note_on(event.note, event.vel, event.ornaments, beat)
             }
-            SequenceLayer::Koto | SequenceLayer::Biwa => {
-                self.koto.note_on(event.note, event.vel, event.ornaments)
-            }
-            _ => {}
+            SequenceLayer::Koto => self.koto.note_on(event.note, event.vel, event.ornaments),
+            SequenceLayer::Biwa => self.biwa.note_on(event.note, event.vel, event.ornaments),
+            SequenceLayer::Taiko => self.taiko.note_on(event.note, event.vel),
+            SequenceLayer::Shoko => self.shoko.note_on(event.note, event.vel),
+            SequenceLayer::Kakko => self.kakko.note_on(event.note, event.vel),
         }
     }
 
@@ -252,8 +266,11 @@ impl RetroVoices {
             SequenceLayer::Sho => self.sho.note_off(event.note),
             SequenceLayer::Hichiriki => self.hichiriki.note_off(),
             SequenceLayer::Ryuteki => self.ryuteki.note_off(),
-            SequenceLayer::Koto | SequenceLayer::Biwa => self.koto.note_off(),
-            _ => {}
+            SequenceLayer::Koto => self.koto.note_off(),
+            SequenceLayer::Biwa => self.biwa.note_off(),
+            SequenceLayer::Taiko => self.taiko.note_off(),
+            SequenceLayer::Shoko => self.shoko.note_off(),
+            SequenceLayer::Kakko => self.kakko.note_off(),
         }
     }
 
@@ -262,14 +279,22 @@ impl RetroVoices {
         let hichiriki = self.hichiriki.next_sample(ctx);
         let ryuteki = self.ryuteki.next_sample(ctx);
         let koto = self.koto.next_sample();
+        let biwa = self.biwa.next_sample();
+        let taiko = self.taiko.next_sample();
+        let shoko = self.shoko.next_sample();
+        let kakko = self.kakko.next_sample();
 
         let (mut left, mut right) = pan_sample(sho, PAN_SHO);
         let (hl, hr) = pan_sample(hichiriki, PAN_HICHIRIKI);
         let (rl, rr) = pan_sample(ryuteki, PAN_RYUTEKI);
         let (kl, kr) = pan_sample(koto, PAN_KOTO);
+        let (bl, br) = pan_sample(biwa, PAN_BIWA);
+        let (tl, tr) = pan_sample(taiko, PAN_TAIKO);
+        let (sl, sr) = pan_sample(shoko, PAN_SHOKO);
+        let (xl, xr) = pan_sample(kakko, PAN_KAKKO);
 
-        left += hl + rl + kl;
-        right += hr + rr + kr;
+        left += hl + rl + kl + bl + tl + sl + xl;
+        right += hr + rr + kr + br + tr + sr + xr;
         (left, right)
     }
 
@@ -278,6 +303,168 @@ impl RetroVoices {
             && self.hichiriki.is_idle()
             && self.ryuteki.is_idle()
             && self.koto.is_idle()
+            && self.biwa.is_idle()
+            && self.taiko.is_idle()
+            && self.shoko.is_idle()
+            && self.kakko.is_idle()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PercussionInstrument {
+    Taiko,
+    Shoko,
+    Kakko,
+}
+
+struct PercussionVoice {
+    sample_rate: f32,
+    instrument: PercussionInstrument,
+    active: bool,
+    phase: f32,
+    overtone_phase: f32,
+    base_freq: f32,
+    overtone_ratio: f32,
+    amplitude: f32,
+    amp_decay: f32,
+    pitch_env: f32,
+    pitch_decay: f32,
+    pitch_drop_hz: f32,
+    noise_level: f32,
+    noise_decay: f32,
+    ring_mix: f32,
+    tail_threshold: f32,
+    noise: Lcg32,
+}
+
+impl PercussionVoice {
+    fn new(sample_rate: f32, instrument: PercussionInstrument) -> Self {
+        let seed = match instrument {
+            PercussionInstrument::Taiko => 0xDA10_0001,
+            PercussionInstrument::Shoko => 0x5A00_0002,
+            PercussionInstrument::Kakko => 0xCACC_0003,
+        };
+        Self {
+            sample_rate,
+            instrument,
+            active: false,
+            phase: 0.0,
+            overtone_phase: 0.0,
+            base_freq: 110.0,
+            overtone_ratio: 2.0,
+            amplitude: 0.0,
+            amp_decay: exp_decay(sample_rate, 0.25),
+            pitch_env: 0.0,
+            pitch_decay: exp_decay(sample_rate, 0.05),
+            pitch_drop_hz: 0.0,
+            noise_level: 0.0,
+            noise_decay: exp_decay(sample_rate, 0.03),
+            ring_mix: 0.2,
+            tail_threshold: 1.0e-3,
+            noise: Lcg32::new(seed),
+        }
+    }
+
+    fn note_on(&mut self, note: u8, velocity: u8) {
+        self.phase = 0.0;
+        self.overtone_phase = 0.0;
+        self.pitch_env = 1.0;
+        self.active = true;
+        let gain = velocity_to_gain(velocity);
+        match self.instrument {
+            PercussionInstrument::Taiko => {
+                self.base_freq = self.noise.next().mul_add(6.0, 68.0);
+                self.overtone_ratio = 1.56;
+                self.amplitude = gain * 0.84;
+                self.amp_decay = exp_decay(self.sample_rate, 0.42);
+                self.pitch_decay = exp_decay(self.sample_rate, 0.09);
+                self.pitch_drop_hz = 42.0;
+                self.noise_level = 0.42;
+                self.noise_decay = exp_decay(self.sample_rate, 0.07);
+                self.ring_mix = 0.18;
+                self.tail_threshold = 1.8e-3;
+            }
+            PercussionInstrument::Shoko => {
+                self.base_freq = self.noise.next().mul_add(45.0, 1_180.0);
+                self.overtone_ratio = 2.63;
+                self.amplitude = gain * 0.33;
+                self.amp_decay = exp_decay(self.sample_rate, 0.88);
+                self.pitch_decay = exp_decay(self.sample_rate, 0.04);
+                self.pitch_drop_hz = 18.0;
+                self.noise_level = 0.12;
+                self.noise_decay = exp_decay(self.sample_rate, 0.03);
+                self.ring_mix = 0.82;
+                self.tail_threshold = 6.0e-4;
+            }
+            PercussionInstrument::Kakko => {
+                let is_high = note >= 76;
+                self.base_freq = if is_high { 310.0 } else { 228.0 };
+                self.overtone_ratio = if is_high { 2.32 } else { 1.86 };
+                self.amplitude = gain * if is_high { 0.42 } else { 0.46 };
+                self.amp_decay = exp_decay(self.sample_rate, if is_high { 0.16 } else { 0.22 });
+                self.pitch_decay = exp_decay(self.sample_rate, 0.035);
+                self.pitch_drop_hz = if is_high { 26.0 } else { 20.0 };
+                self.noise_level = if is_high { 0.22 } else { 0.28 };
+                self.noise_decay = exp_decay(self.sample_rate, 0.025);
+                self.ring_mix = if is_high { 0.22 } else { 0.16 };
+                self.tail_threshold = 1.1e-3;
+            }
+        }
+        self.noise
+            .reseed((u32::from(note) << 9) ^ u32::from(velocity) ^ 0x51A7_0F21);
+    }
+
+    fn note_off(&mut self) {
+        self.amplitude *= 0.32;
+        self.noise_level *= 0.2;
+        self.pitch_env *= 0.4;
+    }
+
+    fn next_sample(&mut self) -> f32 {
+        if !self.active {
+            return 0.0;
+        }
+
+        let pitch_bend = self.pitch_env * self.pitch_drop_hz;
+        let body_freq = self.base_freq + pitch_bend;
+        let overtone_freq = body_freq * self.overtone_ratio;
+        self.phase = wrap_phase(self.phase + TAU * body_freq / self.sample_rate);
+        self.overtone_phase =
+            wrap_phase(self.overtone_phase + TAU * overtone_freq / self.sample_rate);
+
+        let noise = self.noise.next() * self.noise_level;
+        let sample = match self.instrument {
+            PercussionInstrument::Taiko => {
+                let body = self.phase.sin();
+                let sub = (self.phase * 0.51).sin() * 0.28;
+                let skin = self.overtone_phase.sin() * self.ring_mix;
+                soft_clip((body + sub + skin * 0.55) * self.amplitude + noise * 0.08)
+            }
+            PercussionInstrument::Shoko => {
+                let body = self.phase.sin() * 0.22;
+                let ring = self.overtone_phase.sin() * self.ring_mix;
+                let sheen = (self.overtone_phase * 1.91 + 0.3).sin() * 0.34;
+                soft_clip((body + ring + sheen) * self.amplitude + noise * 0.03)
+            }
+            PercussionInstrument::Kakko => {
+                let body = self.phase.sin() * 0.72;
+                let shell = (self.overtone_phase + 0.2).sin() * self.ring_mix;
+                soft_clip((body + shell) * self.amplitude + noise * 0.06)
+            }
+        };
+
+        self.amplitude *= self.amp_decay;
+        self.pitch_env *= self.pitch_decay;
+        self.noise_level *= self.noise_decay;
+        if self.amplitude < self.tail_threshold && self.noise_level < self.tail_threshold {
+            self.active = false;
+            return 0.0;
+        }
+        sample
+    }
+
+    fn is_idle(&self) -> bool {
+        !self.active
     }
 }
 
@@ -307,14 +494,14 @@ impl ShoVoice {
 
     fn note_on(&mut self, note: u8, velocity: u8, beat: f32) {
         let freq = midi_note_to_freq(note, SequenceLayer::Sho);
-        let gain = velocity_to_gain(velocity) * 0.65;
+        let gain = velocity_to_gain(velocity) * 0.52;
         let section = (beat / etenraku::HYOSHI_BEATS).floor() as usize;
         let attack = match section {
-            0 => 0.26,
-            1 => 0.21,
-            _ => 0.18,
+            0 => 0.34,
+            1 => 0.29,
+            _ => 0.24,
         };
-        let release = 0.6;
+        let release = 0.82;
         let detune_ratio = cents_to_ratio(sho_detune_cents(note));
         if let Some(existing) = self.notes.iter_mut().find(|osc| osc.note == note) {
             existing.base_gain = gain;
@@ -355,23 +542,24 @@ impl ShoVoice {
             if env <= f32::EPSILON && osc.envelope.is_idle() {
                 return false;
             }
-            let sample = osc.oscillator.sample(self.sample_rate);
+            let phase = osc.oscillator.advance_phase(self.sample_rate);
+            let sample = sho_wave(phase, shaped_breath);
             let mut amp = osc.base_gain * env * shaped_breath;
             let bloom = (breath_gain - 1.0).max(0.0);
-            amp *= bloom.mul_add(0.35, 1.0);
+            amp *= bloom.mul_add(0.22, 1.0);
             let mut value = sample * amp;
             if osc.transition_env > f32::EPSILON {
-                let tic = self.noise.next() * 0.02 * osc.transition_env;
+                let tic = self.noise.next() * 0.006 * osc.transition_env;
                 value += tic;
-                osc.transition_env *= 0.92;
+                osc.transition_env *= 0.88;
             }
             acc += value;
             true
         });
         let section_halo = match section {
-            0 => 0.38,
-            1 => 0.4,
-            _ => 0.42,
+            0 => 0.32,
+            1 => 0.34,
+            _ => 0.36,
         };
         acc * section_halo
     }
@@ -431,42 +619,42 @@ impl HichirikiVoice {
         let freq = midi_note_to_freq(note, SequenceLayer::Hichiriki);
         self.oscillator = Oscillator::new(freq);
         let attack = if ornaments.contains(OrnamentMark::Tataku) {
-            0.008
+            0.012
         } else {
-            0.02
+            0.028
         };
         let release = 0.32;
         self.envelope.reset_with(self.sample_rate, attack, release);
         self.envelope.trigger();
 
-        let mut gain = velocity_to_gain(velocity) * 0.85;
+        let mut gain = velocity_to_gain(velocity) * 0.74;
         if ornaments.contains(OrnamentMark::Fukura) {
-            gain *= 1.1;
+            gain *= 1.06;
         }
         self.base_gain = gain;
 
         self.breath_mix = if ornaments.contains(OrnamentMark::Fukura) {
-            0.18
+            0.22
         } else {
-            0.12
+            0.16
         };
 
         self.vibrato_rate = if ornaments.contains(OrnamentMark::Mawashi) {
-            6.0
+            5.4
         } else {
-            5.1
+            4.6
         };
         self.vibrato_depth_cents = if ornaments.contains(OrnamentMark::Mawashi) {
-            18.0
+            11.0
         } else {
-            12.0
+            7.0
         };
         self.vibrato_phase = 0.0;
 
         let base_delay: f32 = if ornaments.contains(OrnamentMark::Tataku) {
-            0.18
+            0.26
         } else {
-            0.62
+            0.84
         };
         let delay_samples = base_delay.mul_add(self.sample_rate, 0.0).round().max(0.0);
         self.vibrato_delay_samples = saturating_samples(delay_samples);
@@ -561,10 +749,11 @@ impl HichirikiVoice {
             _ => {}
         }
 
-        let ratio = cents_to_ratio(cents_mod);
-        let freq = self.oscillator.freq * ratio;
-        self.oscillator.set_freq(freq);
-        let tone = self.oscillator.sample(self.sample_rate);
+        let base_freq = midi_note_to_freq(self.current_note, SequenceLayer::Hichiriki);
+        self.oscillator
+            .set_freq(base_freq * cents_to_ratio(cents_mod));
+        let phase = self.oscillator.advance_phase(self.sample_rate);
+        let tone = reed_wave(phase);
 
         let mut target_noise = self.breath_mix * env.mul_add(0.4, 0.6);
         if self.vibrato_counter < self.breath_lag_samples {
@@ -573,7 +762,7 @@ impl HichirikiVoice {
         self.breath_env = target_noise.mul_add(0.12, self.breath_env * 0.88);
         let breath = self.noise.next() * self.breath_env;
 
-        let sample = tone.mul_add(self.breath_env.mul_add(-0.45, 1.0), breath);
+        let sample = tone.mul_add(self.breath_env.mul_add(-0.32, 1.0), breath);
         sample * self.base_gain * env
     }
 
@@ -629,26 +818,26 @@ impl RyutekiVoice {
         self.current_note = note;
         let freq = midi_note_to_freq(note, SequenceLayer::Ryuteki);
         self.oscillator = Oscillator::new(freq);
-        self.envelope.reset_with(self.sample_rate, 0.03, 0.22);
+        self.envelope.reset_with(self.sample_rate, 0.045, 0.28);
         self.envelope.trigger();
 
-        self.base_gain = velocity_to_gain(velocity) * 0.7;
+        self.base_gain = velocity_to_gain(velocity) * 0.56;
         self.noise_env = 1.0;
-        self.noise_decay = exp_decay(self.sample_rate, 0.06);
+        self.noise_decay = exp_decay(self.sample_rate, 0.08);
         self.noise_level = if ornaments.contains(OrnamentMark::Fukura) {
-            0.3
+            0.24
         } else {
-            0.22
+            0.18
         };
         self.vibrato_rate = if ornaments.contains(OrnamentMark::Mawashi) {
-            6.2
+            5.3
         } else {
-            5.8
+            4.8
         };
         self.vibrato_depth_cents = if ornaments.contains(OrnamentMark::Mawashi) {
-            14.0
+            10.0
         } else {
-            9.0
+            6.0
         };
         self.vibrato_phase = 0.0;
         let hyoshi_phase = beat.rem_euclid(etenraku::HYOSHI_BEATS);
@@ -656,8 +845,8 @@ impl RyutekiVoice {
         let delay_samples = delay.mul_add(self.sample_rate, 0.0).round().max(0.0);
         self.vibrato_delay_samples = saturating_samples(delay_samples);
         self.vibrato_counter = 0;
-        self.lip_rate = self.noise.next().abs().mul_add(0.20, 0.25);
-        self.lip_depth_cents = self.noise.next().abs().mul_add(3.0, 3.0);
+        self.lip_rate = self.noise.next().abs().mul_add(0.11, 0.16);
+        self.lip_depth_cents = self.noise.next().abs().mul_add(1.6, 1.6);
         self.lip_phase = 0.0;
         self.noise.reseed((u32::from(note) << 8) ^ 0xA5A5_1122);
     }
@@ -705,15 +894,16 @@ impl RyutekiVoice {
             cents_mod -= 1.5;
         }
 
-        let ratio = cents_to_ratio(cents_mod);
-        let freq = self.oscillator.freq * ratio;
-        self.oscillator.set_freq(freq);
-        let tone = self.oscillator.sample(self.sample_rate);
+        let base_freq = midi_note_to_freq(self.current_note, SequenceLayer::Ryuteki);
+        self.oscillator
+            .set_freq(base_freq * cents_to_ratio(cents_mod));
+        let phase = self.oscillator.advance_phase(self.sample_rate);
+        let tone = flute_wave(phase);
 
         let breath_mix = noise_env.mul_add(0.6, 0.4);
         let env_mix = env.mul_add(0.5, 0.5);
         let breath = self.noise.next() * self.noise_level * breath_mix * env_mix;
-        let sample = tone.mul_add(self.noise_level.mul_add(-0.4, 1.0), breath);
+        let sample = tone.mul_add(self.noise_level.mul_add(-0.25, 1.0), breath);
 
         sample * self.base_gain * env
     }
@@ -753,7 +943,7 @@ impl KotoVoice {
             amp_decay: exp_decay(sample_rate, 1.4),
             mod_env: 0.0,
             mod_decay: exp_decay(sample_rate, 0.4),
-            mod_index: 5.0,
+            mod_index: 2.4,
             tail_threshold: 1.0e-4,
             noise_burst: 0.0,
             noise: Lcg32::new(0xBEEF_CAFE),
@@ -762,21 +952,21 @@ impl KotoVoice {
 
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments) {
         self.carrier_freq = midi_note_to_freq(note, SequenceLayer::Koto);
-        self.mod_freq = self.carrier_freq * 2.0;
+        self.mod_freq = self.carrier_freq * 1.52;
         self.carrier_phase = 0.0;
         self.mod_phase = 0.0;
-        self.amplitude = velocity_to_gain(velocity) * 0.9;
-        self.amp_decay = exp_decay(self.sample_rate, 0.5);
+        self.amplitude = velocity_to_gain(velocity) * 0.72;
+        self.amp_decay = exp_decay(self.sample_rate, 0.48);
         self.mod_env = 1.0;
-        self.mod_decay = exp_decay(self.sample_rate, 0.5);
+        self.mod_decay = exp_decay(self.sample_rate, 0.42);
         let base_index = if ornaments.contains(OrnamentMark::Tataku) {
-            6.0
+            2.8
         } else {
-            5.0
+            2.1
         };
-        let brightness = self.noise.next().mul_add(0.12, 1.0);
+        let brightness = self.noise.next().mul_add(0.08, 1.0);
         self.mod_index = base_index * brightness;
-        self.tail_threshold = 5.0e-3;
+        self.tail_threshold = 6.0e-3;
         self.noise_burst = 1.0;
         self.active = true;
         self.noise
@@ -793,15 +983,11 @@ impl KotoVoice {
             return 0.0;
         }
 
-        let mod_signal =
-            if self.mod_phase < PI { 1.0 } else { -1.0 } * self.mod_index * self.mod_env;
+        let mod_signal = self.mod_phase.sin() * self.mod_index * self.mod_env * 0.32;
         let base = self.carrier_phase + mod_signal;
-        let primary = if base.rem_euclid(TAU) < PI { 1.0 } else { -1.0 };
-        let duplex = if (base * 1.98).rem_euclid(TAU) < PI {
-            0.12
-        } else {
-            -0.12
-        };
+        let primary = base.sin();
+        let duplex = (base * 2.01).sin() * 0.16;
+        let body = (base * 0.51 + 0.25).sin() * 0.08;
 
         let noise_jitter = self.noise.next();
         let freq_step = self
@@ -820,12 +1006,104 @@ impl KotoVoice {
             self.noise_burst = 0.0;
             return 0.0;
         }
-        let mut sample = (primary + duplex) * self.amplitude;
+        let mut sample = (primary + duplex + body) * self.amplitude;
         if self.noise_burst > 1.0e-3 {
-            sample += self.noise.next() * 0.045 * self.noise_burst;
-            self.noise_burst *= 0.86;
+            sample += self.noise.next() * 0.032 * self.noise_burst;
+            self.noise_burst *= 0.82;
         }
-        sample
+        soft_clip(sample)
+    }
+
+    fn is_idle(&self) -> bool {
+        !self.active
+    }
+}
+
+struct BiwaVoice {
+    sample_rate: f32,
+    active: bool,
+    phase: f32,
+    overtone_phase: f32,
+    freq: f32,
+    overtone_freq: f32,
+    amplitude: f32,
+    amp_decay: f32,
+    attack_noise: f32,
+    attack_decay: f32,
+    tail_threshold: f32,
+    noise: Lcg32,
+}
+
+impl BiwaVoice {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            sample_rate,
+            active: false,
+            phase: 0.0,
+            overtone_phase: 0.0,
+            freq: 220.0,
+            overtone_freq: 330.0,
+            amplitude: 0.0,
+            amp_decay: exp_decay(sample_rate, 0.62),
+            attack_noise: 0.0,
+            attack_decay: exp_decay(sample_rate, 0.07),
+            tail_threshold: 1.0e-3,
+            noise: Lcg32::new(0x0B1A_0B1A),
+        }
+    }
+
+    fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments) {
+        self.freq = midi_note_to_freq(note, SequenceLayer::Biwa);
+        self.overtone_freq = self.freq * 1.48;
+        self.phase = 0.0;
+        self.overtone_phase = 0.0;
+        self.amplitude = velocity_to_gain(velocity) * 0.62;
+        self.amp_decay = exp_decay(
+            self.sample_rate,
+            if ornaments.contains(OrnamentMark::Oshi) {
+                0.52
+            } else {
+                0.68
+            },
+        );
+        self.attack_noise = if ornaments.contains(OrnamentMark::Ate) {
+            1.0
+        } else {
+            0.7
+        };
+        self.attack_decay = exp_decay(self.sample_rate, 0.06);
+        self.tail_threshold = 4.0e-3;
+        self.active = true;
+    }
+
+    fn note_off(&mut self) {
+        self.amplitude *= 0.45;
+        self.attack_noise *= 0.3;
+    }
+
+    fn next_sample(&mut self) -> f32 {
+        if !self.active {
+            return 0.0;
+        }
+
+        self.phase = wrap_phase(self.phase + TAU * self.freq / self.sample_rate);
+        self.overtone_phase =
+            wrap_phase(self.overtone_phase + TAU * self.overtone_freq / self.sample_rate);
+
+        let body = self.phase.sin();
+        let overtone = self.overtone_phase.sin() * 0.28;
+        let twang = (self.phase * 2.0 + 0.2).sin() * 0.14;
+        let attack = self.noise.next() * 0.05 * self.attack_noise;
+
+        self.amplitude *= self.amp_decay;
+        self.attack_noise *= self.attack_decay;
+
+        if self.amplitude < self.tail_threshold {
+            self.active = false;
+            return 0.0;
+        }
+
+        soft_clip((body + overtone + twang) * self.amplitude + attack)
     }
 
     fn is_idle(&self) -> bool {
@@ -850,9 +1128,9 @@ impl Oscillator {
         self.freq = freq.max(1.0);
     }
 
-    fn sample(&mut self, sample_rate: f32) -> f32 {
+    fn advance_phase(&mut self, sample_rate: f32) -> f32 {
         self.phase = wrap_phase(self.phase + TAU * self.freq / sample_rate);
-        if self.phase < PI { 1.0 } else { -1.0 }
+        self.phase
     }
 }
 
@@ -998,6 +1276,34 @@ fn wrap_phase(phase: f32) -> f32 {
     }
 }
 
+fn soft_clip(sample: f32) -> f32 {
+    (sample * 1.2).tanh() * 0.9
+}
+
+fn reed_wave(phase: f32) -> f32 {
+    let fundamental = phase.sin();
+    let second = (phase * 2.0 + 0.08).sin() * 0.46;
+    let third = (phase * 3.0 - 0.05).sin() * 0.21;
+    let fifth = (phase * 5.0).sin() * 0.08;
+    soft_clip(fundamental + second + third + fifth)
+}
+
+fn flute_wave(phase: f32) -> f32 {
+    let fundamental = phase.sin();
+    let second = (phase * 2.0 + 0.02).sin() * 0.18;
+    let third = (phase * 3.0 - 0.04).sin() * 0.11;
+    let shimmer = (phase * 4.0 + 0.1).sin() * 0.03;
+    soft_clip(fundamental + second + third + shimmer)
+}
+
+fn sho_wave(phase: f32, breath_shape: f32) -> f32 {
+    let principal = phase.sin();
+    let upper = (phase * 2.0).sin() * 0.22;
+    let hollow = (phase * 3.0 + 0.16).sin() * 0.12;
+    let air = (phase * 4.0 - 0.08).sin() * 0.04 * breath_shape;
+    soft_clip(principal + upper + hollow + air)
+}
+
 fn sho_detune_cents(note: u8) -> f32 {
     match note {
         69 => 1.2,  // A4
@@ -1102,6 +1408,67 @@ mod tests {
             voice.next_sample();
         }
         assert!(voice.is_idle(), "koto should decay to silence");
+    }
+
+    #[test]
+    fn biwa_decay_stops_voice() {
+        let mut voice = BiwaVoice::new(48_000.0);
+        voice.note_on(
+            57,
+            100,
+            Ornaments::with(&[OrnamentMark::Ate, OrnamentMark::Oshi]),
+        );
+        let mut max: f32 = 0.0;
+        for _ in 0..10_000 {
+            max = max.max(voice.next_sample().abs());
+        }
+        assert!(max > 0.001, "biwa should emit at start");
+        for _ in 0..120_000 {
+            voice.next_sample();
+        }
+        assert!(voice.is_idle(), "biwa should decay to silence");
+    }
+
+    #[test]
+    fn percussion_voice_emits_and_decays() {
+        let mut voice = PercussionVoice::new(48_000.0, PercussionInstrument::Taiko);
+        voice.note_on(48, 112);
+        let mut max: f32 = 0.0;
+        for _ in 0..8_000 {
+            max = max.max(voice.next_sample().abs());
+        }
+        assert!(max > 0.001, "taiko should emit at attack");
+        voice.note_off();
+        for _ in 0..180_000 {
+            voice.next_sample();
+        }
+        assert!(voice.is_idle(), "taiko should decay to silence");
+    }
+
+    #[test]
+    fn prepare_keeps_percussion_layers() {
+        let state = prepare(48_000, 2);
+        assert!(
+            state
+                .events
+                .iter()
+                .any(|timed| matches!(timed.event.layer, SequenceLayer::Taiko)),
+            "builtin synth should keep taiko events"
+        );
+        assert!(
+            state
+                .events
+                .iter()
+                .any(|timed| matches!(timed.event.layer, SequenceLayer::Shoko)),
+            "builtin synth should keep shoko events"
+        );
+        assert!(
+            state
+                .events
+                .iter()
+                .any(|timed| matches!(timed.event.layer, SequenceLayer::Kakko)),
+            "builtin synth should keep kakko events"
+        );
     }
 
     #[test]

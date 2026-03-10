@@ -323,6 +323,10 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
             matches!(err, AccountAddressError::InvalidHexAddress),
             "{case_id}: expected InvalidHexAddress, got {err}"
         ),
+        "UnsupportedAddressFormat" => assert!(
+            matches!(err, AccountAddressError::UnsupportedAddressFormat),
+            "{case_id}: expected UnsupportedAddressFormat, got {err}"
+        ),
         "InvalidLength" => assert!(
             matches!(err, AccountAddressError::InvalidLength),
             "{case_id}: expected InvalidLength, got {err}"
@@ -353,11 +357,8 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
 }
 
 fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
-    if let (Some(domain_label), Some(public_key_hex)) = (
-        case.input.normalized_domain.as_deref(),
-        case.controller.public_key_hex.as_deref(),
-    ) {
-        let account = AccountId::new(domain(domain_label), ed25519_public_key(public_key_hex));
+    if let Some(public_key_hex) = case.controller.public_key_hex.as_deref() {
+        let account = AccountId::new(ed25519_public_key(public_key_hex));
         let rebuilt =
             AccountAddress::from_account_id(&account).expect("single address reconstruction");
         assert_eq!(
@@ -419,7 +420,8 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
         .normalized_domain
         .as_deref()
         .expect("multisig case requires normalized domain");
-    let account = AccountId::new_multisig(domain(domain_label), policy);
+    let _ = domain(domain_label);
+    let account = AccountId::new_multisig(policy);
     let rebuilt =
         AccountAddress::from_account_id(&account).expect("multisig address reconstruction");
     assert_eq!(

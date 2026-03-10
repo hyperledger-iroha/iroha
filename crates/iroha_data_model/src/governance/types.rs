@@ -1061,7 +1061,6 @@ mod tests {
         let vote = Vote {
             referendum_id: ProposalId([0x42; 32]),
             voter: AccountId::new(
-                "wonderland".parse().expect("domain id"),
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()
                     .expect("public key"),
@@ -1090,13 +1089,10 @@ mod tests {
 
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let members = vec![
-            AccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
-            AccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
+            AccountId::new(KeyPair::random().public_key().clone()),
+            AccountId::new(KeyPair::random().public_key().clone()),
         ];
-        let alternates = vec![AccountId::new(
-            domain,
-            KeyPair::random().public_key().clone(),
-        )];
+        let alternates = vec![AccountId::new(KeyPair::random().public_key().clone())];
 
         let roster = ParliamentRoster {
             body: ParliamentBody::RulesCommittee,
@@ -1154,7 +1150,7 @@ mod tests {
     fn governance_enactment_certificate_roundtrip() {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let signer = AccountId::new(domain, keypair.public_key().clone());
+        let signer = AccountId::new(keypair.public_key().clone());
         let payload = GovernanceEnactment {
             referendum_id: ProposalId([0x10; 32]),
             preimage_hash: [0x22; 32],
@@ -1186,7 +1182,7 @@ mod tests {
     fn parliament_enactment_certificate_roundtrip() {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
-        let signer = AccountId::new(domain, keypair.public_key().clone());
+        let signer = AccountId::new(keypair.public_key().clone());
         let payload = ParliamentEnactment {
             preimage_hash: [0x33; 32],
             at_window: AtWindow {

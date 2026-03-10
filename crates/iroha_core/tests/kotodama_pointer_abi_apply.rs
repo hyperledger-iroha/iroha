@@ -15,9 +15,8 @@ use ivm::{IVM, KotodamaCompiler};
 use mv::storage::StorageReadOnly;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 #[test]
@@ -68,8 +67,14 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
     let asset_domain_id: DomainId = "wonder".parse().unwrap();
     let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain_id)));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
+    let reg_from = RegisterBox::from(Register::account(NewAccount::new_in_domain(
+        from.clone(),
+        account_domain_id.clone(),
+    )));
+    let reg_to = RegisterBox::from(Register::account(NewAccount::new_in_domain(
+        to.clone(),
+        account_domain_id.clone(),
+    )));
     let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
     let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
         asset_def.clone(),

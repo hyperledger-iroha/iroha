@@ -1315,8 +1315,7 @@ mod tests {
     fn sample_account_bundle() -> (AccountId, String, iroha_crypto::PrivateKey) {
         let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
         let (public_key, private_key) = key_pair.into_parts();
-        let domain: DomainId = "test".parse().expect("domain");
-        let account = AccountId::new(domain, public_key);
+        let account = AccountId::new(public_key);
         let literal = account.to_string();
         (account, literal, private_key)
     }
@@ -1357,16 +1356,9 @@ mod tests {
 
     #[test]
     fn parse_account_address_literal_captures_domain_kind() {
-        let default_domain = iroha_data_model::account::address::default_domain_name();
-        let domain_label = if default_domain.as_ref() == "treasury" {
-            "ledger"
-        } else {
-            "treasury"
-        };
-        let domain: DomainId = domain_label.parse().expect("domain");
         let key_pair =
             iroha_crypto::KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
-        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
         let ih58 = address.to_ih58(42).expect("ih58 encoding");
         let (value, observation) = super::parse_account_address_literal(&ih58);
@@ -1377,13 +1369,11 @@ mod tests {
 
     #[test]
     fn parse_account_address_literal_rejects_canonical_hex() {
-        let domain: DomainId = "treasury".parse().expect("domain");
         let key_pair =
             iroha_crypto::KeyPair::from_seed(vec![0xAC; 32], iroha_crypto::Algorithm::Ed25519);
-        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
         let canonical = address.canonical_hex().expect("canonical hex");
-
         let (value, observation) = super::parse_account_address_literal(&canonical);
         assert_eq!(value.as_deref(), Some(canonical.as_str()));
         assert_eq!(
@@ -1401,8 +1391,8 @@ mod tests {
         let resolved = runtime
             .resolve_account("gb82west12345698765432")
             .expect("alias");
-        let expected_domain: DomainId = "test".parse().unwrap();
-        assert_eq!(resolved.domain(), &expected_domain);
+        let (expected_account, _, _) = sample_account_bundle();
+        assert_eq!(resolved, expected_account);
     }
 
     #[test]

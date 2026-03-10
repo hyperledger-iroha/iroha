@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use iroha_data_model::prelude::PublicKey;
 use iroha_primitives::numeric::Numeric;
 use ivm::mock_wsv::{
-    AccountSubjectId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId,
-    PermissionToken, ScopedAccountId,
+    AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
+    ScopedAccountId,
 };
 
 fn num(value: u64) -> Numeric {
@@ -160,7 +160,7 @@ fn test_balance_permission() {
     wsv.add_account_unchecked(acc2.clone());
     wsv.grant_permission(
         &acc1,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&acc1)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&acc1)),
     );
 
     // acc2 should not see acc1's balance without permission
@@ -168,7 +168,7 @@ fn test_balance_permission() {
     // grant permission to acc2
     wsv.grant_permission(
         &acc2,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&acc1)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&acc1)),
     );
     assert_eq!(wsv.balance_checked(&acc2, &acc1, &asset), Some(num(100)));
 }
@@ -243,20 +243,20 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     assert!(wsv.grant_role(&account, "minter"));
     wsv.grant_permission(
         &account,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account)),
     );
 
     assert!(wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
     assert!(wsv.has_permission(
         &account,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account))
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account))
     ));
 
     assert!(wsv.unregister_account(&account));
     assert!(!wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
     assert!(!wsv.has_permission(
         &account,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&account))
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account))
     ));
 
     assert!(wsv.register_account(&admin, account_relinked.clone()));
@@ -266,9 +266,7 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     ));
     assert!(wsv.has_permission(
         &account_relinked,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(
-            &account_relinked
-        ))
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account_relinked))
     ));
 }
 
@@ -311,8 +309,8 @@ fn subject_links_can_span_multiple_domains_and_are_queryable() {
     let admin = test_account(&first_domain, admin_pk);
     let scoped_first = test_account(&first_domain, subject_pk.clone());
     let scoped_second = test_account(&second_domain, subject_pk);
-    let admin_subject = AccountSubjectId::from(&admin);
-    let subject = AccountSubjectId::from(&scoped_first);
+    let admin_subject = AccountId::from(&admin);
+    let subject = AccountId::from(&scoped_first);
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(admin.clone());

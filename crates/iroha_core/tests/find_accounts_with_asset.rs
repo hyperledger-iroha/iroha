@@ -52,9 +52,11 @@ fn multi_account_mint_returns_only_positive_holders() {
     let (untouched, _kp_untouched) = gen_account_in("wonderland");
 
     for account_id in [&holder_a, &holder_b, &zero_holder, &untouched] {
-        Register::account(Account::new(account_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register account");
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register account");
     }
 
     let definition_id: AssetDefinitionId = "multi_coin#wonderland".parse().expect("asset def");

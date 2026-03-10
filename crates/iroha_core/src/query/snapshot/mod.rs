@@ -142,12 +142,21 @@ mod tests {
         state::{State, World},
     };
 
+    fn alice_account_in(domain: &str) -> Account {
+        Account::new(
+            ALICE_ID
+                .clone()
+                .to_account_id(domain.parse().expect("static domain id")),
+        )
+        .build(&ALICE_ID)
+    }
+
     #[tokio::test]
     async fn snapshot_iterable_is_ephemeral() {
         let d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
         let d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
         let d3 = Domain::new("d3".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = alice_account_in("d1");
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -184,7 +193,7 @@ mod tests {
     async fn snapshot_iterable_continuation_is_snapshot_consistent() {
         let d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
         let d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = alice_account_in("d1");
         let world = World::with([d1.clone(), d2.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -273,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_singular_find_parameters_smoke() {
         let d = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let a = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let a = alice_account_in("w");
         let world = World::with([d], [a], []);
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
@@ -297,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn stored_cursor_requires_budget_on_continue() {
         let d = Domain::new("lane".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = alice_account_in("lane");
         let world = World::with([d], [account], []);
 
         let kura = Kura::blank_kura_for_testing();

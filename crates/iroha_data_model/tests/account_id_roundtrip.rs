@@ -35,7 +35,7 @@ fn account_id_roundtrip_supports_gost_public_key() {
         expected_private
     );
     let domain: DomainId = "wonderland".parse().expect("domain");
-    let id = AccountId::new(domain, key_pair.public_key().clone());
+    let id = AccountId::new(key_pair.public_key().clone());
     let rendered = id.to_string();
     let (_address, format) =
         iroha_data_model::account::AccountAddress::parse_encoded(&rendered, None)

@@ -115,21 +115,19 @@ fn test_router() -> Router {
 }
 
 fn sample_owner() -> AccountId {
-    let domain = "wonderland".parse().expect("domain parses");
     let public_key: PublicKey =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .expect("key parses");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn secondary_owner() -> AccountId {
-    let domain = "wonderland".parse().expect("domain parses");
     let public_key: PublicKey =
         "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
             .parse()
             .expect("key parses");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn controller_for(owner: &AccountId) -> NameControllerV1 {

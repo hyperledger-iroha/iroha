@@ -12,7 +12,7 @@ use ivm::{
 fn parse_account_literal(literal: &str) -> AccountId {
     AccountId::parse_encoded(literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical IH58 or sora compressed")
+        .expect("account literal must be canonical IH58")
 }
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
@@ -55,7 +55,7 @@ fn pointer_map_default_roundtrip() {
     let authority: ScopedAccountId = parse_account_literal(ACCOUNT_A);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&authority),
+        ivm::mock_wsv::AccountId::from(&authority),
         HashMap::new(),
     );
     vm.set_host(host);

@@ -207,6 +207,10 @@ fn owner_literal_matches_authority(authority: &AccountId, literal: &str) -> bool
     literal == authority.to_string()
 }
 
+fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
+    left.subject_id() == right.subject_id()
+}
+
 fn enforce_provider_owner(
     world: &impl crate::state::WorldReadOnly,
     authority: &AccountId,
@@ -228,7 +232,7 @@ fn enforce_provider_owner(
 
     let owner_literal = owner_str.trim();
     if let Some(owner) = crate::block::parse_account_literal_with_world(world, owner_literal) {
-        if &owner == authority {
+        if same_account_subject(&owner, authority) {
             return Ok(());
         }
         return Err(invalid_parameter(format!(
@@ -260,7 +264,7 @@ fn ensure_provider_owner_registered(
     authority: &AccountId,
 ) -> Result<(), InstructionExecutionError> {
     if let Some(owner) = state_transaction.world.provider_owners.get(provider) {
-        if owner != authority {
+        if !same_account_subject(owner, authority) {
             return Err(invalid_parameter(format!(
                 "provider {provider:?} owned by {owner}, but {authority} attempted a SoraFS operation"
             )));
@@ -280,7 +284,7 @@ fn ensure_registered_owner_matches_authority(
     context: &str,
 ) -> Result<(), InstructionExecutionError> {
     if let Some(owner) = state_transaction.world.provider_owners.get(provider) {
-        if owner == authority {
+        if same_account_subject(owner, authority) {
             return Ok(());
         }
         return Err(invalid_parameter(format!(
@@ -313,7 +317,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterProviderOwner {
             .provider_owners
             .get(&self.provider_id)
         {
-            if existing == &self.owner {
+            if same_account_subject(existing, &self.owner) {
                 return Ok(());
             }
             return Err(invalid_parameter(format!(
@@ -1284,7 +1288,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
             &provider_hex,
         )?;
         if let Some(existing_owner) = state_transaction.world.provider_owners.get(&provider_id) {
-            if existing_owner != authority {
+            if !same_account_subject(existing_owner, authority) {
                 return Err(invalid_parameter(format!(
                     "provider {provider_hex} is already owned by {existing_owner} and cannot be rebound to {authority}"
                 )));
@@ -1353,10 +1357,17 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
 
         if policy.require_submitter {
             if let Some(overrides) = policy.per_provider_submitters.get(&provider_id) {
-                if !overrides.contains(authority) {
+                if !overrides
+                    .iter()
+                    .any(|allowed| same_account_subject(allowed, authority))
+                {
                     return reject("unauthorised_submitter_provider");
                 }
-            } else if !policy.submitters.contains(authority) {
+            } else if !policy
+                .submitters
+                .iter()
+                .any(|allowed| same_account_subject(allowed, authority))
+            {
                 return reject("unauthorised_submitter");
             }
         }
@@ -1381,7 +1392,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             &state_transaction.world,
         )?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
-            && owner != authority
+            && !same_account_subject(owner, authority)
         {
             return reject("provider_owner_mismatch");
         }
@@ -2227,18 +2238,19 @@ mod sorafs_tests {
     fn ensure_registered_account(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         account_id: &AccountId,
+        domain_id: &DomainId,
     ) {
-        if stx.world.domains.get(account_id.domain()).is_none() {
-            Register::domain(iroha_data_model::domain::Domain::new(
-                account_id.domain().clone(),
-            ))
-            .execute(&alice(), stx)
-            .expect("register domain for account");
+        if stx.world.domains.get(domain_id).is_none() {
+            Register::domain(iroha_data_model::domain::Domain::new(domain_id.clone()))
+                .execute(&alice(), stx)
+                .expect("register domain for account");
         }
         if stx.world.accounts.get(account_id).is_none() {
-            Register::account(iroha_data_model::account::Account::new(account_id.clone()))
-                .execute(&alice(), stx)
-                .expect("register account");
+            Register::account(iroha_data_model::account::Account::new(
+                account_id.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&alice(), stx)
+            .expect("register account");
         }
     }
 
@@ -2689,7 +2701,6 @@ mod sorafs_tests {
 
     pub(super) fn alice() -> AccountId {
         AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                 .parse()
                 .expect("public key"),
@@ -2702,7 +2713,6 @@ mod sorafs_tests {
 
     pub(super) fn bob() -> AccountId {
         AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed01208D5C8358EA5B64A79653A76F516E436EB93E3EC7117B0C9DD861B029BEA0FC8B"
                 .parse()
                 .expect("public key"),
@@ -4533,7 +4543,6 @@ mod sorafs_tests {
     fn record_capacity_telemetry_requires_authorised_submitter() {
         let mut state = make_state();
         let bob = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451"
                 .parse()
                 .expect("public key"),
@@ -6341,7 +6350,8 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA1; 32]);
-        ensure_registered_account(&mut stx, &bob());
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        ensure_registered_account(&mut stx, &bob(), &domain_id);
 
         RegisterProviderOwner {
             provider_id: provider,
@@ -6375,10 +6385,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA5; 32]);
-        let missing_owner = AccountId::new(
-            "missing.world".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let missing_owner = AccountId::new(KeyPair::random().public_key().clone());
 
         let err = RegisterProviderOwner {
             provider_id: provider,
@@ -6426,7 +6433,8 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA3; 32]);
-        ensure_registered_account(&mut stx, &alice());
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        ensure_registered_account(&mut stx, &alice(), &domain_id);
         RegisterProviderOwner {
             provider_id: provider,
             owner: alice(),

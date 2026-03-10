@@ -328,10 +328,7 @@ pub mod action {
 
         fn account_in(domain: &str) -> AccountId {
             let kp = KeyPair::random();
-            AccountId::new(
-                DomainId::from_str(domain).expect("domain id"),
-                kp.public_key().clone(),
-            )
+            AccountId::new(kp.public_key().clone())
         }
 
         #[test]

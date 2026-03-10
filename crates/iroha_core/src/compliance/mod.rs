@@ -173,15 +173,11 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
         return false;
     }
 
-    if let Some(domain) = selector.domain.as_ref()
-        && domain != ctx.authority.domain()
-    {
+    if selector.domain.is_some() {
         return false;
     }
 
-    if let Some(prefix) = selector.domain_prefix.as_deref()
-        && !ctx.authority.domain().name.as_ref().starts_with(prefix)
-    {
+    if selector.domain_prefix.is_some() {
         return false;
     }
 
@@ -411,7 +407,6 @@ impl LaneComplianceDecisionRecord {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
     use std::{collections::BTreeSet, path::PathBuf};
 
     use iroha_crypto::{
@@ -420,7 +415,6 @@ mod tests {
     };
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
         metadata::Metadata,
         nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneStorageProfile, LaneVisibility},
     };
@@ -429,14 +423,13 @@ mod tests {
     use crate::{governance::manifest::LaneManifestStatus, interlane::LanePrivacyRegistry};
 
     fn account(name: &str, domain: &str) -> AccountId {
-        let domain_id = DomainId::from_str(domain).expect("domain");
         let seed_literal = format!("{name}::{domain}");
         let mut seed = seed_literal.into_bytes();
         if seed.is_empty() {
             seed.extend_from_slice(b"lane-compliance-account");
         }
         let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-        AccountId::new(domain_id, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_policy(

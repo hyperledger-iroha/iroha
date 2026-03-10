@@ -878,7 +878,7 @@ where
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
             RegisterBox::Account(r) => {
-                add_domain_r(&mut set, r.object.id().domain());
+                add_domain_r(&mut set, r.object.domain());
                 add_account_rw(&mut set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
@@ -1139,7 +1139,7 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    add_domain_r(set, id.account().domain());
+    add_domain_r(set, id.definition().domain());
     add_asset_def_r(set, id.definition());
 }
 fn add_nft_rw(set: &mut AccessSet, id: &NftId) {
@@ -1301,6 +1301,18 @@ mod tests {
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
+    fn wonderland_domain_id() -> DomainId {
+        "wonderland".parse().expect("static domain id")
+    }
+
+    fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
+        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+    }
+
+    fn build_wonderland_account(account_id: &AccountId) -> Account {
+        new_wonderland_account(account_id).build(account_id)
+    }
+
     fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
         metadata.insert(
             Name::from_str("gas_limit").expect("static gas_limit key"),
@@ -1325,6 +1337,7 @@ mod tests {
     fn isi_access_transfer_and_mint() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
+        let domain_id = wonderland_domain_id();
         let ad: AssetDefinitionId = "coin#wonderland".parse().unwrap();
         let src = AssetId::of(ad.clone(), alice.clone());
 
@@ -1347,7 +1360,7 @@ mod tests {
         let k_account_alice = key_account(&alice);
         let k_account_bob = key_account(&bob);
         let k_asset_def = key_asset_def(src.definition());
-        let k_domain = key_domain(alice.domain());
+        let k_domain = key_domain(&domain_id);
         assert!(set.read_keys.contains(&a_src));
         assert!(set.write_keys.contains(&a_src));
         assert!(set.read_keys.contains(&a_dst));
@@ -1379,8 +1392,8 @@ mod tests {
     #[test]
     fn register_access_includes_domain_reads() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
-        let domain_id = alice.domain().clone();
-        let account = Account::new(alice.clone());
+        let domain_id = wonderland_domain_id();
+        let account = new_wonderland_account(&alice);
         let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().unwrap();
         let asset_def = AssetDefinition::numeric(asset_def_id.clone());
 
@@ -1413,7 +1426,7 @@ mod tests {
         // World and state for view
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1536,7 +1549,7 @@ mod tests {
     fn ivm_access_dynamic_prepass_requires_gas_limit() {
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1651,7 +1664,7 @@ mod tests {
         // World/state setup with one account to own the manifest
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1722,7 +1735,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1777,7 +1790,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1854,7 +1867,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1907,7 +1920,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1994,7 +2007,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -2066,7 +2079,7 @@ mod tests {
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
-        let account = Account::new(alice.clone()).build(&alice);
+        let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -2215,10 +2228,10 @@ mod tests {
         {
             let mut stx = st_block.transaction();
             let domain_id: DomainId = "wonderland".parse().unwrap();
-            Register::domain(Domain::new(domain_id))
+            Register::domain(Domain::new(domain_id.clone()))
                 .execute(&alice, &mut stx)
                 .unwrap();
-            Register::account(Account::new(alice.clone()))
+            Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
             let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
@@ -2284,7 +2297,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&alice, &mut stx)
                 .unwrap();
-            Register::account(Account::new(alice.clone()))
+            Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
             let trigger_id: TriggerId = "meta_trigger".parse().unwrap();
@@ -2345,7 +2358,7 @@ mod tests {
             Register::domain(Domain::new("wonderland".parse().unwrap()))
                 .execute(&alice, &mut stx)
                 .unwrap();
-            Register::account(Account::new(alice.clone()))
+            Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
 

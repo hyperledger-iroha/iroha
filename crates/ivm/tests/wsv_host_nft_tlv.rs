@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountSubjectId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -58,7 +58,7 @@ fn create_transfer_set_nft_with_tlv() {
     wsv.add_account_unchecked(carol.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -117,7 +117,7 @@ fn create_transfer_set_nft_with_tlv() {
     // Switch caller to an unrelated account before trying to mutate metadata again
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.set_caller_subject(AccountSubjectId::from(&carol));
+        host.set_caller_subject(AccountId::from(&carol));
     }
 
     // Set NFT data as non-owner/non-issuer should now fail (caller=carol, owner=bob, issuer=alice)

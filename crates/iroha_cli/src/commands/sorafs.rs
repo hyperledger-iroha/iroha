@@ -10388,7 +10388,7 @@ impl GatewayDenylistRecord {
                 if trimmed.is_empty() {
                     return Err(eyre!("`account_id` must not be empty"));
                 }
-                // Validate as a strict encoded account literal (IH58/compressed only).
+                // Validate as a strict canonical IH58 account literal.
                 resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
@@ -12046,7 +12046,6 @@ mod tests {
     use iroha_data_model::account::{AccountAddress, address};
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
         isi::{InstructionBox, TransferBox},
         soranet::incentives::{
             RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayComplianceStatusV1,
@@ -12077,12 +12076,11 @@ mod tests {
     use url::Url;
 
     fn sample_account_literals() -> (String, String, String) {
-        let domain: DomainId = "default".parse().expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key parses");
-        let account = AccountId::new(domain, public_key);
+        let account = AccountId::new(public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account");
         let canonical = address.canonical_hex().expect("canonical hex");
         let ih58 = address
@@ -12289,12 +12287,13 @@ mod tests {
     }
 
     #[test]
-    fn gateway_denylist_record_accepts_compressed_literals() {
+    fn gateway_denylist_record_rejects_compressed_literals() {
         let (_, _, compressed) = sample_account_literals();
         let record = denylist_record_for_account(&compressed);
-        record
-            .validate(&resolve_account_literal)
-            .expect("compressed literal accepted");
+        assert!(
+            record.validate(&resolve_account_literal).is_err(),
+            "compressed literal should be rejected"
+        );
     }
 
     pub(super) struct TestContext {
@@ -12311,8 +12310,7 @@ mod tests {
 
         pub(super) fn with_output_format(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
-            let domain: DomainId = "wonderland".parse().expect("domain");
-            let account = AccountId::new(domain, kp.public_key().clone());
+            let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
@@ -12655,7 +12653,6 @@ mod tests {
     }
 
     fn sample_account_id(name: &str) -> AccountId {
-        let domain = DomainId::from_str("default").expect("domain id");
         let mut hasher = Blake3Hasher::new();
         hasher.update(b"sorafs-sample-account");
         hasher.update(name.as_bytes());
@@ -12666,7 +12663,7 @@ mod tests {
         let verifying = signing.verifying_key();
         let public_key =
             PublicKey::from_bytes(Algorithm::Ed25519, verifying.as_bytes()).expect("public key");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn sample_account_literal(name: &str) -> String {

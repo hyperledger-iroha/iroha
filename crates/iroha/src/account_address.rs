@@ -122,7 +122,7 @@ mod tests {
     fn roundtrip_ih58_encoding() {
         let domain = "wonderland".parse().expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let account = AccountId::new(key_pair.public_key().clone());
 
         let encoded = encode_account_id_to_ih58(&account, 42).expect("encode");
         let parsed = parse_account_address(&encoded, Some(42)).expect("parse ih58");
@@ -139,7 +139,7 @@ mod tests {
     fn compressed_encoding_matches_data_model() {
         let domain = "wonderland".parse().expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let account = AccountId::new(key_pair.public_key().clone());
 
         let encoded = encode_account_id_to_compressed(&account).expect("encode compressed");
         let parsed = parse_account_address(&encoded, None).expect("parse compressed");

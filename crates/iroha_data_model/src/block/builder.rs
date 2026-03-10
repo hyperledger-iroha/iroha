@@ -183,7 +183,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),

@@ -1,6 +1,6 @@
 ---
 title: MOCHI Architecture Plan
-description: High-level design for the MOCHI local-network GUI supervisor.
+description: High-level design for the MOCHI local Iroha devnet app.
 ---
 
 # MOCHI Architecture Plan
@@ -9,7 +9,7 @@ description: High-level design for the MOCHI local-network GUI supervisor.
 ## Goals
 
 - Bootstrap single-peer or multi-peer (four-node BFT) local networks quickly.
-- Wrap `kagami`, `irohad`, and supporting binaries in a friendly GUI workflow.
+- Wrap `kagami`, `irohad`, and supporting binaries in a Ganache-style local devnet workflow.
 - Surface live block, event, and state data through Torii HTTP/WebSocket endpoints.
 - Provide structured builders for transactions and Iroha Special Instructions (ISI), with local signing and submission.
 - Manage snapshots, re-genesis flows, and configuration tweaks without editing files manually.
@@ -35,24 +35,26 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 ## User Flows Backed by `mochi-core`
 
-- **Network Creation Wizard**: choose single or four-peer profile, pick directories, and call `kagami` to generate identities plus genesis.
-- **Lifecycle Controls**: start, stop, restart peers; surface live metrics; expose log tails; toggle runtime configuration endpoints (e.g., log levels).
-- **Block and Event Streams**: subscribe to `/block/stream` and `/events`, storing an in-memory rolling buffer for UI panels.
-- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, and asset definitions with pagination helpers and metadata summaries.
-- **Transaction Composer**: stage mint/transfer instruction drafts, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events; vault signing hooks remain a future iteration.
-- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, wipe stores, and regenerate genesis material for quick resets.
+- **Devnet Quickstart**: choose a `Single Peer` or `Four Peer BFT` preset, set the workspace and chain ID, then start, restart, stop, or rebuild the local network from one surface.
+- **Devnet Access**: expose copyable Torii/API endpoints plus development identities so application code can connect to the local network without digging through generated files.
+- **Lifecycle Controls**: start, stop, and restart the devnet; surface live metrics; expose log tails; and reserve advanced profile edits for the Settings dialog.
+- **Live Activity Streams**: subscribe to `/block/stream`, `/events`, and peer logs, keeping rolling in-memory buffers that the UI can auto-attach to running peers.
+- **State Explorer**: run Norito-backed `/query` calls to list domains, accounts, assets, asset definitions, and peers with pagination helpers and metadata summaries.
+- **Transaction Composer**: stage common devnet instructions first, batch them into signed transactions, preview the Norito payload, submit via `/transaction`, and monitor the resulting events.
+- **Snapshots and Re-Genesis**: orchestrate Kura snapshot export/import, lane resets, wipes, and genesis regeneration for fast local iteration.
 
 ## UI Layer (`mochi-ui-egui`)
 
 - Uses `egui`/`eframe` to ship a single native executable without external runtimes.
 - Layout includes:
-  - **Network Dashboard** with peer cards, health indicators, and quick actions.
-  - **Blocks** panel streaming recent commits and allowing height search.
-  - **Events** panel filtering transaction statuses by hash or account.
-  - **State Explorer** tabs for domains, accounts, assets, and asset definitions with paginated Norito results plus raw dumps for inspection.
-- **Composer** form with batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
-- **Genesis & Snapshots** management view.
-- **Settings** for runtime toggles and data directory shortcuts.
+  - **Network** view with a Devnet quickstart card, peer dashboard, health indicators, and quick actions.
+  - **Connect your app** surface on the Network page with copyable endpoints and development identities.
+  - **Activity** view with Logs, Events, and Blocks panels that can auto-attach to a running debug peer.
+  - **State** explorer for domains, accounts, assets, asset definitions, and peers with paginated Norito results plus raw dumps for inspection.
+  - **Transactions** view with common local-dev actions up front and advanced/governance flows tucked behind a secondary affordance.
+- **Composer** supports batchable mint/transfer palettes, queue management (add/remove/clear), raw Norito preview, and submission feedback backed by the signer vault so operators can swap between dev and real authorities.
+- The control bar groups actions under **Devnet**, **Maintenance**, and **Config** rather than pushing first-run work into Settings.
+- **Settings** is reserved for advanced profile overrides, Nexus/DA controls, tooling/readiness behavior, compatibility options, and export paths.
 - UI subscribes to asynchronous updates from `mochi-core` via channels; the core exposes a `SupervisorHandle` that streams structured events (peer status, block headers, transaction updates).
 
 ## Local Development Notes

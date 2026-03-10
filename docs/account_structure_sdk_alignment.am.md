@@ -26,14 +26,8 @@ translator: machine-google-reviewed
 የእርምጃ እቃዎች፡-
 1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ IH58 ብቻ መልቀቅ አለበት
    (አይ18NI00000006X ቅጥያ የለም)። ቀኖናዊ ሄክስ ለማረም (`0x...`) ነው።
-2. ** ተቀባይነት ያላቸው ግብዓቶች፡** ተንታኞች IH58 (የተመረጡ)፣ `sora` የታመቀ፣
-   እና ቀኖናዊ ሄክስ (`0x...` ብቻ፤ ባዶ ሄክስ ውድቅ ተደርጓል)። ግብዓቶች MAY ይይዛሉ
-   የ `@<domain>` ቅጥያ ጥቆማዎችን ለመምራት; `<label>@<domain>` (rejected legacy form) ተለዋጭ ስሞች ያስፈልጋቸዋል
-   ፈቺ. ጥሬው 
-3. **መፍትሄዎች፡** ጎራ የለሽ IH58/sora መተንተን ጎራ-መራጭ ያስፈልገዋል።
-   መራጩ በተዘዋዋሪ ነባሪ ካልሆነ በስተቀር መፍትሄ ሰጪ (የተዋቀረውን ነባሪ ይጠቀሙ
-   የጎራ መለያ)። UAID (`uaid:...`) እና ግልጽ ያልሆነ (`opaque:...`) ቀጥተኛ ቃላት ያስፈልጋቸዋል
-   ፈታኞች.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 checksum:** Blake2b-512 ከ `IH58PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
    የመጀመሪያዎቹ 2 ባይት. የታመቀ ፊደል መሠረት **105** ነው።
 5. ** ከርቭ ጋቲንግ፡** ኤስዲኬዎች ነባሪ ወደ Ed25519-ብቻ። ለ ግልጽ መርጦ መግባትን ያቅርቡ

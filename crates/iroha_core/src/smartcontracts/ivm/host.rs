@@ -4614,7 +4614,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // ----------------- Account ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
                 let ptr = vm.register(10);
-                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let id: ScopedAccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
                 let isi = Register::account(Account::new(id));
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -4829,7 +4829,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
                     let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
                     let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
-                    let action = Self::decode_trigger_action_spec(action_value)?;
+                    let mut action = Self::decode_trigger_action_spec(action_value)?;
+                    if action.authority.subject_id() == self.authority.subject_id() {
+                        action.authority = self.authority.clone();
+                    }
                     Trigger::new(id, action)
                 };
                 let instr = InstructionBox::from(Register::trigger(trigger));
@@ -4957,7 +4960,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 for account_id in accounts.iter() {
                     let name_str = format!("nft_number_{}_for_{}", i, account_id.signatory());
                     if let Ok(name) = name_str.parse() {
-                        let nft_id = NftId::of(account_id.domain().clone(), name);
+                        let nft_id = NftId::of(iroha_genesis::GENESIS_DOMAIN_ID.clone(), name);
                         let nft = Nft::new(nft_id.clone(), Metadata::default());
                         let reg = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
                         gas = gas.saturating_add(self.queue_instruction(reg));
@@ -5763,8 +5766,7 @@ mod pointer_abi_tests {
             "carol" | "charlie" => {
                 let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
                 let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-                let domain: DomainId = "wonderland".parse().expect("fixture domain id");
-                AccountId::new(domain, public_key)
+                AccountId::new(public_key)
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
@@ -7236,8 +7238,7 @@ mod pointer_abi_tests {
     fn register_contract_manifest_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::of(domain, kp.public_key().clone());
+        let authority = AccountId::of(kp.public_key().clone());
         let mut host = CoreHost::new(authority);
 
         let code_hash = IrohaHash::new(b"contract-code");
@@ -7278,8 +7279,7 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
         let (public_key, _) = kp.into_parts();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::of(domain, public_key);
+        let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
 
         let code_hash = IrohaHash::new(b"bytecode");
@@ -7307,8 +7307,7 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
         let (public_key, _) = kp.into_parts();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::of(domain, public_key);
+        let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
 
         let request = scode::ActivateContractInstance {
@@ -7333,8 +7332,7 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
         let (public_key, _) = kp.into_parts();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::of(domain, public_key);
+        let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
 
         let request = scode::DeactivateContractInstance {
@@ -7359,8 +7357,7 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
         let (public_key, _) = kp.into_parts();
-        let domain: DomainId = "wonderland".parse().unwrap();
-        let authority = AccountId::of(domain, public_key);
+        let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
 
         let code_hash = IrohaHash::new(b"bytecode-image");
@@ -7391,7 +7388,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
-        let expected = InstructionBox::from(Register::account(Account::new(account)));
+        let expected = InstructionBox::from(Register::account(Account::new(
+            account.clone().to_account_id("wonderland".parse().unwrap()),
+        )));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -8240,6 +8239,10 @@ mod tests {
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
     }
 
+    fn fixture_domain_id() -> DomainId {
+        "wonderland".parse().expect("fixture domain id")
+    }
+
     fn fixture_account(label: &str) -> AccountId {
         match label {
             "alice" => ALICE_ID.clone(),
@@ -8247,21 +8250,26 @@ mod tests {
             "carol" | "charlie" => {
                 let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
                 let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-                let domain: DomainId = "wonderland".parse().expect("fixture domain id");
-                AccountId::new(domain, public_key)
+                AccountId::new(public_key)
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
     }
 
-    fn fixture_account_in_domain(label: &str, _domain_label: &str) -> AccountId {
-        let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
+    fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
+        let seed: Vec<u8> = format!("{label}@{domain_label}")
+            .as_bytes()
+            .iter()
+            .copied()
+            .cycle()
+            .take(32)
+            .collect();
         let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
-        let domain: DomainId = iroha_data_model::account::address::default_domain_name()
-            .as_ref()
-            .parse()
-            .expect("default fixture domain id");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
+    }
+
+    fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
+        Account::new(id.clone().to_account_id(fixture_domain_id())).build(authority)
     }
 
     #[test]
@@ -8304,7 +8312,7 @@ mod tests {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let account = build_fixture_account(&authority, &authority);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
@@ -8348,9 +8356,9 @@ mod tests {
         let authority: AccountId = fixture_account("alice");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let accounts = vec![
-            Account::new(authority.clone()).build(&authority),
-            Account::new(fixture_account("bob")).build(&authority),
-            Account::new(fixture_account("carol")).build(&authority),
+            build_fixture_account(&authority, &authority),
+            build_fixture_account(&fixture_account("bob"), &authority),
+            build_fixture_account(&fixture_account("carol"), &authority),
         ];
         let world = World::with([domain], accounts, []);
         let kura = Kura::blank_kura_for_testing();
@@ -8426,9 +8434,9 @@ mod tests {
         let authority: AccountId = fixture_account("alice");
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let accounts = vec![
-            Account::new(authority.clone()).build(&authority),
-            Account::new(fixture_account("bob")).build(&authority),
-            Account::new(fixture_account("carol")).build(&authority),
+            build_fixture_account(&authority, &authority),
+            build_fixture_account(&fixture_account("bob"), &authority),
+            build_fixture_account(&fixture_account("carol"), &authority),
         ];
         let world = World::with([domain], accounts, []);
         let kura = Kura::blank_kura_for_testing();
@@ -8640,8 +8648,8 @@ mod tests {
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
         let accounts = vec![
-            Account::new(provider.clone()).build(&provider),
-            Account::new(subscriber.clone()).build(&provider),
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
         ];
         let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
 
@@ -8861,8 +8869,8 @@ mod tests {
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
         let accounts = vec![
-            Account::new(provider.clone()).build(&provider),
-            Account::new(subscriber.clone()).build(&provider),
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
         ];
         let world = World::with_assets(
             domains,
@@ -8978,8 +8986,8 @@ mod tests {
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
         let accounts = vec![
-            Account::new(provider.clone()).build(&provider),
-            Account::new(subscriber.clone()).build(&provider),
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
         ];
         let world = World::with_assets(domains, accounts, [plan_def, charge_def], [asset], [nft]);
 
@@ -9150,8 +9158,8 @@ mod tests {
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
         let accounts = vec![
-            Account::new(provider.clone()).build(&provider),
-            Account::new(subscriber.clone()).build(&provider),
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
         ];
         let world = World::with_assets(
             domains,

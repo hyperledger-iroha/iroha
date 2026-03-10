@@ -8998,9 +8998,9 @@ impl Actor {
     fn determine_genesis_account(state: &State) -> Result<AccountId> {
         let world = state.world_view();
         let maybe_account = world
-            .accounts_iter()
-            .find(|entry| entry.id().domain() == &*GENESIS_DOMAIN_ID)
-            .map(|entry| entry.id().clone());
+            .domain(&GENESIS_DOMAIN_ID)
+            .ok()
+            .map(|domain| domain.owned_by().clone());
         maybe_account.ok_or_else(|| eyre!("genesis account not found in world state"))
     }
 

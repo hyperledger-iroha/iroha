@@ -26,14 +26,8 @@ SDK және кодек иелеріне арналған # IH58 шығару ж
 Әрекет элементтері:
 1. **Канондық шығыс:** `AccountId::to_string()`/Дисплей тек IH58 шығаруы КЕРЕК
    (`@domain` жұрнағы жоқ). Канондық он алтылық қатені түзетуге арналған (`0x...`).
-2. **Қабылданған кірістер:** талдаушылар IH58 (қалаулы), `sora` қысылған,
-   және канондық он алтылық (тек `0x...`; жалаң он алтылық қабылданбайды). Кірістері болуы мүмкін
-   `@<domain>` бағдарлау бойынша кеңестерге арналған жұрнақ; `<label>@<domain>` (rejected legacy form) бүркеншік аттары а талап етеді
-   шешуші. Шикі 
-3. **Resolvers:** доменсіз IH58/sora талдау үшін домен таңдаушысы қажет
-   шешуші, егер селектор жасырын әдепкі болмаса (конфигурацияланған әдепкі параметрді пайдаланыңыз
-   домен белгісі). UAID (`uaid:...`) және мөлдір емес (`opaque:...`) литералдар қажет
-   шешушілер.
+2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **IH58 бақылау сомасы:** `IH58PRE || prefix || payload` орнына Blake2b-512 пайдаланыңыз, алыңыз
    алғашқы 2 байт. Сығылған алфавит базасы **105**.
 5. **Қисық сызық:** SDK әдепкі бойынша тек Ed25519 үшін. Нақты қосылуды қамтамасыз етіңіз

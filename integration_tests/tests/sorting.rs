@@ -209,7 +209,7 @@ fn correct_sorting_of_entities() {
         .collect::<Vec<_>>();
     public_keys.sort_unstable();
     for i in 0..n {
-        let account_id = AccountId::new(domain_id.clone(), public_keys[i as usize].clone());
+        let account_id = AccountId::new(public_keys[i as usize].clone());
         let mut account_metadata = Metadata::default();
         account_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
         let account = Account::new(account_id.clone()).with_metadata(account_metadata.clone());
@@ -405,7 +405,7 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
         .collect::<Vec<_>>();
     public_keys.sort_unstable();
     for i in 0..n {
-        let account_id = AccountId::new(domain_id.clone(), public_keys[i as usize].clone());
+        let account_id = AccountId::new(public_keys[i as usize].clone());
         let account = if skip_set.contains(&i) {
             let account = Account::new(account_id.clone());
             accounts_b.push(account_id);

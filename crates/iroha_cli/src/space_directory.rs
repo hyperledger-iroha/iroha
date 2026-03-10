@@ -701,10 +701,9 @@ impl ManifestScaffoldProfileArgs {
             .clone()
             .unwrap_or_else(|| format!("profile.{dataspace}.v1"));
         let activation_epoch = self.activation_epoch.unwrap_or(manifest.activation_epoch);
-        let governance_issuer = self
-            .governance_issuer
-            .clone()
-            .unwrap_or_else(|| "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned());
+        let governance_issuer = self.governance_issuer.clone().unwrap_or_else(|| {
+            "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()
+        });
         let governance_ticket = self
             .governance_ticket
             .clone()
@@ -1441,7 +1440,9 @@ mod tests {
         };
         let profile_args = ManifestScaffoldProfileArgs {
             profile_id: Some("profile.cbdc.preview".to_owned()),
-            governance_issuer: Some("6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()),
+            governance_issuer: Some(
+                "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned(),
+            ),
             governance_ticket: Some("gov-ticket".to_owned()),
             governance_quorum: Some(4),
             validators: vec![
@@ -1653,8 +1654,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let account_id =
-                AccountId::new("wonderland".parse().unwrap(), key_pair.public_key().clone());
+            let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account: account_id,

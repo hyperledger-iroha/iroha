@@ -36,7 +36,7 @@ fn main() {
     ];
     for (index, label) in domains.iter().enumerate() {
         let index_u8 = u8::try_from(index).expect("domain index exceeds u8");
-        let account = AccountId::new(domain(label), ed25519_pk_with(index_u8));
+        let account = AccountId::new(ed25519_pk_with(index_u8));
         let address = AccountAddress::from_account_id(&account).expect("address encoding");
         let canonical = address
             .canonical_hex()

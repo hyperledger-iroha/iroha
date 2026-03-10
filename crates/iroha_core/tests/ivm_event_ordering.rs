@@ -71,7 +71,7 @@ fn ivm_syscall_data_events_follow_order() {
     let (authority_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let account = Account::new(authority_id.clone()).build(&authority_id);
+    let account = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
     let asset_def = AssetDefinition::new(
         AssetDefinitionId::from_str("rose#wonderland").expect("asset def"),
         NumericSpec::default(),

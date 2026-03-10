@@ -144,7 +144,7 @@ translator: manual
 ### JSON の型エンコード
 
 - `Hash`（`code_hash`, `abi_hash` など）は 64 文字の小文字 hex（32 バイト）。
-- `AccountId`: canonical IH58 literal (no `@domain` suffix; optional `@<domain>` hint).
+- `AccountId`: canonical IH58 literal (no `@domain` suffix).
 - `ExposedPrivateKey` は素の multihash hex 文字列と、アルゴリズム接頭辞付き（例 `ed25519:…`）のどちらも受け付けます。レスポンスでは素の multihash hex に正規化されます。
 
 ### GET レスポンス: ContractCodeRecordDto

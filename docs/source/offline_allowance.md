@@ -914,9 +914,8 @@ All GET surfaces accept the compact `ListFilterParams` struct via query paramete
 `/v1/offline/allowances` additionally exposes roadmap-driven convenience filters so dashboards and
 SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 
-- `controller_id` — filter allowances by controller account. Torii accepts IH58 (preferred), compressed (`sora`, second-best), or
-  raw public-key literals and canonicalises them to the Global form before evaluating the query, so
-  operators can feed whichever encoding their tooling surfaces.
+- `controller_id` — filter allowances by controller account. Torii accepts canonical IH58 account
+  literals only and canonicalises them before evaluating the query.
 - `asset_id` — filter allowances by asset identifier.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — constrain the certificate
   expiry timestamp (`<=`/`>=` respectively).
@@ -935,8 +934,8 @@ SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 the same certificate metadata without composing JSON:
 
 - `controller_id` / `receiver_id` / `deposit_account_id` — filter bundles by the originating
-  controller, receiver, or deposit account. Each parameter accepts IH58 (preferred), compressed (`sora`, second-best), or raw
-  public-key literals and Torii normalises the value to the canonical on-ledger form before matching.
+  controller, receiver, or deposit account. Each parameter accepts canonical IH58 account literals
+  only and Torii normalises the value to the canonical on-ledger form before matching.
 - `asset_id` — filter bundles by the asset identifier recorded in the transfer commitment.
 - `certificate_id_hex` — case-insensitive certificate identifier match.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — filter by the underlying

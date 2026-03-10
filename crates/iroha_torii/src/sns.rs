@@ -1048,12 +1048,11 @@ mod tests {
         assert_conflict_contains(renew_err, "tombstoned");
 
         let new_owner = {
-            let domain = "sns".parse().expect("domain parses");
             let public_key: PublicKey =
                 "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
                     .parse()
                     .expect("key parses");
-            AccountId::new(domain, public_key)
+            AccountId::new(public_key)
         };
         let transfer_err = registry
             .transfer(

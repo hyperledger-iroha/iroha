@@ -1701,7 +1701,6 @@ fn main() { subscription_bill(); }"#,
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
@@ -1731,7 +1730,6 @@ fn main() { subscription_bill(); }"#,
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),

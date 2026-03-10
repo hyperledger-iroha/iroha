@@ -122,7 +122,7 @@ fn cross_dataspace_gas_account_id() -> AccountId {
         b"integration_tests::nexus::cross_dataspace_localnet::gas_account".to_vec(),
         Algorithm::Ed25519,
     );
-    AccountId::new(ivm_domain, gas_keypair.public_key().clone())
+    AccountId::new(gas_keypair.public_key().clone())
 }
 
 fn localnet_builder() -> NetworkBuilder {
@@ -349,7 +349,7 @@ fn npos_multilane_genesis_post_topology_transactions(
             DS2_LANE_INDEX
         };
         let lane_id = LaneId::new(lane_index);
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        let validator_id = AccountId::new(peer.public_key().clone());
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
             Mint::asset_numeric(
@@ -1175,19 +1175,19 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let nexus_lane_validators: Vec<AccountId> = peers
             .iter()
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let ds1_lane_validators: Vec<AccountId> = peers
             .iter()
             .skip(VALIDATORS_PER_LANE)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let ds2_lane_validators: Vec<AccountId> = peers
             .iter()
             .skip(VALIDATORS_PER_LANE * 2)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
         all_validators.extend(nexus_lane_validators.iter().cloned());

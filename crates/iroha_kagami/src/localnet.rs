@@ -528,7 +528,9 @@ impl<T: Write> RunArgs<T> for Args {
             assets: if self.sample_asset {
                 vec![AssetSpec {
                     id: "sample#wonderland".into(),
-                    mint_to: ALICE_ID.clone(),
+                    mint_to: ALICE_ID
+                        .clone()
+                        .to_account_id("wonderland".parse().expect("valid domain")),
                     quantity: 100,
                 }]
             } else {
@@ -1623,7 +1625,7 @@ fn extend_genesis(
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_numeric(
                 asset.quantity,
-                AssetId::new(asset_def, asset.mint_to.clone()),
+                AssetId::new(asset_def, asset.mint_to.clone().into()),
             ));
         }
     }
@@ -1800,7 +1802,7 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(Register::account(Account::new(validator_id.clone())));
         builder = builder.append_instruction(Mint::asset_numeric(
             stake_amount,
-            AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            AssetId::new(stake_asset_id.clone(), validator_id.clone().into()),
         ));
     }
 
@@ -1809,14 +1811,14 @@ fn append_localnet_npos_bootstrap(
         let validator_id = ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone());
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
-            validator: validator_id.clone(),
-            stake_account: validator_id.clone(),
+            validator: validator_id.clone().into(),
+            stake_account: validator_id.clone().into(),
             initial_stake: Numeric::from(stake_amount),
             metadata: Metadata::default(),
         });
         builder = builder.append_instruction(ActivatePublicLaneValidator {
             lane_id: LaneId::SINGLE,
-            validator: validator_id,
+            validator: validator_id.into(),
         });
     }
 

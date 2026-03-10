@@ -917,10 +917,9 @@ mod predicate_tests {
     use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
 
     fn test_authority() -> AccountId {
-        let domain = "wonderland".parse().expect("domain id");
         let (public_key, _private_key) =
             KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519).into_parts();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn sample_domain() -> Domain {
@@ -1032,7 +1031,7 @@ mod committed_tx_predicate_tests {
             let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
             let (public_key, private_key) =
                 iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
-            let id = account::AccountId::new(domain, public_key);
+            let id = account::AccountId::new(public_key);
             Self { id, private_key }
         }
 

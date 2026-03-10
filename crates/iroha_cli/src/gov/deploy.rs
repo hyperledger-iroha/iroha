@@ -377,7 +377,7 @@ pub struct DeployMetaArgs {
     pub namespace: String,
     #[arg(long)]
     pub contract_id: String,
-    /// Optional validator account IDs (IH58 or sora compressed) authorizing the deployment alongside the authority.
+    /// Optional validator account IDs (canonical IH58 account literals) authorizing the deployment alongside the authority.
     #[arg(long = "approver", value_name = "ACCOUNT")]
     pub approvers: Vec<String>,
 }
@@ -436,8 +436,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
-            let account =
-                AccountId::new("wonderland".parse().unwrap(), key_pair.public_key().clone());
+            let account = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
@@ -676,7 +675,6 @@ mod tests {
         hasher.update(name.as_bytes());
         let digest = hasher.finalize();
         let key_pair = KeyPair::from_seed(digest.as_bytes().to_vec(), Algorithm::Ed25519);
-        let domain = "wonderland".parse().expect("domain");
-        AccountId::new(domain, key_pair.public_key().clone()).to_string()
+        AccountId::new(key_pair.public_key().clone()).to_string()
     }
 }

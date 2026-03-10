@@ -7,13 +7,13 @@ path for legacy account/asset literals.
 
 ## Required behavior
 1. **Account parser contract (strict):**
-   - Accept only encoded account literals:
-     - IH58 (preferred)
-     - compressed `sora…` (accepted)
+   - Accept only canonical IH58 account literals.
    - Reject all of:
      - any `@domain` suffix
      - alias literals
      - canonical hex account literals in parser input
+     - compressed `sora…` literals
+     - legacy `norito:<hex>` account literals
      - `uaid:` / `opaque:` account parser forms
 2. **Account identity surface:**
    - Account-facing APIs are domainless and operate on subject identity.

@@ -25,9 +25,9 @@ fn asset_definition_id_of_matches_parse() {
 #[test]
 fn asset_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let domain: DomainId = address::default_domain_name().as_ref().parse().unwrap();
+    let domain: DomainId = "wonderland".parse().unwrap();
     let kp = KeyPair::random();
-    let account = AccountId::of(domain.clone(), kp.public_key().clone());
+    let account = AccountId::of(kp.public_key().clone());
     let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
     let via_of = AssetId::of(def.clone(), account);
 
@@ -52,9 +52,8 @@ fn nft_id_of_matches_parse() {
 #[test]
 fn account_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let domain: DomainId = address::default_domain_name().as_ref().parse().unwrap();
     let kp = KeyPair::random();
-    let via_of = AccountId::of(domain, kp.public_key().clone());
+    let via_of = AccountId::of(kp.public_key().clone());
     let parsed = AccountId::parse_encoded(&via_of.to_string())
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("canonical AccountId literal parses");

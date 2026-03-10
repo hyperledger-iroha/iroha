@@ -29,9 +29,11 @@ fn build_bench_state() -> (State, AccountId, AccountId) {
     let (authority, _) = gen_account_in("wonderland");
     let (recipient, _) = gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let domain = Domain::new(domain_id).build(&authority);
-    let authority_account = Account::new(authority.clone()).build(&authority);
-    let recipient_account = Account::new(recipient.clone()).build(&recipient);
+    let domain = Domain::new(domain_id.clone()).build(&authority);
+    let authority_account =
+        Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+    let recipient_account =
+        Account::new(recipient.clone().to_account_id(domain_id)).build(&recipient);
     let world = World::with([domain], [authority_account, recipient_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

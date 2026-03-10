@@ -1,30 +1,35 @@
 # Iroha Monitor
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+The refactored Iroha monitor pairs a lightweight terminal UI with a small
+festival motif and a builtin Etenraku intro. It focuses on two simple
+workflows:
 
 - **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
 - **Attach mode** – point the monitor at existing Torii HTTP endpoints.
 
-The UI renders three regions on every refresh:
+The UI renders a monitoring-first layout on every refresh:
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
+1. **Overview panel** – online/healthy/degraded counts, aggregate throughput,
+   queue/gas totals, latency, and the currently selected peer summary.
+2. **Peer table** – scrollable peer rows with health-aware colouring and a
+   compact status note.
+3. **Selected peer & alerts** – a detail panel for the focused peer plus a
+   severity-tagged activity log for recoveries, warnings, and outages.
+4. **Optional gas trend** – enable `--show-gas-trend` to add a sparkline
    summarising total gas usage across all peers.
 
 New in this refactor:
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
+- Monitoring-first layout that keeps the peer table and alerts visible on
+  medium terminals.
+- Small torii/Fuji banner so the festival identity remains without dominating
+  the telemetry.
 - Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
 - Intro banner with optional audio playback of the gagaku theme (external MIDI
   player or the built-in soft synth when the platform/audio stack supports it).
 - `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- Per-peer status column showing health plus the latest warning, commit time,
+  or uptime.
 
 ## Quickstart
 
@@ -86,28 +91,36 @@ working audio stack.
 
 Use `--no-theme` or `--no-audio` when running in CI or headless shells.
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+The soft synth now aims closer to gagaku chamber colour than a retro game
+arrangement: hichiriki remains the leading line, ryūteki is lighter and more
+heterophonic, shō forms the sustained bed, and the plucked layers are sparse
+punctuation. The timed note data lives in `etenraku.rs`; it powers both the
+CPAL callback and the generated demo MIDI. When audio output is unavailable the
+monitor skips playback but still renders the ASCII animation.
 
 ## UI overview
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+- **Overview panel** – shows online peers, healthy/degraded/down counts,
+  reported peer count, block totals, tx approvals/rejections, queue depth, gas,
+  latency, refresh rate, and the current focus summary.
+- **Peer table** – columns for peer name, block height, transactions, queue
+  size, gas usage, latency, and a health/status note. The selected peer stays
+  centred in the visible window when the list grows beyond the viewport.
+- **Selected peer** – endpoint, health, height, transaction counters, queue,
+  latency, commit time, view changes, uptime, gas, fees, and the current note.
+- **Alerts & activity** – rolling severity-tagged log of recoveries, warnings,
+  outages, payload limit breaches, and slow endpoints (latest on top).
+- **Festival signal** – a compact torii/Fuji panel that preserves the identity
+  without taking over the screen.
 
 Keyboard shortcuts:
 
 - `n` / Right / Down – move focus to the next peer.
 - `p` / Left / Up – move focus to the previous peer.
+- `s` – cycle sort order (`health` → `height` → `latency` → `name`).
+- `f` – toggle the issues-only filter.
+- `/` – start an endpoint/name search.
+- `x` / `Esc` while searching – clear or cancel the current search.
 - `q` / Esc / Ctrl-C – exit and restore the terminal.
 
 The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
@@ -135,8 +148,8 @@ not need the full suite.
 
 ## Updating screenshots
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+The docs demo now captures the default monitoring view and a search-focused
+view. To refresh the assets, run:
 
 ```bash
 make monitor-screenshots
@@ -160,7 +173,7 @@ deterministic.
 The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
 
 ![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![monitor focused view](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
 Reproduce them with a fixed viewport/seed:
 
@@ -188,8 +201,8 @@ to fail when the assets drift from the recorded manifests.
   indefinitely.
 - **Oversized status payloads** – the peer’s mood column and the festival log
   show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
+- **Slow peers** – the event log records timeout warnings and the selected peer
+  panel surfaces the latest note for quick diagnosis.
 
 Enjoy the festival skyline!  Contributions for additional ASCII motifs or
 metrics panels are welcome—keep them deterministic so clusters render the same

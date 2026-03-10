@@ -543,7 +543,6 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         metadata::Metadata,
         soranet::incentives::{
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
@@ -596,11 +595,10 @@ mod tests {
         }
     }
 
-    fn sample_account(domain: &str) -> AccountId {
-        let domain_id = DomainId::from_str(domain).expect("domain id");
+    fn sample_account(_domain: &str) -> AccountId {
         let key_hex = "01".repeat(32);
         let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
-        AccountId::new(domain_id, public_key)
+        AccountId::new(public_key)
     }
 
     fn budget_id() -> [u8; 32] {

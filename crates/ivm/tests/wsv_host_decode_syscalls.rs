@@ -39,7 +39,7 @@ fn wsv_host() -> WsvHost {
     );
     WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         Default::default(),
     )
 }
