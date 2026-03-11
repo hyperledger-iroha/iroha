@@ -104,10 +104,10 @@ description = "Route CBDC contracts to the restricted lane"
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "ih58...",
-    "ih58...",
-    "ih58...",
-    "ih58..."
+    "i105...",
+    "i105...",
+    "i105...",
+    "i105..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-ቁልፍ መስፈርቶች፡- አረጋጋጮች ** አለባቸው** ቀኖናዊ የIH58 መለያ መታወቂያዎች (አይ18NI00000043X የለም፤ ​​`@domain` እንደ ግልጽ የማዞሪያ ፍንጭ ብቻ አባሪ) በካታሎግ ውስጥ አለ። `quorum` ወደ ባለብዙ ሲግ ገደብ (≥2) አዘጋጅ።
+ቁልፍ መስፈርቶች፡- አረጋጋጮች ** አለባቸው** ቀኖናዊ የI105 መለያ መታወቂያዎች (አይ18NI00000043X የለም፤ ​​`@domain` እንደ ግልጽ የማዞሪያ ፍንጭ ብቻ አባሪ) በካታሎግ ውስጥ አለ። `quorum` ወደ ባለብዙ ሲግ ገደብ (≥2) አዘጋጅ።
 - የተጠበቁ የስም ቦታዎች በ `Queue::push` (`crates/iroha_core/src/queue.rs` ይመልከቱ) ተፈጻሚዎች ናቸው, ስለዚህ ሁሉም የ CBDC ኮንትራቶች `gov_namespace` + `gov_contract_id` መግለጽ አለባቸው.
 - `composability_group` መስኮች በ `docs/source/nexus.md` §8.6 ውስጥ የተገለጸውን እቅድ ይከተላሉ; ባለቤቱ (CBDC ሌን) የተፈቀደላቸው ዝርዝር እና ኮታዎችን ያቀርባል። የተፈቀደላቸው DS አንጸባራቂዎች `group_id_hex` + `activation_epoch` ብቻ ይጠቅሳሉ።
 - አንጸባራቂውን ከገለበጡ በኋላ `LaneManifestRegistry::from_config` መጫኑን ለማረጋገጥ `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ን ያሂዱ።
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

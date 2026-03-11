@@ -1009,15 +1009,16 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
+            domain::DomainId,
             isi::{InstructionBox, Mint},
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
         );
+        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
@@ -1033,11 +1034,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(
-            hints
-                .read_keys
-                .contains(&format!("domain:{}", account.domain()))
-        );
+        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
         assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
         assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
         assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
@@ -1147,16 +1144,17 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
+            domain::DomainId,
             query::asset::FindAssetById,
             query::{QueryRequest, SingularQueryBox},
         };
 
         let account = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
         );
+        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
@@ -1174,11 +1172,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(
-            hints
-                .read_keys
-                .contains(&format!("domain:{}", account.domain()))
-        );
+        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
         assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
         assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
         assert!(hints.write_keys.is_empty());
@@ -1471,7 +1465,6 @@ seiyaku Test {
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
                 .expect("public key"),
@@ -6611,7 +6604,6 @@ fn record_isi_access(
             let Some(id) = parse_account_temp(string_map, func_idx, *account) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_domain_r(access_set, id.domain());
             add_account_rw(access_set, &id);
         }
         ir::Instr::UnregisterAsset { asset } => {
@@ -6890,7 +6882,7 @@ fn record_instruction_box_access(
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
             RegisterBox::Account(r) => {
-                add_domain_r(access_set, r.object.id().domain());
+                add_domain_r(access_set, r.object.domain());
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
@@ -7173,7 +7165,7 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_domain_r(set, id.account().domain());
+    add_domain_r(set, id.definition().domain());
     add_asset_def_r(set, id.definition());
 }
 
@@ -7189,7 +7181,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_domain_r(set, id.account().domain());
+    add_domain_r(set, id.definition().domain());
     add_asset_def_r(set, id.definition());
 }
 

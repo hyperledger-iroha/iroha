@@ -14,7 +14,7 @@ título: Соответствие адресов аккаунтов
 description: Você está trabalhando no dispositivo ADDR-2 e no SDK de comando de sincronização.
 ---
 
-O pacote canônico ADDR-2 (`fixtures/account/address_vectors.json`) possui fixtures IH58 (preferencial), compactado (`sora`, segundo melhor; meia/largura total), multiassinatura e negativo. Quando o SDK + Torii é baseado em Odin e JSON, ele fornece o codec do produto para você. Esta página está fora do status atual do arquivo (`docs/source/account_address_status.md` no repositório principal), este site está disponível Você pode usar o fluxo de trabalho sem copiar o mono-repo.
+O pacote canônico ADDR-2 (`fixtures/account/address_vectors.json`) possui fixtures I105 (preferencial), compactado (`sora`, segundo melhor; meia/largura total), multiassinatura e negativo. Quando o SDK + Torii é baseado em Odin e JSON, ele fornece o codec do produto para você. Esta página está fora do status atual do arquivo (`docs/source/account_address_status.md` no repositório principal), este site está disponível Você pode usar o fluxo de trabalho sem copiar o mono-repo.
 
 ## Перегенерация ou проверка pacета
 
@@ -45,7 +45,7 @@ Fluxo de trabalho de CI **Desvio de vetor de endereço** `cargo xtask address-ve
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-O chicote de fios выполняет канонических байт + IH58 + сжатых кодировок e проверяет, что коды ошибок в стиле Norito fornece suporte para luminárias negativas.
+O chicote de fios выполняет канонических байт + I105 + сжатых кодировок e проверяет, что коды ошибок в стиле Norito fornece suporte para luminárias negativas.
 
 ## Você não precisa de automação?
 

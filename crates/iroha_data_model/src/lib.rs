@@ -245,7 +245,7 @@ pub trait Registrable {
     type Target;
 
     /// Construct [`Self::Target`] with given authority
-    fn build(self, authority: &crate::account::ScopedAccountId) -> Self::Target;
+    fn build(self, authority: &crate::account::AccountId) -> Self::Target;
 }
 
 /// Trait that marks the entity as having metadata.

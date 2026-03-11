@@ -11,7 +11,6 @@ const TEST_CALLER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRU
 
 fn test_caller_account() -> ScopedAccountId {
     ScopedAccountId::parse_encoded(TEST_CALLER_ID)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("test account literal must be valid canonical AccountId")
 }
 
@@ -46,11 +45,11 @@ fn wsv_host_with_subject_map(
 ) -> WsvHost {
     let subject_accounts = accounts
         .into_iter()
-        .map(|(index, account)| (index, ivm::mock_wsv::AccountSubjectId::from(&account)))
+        .map(|(index, account)| (index, ivm::mock_wsv::AccountId::from(&account)))
         .collect();
     WsvHost::new_with_subject_map(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         subject_accounts,
         assets,
     )

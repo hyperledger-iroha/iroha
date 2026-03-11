@@ -86,7 +86,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ## 4. استخدم رمز البيتكود من خلال Toriiلكي تتمكن من العمل، قم بتجميع رمز البيتكود في Torii عبر CLI. يتم الاتصال بهوية التطوير الافتراضية من خلال المفتاح العام في `defaults/client.toml`، حساب المعرف التالي:
 ```
-ih58...
+i105...
 ```
 
 استخدم ملف التكوين لإضافة عنوان URL Torii ومعرف السلسلة وصفحة المفتاح:
@@ -106,7 +106,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

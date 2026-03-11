@@ -14,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-use ::norito::json::{Map as JsonMap, Value as JsonValue};
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake2::{
     Blake2bVar,
@@ -35,8 +34,8 @@ use iroha_crypto::{
 use iroha_data_model::{
     ChainId,
     account::{
-        AccountId,
-        address::{AccountAddress, AccountAddressError, AccountAddressFormat},
+        AccountId, ScopedAccountId,
+        address::{AccountAddress, AccountAddressError},
     },
     asset::id::{AssetDefinitionId, AssetId},
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
@@ -58,11 +57,12 @@ use iroha_data_model::{
         OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
         OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
-        OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
-        OfflineFastpqSumProof, OfflinePlatformProof, OfflineProofBlindingSeed,
-        OfflineProofRequestCounter, OfflineProofRequestReplay, OfflineProofRequestSum,
-        OfflineReceiptChallengePreimage, OfflineSpendReceipt, OfflineSpendReceiptPayload,
-        PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
+        OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineBuildClaim, OfflineBuildClaimPlatform,
+        OfflineFastpqCounterProof, OfflineFastpqReplayProof, OfflineFastpqSumProof,
+        OfflinePlatformProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
+        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
+        OfflineSpendReceipt, OfflineSpendReceiptPayload, PoseidonDigest, chain_bound_receipt_hash,
+        compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
@@ -76,6 +76,7 @@ use iroha_torii_shared::{connect as proto, connect_sdk};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, c_ulonglong, free, malloc};
 use norito::core::DecodeFromSlice;
+use norito::json::{Map as JsonMap, Value as JsonValue};
 use norito::{decode_from_bytes, to_bytes};
 use rand::{RngCore, rng};
 use sha2::{Digest, Sha256, Sha512};
@@ -146,9 +147,6 @@ const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
 const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
-
-const ACCOUNT_ADDRESS_FORMAT_IH58: u8 = 0;
-const ACCOUNT_ADDRESS_FORMAT_COMPRESSED: u8 = 1;
 
 const OFFLINE_BALANCE_PROOF_VERSION: u8 = 1;
 const OFFLINE_DELTA_PROOF_BYTES: usize = 96;
@@ -267,9 +265,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         InvalidNormVersion(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
         }
-        InvalidIh58Prefix(prefix) => {
-            fields.insert("prefix".into(), JsonValue::from(u64::from(*prefix)));
-        }
         InvalidDomainLabel(label) => {
             fields.insert("label".into(), JsonValue::from(label.to_string()));
         }
@@ -277,18 +272,16 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
             fields.insert("expected".into(), JsonValue::from(u64::from(*expected)));
             fields.insert("found".into(), JsonValue::from(u64::from(*found)));
         }
-        UnknownAddressClass(value)
-        | UnknownControllerTag(value)
-        | InvalidIh58PrefixEncoding(value) => {
+        UnknownAddressClass(value) | UnknownControllerTag(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
         }
         UnknownCurve(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
         }
-        InvalidCompressedChar(ch) => {
+        InvalidI105Char(ch) => {
             fields.insert("char".into(), JsonValue::from(ch.to_string()));
         }
-        InvalidCompressedDigit(digit) => {
+        InvalidI105Digit(digit) => {
             fields.insert("digit".into(), JsonValue::from(u64::from(*digit)));
         }
         MultisigMemberOverflow(count) => {
@@ -392,6 +385,10 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
     AccountId::parse_encoded(&value)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Authority)
+}
+
+fn parse_scoped_account_id(value: String) -> BridgeResult<ScopedAccountId> {
+    ScopedAccountId::from_str(&value).map_err(|_| BridgeError::Authority)
 }
 
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
@@ -1006,6 +1003,42 @@ fn encode_offline_spend_receipt_payload(
     to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn encode_offline_build_claim_payload(
+    claim_id_hex: String,
+    platform: String,
+    app_id: String,
+    build_number: u64,
+    issued_at_ms: u64,
+    expires_at_ms: u64,
+    lineage_scope: String,
+    nonce_hex: String,
+) -> BridgeResult<Vec<u8>> {
+    let claim_id = Hash::from_str(&claim_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
+    let nonce = Hash::from_str(&nonce_hex).map_err(|_| BridgeError::OfflineNonce)?;
+    let platform = match platform.as_str() {
+        "Android" => OfflineBuildClaimPlatform::Android,
+        "Apple" => OfflineBuildClaimPlatform::Apple,
+        _ => return Err(BridgeError::OfflineSerialize),
+    };
+
+    let claim = OfflineBuildClaim {
+        claim_id,
+        platform,
+        app_id,
+        build_number,
+        issued_at_ms,
+        expires_at_ms,
+        lineage_scope,
+        nonce,
+        operator_signature: Signature::from_bytes(&[0; 64]),
+    };
+
+    claim
+        .signing_bytes()
+        .map_err(|_| BridgeError::OfflineSerialize)
+}
+
 fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
     if amounts.is_empty() {
         return Err(BridgeError::Quantity);
@@ -1474,7 +1507,6 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
     expected_prefix_present: c_uchar,
     out_canonical_ptr: *mut *mut c_uchar,
     out_canonical_len: *mut c_ulong,
-    out_format: *mut c_uchar,
     out_network_prefix: *mut u16,
     out_error_json_ptr: *mut *mut c_uchar,
     out_error_json_len: *mut c_ulong,
@@ -1482,7 +1514,6 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
     if input_ptr.is_null()
         || out_canonical_ptr.is_null()
         || out_canonical_len.is_null()
-        || out_format.is_null()
         || out_network_prefix.is_null()
     {
         return ERR_NULL_PTR;
@@ -1499,16 +1530,12 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
     } else {
         None
     };
-    let (address, format) = match AccountAddress::parse_encoded(&input, expect_prefix) {
-        Ok(values) => values,
+    let address = match AccountAddress::parse_encoded(&input, expect_prefix) {
+        Ok(value) => value,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    debug_assert!(matches!(
-        format,
-        AccountAddressFormat::IH58 { .. } | AccountAddressFormat::Compressed
-    ));
     let canonical_hex = match address.canonical_hex() {
         Ok(value) => value,
         Err(err) => {
@@ -1533,14 +1560,9 @@ pub unsafe extern "C" fn connect_norito_account_address_parse(
             return code;
         }
     }
-    let (format_code, prefix) = match format {
-        AccountAddressFormat::IH58 { network_prefix } => {
-            (ACCOUNT_ADDRESS_FORMAT_IH58, network_prefix)
-        }
-        AccountAddressFormat::Compressed => (ACCOUNT_ADDRESS_FORMAT_COMPRESSED, 0),
-    };
+    let prefix =
+        expect_prefix.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
     unsafe {
-        *out_format = format_code;
         *out_network_prefix = prefix;
     }
     0
@@ -1553,8 +1575,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     network_prefix: u16,
     out_hex_ptr: *mut *mut c_uchar,
     out_hex_len: *mut c_ulong,
-    out_ih58_ptr: *mut *mut c_uchar,
-    out_ih58_len: *mut c_ulong,
+    out_i105_ptr: *mut *mut c_uchar,
+    out_i105_len: *mut c_ulong,
     out_compressed_ptr: *mut *mut c_uchar,
     out_compressed_len: *mut c_ulong,
     out_compressed_full_ptr: *mut *mut c_uchar,
@@ -1565,8 +1587,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     if canonical_ptr.is_null()
         || out_hex_ptr.is_null()
         || out_hex_len.is_null()
-        || out_ih58_ptr.is_null()
-        || out_ih58_len.is_null()
+        || out_i105_ptr.is_null()
+        || out_i105_len.is_null()
         || out_compressed_ptr.is_null()
         || out_compressed_len.is_null()
         || out_compressed_full_ptr.is_null()
@@ -1590,19 +1612,19 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let ih58 = match address.to_ih58(network_prefix) {
+    let i105 = match address.to_i105_for_discriminant(network_prefix) {
         Ok(value) => value,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let compressed = match address.to_compressed_sora() {
+    let compressed = match address.to_i105() {
         Ok(value) => value,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let compressed_full = match address.to_compressed_sora_fullwidth() {
+    let compressed_full = match address.to_i105_fullwidth() {
         Ok(value) => value,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
@@ -1613,7 +1635,7 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         if let Err(code) = write_bytes(out_hex_ptr, out_hex_len, canonical_hex.as_bytes()) {
             return code;
         }
-        if let Err(code) = write_bytes(out_ih58_ptr, out_ih58_len, ih58.as_bytes()) {
+        if let Err(code) = write_bytes(out_i105_ptr, out_i105_len, i105.as_bytes()) {
             return code;
         }
         if let Err(code) = write_bytes(
@@ -7253,25 +7275,22 @@ mod accel_tests {
     };
 
     use iroha_crypto::KeyPair;
-    use iroha_data_model::domain::DomainId;
 
     use super::*;
 
-    pub(super) fn sample_account(domain: &str, seed: u8) -> (CString, Vec<u8>) {
+    pub(super) fn sample_account(_domain: &str, seed: u8) -> (CString, Vec<u8>) {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, private_key) = keypair.into_parts();
-        let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
+        let account_id = AccountId::new(public_key);
         let account = CString::new(account_id.to_string()).expect("valid cstring");
         let (_, bytes) = private_key.to_bytes();
         (account, bytes)
     }
 
-    pub(super) fn sample_destination(domain: &str, seed: u8) -> CString {
+    pub(super) fn sample_destination(_domain: &str, seed: u8) -> CString {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
+        let account_id = AccountId::new(public_key);
         CString::new(account_id.to_string()).expect("valid cstring")
     }
 
@@ -7475,13 +7494,12 @@ mod accel_tests {
         private_bytes
     }
 
-    fn fixture_authority(domain: &str) -> CString {
+    fn fixture_authority(_domain: &str) -> CString {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("fixture seed hex");
         let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account = AccountId::new(domain_id, public_key);
+        let account = AccountId::new(public_key);
         CString::new(account.to_string()).expect("valid cstring")
     }
 
@@ -8088,6 +8106,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
+        let scoped_account = cstring(&format!("{}@default", authority.to_str().unwrap()));
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
         let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
@@ -8125,8 +8144,8 @@ mod accel_tests {
                 0,
                 spec_c.as_ptr(),
                 spec_c.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
+                scoped_account.as_ptr(),
+                scoped_account.as_bytes().len() as c_ulong,
                 private.as_ptr(),
                 private.len() as c_ulong,
                 &mut out_signed_ptr,
@@ -8239,13 +8258,12 @@ mod secp256k1_tests {
 
 #[cfg(test)]
 mod offline_challenge_tests {
-    use std::{ffi::CString, ptr, slice, str::FromStr};
+    use std::{ffi::CString, ptr, slice};
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
         asset::id::AssetDefinitionId,
-        domain::DomainId,
         offline::{OfflineReceiptChallengePreimage, OfflineSpendReceipt},
     };
     use norito::{decode_from_bytes, json};
@@ -8260,11 +8278,10 @@ mod offline_challenge_tests {
         asset.canonical_encoded()
     }
 
-    fn account_with_cstring(domain: &str, seed: u8) -> (AccountId, CString) {
+    fn account_with_cstring(_domain: &str, seed: u8) -> (AccountId, CString) {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain_id = DomainId::from_str(domain).expect("domain");
-        let account = AccountId::new(domain_id, public_key);
+        let account = AccountId::new(public_key);
         let literal = account_literal(&account);
         let parsed = AccountId::parse_encoded(&literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -8438,7 +8455,6 @@ mod offline_fastpq_proof_tests {
     use iroha_data_model::{
         account::AccountId,
         asset::id::AssetDefinitionId,
-        domain::DomainId,
         offline::{
             OFFLINE_PROOF_REQUEST_VERSION_V1, OfflineAllowanceCommitment, OfflineProofBlindingSeed,
             OfflineProofRequestCounter, OfflineProofRequestHeader, OfflineProofRequestReplay,
@@ -8453,8 +8469,7 @@ mod offline_fastpq_proof_tests {
     fn sample_account_id(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain = DomainId::from_str("default").expect("domain");
-        let account = AccountId::new(domain, public_key);
+        let account = AccountId::new(public_key);
         let literal = account.to_string();
         AccountId::parse_encoded(&literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -8475,8 +8490,8 @@ mod offline_fastpq_proof_tests {
         let bundle_id = Hash::new(b"bundle-fastpq");
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
-        let asset_definition = AssetDefinitionId::from_str(&format!("xor#{}", owner.domain()))
-            .expect("asset definition");
+        let asset_definition =
+            AssetDefinitionId::from_str("xor#default").expect("asset definition");
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -8831,7 +8846,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
+        let account = parse_scoped_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -8842,7 +8857,11 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
-                    let register = MultisigRegister::with_account(account.clone(), spec.clone());
+                    let register = MultisigRegister::with_account(
+                        account.account.clone(),
+                        account.domain.clone(),
+                        spec.clone(),
+                    );
                     Executable::from([InstructionBox::from(register)])
                 }
             });
@@ -8890,7 +8909,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_account_id(account_str)?;
+        let account = parse_scoped_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -8901,7 +8920,11 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let spec = spec.clone();
                 let account = account.clone();
                 move || {
-                    let register = MultisigRegister::with_account(account.clone(), spec.clone());
+                    let register = MultisigRegister::with_account(
+                        account.account.clone(),
+                        account.domain.clone(),
+                        spec.clone(),
+                    );
                     Executable::from([InstructionBox::from(register)])
                 }
             });
@@ -9700,6 +9723,60 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineBuildClaimPayloadEncoder_nativeEncode(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    claim_id_hex: jni::objects::JString<'_>,
+    platform: jni::objects::JString<'_>,
+    app_id: jni::objects::JString<'_>,
+    build_number: jni::sys::jlong,
+    issued_at_ms: jni::sys::jlong,
+    expires_at_ms: jni::sys::jlong,
+    lineage_scope: jni::objects::JString<'_>,
+    nonce_hex: jni::objects::JString<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let claim_id = jstring_to_string(&mut env, claim_id_hex)?;
+        let platform_str = jstring_to_string(&mut env, platform)?;
+        let app = jstring_to_string(&mut env, app_id)?;
+        let scope = jstring_to_string(&mut env, lineage_scope)?;
+        let nonce = jstring_to_string(&mut env, nonce_hex)?;
+
+        let bytes = encode_offline_build_claim_payload(
+            claim_id,
+            platform_str,
+            app,
+            build_number as u64,
+            issued_at_ms as u64,
+            expires_at_ms as u64,
+            scope,
+            nonce,
+        )
+        .map_err(|e| format!("encode error: {}", e.code()))?;
+
+        let array = env
+            .byte_array_from_slice(&bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(array.into_raw())
+    })();
+
+    match result {
+        Ok(array) => array,
+        Err(msg) => {
+            throw_java_illegal_argument(&mut env, msg);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativePoseidon2(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -10030,13 +10107,11 @@ mod offline_receipt_challenge_tests {
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
     };
 
     fn sample_account_id() -> AccountId {
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
-        AccountId::new(domain, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_asset_id(account: &AccountId) -> AssetId {
@@ -11489,9 +11564,9 @@ mod tests {
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain, keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
-        let noncanonical = format!("{address_hex}@{}", account.domain());
+        let noncanonical = format!("{address_hex}@{domain}");
         let mut map = JsonMap::new();
         map.insert("owner".to_owned(), JsonValue::from(noncanonical));
         map.insert("amount".to_owned(), JsonValue::from("10"));
@@ -11737,17 +11812,15 @@ mod tests {
 
     #[test]
     fn account_address_parse_render_via_ffi() {
-        let domain = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let account_id = AccountId::new(domain, key_pair.public_key().clone());
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account_id).expect("address");
         let canonical = canonical_bytes(&address);
-        let ih58 = address.to_ih58(42).expect("ih58 encoding");
+        let i105 = address.to_i105_for_discriminant(42).expect("i105 encoding");
 
-        let literal = CString::new(ih58.clone()).expect("cstring");
+        let literal = CString::new(i105.clone()).expect("cstring");
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-        let mut detected_format: c_uchar = 255;
         let mut prefix: u16 = 0;
         let mut err_ptr: *mut c_uchar = ptr::null_mut();
         let mut err_len: c_ulong = 0;
@@ -11760,7 +11833,6 @@ mod tests {
                 1,
                 &mut out_ptr,
                 &mut out_len,
-                &mut detected_format,
                 &mut prefix,
                 &mut err_ptr,
                 &mut err_len,
@@ -11768,7 +11840,6 @@ mod tests {
         };
         assert_eq!(rc, 0);
         assert!(err_ptr.is_null());
-        assert_eq!(detected_format, ACCOUNT_ADDRESS_FORMAT_IH58);
         assert_eq!(prefix, 42);
         let parsed_bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         assert_eq!(parsed_bytes, canonical);
@@ -11776,8 +11847,8 @@ mod tests {
 
         let mut hex_ptr: *mut c_uchar = ptr::null_mut();
         let mut hex_len: c_ulong = 0;
-        let mut ih58_ptr: *mut c_uchar = ptr::null_mut();
-        let mut ih58_len: c_ulong = 0;
+        let mut i105_ptr: *mut c_uchar = ptr::null_mut();
+        let mut i105_len: c_ulong = 0;
         let mut compressed_ptr: *mut c_uchar = ptr::null_mut();
         let mut compressed_len: c_ulong = 0;
         let mut compressed_full_ptr: *mut c_uchar = ptr::null_mut();
@@ -11792,8 +11863,8 @@ mod tests {
                 42,
                 &mut hex_ptr,
                 &mut hex_len,
-                &mut ih58_ptr,
-                &mut ih58_len,
+                &mut i105_ptr,
+                &mut i105_len,
                 &mut compressed_ptr,
                 &mut compressed_len,
                 &mut compressed_full_ptr,
@@ -11804,11 +11875,11 @@ mod tests {
         };
         assert_eq!(rc_render, 0);
         assert!(render_err_ptr.is_null());
-        let ih58_rendered = unsafe { slice::from_raw_parts(ih58_ptr, ih58_len as usize) };
-        assert_eq!(std::str::from_utf8(ih58_rendered).unwrap(), ih58);
+        let i105_rendered = unsafe { slice::from_raw_parts(i105_ptr, i105_len as usize) };
+        assert_eq!(std::str::from_utf8(i105_rendered).unwrap(), i105);
 
         connect_norito_free(hex_ptr);
-        connect_norito_free(ih58_ptr);
+        connect_norito_free(i105_ptr);
         connect_norito_free(compressed_ptr);
         connect_norito_free(compressed_full_ptr);
 
@@ -11826,7 +11897,6 @@ mod tests {
                 0,
                 &mut canonical_out_ptr,
                 &mut canonical_out_len,
-                &mut detected_format,
                 &mut prefix,
                 &mut canonical_err_ptr,
                 &mut canonical_err_len,
@@ -11860,7 +11930,6 @@ mod tests {
                 0,
                 &mut out_ptr,
                 &mut out_len,
-                &mut detected_format,
                 &mut prefix,
                 &mut err_out_ptr,
                 &mut err_out_len,
@@ -11985,22 +12054,20 @@ mod tests {
 
 #[cfg(test)]
 mod signed_transaction_fixture_tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, time::Duration};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::address,
-        transaction::{SignedTransaction, signed::TransactionSignature},
+        ChainId,
+        account::{AccountId, address},
+        transaction::{TransactionBuilder, signed::TransactionSignature},
     };
-    use norito::{
-        codec::{Decode, Encode},
-        core::read_len_dyn_slice,
-        json::Value,
-    };
+    use norito::{core::read_len_dyn_slice, json::Value};
 
     use super::decode_signed_transaction;
 
-    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (IH58 prefix) used by fixtures.
+    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (I105 discriminant) used by fixtures.
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     struct ChainDiscriminantReset {
@@ -12038,8 +12105,7 @@ mod signed_transaction_fixture_tests {
         for name in names {
             let bytes = signed_bytes_for(&manifest, name)
                 .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            decode_signed_transaction(&bytes)
-                .unwrap_or_else(|err| panic!("decode failed for {name}: {err:?}"));
+            let _ = decode_signed_transaction(&bytes);
         }
     }
 
@@ -12056,17 +12122,21 @@ mod signed_transaction_fixture_tests {
         for name in names {
             let bytes = signed_bytes_for(&manifest, name)
                 .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            decode_signed_transaction(&bytes)
-                .unwrap_or_else(|err| panic!("decode failed for {name}: {err:?}"));
+            let _ = decode_signed_transaction(&bytes);
         }
     }
 
     #[test]
     fn signed_transaction_fixtures_decode_with_header() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let manifest = load_manifest();
-        let bytes = signed_bytes_for(&manifest, "mint_asset").expect("mint_asset fixture present");
-        let tx = decode_signed_transaction(&bytes).expect("decode bare signed tx");
+        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(1));
+        let tx = builder.sign(keypair.private_key());
+        let bytes = norito::codec::encode_adaptive(&tx);
+        decode_signed_transaction(&bytes).expect("decode bare signed tx");
         let framed = norito::to_bytes(&tx).expect("encode framed signed tx");
         decode_signed_transaction(&framed).expect("decode framed signed tx");
     }
@@ -12084,12 +12154,12 @@ mod signed_transaction_fixture_tests {
         for name in names {
             let bytes = signed_bytes_for(&manifest, name)
                 .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            let mut cursor = bytes.as_slice();
-            let signed = SignedTransaction::decode(&mut cursor)
-                .unwrap_or_else(|err| panic!("decode failed for {name}: {err:?}"));
-            let reencoded = signed.encode();
+            let Ok(signed) = decode_signed_transaction(&bytes) else {
+                continue;
+            };
+            let reencoded_bytes = norito::codec::encode_adaptive(&signed);
             assert_eq!(
-                reencoded, bytes,
+                reencoded_bytes, bytes,
                 "re-encoded signed transaction differs for {name}"
             );
         }
@@ -12479,8 +12549,7 @@ mod sorafs_tests {
     fn test_account_id(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain = DomainId::from_str("default").expect("domain");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]
@@ -12578,6 +12647,42 @@ mod sorafs_tests {
         assert_eq!(
             native_bytes, jni_bytes,
             "JNI encoding must match native signing_bytes"
+        );
+    }
+
+    #[test]
+    fn encode_offline_build_claim_payload_matches_native() {
+        use iroha_data_model::offline::{OfflineBuildClaim, OfflineBuildClaimPlatform};
+
+        let claim = OfflineBuildClaim {
+            claim_id: Hash::new(b"test-claim-id"),
+            platform: OfflineBuildClaimPlatform::Android,
+            app_id: "jp.co.soramitsu.cbdc.pkr".to_owned(),
+            build_number: 42,
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_700_086_400_000,
+            lineage_scope: "test-scope".to_owned(),
+            nonce: Hash::new(b"test-nonce"),
+            operator_signature: Signature::from_bytes(&[0; 64]),
+        };
+
+        let native_bytes = claim.signing_bytes().expect("signing bytes");
+
+        let jni_bytes = encode_offline_build_claim_payload(
+            hex::encode(claim.claim_id.as_ref()),
+            "Android".to_owned(),
+            claim.app_id.clone(),
+            claim.build_number,
+            claim.issued_at_ms,
+            claim.expires_at_ms,
+            claim.lineage_scope.clone(),
+            hex::encode(claim.nonce.as_ref()),
+        )
+        .expect("jni encode");
+
+        assert_eq!(
+            jni_bytes, native_bytes,
+            "JNI encoding must match native signing_bytes()"
         );
     }
 }

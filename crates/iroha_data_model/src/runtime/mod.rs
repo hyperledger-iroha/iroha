@@ -413,7 +413,6 @@ mod tests {
             manifest: manifest.clone(),
             status: RuntimeUpgradeStatus::Proposed,
             proposer: crate::account::AccountId::new(
-                "wonderland".parse().expect("domain id"),
                 "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
                     .parse()
                     .expect("public key"),

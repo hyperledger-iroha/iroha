@@ -14,7 +14,7 @@ use clap::{ArgAction, Parser};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::name::Name;
 use iroha_data_model::{
-    account::{AccountAddressSource, AccountId, address},
+    account::{AccountId, address},
     domain::{Domain, DomainId},
     isi::{
         Instruction, InstructionBox, Register, decode_instruction_from_pair,
@@ -771,7 +771,8 @@ fn normalize_payload_authority_bytes(payload_bytes: &[u8], authority: &str) -> R
     let rest = &payload_bytes[cursor..];
 
     let mut out = Vec::with_capacity(
-        chain_field.len()
+        chain_field
+            .len()
             .saturating_add(authority_field.len())
             .saturating_add(rest.len())
             .saturating_add(64),
@@ -997,13 +998,27 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
 }
 
 fn authority_chain_discriminant(authority: &str) -> Option<u16> {
-    let parsed = AccountId::parse_encoded(authority.trim()).ok()?;
-    match parsed.source() {
-        AccountAddressSource::Encoded(address::AccountAddressFormat::IH58 { network_prefix }) => {
-            Some(network_prefix)
-        }
-        AccountAddressSource::Encoded(address::AccountAddressFormat::Compressed) => None,
+    let trimmed = authority.trim();
+    if trimmed.starts_with("sora") {
+        return Some(0x02F1);
     }
+    if trimmed.starts_with("test") {
+        return Some(0x0171);
+    }
+    if trimmed.starts_with("dev") {
+        return Some(0x0000);
+    }
+    trimmed
+        .strip_prefix('n')
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                None
+            } else {
+                Some(digits)
+            }
+        })
+        .and_then(|digits| digits.parse::<u16>().ok())
 }
 
 fn normalize_authority_hint(authority: &str) -> String {
@@ -1018,11 +1033,11 @@ fn normalize_authority_hint(authority: &str) -> String {
 
 fn parse_account_id(value: &str) -> Result<AccountId> {
     let trimmed = value.trim();
-    let (address, _) = AccountAddress::parse_encoded(trimmed, None)
+    let address = AccountAddress::parse_encoded(trimmed, None)
         .map_err(|err| anyhow::anyhow!(err.to_string()))
         .with_context(|| format!("invalid encoded account id '{value}'"))?;
     let canonical = address
-        .to_ih58(address::chain_discriminant())
+        .to_i105_for_discriminant(address::chain_discriminant())
         .map_err(|err| anyhow::anyhow!(err.to_string()))
         .with_context(|| format!("failed to canonicalize account id '{value}'"))?;
     AccountId::parse_encoded(&canonical)
@@ -1450,11 +1465,10 @@ mod tests {
     #[test]
     fn normalize_authority_hint_accepts_encoded_account_literal() {
         let keypair = signing_keypair().expect("test keypair");
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
-        let account = AccountId::new(domain.clone(), keypair.public_key().clone());
-        let ih58 = account.to_string();
-        let normalized = normalize_authority_hint(&ih58);
-        assert_eq!(normalized, ih58);
+        let account = AccountId::new(keypair.public_key().clone());
+        let i105 = account.to_string();
+        let normalized = normalize_authority_hint(&i105);
+        assert_eq!(normalized, i105);
     }
 
     #[test]

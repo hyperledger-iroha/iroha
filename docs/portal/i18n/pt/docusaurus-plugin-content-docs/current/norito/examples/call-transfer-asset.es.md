@@ -19,9 +19,9 @@ Mostrar como um ponto de entrada de Kotodama pode ser chamado de instrução do 
 
 ## Recorrido do livro prefeito
 
-- Funda a autoridade do contrato (por exemplo `ih58...`) com o ativo que será transferido e otórgale o papel `CanTransfer` ou uma permissão equivalente.
-- Ligue para o ponto de entrada `call_transfer_asset` para transferir 5 unidades da conta do contrato para `ih58...`, refletindo a forma em que a automatização na cadeia pode envolver chamadas do host.
-- Verifique os saldos através de `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e inspecione os eventos para confirmar que a guarda de metadados registrou o contexto da transferência.
+- Funda a autoridade do contrato (por exemplo `i105...`) com o ativo que será transferido e otórgale o papel `CanTransfer` ou uma permissão equivalente.
+- Ligue para o ponto de entrada `call_transfer_asset` para transferir 5 unidades da conta do contrato para `i105...`, refletindo a forma em que a automatização na cadeia pode envolver chamadas do host.
+- Verifique os saldos através de `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` e inspecione os eventos para confirmar que a guarda de metadados registrou o contexto da transferência.
 
 ## Guias do SDK relacionados
 
@@ -36,8 +36,8 @@ Mostrar como um ponto de entrada de Kotodama pode ser chamado de instrução do 
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

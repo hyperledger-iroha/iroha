@@ -18,8 +18,8 @@ de traducción.
 
 Los portafeuilles, exploradores y ejemplos de SDK deben tratar las direcciones
 de cuenta como las cargas útiles immuables. El ejemplo de portefeuille retail Android
-En `examples/android/retail-wallet` el reloj de mantenimiento del patrón UX requiere:- **Dos botones de copia.** Cuatro botones de copia explícitos: IH58
-  (prefere) et la forme compressee Sora-only (`sora...`, segunda opción). IH58 está todavía en funcionamiento
+En `examples/android/retail-wallet` el reloj de mantenimiento del patrón UX requiere:- **Dos botones de copia.** Cuatro botones de copia explícitos: I105
+  (prefere) et la forme compressee Sora-only (`sora...`, segunda opción). I105 está todavía en funcionamiento
   Asegúrese de compartir en forma externa y alimentaria la carga útil del QR. La variante compresée
   incluya un anuncio en línea porque no funciona en el
   Aplicaciones gratuitas a cargo de Sora. El ejemplo de Android rama con dos botones Material y
@@ -35,7 +35,7 @@ En `examples/android/retail-wallet` el reloj de mantenimiento del patrón UX req
   El dominio implícito `default`, muestra una leyenda rappelante aux operadores.
   qu'aucun sufijo n'est requis. Les explorateurs doivent aussi mettre en avant
   La etiqueta de dominio canónico cuando el selector codifica un resumen.
-- **QR IH58.** Los códigos QR no codifican la cadena IH58. Si la generación du
+- **QR I105.** Los códigos QR no codifican la cadena I105. Si la generación du
   QR echoue, muestra un error explícito en lugar de una imagen de vídeo.
 - **Message presse-papiers.** Después de copiar la forma compresée, emettez unTostadas o snackbar rappelant aux utilisateurs qu'elle est Sora-only et sujette
   a la distorsión IME.
@@ -59,7 +59,7 @@ plataformas:
 
 ## SDK de ayuda
 
-Cada SDK expone un asistente de conveniencia que devuelve las formas IH58 y
+Cada SDK expone un asistente de conveniencia que devuelve las formas I105 y
 Comprimir además la cadena de anuncios para que los sofás UI resten
 coherentes:
 
@@ -85,7 +85,7 @@ Reparser le payload brut.
 
 
 Los exploradores no deben reproducir el trabajo de telemetría y accesibilidad
-hecho para el portefeuille:- Apliques `data-copy-mode="ih58|compressed|qr"` con botones de copia después de que
+hecho para el portefeuille:- Apliques `data-copy-mode="i105|i105_default|qr"` con botones de copia después de que
   Los front-ends pueden configurar los ordenadores de uso en paralelo
   Métrica Torii `torii_address_format_total`. Le composant demo ci-dessus
   envoie un event `iroha:address-copy` con `{mode,timestamp}` - reliez cela
@@ -97,7 +97,7 @@ hecho para el portefeuille:- Apliques `data-copy-mode="ih58|compressed|qr"` con 
   preuve de 30 jours `domain_kind="local12"` directement depuis le tableau
   `address_ingest` de Grafana.
 - Associa cada control a las indicaciones `aria-label`/`aria-describedby`
-  se distingue qui expliquent si un literal est sur a partager (IH58) o Sora-only
+  se distingue qui expliquent si un literal est sur a partager (I105) o Sora-only
   (comprimir). Incluez la leyenda de dominio implícita en la descripción para
   Que las tecnologías de asistencia reflejan el contexto del mensaje.
 - Exposez une region live (ej. `<output aria-live="polite">...</output>`) aquí
@@ -110,7 +110,7 @@ selecteurs Local soient desactives.
 
 Utilice el [kit de herramientas Local -> Global](local-to-global-toolkit.md) para
 Automatiser l'audit et la conversion des selecteurs Local heredites. El ayudante
-Emet a la fois le rapport d'audit JSON y la lista convertie IH58/compressee que
+Emet a la fois le rapport d'audit JSON y la lista convertie I105/compressee que
 los operadores se unen a los tickets de preparación, tandis que le runbook associe
 se encuentran los paneles de control Grafana y las reglas Alertmanager que verrouillent le
 corte en modo estricto.
@@ -164,14 +164,14 @@ bytes.
 
 ## Imponer las formas canónicas
 
-Les operatorurs qui convertissent les encodages Local herites en IH58 canonique
-Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en ADDR-5:1. `iroha tools address inspect` emet mantenimiento de una estructura JSON con IH58,
+Les operatorurs qui convertissent les encodages Local herites en I105 canonique
+Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en ADDR-5:1. `iroha tools address inspect` emet mantenimiento de una estructura JSON con I105,
    Comprese et des payloads hex canonices. El currículum incluye además un objeto
    `domain` con los campeones `kind`/`warning` y refleja todos los dominios disponibles a través de
    el campeón `input_domain`. Cuando `kind` va a `local12`, la CLI imprime un
    Anuncio en stderr y el currículum JSON reflejan el meme consignado para que
    Los pipelines CI y el SDK pueden mostrarse. Paso `legacy  suffix`
-   Cuando vuelva a activar la codificación convertida bajo la forma `<ih58>@<domain>`.
+   Cuando vuelva a activar la codificación convertida bajo la forma `<i105>@<domain>`.
 2. El SDK puede mostrar el aviso de meme/reanudar a través del asistente
    JavaScript:
 
@@ -182,12 +182,12 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  El ayudante conserva el prefijo IH58 y detecta después del literal sauf si vous
+  El ayudante conserva el prefijo I105 y detecta después del literal sauf si vous
   Fournissez explícitamente `networkPrefix`, donc les resumes pour des reseaux
-  non defaut ne sont pas re-rendus silencieusement avec le prefixe par defaut.3. Convierta la carga útil canónica en reutilizando los campos `ih58.value` o
-   `compressed` del currículum (o solicita otra codificación a través de `--format`). ces
+  non defaut ne sont pas re-rendus silencieusement avec le prefixe par defaut.3. Convierta la carga útil canónica en reutilizando los campos `i105.value` o
+   `i105_default` del currículum (o solicita otra codificación a través de `--format`). ces
    Chaines sont deja sures a partager en externo.
 4. Mettez a jour les manifests, registres et documents orientes client avec la
    forme canonique et notifiez les contraparties que les selecteurs Local seront
@@ -196,7 +196,7 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
    `iroha tools address audit --input addresses.txt --network-prefix 753`. La comando
    lit des literaux separes par nouvelle ligne (les commentaires commencant par
    `#` son ignorados, y `--input -` o ninguna bandera utilizan STDIN), emet una relación
-   JSON con currículums canónicos/IH58/compresse pour cada entrada y cuenta
+   JSON con currículums canónicos/I105/compresse pour cada entrada y cuenta
    Los errores de análisis y los anuncios de dominio local. utilizar
    `--allow-errors` Lors de l'audit de dumps herites contenant des lignes
    parásitos, y bloquear la automatización vía `strict CI post-check` cuando les
@@ -205,7 +205,7 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
   Pour les feuilles de calcul de remediation des selecteurs Local, utilisez
   para exportar un CSV `input,status,format,...` que se encuentra antes de las codificaciones
   canonices, avertissements et echecs de parse en une seule passe.
-   El ayudante ignora las líneas no locales por defecto, convierte cada entradarestante en la codificación solicitada (IH58/compresse/hex/JSON), y conserve el
+   El ayudante ignora las líneas no locales por defecto, convierte cada entradarestante en la codificación solicitada (I105/compresse/hex/JSON), y conserve el
    dominio original cuando `legacy  suffix` está activo. Associaz-le a
    `--allow-errors` para continuar con el análisis de memes cuando un dump contiene contenido
    Literaux mal formes.
@@ -250,6 +250,6 @@ Incluez le bullet suivant dans les notes de release portefeuille/explorateur
 lors du cutover:> **Direcciones:** Ajoute le helper `iroha tools address normalize`
 > y la rama en CI (`ci/check_address_normalize.sh`) para las tuberías
 > portefeuille/explorateur puissent convertir les selecteurs Local herites vers
-> des formes canoniques IH58/compressées avant que Local-8/Local-12 soient
+> des formes canoniques I105/compressées avant que Local-8/Local-12 soient
 > bloques en mainnet. Mettez a jour les exports personalises pour ejecutor la
 > commande et joindre la liste normalisee au bundle de preuve de release.

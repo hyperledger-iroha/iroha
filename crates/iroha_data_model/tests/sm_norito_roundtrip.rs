@@ -59,9 +59,8 @@ mod tests {
 
     #[test]
     fn account_id_with_sm2_signatory_roundtrip() {
-        let domain = "sm2domain".parse().expect("domain");
         let pk: PublicKey = SM2_PUB.parse().expect("parse sm2 pk");
-        let account_id = AccountId::new(domain, pk.clone());
+        let account_id = AccountId::new(pk.clone());
         let mut buf = Vec::new();
         norito::core::NoritoSerialize::serialize(&account_id, &mut buf)
             .expect("serialize AccountId");

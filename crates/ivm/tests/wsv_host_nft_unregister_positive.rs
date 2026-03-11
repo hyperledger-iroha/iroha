@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountSubjectId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -56,7 +56,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterAccount);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -103,7 +103,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch caller to bob to burn NFT
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.set_caller_subject(AccountSubjectId::from(&bob));
+        host.set_caller_subject(AccountId::from(&bob));
     }
 
     // Burn NFT (owner=bob)
@@ -117,7 +117,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch back to alice and unregister bob: should now succeed
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.set_caller_subject(AccountSubjectId::from(&alice));
+        host.set_caller_subject(AccountId::from(&alice));
     }
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");

@@ -59,7 +59,7 @@ TORII_URL=https://torii.testnet.sora node javascript/iroha_js/recipes/governance
 
 # Submit to a node and fetch the resulting state.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=ih58... \
+AUTHORITY=i105... \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \
@@ -214,7 +214,7 @@ All governance mutation helpers accept an optional `{ signal }` object so UI lay
 long-running submissions or tie them to component lifecycles.
 
 ```javascript
-const authority = "ih58...";
+const authority = "i105...";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 const writeController = new AbortController();
@@ -242,7 +242,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "ih58..."; // canonical IH58 account id for ZK public inputs
+const zkOwner = "i105..."; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -270,7 +270,7 @@ const derived = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "ih58...",
+      accountId: "i105...",
       variant: "Normal",
       pk: validatorPk,
       proof: validatorProof,
@@ -317,9 +317,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "ih58..." },
+  creditorAccount: { otherId: "i105..." },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "ih58...", leg: "delivery" },
+  supplementaryData: { account_id: "i105...", leg: "delivery" },
 });
 ```
 

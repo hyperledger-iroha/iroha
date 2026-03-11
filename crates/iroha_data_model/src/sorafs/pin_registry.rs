@@ -501,7 +501,6 @@ mod tests {
             chunk_digest,
             PinPolicy::default(),
             AccountId::new(
-                "wonderland".parse().expect("domain id"),
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()
                     .expect("public key"),
@@ -529,7 +528,6 @@ mod tests {
             order_id: ReplicationOrderId::new([0x44; 32]),
             manifest_digest: ManifestDigest::new([0x55; 32]),
             issued_by: AccountId::new(
-                "wonderland".parse().expect("domain id"),
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                     .parse()
                     .expect("public key"),

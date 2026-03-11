@@ -32,9 +32,9 @@ fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     let kp = KeyPair::random();
     let (pk, _) = kp.clone().into_parts();
     let domain_id: DomainId = "apps".parse().unwrap();
-    let account_id = AccountId::of(domain_id.clone(), pk);
+    let account_id = AccountId::of(pk);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
     let world =
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);

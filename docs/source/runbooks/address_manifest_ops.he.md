@@ -97,7 +97,7 @@ address-manifest-<REVISION>/
    - רשומות `local_alias` חייבות לכלול digest באורך 12 בתים שמיוצר ע"י Norm v1
      (אשרו עם `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`;
      סיכום ה‑JSON משקף את הדומיין דרך `input_domain` ו‑`legacy  suffix` משחזר את
-     הקידוד כ‑`<ih58>@<domain>` עבור מניפסטים).
+     הקידוד כ‑`<i105>@<domain>` עבור מניפסטים).
    - רשומות `tombstone` חייבות להפנות ל‑selector המדויק, ולכלול `reason_code`,
      `ticket` ו־`replaces_sequence`.
 
@@ -131,7 +131,7 @@ address-manifest-<REVISION>/
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **טיוטת רשומת מניפסט.** הוסיפו רשומת JSON כמו:
@@ -174,7 +174,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — נורה מייד כששתי תוויות Local‑12 מתחככות לאותו digest.
     עצרו קידומי מניפסט, הריצו `scripts/address_local_toolkit.sh` לאימות המיפוי,
     ותאמו עם governance Nexus לפני הוצאה מחדש של הרשומה.
-  - `AddressInvalidRatioSlo` — אזהרה כאשר שליחות IH58/דחוסות לא תקינות
+  - `AddressInvalidRatioSlo` — אזהרה כאשר שליחות I105/דחוסות לא תקינות
     (למעט דחיות Local‑8/strict‑mode) עוברות 0.1 % SLO ל‑10 דקות. בדקו
     `torii_address_invalid_total` לפי הקשר/סיבה ותאמו עם צוות ה‑SDK לפני החזרת strict‑mode.
 - לוגים: שמרו שורות `manifest_refresh` של Torii ואת מספר טיקט ה‑governance ב‑`notes.md`.

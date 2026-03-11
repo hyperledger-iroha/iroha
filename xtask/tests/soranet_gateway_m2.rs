@@ -51,7 +51,6 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
         policy_version: Some("2027-beta".to_string()),
         policy_digest: Some([0xAA; 32]),
         operator: AccountId::new(
-            "wonderland".parse().expect("domain"),
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key"),

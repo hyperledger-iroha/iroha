@@ -104,10 +104,10 @@ Lane მანიფესტი პირდაპირ ეთერში `ne
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "ih58...",
-    "ih58...",
-    "ih58...",
-    "ih58..."
+    "i105...",
+    "i105...",
+    "i105...",
+    "i105..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ Lane მანიფესტი პირდაპირ ეთერში `ne
 }
 ```
 
-ძირითადი მოთხოვნები:- ვალიდატორები **უნდა** იყოს IH58 ანგარიშის კანონიკური ID (არა `@domain`; დაურთოს `@domain` მხოლოდ როგორც აშკარა მარშრუტიზაციის მინიშნება), რომელიც არსებობს კატალოგში. დააყენეთ `quorum` მრავალგზის ზღურბლზე (≥2).
+ძირითადი მოთხოვნები:- ვალიდატორები **უნდა** იყოს I105 ანგარიშის კანონიკური ID (არა `@domain`; დაურთოს `@domain` მხოლოდ როგორც აშკარა მარშრუტიზაციის მინიშნება), რომელიც არსებობს კატალოგში. დააყენეთ `quorum` მრავალგზის ზღურბლზე (≥2).
 - დაცული სახელების სივრცეები ახორციელებს `Queue::push`-ს (იხ. `crates/iroha_core/src/queue.rs`), ამიტომ ყველა CBDC კონტრაქტში უნდა იყოს მითითებული `gov_namespace` + `gov_contract_id`.
 - `composability_group` ველები მიჰყვება `docs/source/nexus.md` §8.6-ში აღწერილ სქემას; მფლობელი (CBDC ხაზი) ​​აწვდის თეთრ სიას და კვოტებს. თეთრ სიაში შეყვანილი DS მანიფესტები მიუთითებს მხოლოდ `group_id_hex` + `activation_epoch`.
 - მანიფესტის კოპირების შემდეგ, გაუშვით `cargo test -p integration_tests nexus::lane_registry -- --nocapture`, რათა დაადასტუროთ `LaneManifestRegistry::from_config` ჩატვირთვა.
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/registrations/{selector}/freeze` | מחק | `GovernanceHookV1` | ביטול הקפאה של תיקון אפרה; s'assure que l'override du Council est להירשם. |
 | `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | חיבה דה נומס מילואים פר דייל/מועצה. |
 | `/v1/sns/policies/{suffix_id}` | קבל | -- | Recupere le `SuffixPolicyV1` courant (ניתן לאחסון במטמון). |
-| `/v1/sns/registrations/{selector}` | קבל | -- | Retourne le `NameRecordV1` courant + etat effectif (אקטיב, גרייס וכו'). |**Encodage du selector:** קטע `{selector}` מקבל IH58, דחיסה, או hex canonique selon ADDR-5; Torii לנרמל דרך `NameSelectorV1`.
+| `/v1/sns/registrations/{selector}` | קבל | -- | Retourne le `NameRecordV1` courant + etat effectif (אקטיב, גרייס וכו'). |**Encodage du selector:** קטע `{selector}` מקבל I105, דחיסה, או hex canonique selon ADDR-5; Torii לנרמל דרך `NameSelectorV1`.
 
 **דגם שגיאות:** tous les endpoints retournent Norito JSON avec `code`, `message`, `details`. הקודים כוללים `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Les controls en echec renvoient `sns_err_governance_missing`.
 
 1. חקירת הלקוח `/v1/sns/policies/{suffix_id}` pour recuperer les prix, la grace et les tiers disponibles.
 2. Le client construit `RegisterNameRequestV1`:
-   - `selector` נגזר מהתווית IH58 (עדיף) או דחיסה (בחירה שנייה).
+   - `selector` נגזר מהתווית I105 (עדיף) או דחיסה (בחירה שנייה).
    - `term_years` dans les limites de la politique.
    - `payment` referencant le transfert du splitter tresorerie/דייל.
 3. תקף Torii:

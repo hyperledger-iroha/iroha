@@ -26,8 +26,8 @@ babosa: /norito/ledger-walkthrough
 Los dispositivos `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` están conectados a los terminales correspondientes. Este paquete incluye:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 اكد القيم عبر سرد اولى الحسابات:

@@ -33,7 +33,7 @@ L'analyseur nécessite le fil d'encabezado suivant (l'ordre est flexible) :| Co
 |---------|-----------|-------------|
 | `label` | Si | Étiquette sollicitée (si vous acceptez peut-être/moins ; l'outil de normalisation à partir de la norme v1 et de l'UTS-46). |
 | `suffix_id` | Si | Identificateur numérique du suffixe (décimal ou `0x` hex). |
-| `owner` | Si | Chaîne AccountId (littéral IH58 ; indice @domain facultatif) pour le propriétaire du registre. |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entrez `1..=255`. |
 | `payment_asset_id` | Si | Actif de règlement (par exemple `xor#sora`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades natives del activo. |
@@ -72,9 +72,9 @@ En cas de sortie du script, écrivez un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En cas de sortie du script, écrivez un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ corrida de CSV.
   les références aux archives se rapportent à l'emplacement du CSV. Métadonnées
   qu'aucun objet marin ne produit une erreur de validation.
 - **Contrôleurs :** celdas en blanco respetan `--default-controllers`. Proportion
-  listes de contrôleurs explicites (par exemple `ih58...;ih58...`) au délégué
+  listes de contrôleurs explicites (par exemple `i105...;i105...`) au délégué
   acteurs sans propriétaire.
 
 Los fallos se reportan con numeros de fila contextuales (par exemple

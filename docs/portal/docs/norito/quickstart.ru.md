@@ -91,7 +91,7 @@ Runner выводит лог `info("Hello from Kotodama")` и выполняет
 
 Пока узел работает, отправьте скомпилированный байткод в Torii через CLI. Дефолтная dev-идентичность выводится из публичного ключа в `defaults/client.toml`, поэтому ID аккаунта:
 ```
-ih58...
+i105...
 ```
 
 Используйте конфигурационный файл, чтобы задать URL Torii, chain ID и ключ подписи:
@@ -111,7 +111,7 @@ CLI кодирует транзакцию Norito, подписывает ее de
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

@@ -29,8 +29,8 @@ Para suas instruções, digite `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` em um novo
 ID de contas. No pacote padrão você tem sua conta, usando o demo-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Verifique sua segurança, você pode contar suas contas:

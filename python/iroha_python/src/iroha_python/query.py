@@ -32,7 +32,6 @@ class QueryEnvelope:
     fetch_size: Optional[int] = None
     query_name: Optional[str] = None
     select: Optional[Iterable[Mapping[str, Any]]] = None
-    address_format: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -47,8 +46,6 @@ class QueryEnvelope:
             payload["query"] = self.query_name
         if self.select is not None:
             payload["select"] = list(self.select)
-        if self.address_format is not None:
-            payload["address_format"] = self.address_format
         return payload
 
 
@@ -60,7 +57,6 @@ def account_query_envelope(
     offset: int = 0,
     fetch_size: Optional[int] = None,
     query_name: Optional[str] = None,
-    address_format: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/accounts/query`."""
 
@@ -70,7 +66,6 @@ def account_query_envelope(
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
         query_name=query_name,
-        address_format=address_format,
     )
     return envelope.to_dict()
 
@@ -125,7 +120,6 @@ def asset_holders_query_envelope(
     offset: int = 0,
     fetch_size: Optional[int] = None,
     query_name: Optional[str] = None,
-    address_format: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/assets/{definition}/holders/query`."""
 
@@ -135,6 +129,5 @@ def asset_holders_query_envelope(
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
         query_name=query_name,
-        address_format=address_format,
     )
     return envelope.to_dict()

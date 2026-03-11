@@ -20,7 +20,7 @@ fn make_vm_with_wsv() -> (IVM, ScopedAccountId) {
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(1_000_000);

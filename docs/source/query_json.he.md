@@ -67,7 +67,7 @@ Iroha מספקת נקודת קצה מבוססת Norito בכתובת `/query` ל�
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "ih58..."}
+        {"field": "authority", "value": "i105..."}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

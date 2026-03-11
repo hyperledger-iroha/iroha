@@ -44,13 +44,18 @@ fn find_accounts_with_asset() -> Result<()> {
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
+        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
 
         // Registering accounts
         let register_accounts = accounts
             .iter()
             .skip(1) // Alice has already been registered in genesis
             .cloned()
-            .map(|account_id| Register::account(Account::new(account_id)))
+            .map(|account_id| {
+                Register::account(Account::new(
+                    account_id.to_account_id(wonderland_domain.clone()),
+                ))
+            })
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;
 

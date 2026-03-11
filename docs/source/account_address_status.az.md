@@ -18,7 +18,7 @@ Yol xəritəsi arayışı: ADDR-2 — Dual-Format Compliance Suite
 
 ### 1. İcmal
 
-- Qurğu: `fixtures/account/address_vectors.json` (IH58 (üstünlük verilir) + sıxılmış (`sora`, ikinci ən yaxşı) + multisig müsbət/mənfi hallar).
+- Qurğu: `fixtures/account/address_vectors.json` (I105 (üstünlük verilir) + sıxılmış (`sora`, ikinci ən yaxşı) + multisig müsbət/mənfi hallar).
 - Əhatə dairəsi: qeyri-defolt, Lokal-12, Qlobal reyestr və tam səhv taksonomiyası olan multisig nəzarətçiləri əhatə edən deterministik V1 yükləri.
 - Paylanma: Rust data-modeli, Torii, JS/TS, Swift və Android SDK-ları arasında paylaşılır; Hər hansı bir istehlakçı sapdıqda CI uğursuz olur.
 - Həqiqət mənbəyi: generator `crates/iroha_data_model/src/account/address/compliance_vectors.rs`-də yaşayır və `cargo xtask address-vectors` vasitəsilə ifşa olunur.
@@ -42,10 +42,10 @@ Bayraqlar:
 
 | Səthi | İcra | Qeydlər |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON-u təhlil edir, kanonik faydalı yükləri yenidən qurur və IH58 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı)/kanonik çevrilmələri + strukturlaşdırılmış səhvləri yoxlayır. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Torii səhv formalaşmış IH58 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı) faydalı yüklərdən qəti şəkildə imtina etməsi üçün server tərəfindəki kodekləri təsdiqləyir. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Güzgülər V1 qurğuları (IH58 üstünlük verilir/sıxılmış (`sora`) ikinci ən yaxşı/tam genişlikdə) və hər bir mənfi hal üçün Norito tipli xəta kodlarını təsdiqləyir. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple platformalarında IH58 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı) dekodlaşdırma, multisig faydalı yüklər və səhvlərin aradan qaldırılması məşqləri. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON-u təhlil edir, kanonik faydalı yükləri yenidən qurur və I105 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı)/kanonik çevrilmələri + strukturlaşdırılmış səhvləri yoxlayır. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Torii səhv formalaşmış I105 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı) faydalı yüklərdən qəti şəkildə imtina etməsi üçün server tərəfindəki kodekləri təsdiqləyir. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Güzgülər V1 qurğuları (I105 üstünlük verilir/sıxılmış (`sora`) ikinci ən yaxşı/tam genişlikdə) və hər bir mənfi hal üçün Norito tipli xəta kodlarını təsdiqləyir. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple platformalarında I105 (üstünlük verilir)/sıxılmış (`sora`, ikinci ən yaxşı) dekodlaşdırma, multisig faydalı yüklər və səhvlərin aradan qaldırılması məşqləri. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Kotlin/Java bağlamalarının kanonik qurğu ilə uyğunluğunu təmin edir. |
 
 ### 4. Monitorinq və Görkəmli İş- Status hesabatı: bu sənəd `status.md` və yol xəritəsi ilə əlaqələndirilir ki, həftəlik nəzərdən keçirmə qurğunun sağlamlığını yoxlaya bilsin.

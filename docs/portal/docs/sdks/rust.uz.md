@@ -144,15 +144,14 @@ natijalar. Javoblar Norito tomonidan qo'llab-quvvatlanadigan JSON-dan foydalanad
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 sirt: u kanonik hisob identifikatorini o'z ichiga oladi, literal bilan ko'rsatilgan
 so'ralgan format, tarmoq prefiksi/xatoni tuzatish metama'lumotlari, QR o'lchamlari va
 hamyonlar/tadqiqchilar to'g'ridan-to'g'ri joylashtirishi mumkin bo'lgan inline SVG foydali yuk. O'tkazib yubormang
-`ExplorerAccountQrOptions` sukut boʻyicha afzal qilingan IH58 chiqishi yoki oʻrnatildi
-Ikkinchi eng yaxshisini olish uchun `address_format: Some(AddressFormat::Compressed)`
-ADDR-6b tomonidan ishlatiladigan `sora…` varianti.
+`ExplorerAccountQrOptions` sukut boʻyicha afzal qilingan I105 chiqishi yoki oʻrnatildi
+Ikkinchi eng yaxshisini olish uchun canonical I105 output
+ADDR-6b tomonidan ishlatiladigan `i105` varianti.
 
 ## 7. Tadbirlarga obuna bo'ling
 

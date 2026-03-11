@@ -36,7 +36,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est גמיש):
 |--------|--------|------------|
 | `label` | Oui | Libelle demande (case mixte acceptee; אני רוצה לנרמל את התקן של Norm v1 et UTS-46). |
 | `suffix_id` | Oui | זיהוי מספרי דה סיומת (עשרוני או `0x` hex). |
-| `owner` | Oui | Chaine AccountId (IH58 ליטרל; רמז @דומיין אופציונלי) pour le proprietaire de l'enregistrement. |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de Settlement (למשל `xor#sora`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signnes representant des unites natives de l'actif. |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -249,7 +249,7 @@ reussite/echec des soumissions. Le tableau filter par `release` pour que les
   הפניות a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une reur de validation.
 - **בקרים:** les cellules מגלה את `--default-controllers`. פורניסז
-  des lists explicites (לדוגמה `ih58...;ih58...`) quand vous deleguez a des
+  des lists explicites (לדוגמה `i105...;i105...`) quand vous deleguez a des
   שחקנים שאינם בעלי.
 
 Les echecs sont signales avec des numeros de ligne contextuels (לדוגמה

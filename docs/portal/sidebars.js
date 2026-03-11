@@ -251,6 +251,7 @@ const sidebars = {
         'reference/account-address-status',
         'reference/publishing-checklist',
         'reference/torii-swagger',
+        'reference/torii-mcp',
         'reference/torii-rapidoc'
       ]
     }

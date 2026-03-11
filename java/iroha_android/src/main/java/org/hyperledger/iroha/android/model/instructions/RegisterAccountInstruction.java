@@ -102,7 +102,7 @@ public final class RegisterAccountInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAccountId(final String accountId) {
-      this.accountId = AccountIdLiteral.extractIh58Address(accountId);
+      this.accountId = AccountIdLiteral.extractI105Address(accountId);
       return this;
     }
 

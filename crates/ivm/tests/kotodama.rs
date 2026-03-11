@@ -1958,6 +1958,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     use iroha_data_model::{
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
+        domain::DomainId,
     };
 
     let src = r#"
@@ -1979,14 +1980,11 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse encoded account literal");
     let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let domain: DomainId = "wonderland".parse().expect("domain");
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
     assert!(hints.read_keys.contains(&format!("account:{account}")));
-    assert!(
-        hints
-            .read_keys
-            .contains(&format!("domain:{}", account.domain()))
-    );
+    assert!(hints.read_keys.contains(&format!("domain:{domain}")));
     assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
@@ -1998,10 +1996,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .find(|entry| entry.name == "main")
         .expect("main entrypoint");
     assert!(main.read_keys.contains(&format!("account:{account}")));
-    assert!(
-        main.read_keys
-            .contains(&format!("domain:{}", account.domain()))
-    );
+    assert!(main.read_keys.contains(&format!("domain:{domain}")));
     assert!(main.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(main.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(main.write_keys.contains(&format!("asset_def:{asset_def}")));
@@ -3097,11 +3092,8 @@ fn runtime_durable_get_or_insert_default_state_map() {
             .parse()
             .expect("public key"),
     );
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     vm.set_host(host);
     // Run hajimari
     vm.run().expect("exec");

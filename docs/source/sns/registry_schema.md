@@ -231,7 +231,7 @@ State transitions MUST emit the corresponding `RegistryEventKind` so downstream 
 Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
 
 1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
+2. Regenerating resolver templates (preferred I105 addresses, text records).
 3. Pinning updated zone data via the SoraDNS workflow described in `docs/source/soradns/soradns_registry_rfc.md`.
 
 Event delivery guarantees:
@@ -251,7 +251,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58...",
+    owner: "i105...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -278,7 +278,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58...",
+    steward: "i105...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -291,10 +291,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58...",
+    fund_splitter_account: "i105...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

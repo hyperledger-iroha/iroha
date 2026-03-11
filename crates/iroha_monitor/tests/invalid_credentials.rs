@@ -41,8 +41,8 @@ fn invalid_endpoint_surfaces_warning() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.to_ascii_lowercase().contains("status: error"),
-        "expected status error message in stdout, sample={}",
+        stdout.contains("[headless]") && stdout.to_ascii_lowercase().contains("/status failed"),
+        "expected status fetch failure in stdout, sample={}",
         stdout.chars().take(256).collect::<String>()
     );
 }

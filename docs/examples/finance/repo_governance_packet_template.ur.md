@@ -56,7 +56,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json       | tee a
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA جو custody window، routing account اور drill contact کو cover کرتا ہے۔ |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA جو custody window، routing account اور drill contact کو cover کرتا ہے۔ |
 
 > acknowledgement کو باقی evidence کے ساتھ (`artifacts/finance/repo/<slug>/`) محفوظ کریں تاکہ
 > `scripts/repo_evidence_manifest.py` فائل کو اسی tree میں ریکارڈ کرے جہاں staged instructions

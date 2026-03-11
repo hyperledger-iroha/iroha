@@ -194,12 +194,8 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
-            let gas_account_str = AccountId::new(
-                ivm_domain,
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-            )
-            .to_string();
+            let gas_account_str =
+                AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
@@ -515,26 +511,27 @@ async fn fetch_metrics(
 
 fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = AccountId::new(
-        ivm_domain.clone(),
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
         .with_metadata(Metadata::default());
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain.clone())).into(),
-        Register::account(Account::new(gas_account_id)).into(),
         Register::asset_definition(definition).into(),
     ];
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        let validator_id = AccountId::new(peer.public_key().clone());
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
-        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        if validator_id != gas_account_id {
+            bootstrap_tx.push(
+                Register::account(Account::new(
+                    validator_id.to_account_id(nexus_domain.clone()),
+                ))
+                .into(),
+            );
+        }
         bootstrap_tx.push(
             Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
         );
@@ -542,7 +539,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
 
     let mut validator_tx = Vec::new();
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+        let validator_id = AccountId::new(peer.public_key().clone());
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         validator_tx.push(
             RegisterPublicLaneValidator {

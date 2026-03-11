@@ -1,509 +1,559 @@
-# Command-Line Help for `iroha_cli`
+# Command-Line Help for `iroha`
 
-This document contains the help content for the `iroha_cli` command-line program.
+This document contains the help content for the `iroha` command-line program.
 
 **Command Overview:**
 
-* [`iroha_cli`↴](#iroha_cli)
-* [`iroha_cli ledger`↴](#iroha_cli-ledger)
-* [`iroha_cli ledger domain`↴](#iroha_cli-ledger-domain)
-* [`iroha_cli ledger domain list`↴](#iroha_cli-ledger-domain-list)
-* [`iroha_cli ledger domain list all`↴](#iroha_cli-ledger-domain-list-all)
-* [`iroha_cli ledger domain list filter`↴](#iroha_cli-ledger-domain-list-filter)
-* [`iroha_cli ledger domain get`↴](#iroha_cli-ledger-domain-get)
-* [`iroha_cli ledger domain register`↴](#iroha_cli-ledger-domain-register)
-* [`iroha_cli ledger domain unregister`↴](#iroha_cli-ledger-domain-unregister)
-* [`iroha_cli ledger domain transfer`↴](#iroha_cli-ledger-domain-transfer)
-* [`iroha_cli ledger domain meta`↴](#iroha_cli-ledger-domain-meta)
-* [`iroha_cli ledger domain meta get`↴](#iroha_cli-ledger-domain-meta-get)
-* [`iroha_cli ledger domain meta set`↴](#iroha_cli-ledger-domain-meta-set)
-* [`iroha_cli ledger domain meta remove`↴](#iroha_cli-ledger-domain-meta-remove)
-* [`iroha_cli ledger account`↴](#iroha_cli-ledger-account)
-* [`iroha_cli ledger account role`↴](#iroha_cli-ledger-account-role)
-* [`iroha_cli ledger account role list`↴](#iroha_cli-ledger-account-role-list)
-* [`iroha_cli ledger account role grant`↴](#iroha_cli-ledger-account-role-grant)
-* [`iroha_cli ledger account role revoke`↴](#iroha_cli-ledger-account-role-revoke)
-* [`iroha_cli ledger account permission`↴](#iroha_cli-ledger-account-permission)
-* [`iroha_cli ledger account permission list`↴](#iroha_cli-ledger-account-permission-list)
-* [`iroha_cli ledger account permission grant`↴](#iroha_cli-ledger-account-permission-grant)
-* [`iroha_cli ledger account permission revoke`↴](#iroha_cli-ledger-account-permission-revoke)
-* [`iroha_cli ledger account list`↴](#iroha_cli-ledger-account-list)
-* [`iroha_cli ledger account list all`↴](#iroha_cli-ledger-account-list-all)
-* [`iroha_cli ledger account list filter`↴](#iroha_cli-ledger-account-list-filter)
-* [`iroha_cli ledger account get`↴](#iroha_cli-ledger-account-get)
-* [`iroha_cli ledger account register`↴](#iroha_cli-ledger-account-register)
-* [`iroha_cli ledger account unregister`↴](#iroha_cli-ledger-account-unregister)
-* [`iroha_cli ledger account meta`↴](#iroha_cli-ledger-account-meta)
-* [`iroha_cli ledger account meta get`↴](#iroha_cli-ledger-account-meta-get)
-* [`iroha_cli ledger account meta set`↴](#iroha_cli-ledger-account-meta-set)
-* [`iroha_cli ledger account meta remove`↴](#iroha_cli-ledger-account-meta-remove)
-* [`iroha_cli ledger asset`↴](#iroha_cli-ledger-asset)
-* [`iroha_cli ledger asset definition`↴](#iroha_cli-ledger-asset-definition)
-* [`iroha_cli ledger asset definition list`↴](#iroha_cli-ledger-asset-definition-list)
-* [`iroha_cli ledger asset definition list all`↴](#iroha_cli-ledger-asset-definition-list-all)
-* [`iroha_cli ledger asset definition list filter`↴](#iroha_cli-ledger-asset-definition-list-filter)
-* [`iroha_cli ledger asset definition get`↴](#iroha_cli-ledger-asset-definition-get)
-* [`iroha_cli ledger asset definition register`↴](#iroha_cli-ledger-asset-definition-register)
-* [`iroha_cli ledger asset definition unregister`↴](#iroha_cli-ledger-asset-definition-unregister)
-* [`iroha_cli ledger asset definition transfer`↴](#iroha_cli-ledger-asset-definition-transfer)
-* [`iroha_cli ledger asset definition meta`↴](#iroha_cli-ledger-asset-definition-meta)
-* [`iroha_cli ledger asset definition meta get`↴](#iroha_cli-ledger-asset-definition-meta-get)
-* [`iroha_cli ledger asset definition meta set`↴](#iroha_cli-ledger-asset-definition-meta-set)
-* [`iroha_cli ledger asset definition meta remove`↴](#iroha_cli-ledger-asset-definition-meta-remove)
-* [`iroha_cli ledger asset get`↴](#iroha_cli-ledger-asset-get)
-* [`iroha_cli ledger asset list`↴](#iroha_cli-ledger-asset-list)
-* [`iroha_cli ledger asset list all`↴](#iroha_cli-ledger-asset-list-all)
-* [`iroha_cli ledger asset list filter`↴](#iroha_cli-ledger-asset-list-filter)
-* [`iroha_cli ledger asset mint`↴](#iroha_cli-ledger-asset-mint)
-* [`iroha_cli ledger asset burn`↴](#iroha_cli-ledger-asset-burn)
-* [`iroha_cli ledger asset transfer`↴](#iroha_cli-ledger-asset-transfer)
-* [`iroha_cli ledger nft`↴](#iroha_cli-ledger-nft)
-* [`iroha_cli ledger nft get`↴](#iroha_cli-ledger-nft-get)
-* [`iroha_cli ledger nft list`↴](#iroha_cli-ledger-nft-list)
-* [`iroha_cli ledger nft list all`↴](#iroha_cli-ledger-nft-list-all)
-* [`iroha_cli ledger nft list filter`↴](#iroha_cli-ledger-nft-list-filter)
-* [`iroha_cli ledger nft register`↴](#iroha_cli-ledger-nft-register)
-* [`iroha_cli ledger nft unregister`↴](#iroha_cli-ledger-nft-unregister)
-* [`iroha_cli ledger nft transfer`↴](#iroha_cli-ledger-nft-transfer)
-* [`iroha_cli ledger nft meta`↴](#iroha_cli-ledger-nft-meta)
-* [`iroha_cli ledger nft meta get`↴](#iroha_cli-ledger-nft-meta-get)
-* [`iroha_cli ledger nft meta set`↴](#iroha_cli-ledger-nft-meta-set)
-* [`iroha_cli ledger nft meta remove`↴](#iroha_cli-ledger-nft-meta-remove)
-* [`iroha_cli ledger peer`↴](#iroha_cli-ledger-peer)
-* [`iroha_cli ledger peer list`↴](#iroha_cli-ledger-peer-list)
-* [`iroha_cli ledger peer list all`↴](#iroha_cli-ledger-peer-list-all)
-* [`iroha_cli ledger peer register`↴](#iroha_cli-ledger-peer-register)
-* [`iroha_cli ledger peer unregister`↴](#iroha_cli-ledger-peer-unregister)
-* [`iroha_cli ledger role`↴](#iroha_cli-ledger-role)
-* [`iroha_cli ledger role permission`↴](#iroha_cli-ledger-role-permission)
-* [`iroha_cli ledger role permission list`↴](#iroha_cli-ledger-role-permission-list)
-* [`iroha_cli ledger role permission grant`↴](#iroha_cli-ledger-role-permission-grant)
-* [`iroha_cli ledger role permission revoke`↴](#iroha_cli-ledger-role-permission-revoke)
-* [`iroha_cli ledger role list`↴](#iroha_cli-ledger-role-list)
-* [`iroha_cli ledger role list all`↴](#iroha_cli-ledger-role-list-all)
-* [`iroha_cli ledger role register`↴](#iroha_cli-ledger-role-register)
-* [`iroha_cli ledger role unregister`↴](#iroha_cli-ledger-role-unregister)
-* [`iroha_cli ledger parameter`↴](#iroha_cli-ledger-parameter)
-* [`iroha_cli ledger parameter list`↴](#iroha_cli-ledger-parameter-list)
-* [`iroha_cli ledger parameter list all`↴](#iroha_cli-ledger-parameter-list-all)
-* [`iroha_cli ledger parameter set`↴](#iroha_cli-ledger-parameter-set)
-* [`iroha_cli ledger trigger`↴](#iroha_cli-ledger-trigger)
-* [`iroha_cli ledger trigger list`↴](#iroha_cli-ledger-trigger-list)
-* [`iroha_cli ledger trigger list all`↴](#iroha_cli-ledger-trigger-list-all)
-* [`iroha_cli ledger trigger get`↴](#iroha_cli-ledger-trigger-get)
-* [`iroha_cli ledger trigger register`↴](#iroha_cli-ledger-trigger-register)
-* [`iroha_cli ledger trigger unregister`↴](#iroha_cli-ledger-trigger-unregister)
-* [`iroha_cli ledger trigger mint`↴](#iroha_cli-ledger-trigger-mint)
-* [`iroha_cli ledger trigger burn`↴](#iroha_cli-ledger-trigger-burn)
-* [`iroha_cli ledger trigger meta`↴](#iroha_cli-ledger-trigger-meta)
-* [`iroha_cli ledger trigger meta get`↴](#iroha_cli-ledger-trigger-meta-get)
-* [`iroha_cli ledger trigger meta set`↴](#iroha_cli-ledger-trigger-meta-set)
-* [`iroha_cli ledger trigger meta remove`↴](#iroha_cli-ledger-trigger-meta-remove)
-* [`iroha_cli ledger query`↴](#iroha_cli-ledger-query)
-* [`iroha_cli ledger query stdin`↴](#iroha_cli-ledger-query-stdin)
-* [`iroha_cli ledger query stdin-raw`↴](#iroha_cli-ledger-query-stdin-raw)
-* [`iroha_cli ledger transaction`↴](#iroha_cli-ledger-transaction)
-* [`iroha_cli ledger transaction get`↴](#iroha_cli-ledger-transaction-get)
-* [`iroha_cli ledger transaction ping`↴](#iroha_cli-ledger-transaction-ping)
-* [`iroha_cli ledger transaction ivm`↴](#iroha_cli-ledger-transaction-ivm)
-* [`iroha_cli ledger transaction stdin`↴](#iroha_cli-ledger-transaction-stdin)
-* [`iroha_cli ledger multisig`↴](#iroha_cli-ledger-multisig)
-* [`iroha_cli ledger multisig list`↴](#iroha_cli-ledger-multisig-list)
-* [`iroha_cli ledger multisig list all`↴](#iroha_cli-ledger-multisig-list-all)
-* [`iroha_cli ledger multisig register`↴](#iroha_cli-ledger-multisig-register)
-* [`iroha_cli ledger multisig propose`↴](#iroha_cli-ledger-multisig-propose)
-* [`iroha_cli ledger multisig approve`↴](#iroha_cli-ledger-multisig-approve)
-* [`iroha_cli ledger multisig inspect`↴](#iroha_cli-ledger-multisig-inspect)
-* [`iroha_cli ledger events`↴](#iroha_cli-ledger-events)
-* [`iroha_cli ledger events state`↴](#iroha_cli-ledger-events-state)
-* [`iroha_cli ledger events governance`↴](#iroha_cli-ledger-events-governance)
-* [`iroha_cli ledger events transaction`↴](#iroha_cli-ledger-events-transaction)
-* [`iroha_cli ledger events block`↴](#iroha_cli-ledger-events-block)
-* [`iroha_cli ledger events trigger-execute`↴](#iroha_cli-ledger-events-trigger-execute)
-* [`iroha_cli ledger events trigger-complete`↴](#iroha_cli-ledger-events-trigger-complete)
-* [`iroha_cli ledger blocks`↴](#iroha_cli-ledger-blocks)
-* [`iroha_cli ops`↴](#iroha_cli-ops)
-* [`iroha_cli ops offline`↴](#iroha_cli-ops-offline)
-* [`iroha_cli ops offline allowance`↴](#iroha_cli-ops-offline-allowance)
-* [`iroha_cli ops offline allowance list`↴](#iroha_cli-ops-offline-allowance-list)
-* [`iroha_cli ops offline allowance get`↴](#iroha_cli-ops-offline-allowance-get)
-* [`iroha_cli ops offline transfer`↴](#iroha_cli-ops-offline-transfer)
-* [`iroha_cli ops offline transfer list`↴](#iroha_cli-ops-offline-transfer-list)
-* [`iroha_cli ops offline transfer get`↴](#iroha_cli-ops-offline-transfer-get)
-* [`iroha_cli ops offline transfer proof`↴](#iroha_cli-ops-offline-transfer-proof)
-* [`iroha_cli ops offline bundle`↴](#iroha_cli-ops-offline-bundle)
-* [`iroha_cli ops offline bundle inspect`↴](#iroha_cli-ops-offline-bundle-inspect)
-* [`iroha_cli ops offline summary`↴](#iroha_cli-ops-offline-summary)
-* [`iroha_cli ops offline summary list`↴](#iroha_cli-ops-offline-summary-list)
-* [`iroha_cli ops offline summary export`↴](#iroha_cli-ops-offline-summary-export)
-* [`iroha_cli ops offline revocation`↴](#iroha_cli-ops-offline-revocation)
-* [`iroha_cli ops offline revocation list`↴](#iroha_cli-ops-offline-revocation-list)
-* [`iroha_cli ops offline rejection`↴](#iroha_cli-ops-offline-rejection)
-* [`iroha_cli ops offline rejection stats`↴](#iroha_cli-ops-offline-rejection-stats)
-* [`iroha_cli ops offline qr`↴](#iroha_cli-ops-offline-qr)
-* [`iroha_cli ops offline qr encode`↴](#iroha_cli-ops-offline-qr-encode)
-* [`iroha_cli ops offline qr decode`↴](#iroha_cli-ops-offline-qr-decode)
-* [`iroha_cli ops offline petal`↴](#iroha_cli-ops-offline-petal)
-* [`iroha_cli ops offline petal encode`↴](#iroha_cli-ops-offline-petal-encode)
-* [`iroha_cli ops offline petal decode`↴](#iroha_cli-ops-offline-petal-decode)
-* [`iroha_cli ops executor`↴](#iroha_cli-ops-executor)
-* [`iroha_cli ops executor data-model`↴](#iroha_cli-ops-executor-data-model)
-* [`iroha_cli ops executor upgrade`↴](#iroha_cli-ops-executor-upgrade)
-* [`iroha_cli ops runtime`↴](#iroha_cli-ops-runtime)
-* [`iroha_cli ops runtime abi`↴](#iroha_cli-ops-runtime-abi)
-* [`iroha_cli ops runtime abi active`↴](#iroha_cli-ops-runtime-abi-active)
-* [`iroha_cli ops runtime abi active-query`↴](#iroha_cli-ops-runtime-abi-active-query)
-* [`iroha_cli ops runtime abi hash`↴](#iroha_cli-ops-runtime-abi-hash)
-* [`iroha_cli ops runtime upgrade`↴](#iroha_cli-ops-runtime-upgrade)
-* [`iroha_cli ops runtime upgrade list`↴](#iroha_cli-ops-runtime-upgrade-list)
-* [`iroha_cli ops runtime upgrade propose`↴](#iroha_cli-ops-runtime-upgrade-propose)
-* [`iroha_cli ops runtime upgrade activate`↴](#iroha_cli-ops-runtime-upgrade-activate)
-* [`iroha_cli ops runtime upgrade cancel`↴](#iroha_cli-ops-runtime-upgrade-cancel)
-* [`iroha_cli ops runtime status`↴](#iroha_cli-ops-runtime-status)
-* [`iroha_cli ops runtime capabilities`↴](#iroha_cli-ops-runtime-capabilities)
-* [`iroha_cli ops sumeragi`↴](#iroha_cli-ops-sumeragi)
-* [`iroha_cli ops sumeragi status`↴](#iroha_cli-ops-sumeragi-status)
-* [`iroha_cli ops sumeragi leader`↴](#iroha_cli-ops-sumeragi-leader)
-* [`iroha_cli ops sumeragi params`↴](#iroha_cli-ops-sumeragi-params)
-* [`iroha_cli ops sumeragi collectors`↴](#iroha_cli-ops-sumeragi-collectors)
-* [`iroha_cli ops sumeragi qc`↴](#iroha_cli-ops-sumeragi-qc)
-* [`iroha_cli ops sumeragi pacemaker`↴](#iroha_cli-ops-sumeragi-pacemaker)
-* [`iroha_cli ops sumeragi phases`↴](#iroha_cli-ops-sumeragi-phases)
-* [`iroha_cli ops sumeragi telemetry`↴](#iroha_cli-ops-sumeragi-telemetry)
-* [`iroha_cli ops sumeragi evidence`↴](#iroha_cli-ops-sumeragi-evidence)
-* [`iroha_cli ops sumeragi evidence list`↴](#iroha_cli-ops-sumeragi-evidence-list)
-* [`iroha_cli ops sumeragi evidence count`↴](#iroha_cli-ops-sumeragi-evidence-count)
-* [`iroha_cli ops sumeragi evidence submit`↴](#iroha_cli-ops-sumeragi-evidence-submit)
-* [`iroha_cli ops sumeragi rbc`↴](#iroha_cli-ops-sumeragi-rbc)
-* [`iroha_cli ops sumeragi rbc status`↴](#iroha_cli-ops-sumeragi-rbc-status)
-* [`iroha_cli ops sumeragi rbc sessions`↴](#iroha_cli-ops-sumeragi-rbc-sessions)
-* [`iroha_cli ops sumeragi vrf-penalties`↴](#iroha_cli-ops-sumeragi-vrf-penalties)
-* [`iroha_cli ops sumeragi vrf-epoch`↴](#iroha_cli-ops-sumeragi-vrf-epoch)
-* [`iroha_cli ops sumeragi commit-qc`↴](#iroha_cli-ops-sumeragi-commit-qc)
-* [`iroha_cli ops sumeragi commit-qc get`↴](#iroha_cli-ops-sumeragi-commit-qc-get)
-* [`iroha_cli ops audit`↴](#iroha_cli-ops-audit)
-* [`iroha_cli ops audit witness`↴](#iroha_cli-ops-audit-witness)
-* [`iroha_cli ops connect`↴](#iroha_cli-ops-connect)
-* [`iroha_cli ops connect queue`↴](#iroha_cli-ops-connect-queue)
-* [`iroha_cli ops connect queue inspect`↴](#iroha_cli-ops-connect-queue-inspect)
-* [`iroha_cli offline`↴](#iroha_cli-offline)
-* [`iroha_cli offline allowance`↴](#iroha_cli-offline-allowance)
-* [`iroha_cli offline allowance list`↴](#iroha_cli-offline-allowance-list)
-* [`iroha_cli offline allowance get`↴](#iroha_cli-offline-allowance-get)
-* [`iroha_cli offline transfer`↴](#iroha_cli-offline-transfer)
-* [`iroha_cli offline transfer list`↴](#iroha_cli-offline-transfer-list)
-* [`iroha_cli offline transfer get`↴](#iroha_cli-offline-transfer-get)
-* [`iroha_cli offline transfer proof`↴](#iroha_cli-offline-transfer-proof)
-* [`iroha_cli offline bundle`↴](#iroha_cli-offline-bundle)
-* [`iroha_cli offline bundle inspect`↴](#iroha_cli-offline-bundle-inspect)
-* [`iroha_cli offline summary`↴](#iroha_cli-offline-summary)
-* [`iroha_cli offline summary list`↴](#iroha_cli-offline-summary-list)
-* [`iroha_cli offline summary export`↴](#iroha_cli-offline-summary-export)
-* [`iroha_cli offline revocation`↴](#iroha_cli-offline-revocation)
-* [`iroha_cli offline revocation list`↴](#iroha_cli-offline-revocation-list)
-* [`iroha_cli offline rejection`↴](#iroha_cli-offline-rejection)
-* [`iroha_cli offline rejection stats`↴](#iroha_cli-offline-rejection-stats)
-* [`iroha_cli offline qr`↴](#iroha_cli-offline-qr)
-* [`iroha_cli offline qr encode`↴](#iroha_cli-offline-qr-encode)
-* [`iroha_cli offline qr decode`↴](#iroha_cli-offline-qr-decode)
-* [`iroha_cli offline petal`↴](#iroha_cli-offline-petal)
-* [`iroha_cli offline petal encode`↴](#iroha_cli-offline-petal-encode)
-* [`iroha_cli offline petal decode`↴](#iroha_cli-offline-petal-decode)
-* [`iroha_cli app`↴](#iroha_cli-app)
-* [`iroha_cli app gov`↴](#iroha_cli-app-gov)
-* [`iroha_cli app gov deploy`↴](#iroha_cli-app-gov-deploy)
-* [`iroha_cli app gov deploy propose`↴](#iroha_cli-app-gov-deploy-propose)
-* [`iroha_cli app gov deploy meta`↴](#iroha_cli-app-gov-deploy-meta)
-* [`iroha_cli app gov deploy audit`↴](#iroha_cli-app-gov-deploy-audit)
-* [`iroha_cli app gov vote`↴](#iroha_cli-app-gov-vote)
-* [`iroha_cli app gov proposal`↴](#iroha_cli-app-gov-proposal)
-* [`iroha_cli app gov proposal get`↴](#iroha_cli-app-gov-proposal-get)
-* [`iroha_cli app gov locks`↴](#iroha_cli-app-gov-locks)
-* [`iroha_cli app gov locks get`↴](#iroha_cli-app-gov-locks-get)
-* [`iroha_cli app gov council`↴](#iroha_cli-app-gov-council)
-* [`iroha_cli app gov council derive-vrf`↴](#iroha_cli-app-gov-council-derive-vrf)
-* [`iroha_cli app gov council persist`↴](#iroha_cli-app-gov-council-persist)
-* [`iroha_cli app gov council gen-vrf`↴](#iroha_cli-app-gov-council-gen-vrf)
-* [`iroha_cli app gov council derive-and-persist`↴](#iroha_cli-app-gov-council-derive-and-persist)
-* [`iroha_cli app gov council replace`↴](#iroha_cli-app-gov-council-replace)
-* [`iroha_cli app gov unlock`↴](#iroha_cli-app-gov-unlock)
-* [`iroha_cli app gov unlock stats`↴](#iroha_cli-app-gov-unlock-stats)
-* [`iroha_cli app gov referendum`↴](#iroha_cli-app-gov-referendum)
-* [`iroha_cli app gov referendum get`↴](#iroha_cli-app-gov-referendum-get)
-* [`iroha_cli app gov tally`↴](#iroha_cli-app-gov-tally)
-* [`iroha_cli app gov tally get`↴](#iroha_cli-app-gov-tally-get)
-* [`iroha_cli app gov finalize`↴](#iroha_cli-app-gov-finalize)
-* [`iroha_cli app gov enact`↴](#iroha_cli-app-gov-enact)
-* [`iroha_cli app gov protected`↴](#iroha_cli-app-gov-protected)
-* [`iroha_cli app gov protected set`↴](#iroha_cli-app-gov-protected-set)
-* [`iroha_cli app gov protected apply`↴](#iroha_cli-app-gov-protected-apply)
-* [`iroha_cli app gov protected get`↴](#iroha_cli-app-gov-protected-get)
-* [`iroha_cli app gov instance`↴](#iroha_cli-app-gov-instance)
-* [`iroha_cli app gov instance activate`↴](#iroha_cli-app-gov-instance-activate)
-* [`iroha_cli app gov instance list`↴](#iroha_cli-app-gov-instance-list)
-* [`iroha_cli app contracts`↴](#iroha_cli-app-contracts)
-* [`iroha_cli app contracts code`↴](#iroha_cli-app-contracts-code)
-* [`iroha_cli app contracts code get`↴](#iroha_cli-app-contracts-code-get)
-* [`iroha_cli app contracts deploy`↴](#iroha_cli-app-contracts-deploy)
-* [`iroha_cli app contracts deploy-activate`↴](#iroha_cli-app-contracts-deploy-activate)
-* [`iroha_cli app contracts manifest`↴](#iroha_cli-app-contracts-manifest)
-* [`iroha_cli app contracts manifest get`↴](#iroha_cli-app-contracts-manifest-get)
-* [`iroha_cli app contracts manifest build`↴](#iroha_cli-app-contracts-manifest-build)
-* [`iroha_cli app contracts simulate`↴](#iroha_cli-app-contracts-simulate)
-* [`iroha_cli app contracts instances`↴](#iroha_cli-app-contracts-instances)
-* [`iroha_cli app zk`↴](#iroha_cli-app-zk)
-* [`iroha_cli app zk roots`↴](#iroha_cli-app-zk-roots)
-* [`iroha_cli app zk verify`↴](#iroha_cli-app-zk-verify)
-* [`iroha_cli app zk submit-proof`↴](#iroha_cli-app-zk-submit-proof)
-* [`iroha_cli app zk verify-batch`↴](#iroha_cli-app-zk-verify-batch)
-* [`iroha_cli app zk schema-hash`↴](#iroha_cli-app-zk-schema-hash)
-* [`iroha_cli app zk attachments`↴](#iroha_cli-app-zk-attachments)
-* [`iroha_cli app zk attachments upload`↴](#iroha_cli-app-zk-attachments-upload)
-* [`iroha_cli app zk attachments list`↴](#iroha_cli-app-zk-attachments-list)
-* [`iroha_cli app zk attachments get`↴](#iroha_cli-app-zk-attachments-get)
-* [`iroha_cli app zk attachments delete`↴](#iroha_cli-app-zk-attachments-delete)
-* [`iroha_cli app zk attachments cleanup`↴](#iroha_cli-app-zk-attachments-cleanup)
-* [`iroha_cli app zk register-asset`↴](#iroha_cli-app-zk-register-asset)
-* [`iroha_cli app zk shield`↴](#iroha_cli-app-zk-shield)
-* [`iroha_cli app zk unshield`↴](#iroha_cli-app-zk-unshield)
-* [`iroha_cli app zk vk`↴](#iroha_cli-app-zk-vk)
-* [`iroha_cli app zk vk register`↴](#iroha_cli-app-zk-vk-register)
-* [`iroha_cli app zk vk update`↴](#iroha_cli-app-zk-vk-update)
-* [`iroha_cli app zk vk get`↴](#iroha_cli-app-zk-vk-get)
-* [`iroha_cli app zk proofs`↴](#iroha_cli-app-zk-proofs)
-* [`iroha_cli app zk proofs list`↴](#iroha_cli-app-zk-proofs-list)
-* [`iroha_cli app zk proofs count`↴](#iroha_cli-app-zk-proofs-count)
-* [`iroha_cli app zk proofs get`↴](#iroha_cli-app-zk-proofs-get)
-* [`iroha_cli app zk proofs retention`↴](#iroha_cli-app-zk-proofs-retention)
-* [`iroha_cli app zk proofs prune`↴](#iroha_cli-app-zk-proofs-prune)
-* [`iroha_cli app zk prover`↴](#iroha_cli-app-zk-prover)
-* [`iroha_cli app zk prover reports`↴](#iroha_cli-app-zk-prover-reports)
-* [`iroha_cli app zk prover reports list`↴](#iroha_cli-app-zk-prover-reports-list)
-* [`iroha_cli app zk prover reports get`↴](#iroha_cli-app-zk-prover-reports-get)
-* [`iroha_cli app zk prover reports delete`↴](#iroha_cli-app-zk-prover-reports-delete)
-* [`iroha_cli app zk prover reports cleanup`↴](#iroha_cli-app-zk-prover-reports-cleanup)
-* [`iroha_cli app zk prover reports count`↴](#iroha_cli-app-zk-prover-reports-count)
-* [`iroha_cli app zk vote`↴](#iroha_cli-app-zk-vote)
-* [`iroha_cli app zk vote tally`↴](#iroha_cli-app-zk-vote-tally)
-* [`iroha_cli app zk envelope`↴](#iroha_cli-app-zk-envelope)
-* [`iroha_cli app confidential`↴](#iroha_cli-app-confidential)
-* [`iroha_cli app confidential create-keys`↴](#iroha_cli-app-confidential-create-keys)
-* [`iroha_cli app confidential gas`↴](#iroha_cli-app-confidential-gas)
-* [`iroha_cli app confidential gas get`↴](#iroha_cli-app-confidential-gas-get)
-* [`iroha_cli app confidential gas set`↴](#iroha_cli-app-confidential-gas-set)
-* [`iroha_cli app taikai`↴](#iroha_cli-app-taikai)
-* [`iroha_cli app taikai bundle`↴](#iroha_cli-app-taikai-bundle)
-* [`iroha_cli app taikai cek-rotate`↴](#iroha_cli-app-taikai-cek-rotate)
-* [`iroha_cli app taikai rpt-attest`↴](#iroha_cli-app-taikai-rpt-attest)
-* [`iroha_cli app taikai ingest`↴](#iroha_cli-app-taikai-ingest)
-* [`iroha_cli app taikai ingest watch`↴](#iroha_cli-app-taikai-ingest-watch)
-* [`iroha_cli app taikai ingest edge`↴](#iroha_cli-app-taikai-ingest-edge)
-* [`iroha_cli app content`↴](#iroha_cli-app-content)
-* [`iroha_cli app content publish`↴](#iroha_cli-app-content-publish)
-* [`iroha_cli app content pack`↴](#iroha_cli-app-content-pack)
-* [`iroha_cli app da`↴](#iroha_cli-app-da)
-* [`iroha_cli app da submit`↴](#iroha_cli-app-da-submit)
-* [`iroha_cli app da get`↴](#iroha_cli-app-da-get)
-* [`iroha_cli app da get-blob`↴](#iroha_cli-app-da-get-blob)
-* [`iroha_cli app da prove`↴](#iroha_cli-app-da-prove)
-* [`iroha_cli app da prove-availability`↴](#iroha_cli-app-da-prove-availability)
-* [`iroha_cli app da rent-quote`↴](#iroha_cli-app-da-rent-quote)
-* [`iroha_cli app da rent-ledger`↴](#iroha_cli-app-da-rent-ledger)
-* [`iroha_cli app streaming`↴](#iroha_cli-app-streaming)
-* [`iroha_cli app streaming fingerprint`↴](#iroha_cli-app-streaming-fingerprint)
-* [`iroha_cli app streaming suites`↴](#iroha_cli-app-streaming-suites)
-* [`iroha_cli app nexus`↴](#iroha_cli-app-nexus)
-* [`iroha_cli app nexus lane-report`↴](#iroha_cli-app-nexus-lane-report)
-* [`iroha_cli app nexus public-lane`↴](#iroha_cli-app-nexus-public-lane)
-* [`iroha_cli app nexus public-lane validators`↴](#iroha_cli-app-nexus-public-lane-validators)
-* [`iroha_cli app nexus public-lane stake`↴](#iroha_cli-app-nexus-public-lane-stake)
-* [`iroha_cli app staking`↴](#iroha_cli-app-staking)
-* [`iroha_cli app staking register`↴](#iroha_cli-app-staking-register)
-* [`iroha_cli app staking activate`↴](#iroha_cli-app-staking-activate)
-* [`iroha_cli app staking exit`↴](#iroha_cli-app-staking-exit)
-* [`iroha_cli app subscriptions`↴](#iroha_cli-app-subscriptions)
-* [`iroha_cli app subscriptions plan`↴](#iroha_cli-app-subscriptions-plan)
-* [`iroha_cli app subscriptions plan create`↴](#iroha_cli-app-subscriptions-plan-create)
-* [`iroha_cli app subscriptions plan list`↴](#iroha_cli-app-subscriptions-plan-list)
-* [`iroha_cli app subscriptions subscription`↴](#iroha_cli-app-subscriptions-subscription)
-* [`iroha_cli app subscriptions subscription create`↴](#iroha_cli-app-subscriptions-subscription-create)
-* [`iroha_cli app subscriptions subscription list`↴](#iroha_cli-app-subscriptions-subscription-list)
-* [`iroha_cli app subscriptions subscription get`↴](#iroha_cli-app-subscriptions-subscription-get)
-* [`iroha_cli app subscriptions subscription pause`↴](#iroha_cli-app-subscriptions-subscription-pause)
-* [`iroha_cli app subscriptions subscription resume`↴](#iroha_cli-app-subscriptions-subscription-resume)
-* [`iroha_cli app subscriptions subscription cancel`↴](#iroha_cli-app-subscriptions-subscription-cancel)
-* [`iroha_cli app subscriptions subscription keep`↴](#iroha_cli-app-subscriptions-subscription-keep)
-* [`iroha_cli app subscriptions subscription charge-now`↴](#iroha_cli-app-subscriptions-subscription-charge-now)
-* [`iroha_cli app subscriptions subscription usage`↴](#iroha_cli-app-subscriptions-subscription-usage)
-* [`iroha_cli app endorsement`↴](#iroha_cli-app-endorsement)
-* [`iroha_cli app endorsement prepare`↴](#iroha_cli-app-endorsement-prepare)
-* [`iroha_cli app endorsement submit`↴](#iroha_cli-app-endorsement-submit)
-* [`iroha_cli app endorsement list`↴](#iroha_cli-app-endorsement-list)
-* [`iroha_cli app endorsement policy`↴](#iroha_cli-app-endorsement-policy)
-* [`iroha_cli app endorsement committee`↴](#iroha_cli-app-endorsement-committee)
-* [`iroha_cli app endorsement register-committee`↴](#iroha_cli-app-endorsement-register-committee)
-* [`iroha_cli app endorsement set-policy`↴](#iroha_cli-app-endorsement-set-policy)
-* [`iroha_cli app jurisdiction`↴](#iroha_cli-app-jurisdiction)
-* [`iroha_cli app jurisdiction verify`↴](#iroha_cli-app-jurisdiction-verify)
-* [`iroha_cli app compute`↴](#iroha_cli-app-compute)
-* [`iroha_cli app compute simulate`↴](#iroha_cli-app-compute-simulate)
-* [`iroha_cli app compute invoke`↴](#iroha_cli-app-compute-invoke)
-* [`iroha_cli app social`↴](#iroha_cli-app-social)
-* [`iroha_cli app social claim-twitter-follow-reward`↴](#iroha_cli-app-social-claim-twitter-follow-reward)
-* [`iroha_cli app social send-to-twitter`↴](#iroha_cli-app-social-send-to-twitter)
-* [`iroha_cli app social cancel-twitter-escrow`↴](#iroha_cli-app-social-cancel-twitter-escrow)
-* [`iroha_cli app space-directory`↴](#iroha_cli-app-space-directory)
-* [`iroha_cli app space-directory manifest`↴](#iroha_cli-app-space-directory-manifest)
-* [`iroha_cli app space-directory manifest publish`↴](#iroha_cli-app-space-directory-manifest-publish)
-* [`iroha_cli app space-directory manifest encode`↴](#iroha_cli-app-space-directory-manifest-encode)
-* [`iroha_cli app space-directory manifest revoke`↴](#iroha_cli-app-space-directory-manifest-revoke)
-* [`iroha_cli app space-directory manifest expire`↴](#iroha_cli-app-space-directory-manifest-expire)
-* [`iroha_cli app space-directory manifest audit-bundle`↴](#iroha_cli-app-space-directory-manifest-audit-bundle)
-* [`iroha_cli app space-directory manifest fetch`↴](#iroha_cli-app-space-directory-manifest-fetch)
-* [`iroha_cli app space-directory manifest scaffold`↴](#iroha_cli-app-space-directory-manifest-scaffold)
-* [`iroha_cli app space-directory bindings`↴](#iroha_cli-app-space-directory-bindings)
-* [`iroha_cli app space-directory bindings fetch`↴](#iroha_cli-app-space-directory-bindings-fetch)
-* [`iroha_cli app kaigi`↴](#iroha_cli-app-kaigi)
-* [`iroha_cli app kaigi create`↴](#iroha_cli-app-kaigi-create)
-* [`iroha_cli app kaigi quickstart`↴](#iroha_cli-app-kaigi-quickstart)
-* [`iroha_cli app kaigi join`↴](#iroha_cli-app-kaigi-join)
-* [`iroha_cli app kaigi leave`↴](#iroha_cli-app-kaigi-leave)
-* [`iroha_cli app kaigi end`↴](#iroha_cli-app-kaigi-end)
-* [`iroha_cli app kaigi record-usage`↴](#iroha_cli-app-kaigi-record-usage)
-* [`iroha_cli app kaigi report-relay-health`↴](#iroha_cli-app-kaigi-report-relay-health)
-* [`iroha_cli app sorafs`↴](#iroha_cli-app-sorafs)
-* [`iroha_cli app sorafs pin`↴](#iroha_cli-app-sorafs-pin)
-* [`iroha_cli app sorafs pin list`↴](#iroha_cli-app-sorafs-pin-list)
-* [`iroha_cli app sorafs pin show`↴](#iroha_cli-app-sorafs-pin-show)
-* [`iroha_cli app sorafs pin register`↴](#iroha_cli-app-sorafs-pin-register)
-* [`iroha_cli app sorafs alias`↴](#iroha_cli-app-sorafs-alias)
-* [`iroha_cli app sorafs alias list`↴](#iroha_cli-app-sorafs-alias-list)
-* [`iroha_cli app sorafs replication`↴](#iroha_cli-app-sorafs-replication)
-* [`iroha_cli app sorafs replication list`↴](#iroha_cli-app-sorafs-replication-list)
-* [`iroha_cli app sorafs storage`↴](#iroha_cli-app-sorafs-storage)
-* [`iroha_cli app sorafs storage pin`↴](#iroha_cli-app-sorafs-storage-pin)
-* [`iroha_cli app sorafs storage token`↴](#iroha_cli-app-sorafs-storage-token)
-* [`iroha_cli app sorafs storage token issue`↴](#iroha_cli-app-sorafs-storage-token-issue)
-* [`iroha_cli app sorafs gateway`↴](#iroha_cli-app-sorafs-gateway)
-* [`iroha_cli app sorafs gateway lint-denylist`↴](#iroha_cli-app-sorafs-gateway-lint-denylist)
-* [`iroha_cli app sorafs gateway update-denylist`↴](#iroha_cli-app-sorafs-gateway-update-denylist)
-* [`iroha_cli app sorafs gateway template-config`↴](#iroha_cli-app-sorafs-gateway-template-config)
-* [`iroha_cli app sorafs gateway generate-hosts`↴](#iroha_cli-app-sorafs-gateway-generate-hosts)
-* [`iroha_cli app sorafs gateway route-plan`↴](#iroha_cli-app-sorafs-gateway-route-plan)
-* [`iroha_cli app sorafs gateway cache-invalidate`↴](#iroha_cli-app-sorafs-gateway-cache-invalidate)
-* [`iroha_cli app sorafs gateway evidence`↴](#iroha_cli-app-sorafs-gateway-evidence)
-* [`iroha_cli app sorafs gateway direct-mode`↴](#iroha_cli-app-sorafs-gateway-direct-mode)
-* [`iroha_cli app sorafs gateway direct-mode plan`↴](#iroha_cli-app-sorafs-gateway-direct-mode-plan)
-* [`iroha_cli app sorafs gateway direct-mode enable`↴](#iroha_cli-app-sorafs-gateway-direct-mode-enable)
-* [`iroha_cli app sorafs gateway direct-mode rollback`↴](#iroha_cli-app-sorafs-gateway-direct-mode-rollback)
-* [`iroha_cli app sorafs gateway merkle`↴](#iroha_cli-app-sorafs-gateway-merkle)
-* [`iroha_cli app sorafs gateway merkle snapshot`↴](#iroha_cli-app-sorafs-gateway-merkle-snapshot)
-* [`iroha_cli app sorafs gateway merkle proof`↴](#iroha_cli-app-sorafs-gateway-merkle-proof)
-* [`iroha_cli app sorafs incentives`↴](#iroha_cli-app-sorafs-incentives)
-* [`iroha_cli app sorafs incentives compute`↴](#iroha_cli-app-sorafs-incentives-compute)
-* [`iroha_cli app sorafs incentives open-dispute`↴](#iroha_cli-app-sorafs-incentives-open-dispute)
-* [`iroha_cli app sorafs incentives dashboard`↴](#iroha_cli-app-sorafs-incentives-dashboard)
-* [`iroha_cli app sorafs incentives service`↴](#iroha_cli-app-sorafs-incentives-service)
-* [`iroha_cli app sorafs incentives service init`↴](#iroha_cli-app-sorafs-incentives-service-init)
-* [`iroha_cli app sorafs incentives service process`↴](#iroha_cli-app-sorafs-incentives-service-process)
-* [`iroha_cli app sorafs incentives service record`↴](#iroha_cli-app-sorafs-incentives-service-record)
-* [`iroha_cli app sorafs incentives service dispute`↴](#iroha_cli-app-sorafs-incentives-service-dispute)
-* [`iroha_cli app sorafs incentives service dispute file`↴](#iroha_cli-app-sorafs-incentives-service-dispute-file)
-* [`iroha_cli app sorafs incentives service dispute resolve`↴](#iroha_cli-app-sorafs-incentives-service-dispute-resolve)
-* [`iroha_cli app sorafs incentives service dispute reject`↴](#iroha_cli-app-sorafs-incentives-service-dispute-reject)
-* [`iroha_cli app sorafs incentives service dashboard`↴](#iroha_cli-app-sorafs-incentives-service-dashboard)
-* [`iroha_cli app sorafs incentives service audit`↴](#iroha_cli-app-sorafs-incentives-service-audit)
-* [`iroha_cli app sorafs incentives service shadow-run`↴](#iroha_cli-app-sorafs-incentives-service-shadow-run)
-* [`iroha_cli app sorafs incentives service reconcile`↴](#iroha_cli-app-sorafs-incentives-service-reconcile)
-* [`iroha_cli app sorafs incentives service daemon`↴](#iroha_cli-app-sorafs-incentives-service-daemon)
-* [`iroha_cli app sorafs handshake`↴](#iroha_cli-app-sorafs-handshake)
-* [`iroha_cli app sorafs handshake show`↴](#iroha_cli-app-sorafs-handshake-show)
-* [`iroha_cli app sorafs handshake update`↴](#iroha_cli-app-sorafs-handshake-update)
-* [`iroha_cli app sorafs handshake token`↴](#iroha_cli-app-sorafs-handshake-token)
-* [`iroha_cli app sorafs handshake token issue`↴](#iroha_cli-app-sorafs-handshake-token-issue)
-* [`iroha_cli app sorafs handshake token id`↴](#iroha_cli-app-sorafs-handshake-token-id)
-* [`iroha_cli app sorafs handshake token fingerprint`↴](#iroha_cli-app-sorafs-handshake-token-fingerprint)
-* [`iroha_cli app sorafs toolkit`↴](#iroha_cli-app-sorafs-toolkit)
-* [`iroha_cli app sorafs toolkit pack`↴](#iroha_cli-app-sorafs-toolkit-pack)
-* [`iroha_cli app sorafs guard-directory`↴](#iroha_cli-app-sorafs-guard-directory)
-* [`iroha_cli app sorafs guard-directory fetch`↴](#iroha_cli-app-sorafs-guard-directory-fetch)
-* [`iroha_cli app sorafs guard-directory verify`↴](#iroha_cli-app-sorafs-guard-directory-verify)
-* [`iroha_cli app sorafs reserve`↴](#iroha_cli-app-sorafs-reserve)
-* [`iroha_cli app sorafs reserve quote`↴](#iroha_cli-app-sorafs-reserve-quote)
-* [`iroha_cli app sorafs reserve ledger`↴](#iroha_cli-app-sorafs-reserve-ledger)
-* [`iroha_cli app sorafs gar`↴](#iroha_cli-app-sorafs-gar)
-* [`iroha_cli app sorafs gar receipt`↴](#iroha_cli-app-sorafs-gar-receipt)
-* [`iroha_cli app sorafs repair`↴](#iroha_cli-app-sorafs-repair)
-* [`iroha_cli app sorafs repair list`↴](#iroha_cli-app-sorafs-repair-list)
-* [`iroha_cli app sorafs repair claim`↴](#iroha_cli-app-sorafs-repair-claim)
-* [`iroha_cli app sorafs repair complete`↴](#iroha_cli-app-sorafs-repair-complete)
-* [`iroha_cli app sorafs repair fail`↴](#iroha_cli-app-sorafs-repair-fail)
-* [`iroha_cli app sorafs repair escalate`↴](#iroha_cli-app-sorafs-repair-escalate)
-* [`iroha_cli app sorafs gc`↴](#iroha_cli-app-sorafs-gc)
-* [`iroha_cli app sorafs gc inspect`↴](#iroha_cli-app-sorafs-gc-inspect)
-* [`iroha_cli app sorafs gc dry-run`↴](#iroha_cli-app-sorafs-gc-dry-run)
-* [`iroha_cli app sorafs fetch`↴](#iroha_cli-app-sorafs-fetch)
-* [`iroha_cli app soracles`↴](#iroha_cli-app-soracles)
-* [`iroha_cli app soracles bundle`↴](#iroha_cli-app-soracles-bundle)
-* [`iroha_cli app soracles catalog`↴](#iroha_cli-app-soracles-catalog)
-* [`iroha_cli app soracles evidence-gc`↴](#iroha_cli-app-soracles-evidence-gc)
-* [`iroha_cli app sns`↴](#iroha_cli-app-sns)
-* [`iroha_cli app sns register`↴](#iroha_cli-app-sns-register)
-* [`iroha_cli app sns renew`↴](#iroha_cli-app-sns-renew)
-* [`iroha_cli app sns transfer`↴](#iroha_cli-app-sns-transfer)
-* [`iroha_cli app sns update-controllers`↴](#iroha_cli-app-sns-update-controllers)
-* [`iroha_cli app sns freeze`↴](#iroha_cli-app-sns-freeze)
-* [`iroha_cli app sns unfreeze`↴](#iroha_cli-app-sns-unfreeze)
-* [`iroha_cli app sns registration`↴](#iroha_cli-app-sns-registration)
-* [`iroha_cli app sns policy`↴](#iroha_cli-app-sns-policy)
-* [`iroha_cli app sns governance`↴](#iroha_cli-app-sns-governance)
-* [`iroha_cli app sns governance case`↴](#iroha_cli-app-sns-governance-case)
-* [`iroha_cli app sns governance case create`↴](#iroha_cli-app-sns-governance-case-create)
-* [`iroha_cli app sns governance case export`↴](#iroha_cli-app-sns-governance-case-export)
-* [`iroha_cli app alias`↴](#iroha_cli-app-alias)
-* [`iroha_cli app alias voprf-evaluate`↴](#iroha_cli-app-alias-voprf-evaluate)
-* [`iroha_cli app alias resolve`↴](#iroha_cli-app-alias-resolve)
-* [`iroha_cli app alias resolve-index`↴](#iroha_cli-app-alias-resolve-index)
-* [`iroha_cli app repo`↴](#iroha_cli-app-repo)
-* [`iroha_cli app repo initiate`↴](#iroha_cli-app-repo-initiate)
-* [`iroha_cli app repo unwind`↴](#iroha_cli-app-repo-unwind)
-* [`iroha_cli app repo query`↴](#iroha_cli-app-repo-query)
-* [`iroha_cli app repo query list`↴](#iroha_cli-app-repo-query-list)
-* [`iroha_cli app repo query get`↴](#iroha_cli-app-repo-query-get)
-* [`iroha_cli app repo margin`↴](#iroha_cli-app-repo-margin)
-* [`iroha_cli app repo margin-call`↴](#iroha_cli-app-repo-margin-call)
-* [`iroha_cli app settlement`↴](#iroha_cli-app-settlement)
-* [`iroha_cli app settlement dvp`↴](#iroha_cli-app-settlement-dvp)
-* [`iroha_cli app settlement pvp`↴](#iroha_cli-app-settlement-pvp)
-* [`iroha_cli tools`↴](#iroha_cli-tools)
-* [`iroha_cli tools address`↴](#iroha_cli-tools-address)
-* [`iroha_cli tools address convert`↴](#iroha_cli-tools-address-convert)
-* [`iroha_cli tools address audit`↴](#iroha_cli-tools-address-audit)
-* [`iroha_cli tools address normalize`↴](#iroha_cli-tools-address-normalize)
-* [`iroha_cli tools crypto`↴](#iroha_cli-tools-crypto)
-* [`iroha_cli tools crypto sm2`↴](#iroha_cli-tools-crypto-sm2)
-* [`iroha_cli tools crypto sm2 keygen`↴](#iroha_cli-tools-crypto-sm2-keygen)
-* [`iroha_cli tools crypto sm2 import`↴](#iroha_cli-tools-crypto-sm2-import)
-* [`iroha_cli tools crypto sm2 export`↴](#iroha_cli-tools-crypto-sm2-export)
-* [`iroha_cli tools crypto sm3`↴](#iroha_cli-tools-crypto-sm3)
-* [`iroha_cli tools crypto sm3 hash`↴](#iroha_cli-tools-crypto-sm3-hash)
-* [`iroha_cli tools crypto sm4`↴](#iroha_cli-tools-crypto-sm4)
-* [`iroha_cli tools crypto sm4 gcm-seal`↴](#iroha_cli-tools-crypto-sm4-gcm-seal)
-* [`iroha_cli tools crypto sm4 gcm-open`↴](#iroha_cli-tools-crypto-sm4-gcm-open)
-* [`iroha_cli tools crypto sm4 ccm-seal`↴](#iroha_cli-tools-crypto-sm4-ccm-seal)
-* [`iroha_cli tools crypto sm4 ccm-open`↴](#iroha_cli-tools-crypto-sm4-ccm-open)
-* [`iroha_cli tools ivm`↴](#iroha_cli-tools-ivm)
-* [`iroha_cli tools ivm abi-hash`↴](#iroha_cli-tools-ivm-abi-hash)
-* [`iroha_cli tools ivm syscalls`↴](#iroha_cli-tools-ivm-syscalls)
-* [`iroha_cli tools ivm manifest-gen`↴](#iroha_cli-tools-ivm-manifest-gen)
-* [`iroha_cli tools markdown-help`↴](#iroha_cli-tools-markdown-help)
-* [`iroha_cli tools version`↴](#iroha_cli-tools-version)
+* [`iroha`↴](#iroha)
+* [`iroha ledger`↴](#iroha-ledger)
+* [`iroha ledger domain`↴](#iroha-ledger-domain)
+* [`iroha ledger domain list`↴](#iroha-ledger-domain-list)
+* [`iroha ledger domain list all`↴](#iroha-ledger-domain-list-all)
+* [`iroha ledger domain list filter`↴](#iroha-ledger-domain-list-filter)
+* [`iroha ledger domain get`↴](#iroha-ledger-domain-get)
+* [`iroha ledger domain register`↴](#iroha-ledger-domain-register)
+* [`iroha ledger domain unregister`↴](#iroha-ledger-domain-unregister)
+* [`iroha ledger domain transfer`↴](#iroha-ledger-domain-transfer)
+* [`iroha ledger domain meta`↴](#iroha-ledger-domain-meta)
+* [`iroha ledger domain meta get`↴](#iroha-ledger-domain-meta-get)
+* [`iroha ledger domain meta set`↴](#iroha-ledger-domain-meta-set)
+* [`iroha ledger domain meta remove`↴](#iroha-ledger-domain-meta-remove)
+* [`iroha ledger account`↴](#iroha-ledger-account)
+* [`iroha ledger account role`↴](#iroha-ledger-account-role)
+* [`iroha ledger account role list`↴](#iroha-ledger-account-role-list)
+* [`iroha ledger account role grant`↴](#iroha-ledger-account-role-grant)
+* [`iroha ledger account role revoke`↴](#iroha-ledger-account-role-revoke)
+* [`iroha ledger account permission`↴](#iroha-ledger-account-permission)
+* [`iroha ledger account permission list`↴](#iroha-ledger-account-permission-list)
+* [`iroha ledger account permission grant`↴](#iroha-ledger-account-permission-grant)
+* [`iroha ledger account permission revoke`↴](#iroha-ledger-account-permission-revoke)
+* [`iroha ledger account list`↴](#iroha-ledger-account-list)
+* [`iroha ledger account list all`↴](#iroha-ledger-account-list-all)
+* [`iroha ledger account list filter`↴](#iroha-ledger-account-list-filter)
+* [`iroha ledger account get`↴](#iroha-ledger-account-get)
+* [`iroha ledger account register`↴](#iroha-ledger-account-register)
+* [`iroha ledger account unregister`↴](#iroha-ledger-account-unregister)
+* [`iroha ledger account meta`↴](#iroha-ledger-account-meta)
+* [`iroha ledger account meta get`↴](#iroha-ledger-account-meta-get)
+* [`iroha ledger account meta set`↴](#iroha-ledger-account-meta-set)
+* [`iroha ledger account meta remove`↴](#iroha-ledger-account-meta-remove)
+* [`iroha ledger asset`↴](#iroha-ledger-asset)
+* [`iroha ledger asset definition`↴](#iroha-ledger-asset-definition)
+* [`iroha ledger asset definition list`↴](#iroha-ledger-asset-definition-list)
+* [`iroha ledger asset definition list all`↴](#iroha-ledger-asset-definition-list-all)
+* [`iroha ledger asset definition list filter`↴](#iroha-ledger-asset-definition-list-filter)
+* [`iroha ledger asset definition get`↴](#iroha-ledger-asset-definition-get)
+* [`iroha ledger asset definition register`↴](#iroha-ledger-asset-definition-register)
+* [`iroha ledger asset definition unregister`↴](#iroha-ledger-asset-definition-unregister)
+* [`iroha ledger asset definition transfer`↴](#iroha-ledger-asset-definition-transfer)
+* [`iroha ledger asset definition meta`↴](#iroha-ledger-asset-definition-meta)
+* [`iroha ledger asset definition meta get`↴](#iroha-ledger-asset-definition-meta-get)
+* [`iroha ledger asset definition meta set`↴](#iroha-ledger-asset-definition-meta-set)
+* [`iroha ledger asset definition meta remove`↴](#iroha-ledger-asset-definition-meta-remove)
+* [`iroha ledger asset get`↴](#iroha-ledger-asset-get)
+* [`iroha ledger asset list`↴](#iroha-ledger-asset-list)
+* [`iroha ledger asset list all`↴](#iroha-ledger-asset-list-all)
+* [`iroha ledger asset list filter`↴](#iroha-ledger-asset-list-filter)
+* [`iroha ledger asset mint`↴](#iroha-ledger-asset-mint)
+* [`iroha ledger asset burn`↴](#iroha-ledger-asset-burn)
+* [`iroha ledger asset transfer`↴](#iroha-ledger-asset-transfer)
+* [`iroha ledger nft`↴](#iroha-ledger-nft)
+* [`iroha ledger nft get`↴](#iroha-ledger-nft-get)
+* [`iroha ledger nft list`↴](#iroha-ledger-nft-list)
+* [`iroha ledger nft list all`↴](#iroha-ledger-nft-list-all)
+* [`iroha ledger nft list filter`↴](#iroha-ledger-nft-list-filter)
+* [`iroha ledger nft register`↴](#iroha-ledger-nft-register)
+* [`iroha ledger nft unregister`↴](#iroha-ledger-nft-unregister)
+* [`iroha ledger nft transfer`↴](#iroha-ledger-nft-transfer)
+* [`iroha ledger nft meta`↴](#iroha-ledger-nft-meta)
+* [`iroha ledger nft meta get`↴](#iroha-ledger-nft-meta-get)
+* [`iroha ledger nft meta set`↴](#iroha-ledger-nft-meta-set)
+* [`iroha ledger nft meta remove`↴](#iroha-ledger-nft-meta-remove)
+* [`iroha ledger peer`↴](#iroha-ledger-peer)
+* [`iroha ledger peer list`↴](#iroha-ledger-peer-list)
+* [`iroha ledger peer list all`↴](#iroha-ledger-peer-list-all)
+* [`iroha ledger peer register`↴](#iroha-ledger-peer-register)
+* [`iroha ledger peer unregister`↴](#iroha-ledger-peer-unregister)
+* [`iroha ledger role`↴](#iroha-ledger-role)
+* [`iroha ledger role permission`↴](#iroha-ledger-role-permission)
+* [`iroha ledger role permission list`↴](#iroha-ledger-role-permission-list)
+* [`iroha ledger role permission grant`↴](#iroha-ledger-role-permission-grant)
+* [`iroha ledger role permission revoke`↴](#iroha-ledger-role-permission-revoke)
+* [`iroha ledger role list`↴](#iroha-ledger-role-list)
+* [`iroha ledger role list all`↴](#iroha-ledger-role-list-all)
+* [`iroha ledger role register`↴](#iroha-ledger-role-register)
+* [`iroha ledger role unregister`↴](#iroha-ledger-role-unregister)
+* [`iroha ledger parameter`↴](#iroha-ledger-parameter)
+* [`iroha ledger parameter list`↴](#iroha-ledger-parameter-list)
+* [`iroha ledger parameter list all`↴](#iroha-ledger-parameter-list-all)
+* [`iroha ledger parameter set`↴](#iroha-ledger-parameter-set)
+* [`iroha ledger trigger`↴](#iroha-ledger-trigger)
+* [`iroha ledger trigger list`↴](#iroha-ledger-trigger-list)
+* [`iroha ledger trigger list all`↴](#iroha-ledger-trigger-list-all)
+* [`iroha ledger trigger get`↴](#iroha-ledger-trigger-get)
+* [`iroha ledger trigger register`↴](#iroha-ledger-trigger-register)
+* [`iroha ledger trigger unregister`↴](#iroha-ledger-trigger-unregister)
+* [`iroha ledger trigger mint`↴](#iroha-ledger-trigger-mint)
+* [`iroha ledger trigger burn`↴](#iroha-ledger-trigger-burn)
+* [`iroha ledger trigger meta`↴](#iroha-ledger-trigger-meta)
+* [`iroha ledger trigger meta get`↴](#iroha-ledger-trigger-meta-get)
+* [`iroha ledger trigger meta set`↴](#iroha-ledger-trigger-meta-set)
+* [`iroha ledger trigger meta remove`↴](#iroha-ledger-trigger-meta-remove)
+* [`iroha ledger query`↴](#iroha-ledger-query)
+* [`iroha ledger query stdin`↴](#iroha-ledger-query-stdin)
+* [`iroha ledger query stdin-raw`↴](#iroha-ledger-query-stdin-raw)
+* [`iroha ledger transaction`↴](#iroha-ledger-transaction)
+* [`iroha ledger transaction get`↴](#iroha-ledger-transaction-get)
+* [`iroha ledger transaction ping`↴](#iroha-ledger-transaction-ping)
+* [`iroha ledger transaction ivm`↴](#iroha-ledger-transaction-ivm)
+* [`iroha ledger transaction stdin`↴](#iroha-ledger-transaction-stdin)
+* [`iroha ledger multisig`↴](#iroha-ledger-multisig)
+* [`iroha ledger multisig list`↴](#iroha-ledger-multisig-list)
+* [`iroha ledger multisig list all`↴](#iroha-ledger-multisig-list-all)
+* [`iroha ledger multisig register`↴](#iroha-ledger-multisig-register)
+* [`iroha ledger multisig propose`↴](#iroha-ledger-multisig-propose)
+* [`iroha ledger multisig approve`↴](#iroha-ledger-multisig-approve)
+* [`iroha ledger multisig inspect`↴](#iroha-ledger-multisig-inspect)
+* [`iroha ledger events`↴](#iroha-ledger-events)
+* [`iroha ledger events state`↴](#iroha-ledger-events-state)
+* [`iroha ledger events governance`↴](#iroha-ledger-events-governance)
+* [`iroha ledger events transaction`↴](#iroha-ledger-events-transaction)
+* [`iroha ledger events block`↴](#iroha-ledger-events-block)
+* [`iroha ledger events trigger-execute`↴](#iroha-ledger-events-trigger-execute)
+* [`iroha ledger events trigger-complete`↴](#iroha-ledger-events-trigger-complete)
+* [`iroha ledger blocks`↴](#iroha-ledger-blocks)
+* [`iroha ops`↴](#iroha-ops)
+* [`iroha ops offline`↴](#iroha-ops-offline)
+* [`iroha ops offline allowance`↴](#iroha-ops-offline-allowance)
+* [`iroha ops offline allowance list`↴](#iroha-ops-offline-allowance-list)
+* [`iroha ops offline allowance get`↴](#iroha-ops-offline-allowance-get)
+* [`iroha ops offline transfer`↴](#iroha-ops-offline-transfer)
+* [`iroha ops offline transfer list`↴](#iroha-ops-offline-transfer-list)
+* [`iroha ops offline transfer get`↴](#iroha-ops-offline-transfer-get)
+* [`iroha ops offline transfer proof`↴](#iroha-ops-offline-transfer-proof)
+* [`iroha ops offline bundle`↴](#iroha-ops-offline-bundle)
+* [`iroha ops offline bundle inspect`↴](#iroha-ops-offline-bundle-inspect)
+* [`iroha ops offline summary`↴](#iroha-ops-offline-summary)
+* [`iroha ops offline summary list`↴](#iroha-ops-offline-summary-list)
+* [`iroha ops offline summary export`↴](#iroha-ops-offline-summary-export)
+* [`iroha ops offline revocation`↴](#iroha-ops-offline-revocation)
+* [`iroha ops offline revocation list`↴](#iroha-ops-offline-revocation-list)
+* [`iroha ops offline rejection`↴](#iroha-ops-offline-rejection)
+* [`iroha ops offline rejection stats`↴](#iroha-ops-offline-rejection-stats)
+* [`iroha ops offline qr`↴](#iroha-ops-offline-qr)
+* [`iroha ops offline qr encode`↴](#iroha-ops-offline-qr-encode)
+* [`iroha ops offline qr decode`↴](#iroha-ops-offline-qr-decode)
+* [`iroha ops offline petal`↴](#iroha-ops-offline-petal)
+* [`iroha ops offline petal encode`↴](#iroha-ops-offline-petal-encode)
+* [`iroha ops offline petal decode`↴](#iroha-ops-offline-petal-decode)
+* [`iroha ops offline petal eval-capture`↴](#iroha-ops-offline-petal-eval-capture)
+* [`iroha ops offline petal simulate-realtime`↴](#iroha-ops-offline-petal-simulate-realtime)
+* [`iroha ops offline petal score-styles`↴](#iroha-ops-offline-petal-score-styles)
+* [`iroha ops executor`↴](#iroha-ops-executor)
+* [`iroha ops executor data-model`↴](#iroha-ops-executor-data-model)
+* [`iroha ops executor upgrade`↴](#iroha-ops-executor-upgrade)
+* [`iroha ops runtime`↴](#iroha-ops-runtime)
+* [`iroha ops runtime abi`↴](#iroha-ops-runtime-abi)
+* [`iroha ops runtime abi active`↴](#iroha-ops-runtime-abi-active)
+* [`iroha ops runtime abi active-query`↴](#iroha-ops-runtime-abi-active-query)
+* [`iroha ops runtime abi hash`↴](#iroha-ops-runtime-abi-hash)
+* [`iroha ops runtime upgrade`↴](#iroha-ops-runtime-upgrade)
+* [`iroha ops runtime upgrade list`↴](#iroha-ops-runtime-upgrade-list)
+* [`iroha ops runtime upgrade propose`↴](#iroha-ops-runtime-upgrade-propose)
+* [`iroha ops runtime upgrade activate`↴](#iroha-ops-runtime-upgrade-activate)
+* [`iroha ops runtime upgrade cancel`↴](#iroha-ops-runtime-upgrade-cancel)
+* [`iroha ops runtime status`↴](#iroha-ops-runtime-status)
+* [`iroha ops runtime capabilities`↴](#iroha-ops-runtime-capabilities)
+* [`iroha ops sumeragi`↴](#iroha-ops-sumeragi)
+* [`iroha ops sumeragi status`↴](#iroha-ops-sumeragi-status)
+* [`iroha ops sumeragi leader`↴](#iroha-ops-sumeragi-leader)
+* [`iroha ops sumeragi params`↴](#iroha-ops-sumeragi-params)
+* [`iroha ops sumeragi collectors`↴](#iroha-ops-sumeragi-collectors)
+* [`iroha ops sumeragi qc`↴](#iroha-ops-sumeragi-qc)
+* [`iroha ops sumeragi pacemaker`↴](#iroha-ops-sumeragi-pacemaker)
+* [`iroha ops sumeragi phases`↴](#iroha-ops-sumeragi-phases)
+* [`iroha ops sumeragi telemetry`↴](#iroha-ops-sumeragi-telemetry)
+* [`iroha ops sumeragi evidence`↴](#iroha-ops-sumeragi-evidence)
+* [`iroha ops sumeragi evidence list`↴](#iroha-ops-sumeragi-evidence-list)
+* [`iroha ops sumeragi evidence count`↴](#iroha-ops-sumeragi-evidence-count)
+* [`iroha ops sumeragi evidence submit`↴](#iroha-ops-sumeragi-evidence-submit)
+* [`iroha ops sumeragi rbc`↴](#iroha-ops-sumeragi-rbc)
+* [`iroha ops sumeragi rbc status`↴](#iroha-ops-sumeragi-rbc-status)
+* [`iroha ops sumeragi rbc sessions`↴](#iroha-ops-sumeragi-rbc-sessions)
+* [`iroha ops sumeragi vrf-penalties`↴](#iroha-ops-sumeragi-vrf-penalties)
+* [`iroha ops sumeragi vrf-epoch`↴](#iroha-ops-sumeragi-vrf-epoch)
+* [`iroha ops sumeragi commit-qc`↴](#iroha-ops-sumeragi-commit-qc)
+* [`iroha ops sumeragi commit-qc get`↴](#iroha-ops-sumeragi-commit-qc-get)
+* [`iroha ops audit`↴](#iroha-ops-audit)
+* [`iroha ops audit witness`↴](#iroha-ops-audit-witness)
+* [`iroha ops connect`↴](#iroha-ops-connect)
+* [`iroha ops connect queue`↴](#iroha-ops-connect-queue)
+* [`iroha ops connect queue inspect`↴](#iroha-ops-connect-queue-inspect)
+* [`iroha offline`↴](#iroha-offline)
+* [`iroha offline allowance`↴](#iroha-offline-allowance)
+* [`iroha offline allowance list`↴](#iroha-offline-allowance-list)
+* [`iroha offline allowance get`↴](#iroha-offline-allowance-get)
+* [`iroha offline transfer`↴](#iroha-offline-transfer)
+* [`iroha offline transfer list`↴](#iroha-offline-transfer-list)
+* [`iroha offline transfer get`↴](#iroha-offline-transfer-get)
+* [`iroha offline transfer proof`↴](#iroha-offline-transfer-proof)
+* [`iroha offline bundle`↴](#iroha-offline-bundle)
+* [`iroha offline bundle inspect`↴](#iroha-offline-bundle-inspect)
+* [`iroha offline summary`↴](#iroha-offline-summary)
+* [`iroha offline summary list`↴](#iroha-offline-summary-list)
+* [`iroha offline summary export`↴](#iroha-offline-summary-export)
+* [`iroha offline revocation`↴](#iroha-offline-revocation)
+* [`iroha offline revocation list`↴](#iroha-offline-revocation-list)
+* [`iroha offline rejection`↴](#iroha-offline-rejection)
+* [`iroha offline rejection stats`↴](#iroha-offline-rejection-stats)
+* [`iroha offline qr`↴](#iroha-offline-qr)
+* [`iroha offline qr encode`↴](#iroha-offline-qr-encode)
+* [`iroha offline qr decode`↴](#iroha-offline-qr-decode)
+* [`iroha offline petal`↴](#iroha-offline-petal)
+* [`iroha offline petal encode`↴](#iroha-offline-petal-encode)
+* [`iroha offline petal decode`↴](#iroha-offline-petal-decode)
+* [`iroha offline petal eval-capture`↴](#iroha-offline-petal-eval-capture)
+* [`iroha offline petal simulate-realtime`↴](#iroha-offline-petal-simulate-realtime)
+* [`iroha offline petal score-styles`↴](#iroha-offline-petal-score-styles)
+* [`iroha app`↴](#iroha-app)
+* [`iroha app gov`↴](#iroha-app-gov)
+* [`iroha app gov deploy`↴](#iroha-app-gov-deploy)
+* [`iroha app gov deploy propose`↴](#iroha-app-gov-deploy-propose)
+* [`iroha app gov deploy meta`↴](#iroha-app-gov-deploy-meta)
+* [`iroha app gov deploy audit`↴](#iroha-app-gov-deploy-audit)
+* [`iroha app gov vote`↴](#iroha-app-gov-vote)
+* [`iroha app gov proposal`↴](#iroha-app-gov-proposal)
+* [`iroha app gov proposal get`↴](#iroha-app-gov-proposal-get)
+* [`iroha app gov locks`↴](#iroha-app-gov-locks)
+* [`iroha app gov locks get`↴](#iroha-app-gov-locks-get)
+* [`iroha app gov council`↴](#iroha-app-gov-council)
+* [`iroha app gov council derive-vrf`↴](#iroha-app-gov-council-derive-vrf)
+* [`iroha app gov council persist`↴](#iroha-app-gov-council-persist)
+* [`iroha app gov council gen-vrf`↴](#iroha-app-gov-council-gen-vrf)
+* [`iroha app gov council derive-and-persist`↴](#iroha-app-gov-council-derive-and-persist)
+* [`iroha app gov council replace`↴](#iroha-app-gov-council-replace)
+* [`iroha app gov unlock`↴](#iroha-app-gov-unlock)
+* [`iroha app gov unlock stats`↴](#iroha-app-gov-unlock-stats)
+* [`iroha app gov referendum`↴](#iroha-app-gov-referendum)
+* [`iroha app gov referendum get`↴](#iroha-app-gov-referendum-get)
+* [`iroha app gov tally`↴](#iroha-app-gov-tally)
+* [`iroha app gov tally get`↴](#iroha-app-gov-tally-get)
+* [`iroha app gov finalize`↴](#iroha-app-gov-finalize)
+* [`iroha app gov enact`↴](#iroha-app-gov-enact)
+* [`iroha app gov protected`↴](#iroha-app-gov-protected)
+* [`iroha app gov protected set`↴](#iroha-app-gov-protected-set)
+* [`iroha app gov protected apply`↴](#iroha-app-gov-protected-apply)
+* [`iroha app gov protected get`↴](#iroha-app-gov-protected-get)
+* [`iroha app gov instance`↴](#iroha-app-gov-instance)
+* [`iroha app gov instance activate`↴](#iroha-app-gov-instance-activate)
+* [`iroha app gov instance list`↴](#iroha-app-gov-instance-list)
+* [`iroha app contracts`↴](#iroha-app-contracts)
+* [`iroha app contracts code`↴](#iroha-app-contracts-code)
+* [`iroha app contracts code get`↴](#iroha-app-contracts-code-get)
+* [`iroha app contracts deploy`↴](#iroha-app-contracts-deploy)
+* [`iroha app contracts deploy-activate`↴](#iroha-app-contracts-deploy-activate)
+* [`iroha app contracts manifest`↴](#iroha-app-contracts-manifest)
+* [`iroha app contracts manifest get`↴](#iroha-app-contracts-manifest-get)
+* [`iroha app contracts manifest build`↴](#iroha-app-contracts-manifest-build)
+* [`iroha app contracts simulate`↴](#iroha-app-contracts-simulate)
+* [`iroha app contracts instances`↴](#iroha-app-contracts-instances)
+* [`iroha app zk`↴](#iroha-app-zk)
+* [`iroha app zk roots`↴](#iroha-app-zk-roots)
+* [`iroha app zk verify`↴](#iroha-app-zk-verify)
+* [`iroha app zk submit-proof`↴](#iroha-app-zk-submit-proof)
+* [`iroha app zk verify-batch`↴](#iroha-app-zk-verify-batch)
+* [`iroha app zk schema-hash`↴](#iroha-app-zk-schema-hash)
+* [`iroha app zk attachments`↴](#iroha-app-zk-attachments)
+* [`iroha app zk attachments upload`↴](#iroha-app-zk-attachments-upload)
+* [`iroha app zk attachments list`↴](#iroha-app-zk-attachments-list)
+* [`iroha app zk attachments get`↴](#iroha-app-zk-attachments-get)
+* [`iroha app zk attachments delete`↴](#iroha-app-zk-attachments-delete)
+* [`iroha app zk attachments cleanup`↴](#iroha-app-zk-attachments-cleanup)
+* [`iroha app zk register-asset`↴](#iroha-app-zk-register-asset)
+* [`iroha app zk shield`↴](#iroha-app-zk-shield)
+* [`iroha app zk unshield`↴](#iroha-app-zk-unshield)
+* [`iroha app zk vk`↴](#iroha-app-zk-vk)
+* [`iroha app zk vk register`↴](#iroha-app-zk-vk-register)
+* [`iroha app zk vk update`↴](#iroha-app-zk-vk-update)
+* [`iroha app zk vk get`↴](#iroha-app-zk-vk-get)
+* [`iroha app zk proofs`↴](#iroha-app-zk-proofs)
+* [`iroha app zk proofs list`↴](#iroha-app-zk-proofs-list)
+* [`iroha app zk proofs count`↴](#iroha-app-zk-proofs-count)
+* [`iroha app zk proofs get`↴](#iroha-app-zk-proofs-get)
+* [`iroha app zk proofs retention`↴](#iroha-app-zk-proofs-retention)
+* [`iroha app zk proofs prune`↴](#iroha-app-zk-proofs-prune)
+* [`iroha app zk prover`↴](#iroha-app-zk-prover)
+* [`iroha app zk prover reports`↴](#iroha-app-zk-prover-reports)
+* [`iroha app zk prover reports list`↴](#iroha-app-zk-prover-reports-list)
+* [`iroha app zk prover reports get`↴](#iroha-app-zk-prover-reports-get)
+* [`iroha app zk prover reports delete`↴](#iroha-app-zk-prover-reports-delete)
+* [`iroha app zk prover reports cleanup`↴](#iroha-app-zk-prover-reports-cleanup)
+* [`iroha app zk prover reports count`↴](#iroha-app-zk-prover-reports-count)
+* [`iroha app zk ivm`↴](#iroha-app-zk-ivm)
+* [`iroha app zk ivm derive`↴](#iroha-app-zk-ivm-derive)
+* [`iroha app zk ivm prove`↴](#iroha-app-zk-ivm-prove)
+* [`iroha app zk ivm get`↴](#iroha-app-zk-ivm-get)
+* [`iroha app zk ivm delete`↴](#iroha-app-zk-ivm-delete)
+* [`iroha app zk ivm derive-pk`↴](#iroha-app-zk-ivm-derive-pk)
+* [`iroha app zk vote`↴](#iroha-app-zk-vote)
+* [`iroha app zk vote tally`↴](#iroha-app-zk-vote-tally)
+* [`iroha app zk envelope`↴](#iroha-app-zk-envelope)
+* [`iroha app confidential`↴](#iroha-app-confidential)
+* [`iroha app confidential create-keys`↴](#iroha-app-confidential-create-keys)
+* [`iroha app confidential gas`↴](#iroha-app-confidential-gas)
+* [`iroha app confidential gas get`↴](#iroha-app-confidential-gas-get)
+* [`iroha app confidential gas set`↴](#iroha-app-confidential-gas-set)
+* [`iroha app taikai`↴](#iroha-app-taikai)
+* [`iroha app taikai bundle`↴](#iroha-app-taikai-bundle)
+* [`iroha app taikai cek-rotate`↴](#iroha-app-taikai-cek-rotate)
+* [`iroha app taikai rpt-attest`↴](#iroha-app-taikai-rpt-attest)
+* [`iroha app taikai ingest`↴](#iroha-app-taikai-ingest)
+* [`iroha app taikai ingest watch`↴](#iroha-app-taikai-ingest-watch)
+* [`iroha app taikai ingest edge`↴](#iroha-app-taikai-ingest-edge)
+* [`iroha app content`↴](#iroha-app-content)
+* [`iroha app content publish`↴](#iroha-app-content-publish)
+* [`iroha app content pack`↴](#iroha-app-content-pack)
+* [`iroha app da`↴](#iroha-app-da)
+* [`iroha app da submit`↴](#iroha-app-da-submit)
+* [`iroha app da get`↴](#iroha-app-da-get)
+* [`iroha app da get-blob`↴](#iroha-app-da-get-blob)
+* [`iroha app da prove`↴](#iroha-app-da-prove)
+* [`iroha app da prove-availability`↴](#iroha-app-da-prove-availability)
+* [`iroha app da proof-policies`↴](#iroha-app-da-proof-policies)
+* [`iroha app da proof-policy-snapshot`↴](#iroha-app-da-proof-policy-snapshot)
+* [`iroha app da commitments-list`↴](#iroha-app-da-commitments-list)
+* [`iroha app da commitments-prove`↴](#iroha-app-da-commitments-prove)
+* [`iroha app da commitments-verify`↴](#iroha-app-da-commitments-verify)
+* [`iroha app da pin-intents-list`↴](#iroha-app-da-pin-intents-list)
+* [`iroha app da pin-intents-prove`↴](#iroha-app-da-pin-intents-prove)
+* [`iroha app da pin-intents-verify`↴](#iroha-app-da-pin-intents-verify)
+* [`iroha app da rent-quote`↴](#iroha-app-da-rent-quote)
+* [`iroha app da rent-ledger`↴](#iroha-app-da-rent-ledger)
+* [`iroha app streaming`↴](#iroha-app-streaming)
+* [`iroha app streaming fingerprint`↴](#iroha-app-streaming-fingerprint)
+* [`iroha app streaming suites`↴](#iroha-app-streaming-suites)
+* [`iroha app nexus`↴](#iroha-app-nexus)
+* [`iroha app nexus lane-report`↴](#iroha-app-nexus-lane-report)
+* [`iroha app nexus public-lane`↴](#iroha-app-nexus-public-lane)
+* [`iroha app nexus public-lane validators`↴](#iroha-app-nexus-public-lane-validators)
+* [`iroha app nexus public-lane stake`↴](#iroha-app-nexus-public-lane-stake)
+* [`iroha app staking`↴](#iroha-app-staking)
+* [`iroha app staking register`↴](#iroha-app-staking-register)
+* [`iroha app staking activate`↴](#iroha-app-staking-activate)
+* [`iroha app staking exit`↴](#iroha-app-staking-exit)
+* [`iroha app subscriptions`↴](#iroha-app-subscriptions)
+* [`iroha app subscriptions plan`↴](#iroha-app-subscriptions-plan)
+* [`iroha app subscriptions plan create`↴](#iroha-app-subscriptions-plan-create)
+* [`iroha app subscriptions plan list`↴](#iroha-app-subscriptions-plan-list)
+* [`iroha app subscriptions subscription`↴](#iroha-app-subscriptions-subscription)
+* [`iroha app subscriptions subscription create`↴](#iroha-app-subscriptions-subscription-create)
+* [`iroha app subscriptions subscription list`↴](#iroha-app-subscriptions-subscription-list)
+* [`iroha app subscriptions subscription get`↴](#iroha-app-subscriptions-subscription-get)
+* [`iroha app subscriptions subscription pause`↴](#iroha-app-subscriptions-subscription-pause)
+* [`iroha app subscriptions subscription resume`↴](#iroha-app-subscriptions-subscription-resume)
+* [`iroha app subscriptions subscription cancel`↴](#iroha-app-subscriptions-subscription-cancel)
+* [`iroha app subscriptions subscription keep`↴](#iroha-app-subscriptions-subscription-keep)
+* [`iroha app subscriptions subscription charge-now`↴](#iroha-app-subscriptions-subscription-charge-now)
+* [`iroha app subscriptions subscription usage`↴](#iroha-app-subscriptions-subscription-usage)
+* [`iroha app endorsement`↴](#iroha-app-endorsement)
+* [`iroha app endorsement prepare`↴](#iroha-app-endorsement-prepare)
+* [`iroha app endorsement submit`↴](#iroha-app-endorsement-submit)
+* [`iroha app endorsement list`↴](#iroha-app-endorsement-list)
+* [`iroha app endorsement policy`↴](#iroha-app-endorsement-policy)
+* [`iroha app endorsement committee`↴](#iroha-app-endorsement-committee)
+* [`iroha app endorsement register-committee`↴](#iroha-app-endorsement-register-committee)
+* [`iroha app endorsement set-policy`↴](#iroha-app-endorsement-set-policy)
+* [`iroha app jurisdiction`↴](#iroha-app-jurisdiction)
+* [`iroha app jurisdiction verify`↴](#iroha-app-jurisdiction-verify)
+* [`iroha app compute`↴](#iroha-app-compute)
+* [`iroha app compute simulate`↴](#iroha-app-compute-simulate)
+* [`iroha app compute invoke`↴](#iroha-app-compute-invoke)
+* [`iroha app soracloud`↴](#iroha-app-soracloud)
+* [`iroha app soracloud init`↴](#iroha-app-soracloud-init)
+* [`iroha app soracloud deploy`↴](#iroha-app-soracloud-deploy)
+* [`iroha app soracloud status`↴](#iroha-app-soracloud-status)
+* [`iroha app soracloud upgrade`↴](#iroha-app-soracloud-upgrade)
+* [`iroha app soracloud rollback`↴](#iroha-app-soracloud-rollback)
+* [`iroha app soracloud rollout`↴](#iroha-app-soracloud-rollout)
+* [`iroha app soracloud agent-deploy`↴](#iroha-app-soracloud-agent-deploy)
+* [`iroha app soracloud agent-lease-renew`↴](#iroha-app-soracloud-agent-lease-renew)
+* [`iroha app soracloud agent-restart`↴](#iroha-app-soracloud-agent-restart)
+* [`iroha app soracloud agent-status`↴](#iroha-app-soracloud-agent-status)
+* [`iroha app soracloud agent-wallet-spend`↴](#iroha-app-soracloud-agent-wallet-spend)
+* [`iroha app soracloud agent-wallet-approve`↴](#iroha-app-soracloud-agent-wallet-approve)
+* [`iroha app soracloud agent-policy-revoke`↴](#iroha-app-soracloud-agent-policy-revoke)
+* [`iroha app soracloud agent-message-send`↴](#iroha-app-soracloud-agent-message-send)
+* [`iroha app soracloud agent-message-ack`↴](#iroha-app-soracloud-agent-message-ack)
+* [`iroha app soracloud agent-mailbox-status`↴](#iroha-app-soracloud-agent-mailbox-status)
+* [`iroha app soracloud agent-artifact-allow`↴](#iroha-app-soracloud-agent-artifact-allow)
+* [`iroha app soracloud agent-autonomy-run`↴](#iroha-app-soracloud-agent-autonomy-run)
+* [`iroha app soracloud agent-autonomy-status`↴](#iroha-app-soracloud-agent-autonomy-status)
+* [`iroha app soracloud training-job-start`↴](#iroha-app-soracloud-training-job-start)
+* [`iroha app soracloud training-job-checkpoint`↴](#iroha-app-soracloud-training-job-checkpoint)
+* [`iroha app soracloud training-job-retry`↴](#iroha-app-soracloud-training-job-retry)
+* [`iroha app soracloud training-job-status`↴](#iroha-app-soracloud-training-job-status)
+* [`iroha app soracloud model-artifact-register`↴](#iroha-app-soracloud-model-artifact-register)
+* [`iroha app soracloud model-artifact-status`↴](#iroha-app-soracloud-model-artifact-status)
+* [`iroha app soracloud model-weight-register`↴](#iroha-app-soracloud-model-weight-register)
+* [`iroha app soracloud model-weight-promote`↴](#iroha-app-soracloud-model-weight-promote)
+* [`iroha app soracloud model-weight-rollback`↴](#iroha-app-soracloud-model-weight-rollback)
+* [`iroha app soracloud model-weight-status`↴](#iroha-app-soracloud-model-weight-status)
+* [`iroha app social`↴](#iroha-app-social)
+* [`iroha app social claim-twitter-follow-reward`↴](#iroha-app-social-claim-twitter-follow-reward)
+* [`iroha app social send-to-twitter`↴](#iroha-app-social-send-to-twitter)
+* [`iroha app social cancel-twitter-escrow`↴](#iroha-app-social-cancel-twitter-escrow)
+* [`iroha app space-directory`↴](#iroha-app-space-directory)
+* [`iroha app space-directory manifest`↴](#iroha-app-space-directory-manifest)
+* [`iroha app space-directory manifest publish`↴](#iroha-app-space-directory-manifest-publish)
+* [`iroha app space-directory manifest encode`↴](#iroha-app-space-directory-manifest-encode)
+* [`iroha app space-directory manifest revoke`↴](#iroha-app-space-directory-manifest-revoke)
+* [`iroha app space-directory manifest expire`↴](#iroha-app-space-directory-manifest-expire)
+* [`iroha app space-directory manifest audit-bundle`↴](#iroha-app-space-directory-manifest-audit-bundle)
+* [`iroha app space-directory manifest fetch`↴](#iroha-app-space-directory-manifest-fetch)
+* [`iroha app space-directory manifest scaffold`↴](#iroha-app-space-directory-manifest-scaffold)
+* [`iroha app space-directory bindings`↴](#iroha-app-space-directory-bindings)
+* [`iroha app space-directory bindings fetch`↴](#iroha-app-space-directory-bindings-fetch)
+* [`iroha app kaigi`↴](#iroha-app-kaigi)
+* [`iroha app kaigi create`↴](#iroha-app-kaigi-create)
+* [`iroha app kaigi quickstart`↴](#iroha-app-kaigi-quickstart)
+* [`iroha app kaigi join`↴](#iroha-app-kaigi-join)
+* [`iroha app kaigi leave`↴](#iroha-app-kaigi-leave)
+* [`iroha app kaigi end`↴](#iroha-app-kaigi-end)
+* [`iroha app kaigi record-usage`↴](#iroha-app-kaigi-record-usage)
+* [`iroha app kaigi report-relay-health`↴](#iroha-app-kaigi-report-relay-health)
+* [`iroha app sorafs`↴](#iroha-app-sorafs)
+* [`iroha app sorafs pin`↴](#iroha-app-sorafs-pin)
+* [`iroha app sorafs pin list`↴](#iroha-app-sorafs-pin-list)
+* [`iroha app sorafs pin show`↴](#iroha-app-sorafs-pin-show)
+* [`iroha app sorafs pin register`↴](#iroha-app-sorafs-pin-register)
+* [`iroha app sorafs alias`↴](#iroha-app-sorafs-alias)
+* [`iroha app sorafs alias list`↴](#iroha-app-sorafs-alias-list)
+* [`iroha app sorafs replication`↴](#iroha-app-sorafs-replication)
+* [`iroha app sorafs replication list`↴](#iroha-app-sorafs-replication-list)
+* [`iroha app sorafs storage`↴](#iroha-app-sorafs-storage)
+* [`iroha app sorafs storage pin`↴](#iroha-app-sorafs-storage-pin)
+* [`iroha app sorafs storage token`↴](#iroha-app-sorafs-storage-token)
+* [`iroha app sorafs storage token issue`↴](#iroha-app-sorafs-storage-token-issue)
+* [`iroha app sorafs gateway`↴](#iroha-app-sorafs-gateway)
+* [`iroha app sorafs gateway lint-denylist`↴](#iroha-app-sorafs-gateway-lint-denylist)
+* [`iroha app sorafs gateway update-denylist`↴](#iroha-app-sorafs-gateway-update-denylist)
+* [`iroha app sorafs gateway template-config`↴](#iroha-app-sorafs-gateway-template-config)
+* [`iroha app sorafs gateway generate-hosts`↴](#iroha-app-sorafs-gateway-generate-hosts)
+* [`iroha app sorafs gateway route-plan`↴](#iroha-app-sorafs-gateway-route-plan)
+* [`iroha app sorafs gateway cache-invalidate`↴](#iroha-app-sorafs-gateway-cache-invalidate)
+* [`iroha app sorafs gateway evidence`↴](#iroha-app-sorafs-gateway-evidence)
+* [`iroha app sorafs gateway direct-mode`↴](#iroha-app-sorafs-gateway-direct-mode)
+* [`iroha app sorafs gateway direct-mode plan`↴](#iroha-app-sorafs-gateway-direct-mode-plan)
+* [`iroha app sorafs gateway direct-mode enable`↴](#iroha-app-sorafs-gateway-direct-mode-enable)
+* [`iroha app sorafs gateway direct-mode rollback`↴](#iroha-app-sorafs-gateway-direct-mode-rollback)
+* [`iroha app sorafs gateway merkle`↴](#iroha-app-sorafs-gateway-merkle)
+* [`iroha app sorafs gateway merkle snapshot`↴](#iroha-app-sorafs-gateway-merkle-snapshot)
+* [`iroha app sorafs gateway merkle proof`↴](#iroha-app-sorafs-gateway-merkle-proof)
+* [`iroha app sorafs incentives`↴](#iroha-app-sorafs-incentives)
+* [`iroha app sorafs incentives compute`↴](#iroha-app-sorafs-incentives-compute)
+* [`iroha app sorafs incentives open-dispute`↴](#iroha-app-sorafs-incentives-open-dispute)
+* [`iroha app sorafs incentives dashboard`↴](#iroha-app-sorafs-incentives-dashboard)
+* [`iroha app sorafs incentives service`↴](#iroha-app-sorafs-incentives-service)
+* [`iroha app sorafs incentives service init`↴](#iroha-app-sorafs-incentives-service-init)
+* [`iroha app sorafs incentives service process`↴](#iroha-app-sorafs-incentives-service-process)
+* [`iroha app sorafs incentives service record`↴](#iroha-app-sorafs-incentives-service-record)
+* [`iroha app sorafs incentives service dispute`↴](#iroha-app-sorafs-incentives-service-dispute)
+* [`iroha app sorafs incentives service dispute file`↴](#iroha-app-sorafs-incentives-service-dispute-file)
+* [`iroha app sorafs incentives service dispute resolve`↴](#iroha-app-sorafs-incentives-service-dispute-resolve)
+* [`iroha app sorafs incentives service dispute reject`↴](#iroha-app-sorafs-incentives-service-dispute-reject)
+* [`iroha app sorafs incentives service dashboard`↴](#iroha-app-sorafs-incentives-service-dashboard)
+* [`iroha app sorafs incentives service audit`↴](#iroha-app-sorafs-incentives-service-audit)
+* [`iroha app sorafs incentives service shadow-run`↴](#iroha-app-sorafs-incentives-service-shadow-run)
+* [`iroha app sorafs incentives service reconcile`↴](#iroha-app-sorafs-incentives-service-reconcile)
+* [`iroha app sorafs incentives service daemon`↴](#iroha-app-sorafs-incentives-service-daemon)
+* [`iroha app sorafs handshake`↴](#iroha-app-sorafs-handshake)
+* [`iroha app sorafs handshake show`↴](#iroha-app-sorafs-handshake-show)
+* [`iroha app sorafs handshake update`↴](#iroha-app-sorafs-handshake-update)
+* [`iroha app sorafs handshake token`↴](#iroha-app-sorafs-handshake-token)
+* [`iroha app sorafs handshake token issue`↴](#iroha-app-sorafs-handshake-token-issue)
+* [`iroha app sorafs handshake token id`↴](#iroha-app-sorafs-handshake-token-id)
+* [`iroha app sorafs handshake token fingerprint`↴](#iroha-app-sorafs-handshake-token-fingerprint)
+* [`iroha app sorafs toolkit`↴](#iroha-app-sorafs-toolkit)
+* [`iroha app sorafs toolkit pack`↴](#iroha-app-sorafs-toolkit-pack)
+* [`iroha app sorafs guard-directory`↴](#iroha-app-sorafs-guard-directory)
+* [`iroha app sorafs guard-directory fetch`↴](#iroha-app-sorafs-guard-directory-fetch)
+* [`iroha app sorafs guard-directory verify`↴](#iroha-app-sorafs-guard-directory-verify)
+* [`iroha app sorafs reserve`↴](#iroha-app-sorafs-reserve)
+* [`iroha app sorafs reserve quote`↴](#iroha-app-sorafs-reserve-quote)
+* [`iroha app sorafs reserve ledger`↴](#iroha-app-sorafs-reserve-ledger)
+* [`iroha app sorafs gar`↴](#iroha-app-sorafs-gar)
+* [`iroha app sorafs gar receipt`↴](#iroha-app-sorafs-gar-receipt)
+* [`iroha app sorafs repair`↴](#iroha-app-sorafs-repair)
+* [`iroha app sorafs repair list`↴](#iroha-app-sorafs-repair-list)
+* [`iroha app sorafs repair claim`↴](#iroha-app-sorafs-repair-claim)
+* [`iroha app sorafs repair complete`↴](#iroha-app-sorafs-repair-complete)
+* [`iroha app sorafs repair fail`↴](#iroha-app-sorafs-repair-fail)
+* [`iroha app sorafs repair escalate`↴](#iroha-app-sorafs-repair-escalate)
+* [`iroha app sorafs gc`↴](#iroha-app-sorafs-gc)
+* [`iroha app sorafs gc inspect`↴](#iroha-app-sorafs-gc-inspect)
+* [`iroha app sorafs gc dry-run`↴](#iroha-app-sorafs-gc-dry-run)
+* [`iroha app sorafs fetch`↴](#iroha-app-sorafs-fetch)
+* [`iroha app soracles`↴](#iroha-app-soracles)
+* [`iroha app soracles bundle`↴](#iroha-app-soracles-bundle)
+* [`iroha app soracles catalog`↴](#iroha-app-soracles-catalog)
+* [`iroha app soracles evidence-gc`↴](#iroha-app-soracles-evidence-gc)
+* [`iroha app sns`↴](#iroha-app-sns)
+* [`iroha app sns register`↴](#iroha-app-sns-register)
+* [`iroha app sns renew`↴](#iroha-app-sns-renew)
+* [`iroha app sns transfer`↴](#iroha-app-sns-transfer)
+* [`iroha app sns update-controllers`↴](#iroha-app-sns-update-controllers)
+* [`iroha app sns freeze`↴](#iroha-app-sns-freeze)
+* [`iroha app sns unfreeze`↴](#iroha-app-sns-unfreeze)
+* [`iroha app sns registration`↴](#iroha-app-sns-registration)
+* [`iroha app sns policy`↴](#iroha-app-sns-policy)
+* [`iroha app sns governance`↴](#iroha-app-sns-governance)
+* [`iroha app sns governance case`↴](#iroha-app-sns-governance-case)
+* [`iroha app sns governance case create`↴](#iroha-app-sns-governance-case-create)
+* [`iroha app sns governance case export`↴](#iroha-app-sns-governance-case-export)
+* [`iroha app alias`↴](#iroha-app-alias)
+* [`iroha app alias voprf-evaluate`↴](#iroha-app-alias-voprf-evaluate)
+* [`iroha app alias resolve`↴](#iroha-app-alias-resolve)
+* [`iroha app alias resolve-index`↴](#iroha-app-alias-resolve-index)
+* [`iroha app repo`↴](#iroha-app-repo)
+* [`iroha app repo initiate`↴](#iroha-app-repo-initiate)
+* [`iroha app repo unwind`↴](#iroha-app-repo-unwind)
+* [`iroha app repo query`↴](#iroha-app-repo-query)
+* [`iroha app repo query list`↴](#iroha-app-repo-query-list)
+* [`iroha app repo query get`↴](#iroha-app-repo-query-get)
+* [`iroha app repo margin`↴](#iroha-app-repo-margin)
+* [`iroha app repo margin-call`↴](#iroha-app-repo-margin-call)
+* [`iroha app settlement`↴](#iroha-app-settlement)
+* [`iroha app settlement dvp`↴](#iroha-app-settlement-dvp)
+* [`iroha app settlement pvp`↴](#iroha-app-settlement-pvp)
+* [`iroha tools`↴](#iroha-tools)
+* [`iroha tools address`↴](#iroha-tools-address)
+* [`iroha tools address convert`↴](#iroha-tools-address-convert)
+* [`iroha tools address audit`↴](#iroha-tools-address-audit)
+* [`iroha tools address normalize`↴](#iroha-tools-address-normalize)
+* [`iroha tools crypto`↴](#iroha-tools-crypto)
+* [`iroha tools crypto sm2`↴](#iroha-tools-crypto-sm2)
+* [`iroha tools crypto sm2 keygen`↴](#iroha-tools-crypto-sm2-keygen)
+* [`iroha tools crypto sm2 import`↴](#iroha-tools-crypto-sm2-import)
+* [`iroha tools crypto sm2 export`↴](#iroha-tools-crypto-sm2-export)
+* [`iroha tools crypto sm3`↴](#iroha-tools-crypto-sm3)
+* [`iroha tools crypto sm3 hash`↴](#iroha-tools-crypto-sm3-hash)
+* [`iroha tools crypto sm4`↴](#iroha-tools-crypto-sm4)
+* [`iroha tools crypto sm4 gcm-seal`↴](#iroha-tools-crypto-sm4-gcm-seal)
+* [`iroha tools crypto sm4 gcm-open`↴](#iroha-tools-crypto-sm4-gcm-open)
+* [`iroha tools crypto sm4 ccm-seal`↴](#iroha-tools-crypto-sm4-ccm-seal)
+* [`iroha tools crypto sm4 ccm-open`↴](#iroha-tools-crypto-sm4-ccm-open)
+* [`iroha tools ivm`↴](#iroha-tools-ivm)
+* [`iroha tools ivm abi-hash`↴](#iroha-tools-ivm-abi-hash)
+* [`iroha tools ivm syscalls`↴](#iroha-tools-ivm-syscalls)
+* [`iroha tools ivm manifest-gen`↴](#iroha-tools-ivm-manifest-gen)
+* [`iroha tools markdown-help`↴](#iroha-tools-markdown-help)
+* [`iroha tools version`↴](#iroha-tools-version)
 
-## `iroha_cli`
+## `iroha`
 
 Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
-**Usage:** `iroha_cli [OPTIONS] <COMMAND>`
+**Usage:** `iroha [OPTIONS] <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -541,14 +591,15 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
     Emit human-readable text when available
 
 * `--language <LANG>` — Language code for messages, overrides system language
+* `--machine` — Enable deterministic machine mode (no startup chatter, strict config loading)
 
 
 
-## `iroha_cli ledger`
+## `iroha ledger`
 
 Ledger data and transaction helpers
 
-**Usage:** `iroha_cli ledger <COMMAND>`
+**Usage:** `iroha ledger <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -568,11 +619,11 @@ Ledger data and transaction helpers
 
 
 
-## `iroha_cli ledger domain`
+## `iroha ledger domain`
 
 Read and write domains
 
-**Usage:** `iroha_cli ledger domain <COMMAND>`
+**Usage:** `iroha ledger domain <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -585,11 +636,11 @@ Read and write domains
 
 
 
-## `iroha_cli ledger domain list`
+## `iroha ledger domain list`
 
 List domains
 
-**Usage:** `iroha_cli ledger domain list <COMMAND>`
+**Usage:** `iroha ledger domain list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -598,11 +649,11 @@ List domains
 
 
 
-## `iroha_cli ledger domain list all`
+## `iroha ledger domain list all`
 
 List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha_cli ledger domain list all [OPTIONS]`
+**Usage:** `iroha ledger domain list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -621,11 +672,11 @@ List all IDs, or full entries when `--verbose` is specified
 
 
 
-## `iroha_cli ledger domain list filter`
+## `iroha ledger domain list filter`
 
 Filter by a given predicate
 
-**Usage:** `iroha_cli ledger domain list filter [OPTIONS] <PREDICATE>`
+**Usage:** `iroha ledger domain list filter [OPTIONS] <PREDICATE>`
 
 ###### **Arguments:**
 
@@ -647,11 +698,11 @@ Filter by a given predicate
 
 
 
-## `iroha_cli ledger domain get`
+## `iroha ledger domain get`
 
 Retrieve details of a specific domain
 
-**Usage:** `iroha_cli ledger domain get --id <ID>`
+**Usage:** `iroha ledger domain get --id <ID>`
 
 ###### **Options:**
 
@@ -659,11 +710,11 @@ Retrieve details of a specific domain
 
 
 
-## `iroha_cli ledger domain register`
+## `iroha ledger domain register`
 
 Register a domain
 
-**Usage:** `iroha_cli ledger domain register --id <ID>`
+**Usage:** `iroha ledger domain register --id <ID>`
 
 ###### **Options:**
 
@@ -671,11 +722,11 @@ Register a domain
 
 
 
-## `iroha_cli ledger domain unregister`
+## `iroha ledger domain unregister`
 
 Unregister a domain
 
-**Usage:** `iroha_cli ledger domain unregister --id <ID>`
+**Usage:** `iroha ledger domain unregister --id <ID>`
 
 ###### **Options:**
 
@@ -683,25 +734,25 @@ Unregister a domain
 
 
 
-## `iroha_cli ledger domain transfer`
+## `iroha ledger domain transfer`
 
 Transfer ownership of a domain
 
-**Usage:** `iroha_cli ledger domain transfer --id <ID> --from <FROM> --to <TO>`
+**Usage:** `iroha ledger domain transfer --id <ID> --from <FROM> --to <TO>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Domain name
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger domain meta`
+## `iroha ledger domain meta`
 
 Read and write metadata
 
-**Usage:** `iroha_cli ledger domain meta <COMMAND>`
+**Usage:** `iroha ledger domain meta <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -711,11 +762,11 @@ Read and write metadata
 
 
 
-## `iroha_cli ledger domain meta get`
+## `iroha ledger domain meta get`
 
 Retrieve a value from the key-value store
 
-**Usage:** `iroha_cli ledger domain meta get --id <ID> --key <KEY>`
+**Usage:** `iroha ledger domain meta get --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -724,11 +775,11 @@ Retrieve a value from the key-value store
 
 
 
-## `iroha_cli ledger domain meta set`
+## `iroha ledger domain meta set`
 
 Create or update an entry in the key-value store using JSON input from stdin
 
-**Usage:** `iroha_cli ledger domain meta set --id <ID> --key <KEY>`
+**Usage:** `iroha ledger domain meta set --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -737,11 +788,11 @@ Create or update an entry in the key-value store using JSON input from stdin
 
 
 
-## `iroha_cli ledger domain meta remove`
+## `iroha ledger domain meta remove`
 
 Delete an entry from the key-value store
 
-**Usage:** `iroha_cli ledger domain meta remove --id <ID> --key <KEY>`
+**Usage:** `iroha ledger domain meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -750,11 +801,11 @@ Delete an entry from the key-value store
 
 
 
-## `iroha_cli ledger account`
+## `iroha ledger account`
 
 Read and write accounts
 
-**Usage:** `iroha_cli ledger account <COMMAND>`
+**Usage:** `iroha ledger account <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -768,11 +819,11 @@ Read and write accounts
 
 
 
-## `iroha_cli ledger account role`
+## `iroha ledger account role`
 
 Read and write account roles
 
-**Usage:** `iroha_cli ledger account role <COMMAND>`
+**Usage:** `iroha ledger account role <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -782,15 +833,15 @@ Read and write account roles
 
 
 
-## `iroha_cli ledger account role list`
+## `iroha ledger account role list`
 
 List account role IDs
 
-**Usage:** `iroha_cli ledger account role list [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger account role list [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -799,37 +850,37 @@ List account role IDs
 
 
 
-## `iroha_cli ledger account role grant`
+## `iroha ledger account role grant`
 
 Grant a role to an account
 
-**Usage:** `iroha_cli ledger account role grant --id <ID> --role <ROLE>`
+**Usage:** `iroha ledger account role grant --id <ID> --role <ROLE>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `-r`, `--role <ROLE>` — Role name
 
 
 
-## `iroha_cli ledger account role revoke`
+## `iroha ledger account role revoke`
 
 Revoke a role from an account
 
-**Usage:** `iroha_cli ledger account role revoke --id <ID> --role <ROLE>`
+**Usage:** `iroha ledger account role revoke --id <ID> --role <ROLE>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `-r`, `--role <ROLE>` — Role name
 
 
 
-## `iroha_cli ledger account permission`
+## `iroha ledger account permission`
 
 Read and write account permissions
 
-**Usage:** `iroha_cli ledger account permission <COMMAND>`
+**Usage:** `iroha ledger account permission <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -839,15 +890,15 @@ Read and write account permissions
 
 
 
-## `iroha_cli ledger account permission list`
+## `iroha ledger account permission list`
 
 List account permissions
 
-**Usage:** `iroha_cli ledger account permission list [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger account permission list [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -856,35 +907,35 @@ List account permissions
 
 
 
-## `iroha_cli ledger account permission grant`
+## `iroha ledger account permission grant`
 
 Grant an account permission using JSON input from stdin
 
-**Usage:** `iroha_cli ledger account permission grant --id <ID>`
+**Usage:** `iroha ledger account permission grant --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger account permission revoke`
+## `iroha ledger account permission revoke`
 
 Revoke an account permission using JSON input from stdin
 
-**Usage:** `iroha_cli ledger account permission revoke --id <ID>`
+**Usage:** `iroha ledger account permission revoke --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger account list`
+## `iroha ledger account list`
 
 List accounts
 
-**Usage:** `iroha_cli ledger account list <COMMAND>`
+**Usage:** `iroha ledger account list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -893,11 +944,11 @@ List accounts
 
 
 
-## `iroha_cli ledger account list all`
+## `iroha ledger account list all`
 
 List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha_cli ledger account list all [OPTIONS]`
+**Usage:** `iroha ledger account list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -916,11 +967,11 @@ List all IDs, or full entries when `--verbose` is specified
 
 
 
-## `iroha_cli ledger account list filter`
+## `iroha ledger account list filter`
 
 Filter by a given predicate
 
-**Usage:** `iroha_cli ledger account list filter [OPTIONS] <PREDICATE>`
+**Usage:** `iroha ledger account list filter [OPTIONS] <PREDICATE>`
 
 ###### **Arguments:**
 
@@ -942,47 +993,48 @@ Filter by a given predicate
 
 
 
-## `iroha_cli ledger account get`
+## `iroha ledger account get`
 
 Retrieve details of a specific account
 
-**Usage:** `iroha_cli ledger account get --id <ID>`
+**Usage:** `iroha ledger account get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger account register`
+## `iroha ledger account register`
 
 Register an account
 
-**Usage:** `iroha_cli ledger account register --id <ID>`
+**Usage:** `iroha ledger account register --id <ID> --domain <DOMAIN>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Canonical domainless account identifier for registration (canonical I105 literal)
+* `-d`, `--domain <DOMAIN>` — Domain in which to materialize the account link
 
 
 
-## `iroha_cli ledger account unregister`
+## `iroha ledger account unregister`
 
 Unregister an account
 
-**Usage:** `iroha_cli ledger account unregister --id <ID>`
+**Usage:** `iroha ledger account unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger account meta`
+## `iroha ledger account meta`
 
 Read and write metadata
 
-**Usage:** `iroha_cli ledger account meta <COMMAND>`
+**Usage:** `iroha ledger account meta <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -992,11 +1044,11 @@ Read and write metadata
 
 
 
-## `iroha_cli ledger account meta get`
+## `iroha ledger account meta get`
 
 Retrieve a value from the key-value store
 
-**Usage:** `iroha_cli ledger account meta get --id <ID> --key <KEY>`
+**Usage:** `iroha ledger account meta get --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1005,11 +1057,11 @@ Retrieve a value from the key-value store
 
 
 
-## `iroha_cli ledger account meta set`
+## `iroha ledger account meta set`
 
 Create or update an entry in the key-value store using JSON input from stdin
 
-**Usage:** `iroha_cli ledger account meta set --id <ID> --key <KEY>`
+**Usage:** `iroha ledger account meta set --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1018,11 +1070,11 @@ Create or update an entry in the key-value store using JSON input from stdin
 
 
 
-## `iroha_cli ledger account meta remove`
+## `iroha ledger account meta remove`
 
 Delete an entry from the key-value store
 
-**Usage:** `iroha_cli ledger account meta remove --id <ID> --key <KEY>`
+**Usage:** `iroha ledger account meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1031,11 +1083,11 @@ Delete an entry from the key-value store
 
 
 
-## `iroha_cli ledger asset`
+## `iroha ledger asset`
 
 Read and write assets
 
-**Usage:** `iroha_cli ledger asset <COMMAND>`
+**Usage:** `iroha ledger asset <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1048,11 +1100,11 @@ Read and write assets
 
 
 
-## `iroha_cli ledger asset definition`
+## `iroha ledger asset definition`
 
 Read and write asset definitions
 
-**Usage:** `iroha_cli ledger asset definition <COMMAND>`
+**Usage:** `iroha ledger asset definition <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1065,11 +1117,11 @@ Read and write asset definitions
 
 
 
-## `iroha_cli ledger asset definition list`
+## `iroha ledger asset definition list`
 
 List asset definitions
 
-**Usage:** `iroha_cli ledger asset definition list <COMMAND>`
+**Usage:** `iroha ledger asset definition list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1078,11 +1130,11 @@ List asset definitions
 
 
 
-## `iroha_cli ledger asset definition list all`
+## `iroha ledger asset definition list all`
 
 List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha_cli ledger asset definition list all [OPTIONS]`
+**Usage:** `iroha ledger asset definition list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1101,11 +1153,11 @@ List all IDs, or full entries when `--verbose` is specified
 
 
 
-## `iroha_cli ledger asset definition list filter`
+## `iroha ledger asset definition list filter`
 
 Filter by a given predicate
 
-**Usage:** `iroha_cli ledger asset definition list filter [OPTIONS] <PREDICATE>`
+**Usage:** `iroha ledger asset definition list filter [OPTIONS] <PREDICATE>`
 
 ###### **Arguments:**
 
@@ -1127,11 +1179,11 @@ Filter by a given predicate
 
 
 
-## `iroha_cli ledger asset definition get`
+## `iroha ledger asset definition get`
 
 Retrieve details of a specific asset definition
 
-**Usage:** `iroha_cli ledger asset definition get --id <ID>`
+**Usage:** `iroha ledger asset definition get --id <ID>`
 
 ###### **Options:**
 
@@ -1139,11 +1191,11 @@ Retrieve details of a specific asset definition
 
 
 
-## `iroha_cli ledger asset definition register`
+## `iroha ledger asset definition register`
 
 Register an asset definition
 
-**Usage:** `iroha_cli ledger asset definition register [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger asset definition register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
@@ -1162,11 +1214,11 @@ Register an asset definition
 
 
 
-## `iroha_cli ledger asset definition unregister`
+## `iroha ledger asset definition unregister`
 
 Unregister an asset definition
 
-**Usage:** `iroha_cli ledger asset definition unregister --id <ID>`
+**Usage:** `iroha ledger asset definition unregister --id <ID>`
 
 ###### **Options:**
 
@@ -1174,25 +1226,25 @@ Unregister an asset definition
 
 
 
-## `iroha_cli ledger asset definition transfer`
+## `iroha ledger asset definition transfer`
 
 Transfer ownership of an asset definition
 
-**Usage:** `iroha_cli ledger asset definition transfer --id <ID> --from <FROM> --to <TO>`
+**Usage:** `iroha ledger asset definition transfer --id <ID> --from <FROM> --to <TO>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger asset definition meta`
+## `iroha ledger asset definition meta`
 
 Read and write metadata
 
-**Usage:** `iroha_cli ledger asset definition meta <COMMAND>`
+**Usage:** `iroha ledger asset definition meta <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1202,11 +1254,11 @@ Read and write metadata
 
 
 
-## `iroha_cli ledger asset definition meta get`
+## `iroha ledger asset definition meta get`
 
 Retrieve a value from the key-value store
 
-**Usage:** `iroha_cli ledger asset definition meta get --id <ID> --key <KEY>`
+**Usage:** `iroha ledger asset definition meta get --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1215,11 +1267,11 @@ Retrieve a value from the key-value store
 
 
 
-## `iroha_cli ledger asset definition meta set`
+## `iroha ledger asset definition meta set`
 
 Create or update an entry in the key-value store using JSON input from stdin
 
-**Usage:** `iroha_cli ledger asset definition meta set --id <ID> --key <KEY>`
+**Usage:** `iroha ledger asset definition meta set --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1228,11 +1280,11 @@ Create or update an entry in the key-value store using JSON input from stdin
 
 
 
-## `iroha_cli ledger asset definition meta remove`
+## `iroha ledger asset definition meta remove`
 
 Delete an entry from the key-value store
 
-**Usage:** `iroha_cli ledger asset definition meta remove --id <ID> --key <KEY>`
+**Usage:** `iroha ledger asset definition meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1241,23 +1293,23 @@ Delete an entry from the key-value store
 
 
 
-## `iroha_cli ledger asset get`
+## `iroha ledger asset get`
 
 Retrieve details of a specific asset
 
-**Usage:** `iroha_cli ledger asset get --id <ID>`
+**Usage:** `iroha ledger asset get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 
 
 
-## `iroha_cli ledger asset list`
+## `iroha ledger asset list`
 
 List assets
 
-**Usage:** `iroha_cli ledger asset list <COMMAND>`
+**Usage:** `iroha ledger asset list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1266,11 +1318,11 @@ List assets
 
 
 
-## `iroha_cli ledger asset list all`
+## `iroha ledger asset list all`
 
 List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha_cli ledger asset list all [OPTIONS]`
+**Usage:** `iroha ledger asset list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1289,11 +1341,11 @@ List all IDs, or full entries when `--verbose` is specified
 
 
 
-## `iroha_cli ledger asset list filter`
+## `iroha ledger asset list filter`
 
 Filter by a given predicate
 
-**Usage:** `iroha_cli ledger asset list filter [OPTIONS] <PREDICATE>`
+**Usage:** `iroha ledger asset list filter [OPTIONS] <PREDICATE>`
 
 ###### **Arguments:**
 
@@ -1315,52 +1367,52 @@ Filter by a given predicate
 
 
 
-## `iroha_cli ledger asset mint`
+## `iroha ledger asset mint`
 
 Increase the quantity of an asset
 
-**Usage:** `iroha_cli ledger asset mint --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset mint --id <ID> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
 
-## `iroha_cli ledger asset burn`
+## `iroha ledger asset burn`
 
 Decrease the quantity of an asset
 
-**Usage:** `iroha_cli ledger asset burn --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset burn --id <ID> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
 
-## `iroha_cli ledger asset transfer`
+## `iroha ledger asset transfer`
 
 Transfer an asset between accounts
 
-**Usage:** `iroha_cli ledger asset transfer [OPTIONS] --id <ID> --to <TO> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset transfer [OPTIONS] --id <ID> --to <TO> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
 
 
 
-## `iroha_cli ledger nft`
+## `iroha ledger nft`
 
 Read and write NFTs
 
-**Usage:** `iroha_cli ledger nft <COMMAND>`
+**Usage:** `iroha ledger nft <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1373,11 +1425,11 @@ Read and write NFTs
 
 
 
-## `iroha_cli ledger nft get`
+## `iroha ledger nft get`
 
 Retrieve details of a specific NFT
 
-**Usage:** `iroha_cli ledger nft get --id <ID>`
+**Usage:** `iroha ledger nft get --id <ID>`
 
 ###### **Options:**
 
@@ -1385,11 +1437,11 @@ Retrieve details of a specific NFT
 
 
 
-## `iroha_cli ledger nft list`
+## `iroha ledger nft list`
 
 List NFTs
 
-**Usage:** `iroha_cli ledger nft list <COMMAND>`
+**Usage:** `iroha ledger nft list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1398,11 +1450,11 @@ List NFTs
 
 
 
-## `iroha_cli ledger nft list all`
+## `iroha ledger nft list all`
 
 List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha_cli ledger nft list all [OPTIONS]`
+**Usage:** `iroha ledger nft list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1421,11 +1473,11 @@ List all IDs, or full entries when `--verbose` is specified
 
 
 
-## `iroha_cli ledger nft list filter`
+## `iroha ledger nft list filter`
 
 Filter by a given predicate
 
-**Usage:** `iroha_cli ledger nft list filter [OPTIONS] <PREDICATE>`
+**Usage:** `iroha ledger nft list filter [OPTIONS] <PREDICATE>`
 
 ###### **Arguments:**
 
@@ -1447,11 +1499,11 @@ Filter by a given predicate
 
 
 
-## `iroha_cli ledger nft register`
+## `iroha ledger nft register`
 
 Register NFT with content provided from stdin in JSON format
 
-**Usage:** `iroha_cli ledger nft register --id <ID>`
+**Usage:** `iroha ledger nft register --id <ID>`
 
 ###### **Options:**
 
@@ -1459,11 +1511,11 @@ Register NFT with content provided from stdin in JSON format
 
 
 
-## `iroha_cli ledger nft unregister`
+## `iroha ledger nft unregister`
 
 Unregister NFT
 
-**Usage:** `iroha_cli ledger nft unregister --id <ID>`
+**Usage:** `iroha ledger nft unregister --id <ID>`
 
 ###### **Options:**
 
@@ -1471,25 +1523,25 @@ Unregister NFT
 
 
 
-## `iroha_cli ledger nft transfer`
+## `iroha ledger nft transfer`
 
 Transfer ownership of NFT
 
-**Usage:** `iroha_cli ledger nft transfer --id <ID> --from <FROM> --to <TO>`
+**Usage:** `iroha ledger nft transfer --id <ID> --from <FROM> --to <TO>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — NFT in the format "name$domain"
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
-## `iroha_cli ledger nft meta`
+## `iroha ledger nft meta`
 
 Read and write metadata
 
-**Usage:** `iroha_cli ledger nft meta <COMMAND>`
+**Usage:** `iroha ledger nft meta <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1499,11 +1551,11 @@ Read and write metadata
 
 
 
-## `iroha_cli ledger nft meta get`
+## `iroha ledger nft meta get`
 
 Retrieve a value from the key-value store
 
-**Usage:** `iroha_cli ledger nft meta get --id <ID> --key <KEY>`
+**Usage:** `iroha ledger nft meta get --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1512,11 +1564,11 @@ Retrieve a value from the key-value store
 
 
 
-## `iroha_cli ledger nft meta set`
+## `iroha ledger nft meta set`
 
 Create or update an entry in the key-value store using JSON input from stdin
 
-**Usage:** `iroha_cli ledger nft meta set --id <ID> --key <KEY>`
+**Usage:** `iroha ledger nft meta set --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1525,11 +1577,11 @@ Create or update an entry in the key-value store using JSON input from stdin
 
 
 
-## `iroha_cli ledger nft meta remove`
+## `iroha ledger nft meta remove`
 
 Delete an entry from the key-value store
 
-**Usage:** `iroha_cli ledger nft meta remove --id <ID> --key <KEY>`
+**Usage:** `iroha ledger nft meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1538,11 +1590,11 @@ Delete an entry from the key-value store
 
 
 
-## `iroha_cli ledger peer`
+## `iroha ledger peer`
 
 Read and write peers
 
-**Usage:** `iroha_cli ledger peer <COMMAND>`
+**Usage:** `iroha ledger peer <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1552,11 +1604,11 @@ Read and write peers
 
 
 
-## `iroha_cli ledger peer list`
+## `iroha ledger peer list`
 
 List registered peers expected to connect with each other
 
-**Usage:** `iroha_cli ledger peer list <COMMAND>`
+**Usage:** `iroha ledger peer list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1564,11 +1616,11 @@ List registered peers expected to connect with each other
 
 
 
-## `iroha_cli ledger peer list all`
+## `iroha ledger peer list all`
 
 List all registered peers
 
-**Usage:** `iroha_cli ledger peer list all [OPTIONS]`
+**Usage:** `iroha ledger peer list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1587,11 +1639,11 @@ List all registered peers
 
 
 
-## `iroha_cli ledger peer register`
+## `iroha ledger peer register`
 
 Register a peer
 
-**Usage:** `iroha_cli ledger peer register --key <KEY> --pop <HEX>`
+**Usage:** `iroha ledger peer register --key <KEY> --pop <HEX>`
 
 ###### **Options:**
 
@@ -1600,11 +1652,11 @@ Register a peer
 
 
 
-## `iroha_cli ledger peer unregister`
+## `iroha ledger peer unregister`
 
 Unregister a peer
 
-**Usage:** `iroha_cli ledger peer unregister --key <KEY>`
+**Usage:** `iroha ledger peer unregister --key <KEY>`
 
 ###### **Options:**
 
@@ -1612,11 +1664,11 @@ Unregister a peer
 
 
 
-## `iroha_cli ledger role`
+## `iroha ledger role`
 
 Read and write roles
 
-**Usage:** `iroha_cli ledger role <COMMAND>`
+**Usage:** `iroha ledger role <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1627,11 +1679,11 @@ Read and write roles
 
 
 
-## `iroha_cli ledger role permission`
+## `iroha ledger role permission`
 
 Read and write role permissions
 
-**Usage:** `iroha_cli ledger role permission <COMMAND>`
+**Usage:** `iroha ledger role permission <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1641,11 +1693,11 @@ Read and write role permissions
 
 
 
-## `iroha_cli ledger role permission list`
+## `iroha ledger role permission list`
 
 List role permissions
 
-**Usage:** `iroha_cli ledger role permission list [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger role permission list [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
@@ -1657,11 +1709,11 @@ List role permissions
 
 
 
-## `iroha_cli ledger role permission grant`
+## `iroha ledger role permission grant`
 
 Grant role permission using JSON input from stdin
 
-**Usage:** `iroha_cli ledger role permission grant --id <ID>`
+**Usage:** `iroha ledger role permission grant --id <ID>`
 
 ###### **Options:**
 
@@ -1669,11 +1721,11 @@ Grant role permission using JSON input from stdin
 
 
 
-## `iroha_cli ledger role permission revoke`
+## `iroha ledger role permission revoke`
 
 Revoke role permission using JSON input from stdin
 
-**Usage:** `iroha_cli ledger role permission revoke --id <ID>`
+**Usage:** `iroha ledger role permission revoke --id <ID>`
 
 ###### **Options:**
 
@@ -1681,11 +1733,11 @@ Revoke role permission using JSON input from stdin
 
 
 
-## `iroha_cli ledger role list`
+## `iroha ledger role list`
 
 List role IDs
 
-**Usage:** `iroha_cli ledger role list <COMMAND>`
+**Usage:** `iroha ledger role list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1693,11 +1745,11 @@ List role IDs
 
 
 
-## `iroha_cli ledger role list all`
+## `iroha ledger role list all`
 
 List all role IDs
 
-**Usage:** `iroha_cli ledger role list all [OPTIONS]`
+**Usage:** `iroha ledger role list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1709,11 +1761,11 @@ List all role IDs
 
 
 
-## `iroha_cli ledger role register`
+## `iroha ledger role register`
 
 Register a role and grant it to the registrant
 
-**Usage:** `iroha_cli ledger role register --id <ID>`
+**Usage:** `iroha ledger role register --id <ID>`
 
 ###### **Options:**
 
@@ -1721,11 +1773,11 @@ Register a role and grant it to the registrant
 
 
 
-## `iroha_cli ledger role unregister`
+## `iroha ledger role unregister`
 
 Unregister a role
 
-**Usage:** `iroha_cli ledger role unregister --id <ID>`
+**Usage:** `iroha ledger role unregister --id <ID>`
 
 ###### **Options:**
 
@@ -1733,11 +1785,11 @@ Unregister a role
 
 
 
-## `iroha_cli ledger parameter`
+## `iroha ledger parameter`
 
 Read and write system parameters
 
-**Usage:** `iroha_cli ledger parameter <COMMAND>`
+**Usage:** `iroha ledger parameter <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1746,11 +1798,11 @@ Read and write system parameters
 
 
 
-## `iroha_cli ledger parameter list`
+## `iroha ledger parameter list`
 
 List system parameters
 
-**Usage:** `iroha_cli ledger parameter list <COMMAND>`
+**Usage:** `iroha ledger parameter list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1758,27 +1810,27 @@ List system parameters
 
 
 
-## `iroha_cli ledger parameter list all`
+## `iroha ledger parameter list all`
 
 List all system parameters
 
-**Usage:** `iroha_cli ledger parameter list all`
+**Usage:** `iroha ledger parameter list all`
 
 
 
-## `iroha_cli ledger parameter set`
+## `iroha ledger parameter set`
 
 Set a system parameter using JSON input from stdin
 
-**Usage:** `iroha_cli ledger parameter set`
+**Usage:** `iroha ledger parameter set`
 
 
 
-## `iroha_cli ledger trigger`
+## `iroha ledger trigger`
 
 Read and write triggers
 
-**Usage:** `iroha_cli ledger trigger <COMMAND>`
+**Usage:** `iroha ledger trigger <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1792,11 +1844,11 @@ Read and write triggers
 
 
 
-## `iroha_cli ledger trigger list`
+## `iroha ledger trigger list`
 
 List trigger IDs
 
-**Usage:** `iroha_cli ledger trigger list <COMMAND>`
+**Usage:** `iroha ledger trigger list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1804,11 +1856,11 @@ List trigger IDs
 
 
 
-## `iroha_cli ledger trigger list all`
+## `iroha ledger trigger list all`
 
 List all trigger IDs
 
-**Usage:** `iroha_cli ledger trigger list all [OPTIONS]`
+**Usage:** `iroha ledger trigger list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -1820,11 +1872,11 @@ List all trigger IDs
 
 
 
-## `iroha_cli ledger trigger get`
+## `iroha ledger trigger get`
 
 Retrieve details of a specific trigger
 
-**Usage:** `iroha_cli ledger trigger get --id <ID>`
+**Usage:** `iroha ledger trigger get --id <ID>`
 
 ###### **Options:**
 
@@ -1832,11 +1884,11 @@ Retrieve details of a specific trigger
 
 
 
-## `iroha_cli ledger trigger register`
+## `iroha ledger trigger register`
 
 Register a trigger
 
-**Usage:** `iroha_cli ledger trigger register [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger trigger register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
@@ -1845,7 +1897,7 @@ Register a trigger
 * `--instructions-stdin` — Read JSON array of instructions from stdin instead of bytecode path Example: echo "[ {\"Log\": {\"level\": \"INFO\", \"message\": \"hi\"}} ]" | iroha trigger register -i `my_trig` --instructions-stdin
 * `--instructions <PATH>` — Read JSON array of instructions from a file instead of bytecode path
 * `-r`, `--repeats <REPEATS>` — Number of permitted executions (default: indefinitely)
-* `--authority <AUTHORITY>` — Account executing the trigger (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Account executing the trigger (canonical I105 literal)
 * `--filter <FILTER>` — Filter type for the trigger
 
   Default value: `execute`
@@ -1856,8 +1908,8 @@ Register a trigger
 * `--time-period-ms <TIME_PERIOD_MS>` — Period in milliseconds for time filter (optional)
 * `--data-filter <JSON>` — JSON for a `DataEventFilter` to use as filter
 * `--data-domain <DATA_DOMAIN>` — Data filter preset: events within a domain
-* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `--data-asset <DATA_ASSET>` — Data filter preset: events for an asset
+* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (canonical I105 literal)
+* `--data-asset <DATA_ASSET>` — Data filter preset: events for an encoded asset (`norito:<hex>`)
 * `--data-asset-definition <DATA_ASSET_DEFINITION>` — Data filter preset: events for an asset definition
 * `--data-role <DATA_ROLE>` — Data filter preset: events for a role
 * `--data-trigger <DATA_TRIGGER>` — Data filter preset: events for a trigger
@@ -1888,11 +1940,11 @@ Register a trigger
 
 
 
-## `iroha_cli ledger trigger unregister`
+## `iroha ledger trigger unregister`
 
 Unregister a trigger
 
-**Usage:** `iroha_cli ledger trigger unregister --id <ID>`
+**Usage:** `iroha ledger trigger unregister --id <ID>`
 
 ###### **Options:**
 
@@ -1900,11 +1952,11 @@ Unregister a trigger
 
 
 
-## `iroha_cli ledger trigger mint`
+## `iroha ledger trigger mint`
 
 Increase the number of trigger executions
 
-**Usage:** `iroha_cli ledger trigger mint --id <ID> --repetitions <REPETITIONS>`
+**Usage:** `iroha ledger trigger mint --id <ID> --repetitions <REPETITIONS>`
 
 ###### **Options:**
 
@@ -1913,11 +1965,11 @@ Increase the number of trigger executions
 
 
 
-## `iroha_cli ledger trigger burn`
+## `iroha ledger trigger burn`
 
 Decrease the number of trigger executions
 
-**Usage:** `iroha_cli ledger trigger burn --id <ID> --repetitions <REPETITIONS>`
+**Usage:** `iroha ledger trigger burn --id <ID> --repetitions <REPETITIONS>`
 
 ###### **Options:**
 
@@ -1926,11 +1978,11 @@ Decrease the number of trigger executions
 
 
 
-## `iroha_cli ledger trigger meta`
+## `iroha ledger trigger meta`
 
 Read and write metadata
 
-**Usage:** `iroha_cli ledger trigger meta <COMMAND>`
+**Usage:** `iroha ledger trigger meta <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1940,11 +1992,11 @@ Read and write metadata
 
 
 
-## `iroha_cli ledger trigger meta get`
+## `iroha ledger trigger meta get`
 
 Retrieve a value from the key-value store
 
-**Usage:** `iroha_cli ledger trigger meta get --id <ID> --key <KEY>`
+**Usage:** `iroha ledger trigger meta get --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1953,11 +2005,11 @@ Retrieve a value from the key-value store
 
 
 
-## `iroha_cli ledger trigger meta set`
+## `iroha ledger trigger meta set`
 
 Create or update an entry in the key-value store using JSON input from stdin
 
-**Usage:** `iroha_cli ledger trigger meta set --id <ID> --key <KEY>`
+**Usage:** `iroha ledger trigger meta set --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1966,11 +2018,11 @@ Create or update an entry in the key-value store using JSON input from stdin
 
 
 
-## `iroha_cli ledger trigger meta remove`
+## `iroha ledger trigger meta remove`
 
 Delete an entry from the key-value store
 
-**Usage:** `iroha_cli ledger trigger meta remove --id <ID> --key <KEY>`
+**Usage:** `iroha ledger trigger meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1979,11 +2031,11 @@ Delete an entry from the key-value store
 
 
 
-## `iroha_cli ledger query`
+## `iroha ledger query`
 
 Read various data
 
-**Usage:** `iroha_cli ledger query <COMMAND>`
+**Usage:** `iroha ledger query <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -1992,27 +2044,27 @@ Read various data
 
 
 
-## `iroha_cli ledger query stdin`
+## `iroha ledger query stdin`
 
 Query using JSON input from stdin
 
-**Usage:** `iroha_cli ledger query stdin`
+**Usage:** `iroha ledger query stdin`
 
 
 
-## `iroha_cli ledger query stdin-raw`
+## `iroha ledger query stdin-raw`
 
 Query using raw `SignedQuery` (base64 or hex) from stdin
 
-**Usage:** `iroha_cli ledger query stdin-raw`
+**Usage:** `iroha ledger query stdin-raw`
 
 
 
-## `iroha_cli ledger transaction`
+## `iroha ledger transaction`
 
 Read transactions and write various data
 
-**Usage:** `iroha_cli ledger transaction <COMMAND>`
+**Usage:** `iroha ledger transaction <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2023,11 +2075,11 @@ Read transactions and write various data
 
 
 
-## `iroha_cli ledger transaction get`
+## `iroha ledger transaction get`
 
 Retrieve details of a specific transaction
 
-**Usage:** `iroha_cli ledger transaction get --hash <HASH>`
+**Usage:** `iroha ledger transaction get --hash <HASH>`
 
 ###### **Options:**
 
@@ -2035,17 +2087,17 @@ Retrieve details of a specific transaction
 
 
 
-## `iroha_cli ledger transaction ping`
+## `iroha ledger transaction ping`
 
 Send an empty transaction that logs a message
 
-**Usage:** `iroha_cli ledger transaction ping [OPTIONS] --msg <MSG>`
+**Usage:** `iroha ledger transaction ping [OPTIONS] --msg <MSG>`
 
 ###### **Options:**
 
 * `-l`, `--log-level <LOG_LEVEL>` — Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
 
-  Default value: `INFO`
+  Default value: `DEBUG`
 * `-m`, `--msg <MSG>` — Log message
 * `--count <COUNT>` — Number of ping transactions to send
 
@@ -2061,11 +2113,11 @@ Send an empty transaction that logs a message
 
 
 
-## `iroha_cli ledger transaction ivm`
+## `iroha ledger transaction ivm`
 
 Send a transaction using IVM bytecode
 
-**Usage:** `iroha_cli ledger transaction ivm [OPTIONS]`
+**Usage:** `iroha ledger transaction ivm [OPTIONS]`
 
 ###### **Options:**
 
@@ -2073,19 +2125,19 @@ Send a transaction using IVM bytecode
 
 
 
-## `iroha_cli ledger transaction stdin`
+## `iroha ledger transaction stdin`
 
 Send a transaction using JSON input from stdin
 
-**Usage:** `iroha_cli ledger transaction stdin`
+**Usage:** `iroha ledger transaction stdin`
 
 
 
-## `iroha_cli ledger multisig`
+## `iroha ledger multisig`
 
 Read and write multi-signature accounts and transactions
 
-**Usage:** `iroha_cli ledger multisig <COMMAND>`
+**Usage:** `iroha ledger multisig <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2097,11 +2149,11 @@ Read and write multi-signature accounts and transactions
 
 
 
-## `iroha_cli ledger multisig list`
+## `iroha ledger multisig list`
 
 List pending multisig transactions relevant to you
 
-**Usage:** `iroha_cli ledger multisig list <COMMAND>`
+**Usage:** `iroha ledger multisig list <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2109,11 +2161,11 @@ List pending multisig transactions relevant to you
 
 
 
-## `iroha_cli ledger multisig list all`
+## `iroha ledger multisig list all`
 
 List all pending multisig transactions relevant to you
 
-**Usage:** `iroha_cli ledger multisig list all [OPTIONS]`
+**Usage:** `iroha ledger multisig list all [OPTIONS]`
 
 ###### **Options:**
 
@@ -2125,29 +2177,29 @@ List all pending multisig transactions relevant to you
 
 
 
-## `iroha_cli ledger multisig register`
+## `iroha ledger multisig register`
 
 Register a multisig account
 
-**Usage:** `iroha_cli ledger multisig register [OPTIONS] --quorum <QUORUM>`
+**Usage:** `iroha ledger multisig register [OPTIONS] --quorum <QUORUM>`
 
 ###### **Options:**
 
-* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (canonical I105 literal)
 * `-w`, `--weights <WEIGHTS>` — Relative weights of signatories' responsibilities
 * `-q`, `--quorum <QUORUM>` — Threshold of total weight required for authentication
-* `--account <ACCOUNT>` — Account id to use for the multisig controller. If omitted, a new random account is generated in the signatory domain and the private key is discarded locally
+* `--account <ACCOUNT>` — Account id to use for the multisig controller. If omitted, a new random domainless account id is generated locally, the private key is discarded, and the registration uses the configured default home domain
 * `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Time-to-live for multisig transactions. Example: "1y 6M 2w 3d 12h 30m 30s"
 
   Default value: `1h`
 
 
 
-## `iroha_cli ledger multisig propose`
+## `iroha ledger multisig propose`
 
 Propose a multisig transaction using JSON input from stdin
 
-**Usage:** `iroha_cli ledger multisig propose [OPTIONS] --account <ACCOUNT>`
+**Usage:** `iroha ledger multisig propose [OPTIONS] --account <ACCOUNT>`
 
 ###### **Options:**
 
@@ -2156,11 +2208,11 @@ Propose a multisig transaction using JSON input from stdin
 
 
 
-## `iroha_cli ledger multisig approve`
+## `iroha ledger multisig approve`
 
 Approve a multisig transaction
 
-**Usage:** `iroha_cli ledger multisig approve --account <ACCOUNT> --instructions-hash <INSTRUCTIONS_HASH>`
+**Usage:** `iroha ledger multisig approve --account <ACCOUNT> --instructions-hash <INSTRUCTIONS_HASH>`
 
 ###### **Options:**
 
@@ -2169,11 +2221,11 @@ Approve a multisig transaction
 
 
 
-## `iroha_cli ledger multisig inspect`
+## `iroha ledger multisig inspect`
 
 Inspect a multisig account controller and print the CTAP2 payload + digest
 
-**Usage:** `iroha_cli ledger multisig inspect [OPTIONS] --account <ACCOUNT>`
+**Usage:** `iroha ledger multisig inspect [OPTIONS] --account <ACCOUNT>`
 
 ###### **Options:**
 
@@ -2182,11 +2234,11 @@ Inspect a multisig account controller and print the CTAP2 payload + digest
 
 
 
-## `iroha_cli ledger events`
+## `iroha ledger events`
 
 Subscribe to events: state changes, transaction/block/trigger progress
 
-**Usage:** `iroha_cli ledger events [OPTIONS] <COMMAND>`
+**Usage:** `iroha ledger events [OPTIONS] <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2203,19 +2255,19 @@ Subscribe to events: state changes, transaction/block/trigger progress
 
 
 
-## `iroha_cli ledger events state`
+## `iroha ledger events state`
 
 Notify when the world state undergoes certain changes
 
-**Usage:** `iroha_cli ledger events state`
+**Usage:** `iroha ledger events state`
 
 
 
-## `iroha_cli ledger events governance`
+## `iroha ledger events governance`
 
 Notify governance lifecycle events
 
-**Usage:** `iroha_cli ledger events governance [OPTIONS]`
+**Usage:** `iroha ledger events governance [OPTIONS]`
 
 ###### **Options:**
 
@@ -2224,43 +2276,43 @@ Notify governance lifecycle events
 
 
 
-## `iroha_cli ledger events transaction`
+## `iroha ledger events transaction`
 
 Notify when a transaction reaches specific stages
 
-**Usage:** `iroha_cli ledger events transaction`
+**Usage:** `iroha ledger events transaction`
 
 
 
-## `iroha_cli ledger events block`
+## `iroha ledger events block`
 
 Notify when a block reaches specific stages
 
-**Usage:** `iroha_cli ledger events block`
+**Usage:** `iroha ledger events block`
 
 
 
-## `iroha_cli ledger events trigger-execute`
+## `iroha ledger events trigger-execute`
 
 Notify when a trigger execution is ordered
 
-**Usage:** `iroha_cli ledger events trigger-execute`
+**Usage:** `iroha ledger events trigger-execute`
 
 
 
-## `iroha_cli ledger events trigger-complete`
+## `iroha ledger events trigger-complete`
 
 Notify when a trigger execution is completed
 
-**Usage:** `iroha_cli ledger events trigger-complete`
+**Usage:** `iroha ledger events trigger-complete`
 
 
 
-## `iroha_cli ledger blocks`
+## `iroha ledger blocks`
 
 Subscribe to blocks
 
-**Usage:** `iroha_cli ledger blocks [OPTIONS] <HEIGHT>`
+**Usage:** `iroha ledger blocks [OPTIONS] <HEIGHT>`
 
 ###### **Arguments:**
 
@@ -2272,11 +2324,11 @@ Subscribe to blocks
 
 
 
-## `iroha_cli ops`
+## `iroha ops`
 
 Node and operator helpers
 
-**Usage:** `iroha_cli ops <COMMAND>`
+**Usage:** `iroha ops <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2289,11 +2341,11 @@ Node and operator helpers
 
 
 
-## `iroha_cli ops offline`
+## `iroha ops offline`
 
 Inspect offline allowances and offline-to-online bundles
 
-**Usage:** `iroha_cli ops offline <COMMAND>`
+**Usage:** `iroha ops offline <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2308,11 +2360,11 @@ Inspect offline allowances and offline-to-online bundles
 
 
 
-## `iroha_cli ops offline allowance`
+## `iroha ops offline allowance`
 
 Inspect offline allowances registered on-ledger
 
-**Usage:** `iroha_cli ops offline allowance <COMMAND>`
+**Usage:** `iroha ops offline allowance <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2321,11 +2373,11 @@ Inspect offline allowances registered on-ledger
 
 
 
-## `iroha_cli ops offline allowance list`
+## `iroha ops offline allowance list`
 
 List all registered offline allowances
 
-**Usage:** `iroha_cli ops offline allowance list [OPTIONS]`
+**Usage:** `iroha ops offline allowance list [OPTIONS]`
 
 ###### **Options:**
 
@@ -2355,11 +2407,11 @@ List all registered offline allowances
 
 
 
-## `iroha_cli ops offline allowance get`
+## `iroha ops offline allowance get`
 
 Fetch a specific allowance by certificate id
 
-**Usage:** `iroha_cli ops offline allowance get --certificate-id <CERTIFICATE_ID>`
+**Usage:** `iroha ops offline allowance get --certificate-id <CERTIFICATE_ID>`
 
 ###### **Options:**
 
@@ -2367,11 +2419,11 @@ Fetch a specific allowance by certificate id
 
 
 
-## `iroha_cli ops offline transfer`
+## `iroha ops offline transfer`
 
 Inspect pending offline-to-online transfer bundles
 
-**Usage:** `iroha_cli ops offline transfer <COMMAND>`
+**Usage:** `iroha ops offline transfer <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2381,11 +2433,11 @@ Inspect pending offline-to-online transfer bundles
 
 
 
-## `iroha_cli ops offline transfer list`
+## `iroha ops offline transfer list`
 
 List all pending offline-to-online transfer bundles
 
-**Usage:** `iroha_cli ops offline transfer list [OPTIONS]`
+**Usage:** `iroha ops offline transfer list [OPTIONS]`
 
 ###### **Options:**
 
@@ -2405,7 +2457,7 @@ List all pending offline-to-online transfer bundles
 * `--receiver <ACCOUNT_ID>` — Optional receiver filter (account identifier)
 * `--status <STATUS>` — Optional lifecycle status filter
 
-  Possible values: `settled`, `archived`
+  Possible values: `settled`, `rejected`, `archived`
 
 * `--certificate-id <HEX>` — Only show bundles whose certificate id matches the provided hex value
 * `--certificate-expires-before-ms <CERTIFICATE_EXPIRES_BEFORE_MS>` — Only show bundles whose certificate expiry is at or before this value
@@ -2427,11 +2479,11 @@ List all pending offline-to-online transfer bundles
 
 
 
-## `iroha_cli ops offline transfer get`
+## `iroha ops offline transfer get`
 
 Fetch a specific transfer bundle by id
 
-**Usage:** `iroha_cli ops offline transfer get --bundle-id <BUNDLE_ID>`
+**Usage:** `iroha ops offline transfer get --bundle-id <BUNDLE_ID>`
 
 ###### **Options:**
 
@@ -2439,11 +2491,11 @@ Fetch a specific transfer bundle by id
 
 
 
-## `iroha_cli ops offline transfer proof`
+## `iroha ops offline transfer proof`
 
 Generate a FASTPQ witness request for a bundle payload
 
-**Usage:** `iroha_cli ops offline transfer proof [OPTIONS] --bundle <PATH> --kind <KIND>`
+**Usage:** `iroha ops offline transfer proof [OPTIONS] --bundle <PATH> --kind <KIND>`
 
 ###### **Options:**
 
@@ -2464,11 +2516,11 @@ Generate a FASTPQ witness request for a bundle payload
 
 
 
-## `iroha_cli ops offline bundle`
+## `iroha ops offline bundle`
 
 Inspect offline bundle fixtures and aggregate proofs
 
-**Usage:** `iroha_cli ops offline bundle <COMMAND>`
+**Usage:** `iroha ops offline bundle <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2476,11 +2528,11 @@ Inspect offline bundle fixtures and aggregate proofs
 
 
 
-## `iroha_cli ops offline bundle inspect`
+## `iroha ops offline bundle inspect`
 
 Inspect offline bundle fixtures and compute Poseidon receipts roots
 
-**Usage:** `iroha_cli ops offline bundle inspect [OPTIONS] <PATH>...`
+**Usage:** `iroha ops offline bundle inspect [OPTIONS] <PATH>...`
 
 ###### **Arguments:**
 
@@ -2498,11 +2550,11 @@ Inspect offline bundle fixtures and compute Poseidon receipts roots
 
 
 
-## `iroha_cli ops offline summary`
+## `iroha ops offline summary`
 
 Inspect derived counter summaries per offline certificate
 
-**Usage:** `iroha_cli ops offline summary <COMMAND>`
+**Usage:** `iroha ops offline summary <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2511,11 +2563,11 @@ Inspect derived counter summaries per offline certificate
 
 
 
-## `iroha_cli ops offline summary list`
+## `iroha ops offline summary list`
 
 List counter summaries derived from wallet allowances
 
-**Usage:** `iroha_cli ops offline summary list [OPTIONS]`
+**Usage:** `iroha ops offline summary list [OPTIONS]`
 
 ###### **Options:**
 
@@ -2534,11 +2586,11 @@ List counter summaries derived from wallet allowances
 
 
 
-## `iroha_cli ops offline summary export`
+## `iroha ops offline summary export`
 
 Export counter summaries to a JSON digest for receiver sharing
 
-**Usage:** `iroha_cli ops offline summary export [OPTIONS] --output <PATH>`
+**Usage:** `iroha ops offline summary export [OPTIONS] --output <PATH>`
 
 ###### **Options:**
 
@@ -2560,11 +2612,11 @@ Export counter summaries to a JSON digest for receiver sharing
 
 
 
-## `iroha_cli ops offline revocation`
+## `iroha ops offline revocation`
 
 Inspect recorded verdict revocations
 
-**Usage:** `iroha_cli ops offline revocation <COMMAND>`
+**Usage:** `iroha ops offline revocation <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2572,11 +2624,11 @@ Inspect recorded verdict revocations
 
 
 
-## `iroha_cli ops offline revocation list`
+## `iroha ops offline revocation list`
 
 List recorded verdict revocations
 
-**Usage:** `iroha_cli ops offline revocation list [OPTIONS]`
+**Usage:** `iroha ops offline revocation list [OPTIONS]`
 
 ###### **Options:**
 
@@ -2595,11 +2647,11 @@ List recorded verdict revocations
 
 
 
-## `iroha_cli ops offline rejection`
+## `iroha ops offline rejection`
 
 Fetch offline rejection telemetry snapshots
 
-**Usage:** `iroha_cli ops offline rejection <COMMAND>`
+**Usage:** `iroha ops offline rejection <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2607,11 +2659,11 @@ Fetch offline rejection telemetry snapshots
 
 
 
-## `iroha_cli ops offline rejection stats`
+## `iroha ops offline rejection stats`
 
 Fetch aggregated offline rejection counters
 
-**Usage:** `iroha_cli ops offline rejection stats [OPTIONS]`
+**Usage:** `iroha ops offline rejection stats [OPTIONS]`
 
 ###### **Options:**
 
@@ -2619,11 +2671,11 @@ Fetch aggregated offline rejection counters
 
 
 
-## `iroha_cli ops offline qr`
+## `iroha ops offline qr`
 
 Encode/decode QR stream frames for offline payloads
 
-**Usage:** `iroha_cli ops offline qr <COMMAND>`
+**Usage:** `iroha ops offline qr <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2632,11 +2684,11 @@ Encode/decode QR stream frames for offline payloads
 
 
 
-## `iroha_cli ops offline qr encode`
+## `iroha ops offline qr encode`
 
 Encode a payload into QR stream frames
 
-**Usage:** `iroha_cli ops offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
+**Usage:** `iroha ops offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
 
 ###### **Options:**
 
@@ -2679,7 +2731,7 @@ Encode a payload into QR stream frames
 
   Default value: `mono`
 
-  Possible values: `mono`, `sakura`, `sakura-wind`
+  Possible values: `mono`, `sakura`, `sakura-wind`, `sakura-storm`
 
 * `--fps <FPS>` — Frames per second for animated outputs
 
@@ -2687,11 +2739,11 @@ Encode a payload into QR stream frames
 
 
 
-## `iroha_cli ops offline qr decode`
+## `iroha ops offline qr decode`
 
 Decode QR stream frames into the original payload
 
-**Usage:** `iroha_cli ops offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+**Usage:** `iroha ops offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
 
 ###### **Options:**
 
@@ -2707,24 +2759,27 @@ Decode QR stream frames into the original payload
 
 
 
-## `iroha_cli ops offline petal`
+## `iroha ops offline petal`
 
 Encode/decode petal stream frames for offline payloads
 
-**Usage:** `iroha_cli ops offline petal <COMMAND>`
+**Usage:** `iroha ops offline petal <COMMAND>`
 
 ###### **Subcommands:**
 
 * `encode` — Encode a payload into petal stream frames
 * `decode` — Decode petal stream frames into the original payload
+* `eval-capture` — Evaluate decode robustness under simulated distant/moving capture
+* `simulate-realtime` — Simulate live camera reading and decode frame-by-frame in real time
+* `score-styles` — Score render styles with deterministic capture simulation and throughput metrics
 
 
 
-## `iroha_cli ops offline petal encode`
+## `iroha ops offline petal encode`
 
 Encode a payload into petal stream frames
 
-**Usage:** `iroha_cli ops offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
+**Usage:** `iroha ops offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
 
 ###### **Options:**
 
@@ -2738,7 +2793,7 @@ Encode a payload into petal stream frames
 
 * `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
 
-  Default value: `360`
+  Default value: `140`
 * `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
 
   Default value: `0`
@@ -2765,18 +2820,30 @@ Encode a payload into petal stream frames
   Default value: `24`
 * `--style <STYLE>` — Render style for preview images (ignored for --format frames)
 
-  Default value: `sakura-wind`
+  Default value: `sora-temple`
 
-  Possible values: `sakura-wind`
+  Possible values: `sakura-wind`, `sora-temple`, `sora-temple-bold`, `sora-temple-minimal`, `sora-temple-radiant`, `sora-temple-command`, `sora-temple-aegis`, `sora-temple-ghost`
+
+* `--channel <CHANNEL>` — Data channel used for data cells in rendered outputs
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--katakana-preset <KATAKANA_PRESET>` — Katakana channel tuning preset used when grid/chunk are left at defaults
+
+  Default value: `balanced`
+
+  Possible values: `balanced`, `distance-safe`
 
 
 
 
-## `iroha_cli ops offline petal decode`
+## `iroha ops offline petal decode`
 
 Decode petal stream frames into the original payload
 
-**Usage:** `iroha_cli ops offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+**Usage:** `iroha ops offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
 
 ###### **Options:**
 
@@ -2792,14 +2859,172 @@ Decode petal stream frames into the original payload
 
   Default value: `3`
 * `--output-manifest <FILE>` — Optional JSON manifest output path
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
 
 
 
-## `iroha_cli ops executor`
+
+## `iroha ops offline petal eval-capture`
+
+Evaluate decode robustness under simulated distant/moving capture
+
+**Usage:** `iroha ops offline petal eval-capture [OPTIONS] --input-dir <DIR>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing rendered PNG frames
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect from pristine frames)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--profile <PROFILE>` — Capture perturbation profile
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for perturbation sampling
+
+  Default value: `42`
+* `--trials-per-frame <TRIALS_PER_FRAME>` — Number of perturbation trials per frame (0 uses profile default)
+
+  Default value: `0`
+* `--min-success-ratio <MIN_SUCCESS_RATIO>` — Minimum successful decode ratio required to pass
+
+  Default value: `0.95`
+* `--output-report <FILE>` — Optional JSON report output path
+
+
+
+## `iroha ops offline petal simulate-realtime`
+
+Simulate live camera reading and decode frame-by-frame in real time
+
+**Usage:** `iroha ops offline petal simulate-realtime [OPTIONS] --input-dir <DIR>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing rendered PNG frames
+* `--output-payload <FILE>` — Optional output file for the decoded payload
+* `--output-report <FILE>` — Optional JSON report output path
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect from the first frame)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--profile <PROFILE>` — Capture perturbation profile used to emulate a moving camera read
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for capture perturbation sampling
+
+  Default value: `42`
+* `--simulate-fps <SIMULATE_FPS>` — Simulated camera frame rate used to compute timeline metrics
+
+  Default value: `24`
+* `--frame-limit <FRAME_LIMIT>` — Optional cap on number of frames to process from the input directory
+* `--realtime-loops <REALTIME_LOOPS>` — Number of playback loops to simulate over the same frame set
+
+  Default value: `1`
+* `--disable-capture-perturbation` — Disable capture perturbation and decode pristine frames only
+* `--allow-incomplete` — Allow incomplete stream reconstruction without returning an error
+
+
+
+## `iroha ops offline petal score-styles`
+
+Score render styles with deterministic capture simulation and throughput metrics
+
+**Usage:** `iroha ops offline petal score-styles [OPTIONS] --input <FILE> --output-report <FILE>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to payload bytes used for style scoring
+* `--output-report <FILE>` — JSON report path for scored styles
+* `--style <STYLE>` — Styles to evaluate (repeat flag). Empty means the default temple style set
+
+  Possible values: `sakura-wind`, `sora-temple`, `sora-temple-bold`, `sora-temple-minimal`, `sora-temple-radiant`, `sora-temple-command`, `sora-temple-aegis`, `sora-temple-ghost`
+
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `140`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 selects automatic sizing)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--dimension <DIMENSION>` — Rendered frame size in pixels
+
+  Default value: `512`
+* `--fps <FPS>` — Frames per second used for effective throughput scoring
+
+  Default value: `24`
+* `--profile <PROFILE>` — Capture perturbation profile
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for perturbation sampling
+
+  Default value: `42`
+* `--trials-per-frame <TRIALS_PER_FRAME>` — Number of perturbation trials per frame (0 uses profile default)
+
+  Default value: `0`
+* `--min-success-ratio <MIN_SUCCESS_RATIO>` — Minimum capture success ratio used for the pass gate in the report
+
+  Default value: `0.95`
+* `--target-effective-bps <TARGET_EFFECTIVE_BPS>` — Target effective throughput used to normalize throughput scoring
+
+  Default value: `3000`
+
+
+
+## `iroha ops executor`
 
 Read and write the executor
 
-**Usage:** `iroha_cli ops executor <COMMAND>`
+**Usage:** `iroha ops executor <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2808,19 +3033,19 @@ Read and write the executor
 
 
 
-## `iroha_cli ops executor data-model`
+## `iroha ops executor data-model`
 
 Retrieve the executor data model
 
-**Usage:** `iroha_cli ops executor data-model`
+**Usage:** `iroha ops executor data-model`
 
 
 
-## `iroha_cli ops executor upgrade`
+## `iroha ops executor upgrade`
 
 Upgrade the executor
 
-**Usage:** `iroha_cli ops executor upgrade --path <PATH>`
+**Usage:** `iroha ops executor upgrade --path <PATH>`
 
 ###### **Options:**
 
@@ -2828,11 +3053,11 @@ Upgrade the executor
 
 
 
-## `iroha_cli ops runtime`
+## `iroha ops runtime`
 
 Runtime ABI/upgrades
 
-**Usage:** `iroha_cli ops runtime <COMMAND>`
+**Usage:** `iroha ops runtime <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2843,11 +3068,11 @@ Runtime ABI/upgrades
 
 
 
-## `iroha_cli ops runtime abi`
+## `iroha ops runtime abi`
 
 Runtime ABI helpers
 
-**Usage:** `iroha_cli ops runtime abi <COMMAND>`
+**Usage:** `iroha ops runtime abi <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2857,35 +3082,35 @@ Runtime ABI helpers
 
 
 
-## `iroha_cli ops runtime abi active`
+## `iroha ops runtime abi active`
 
 Fetch active ABI versions from the node
 
-**Usage:** `iroha_cli ops runtime abi active`
+**Usage:** `iroha ops runtime abi active`
 
 
 
-## `iroha_cli ops runtime abi active-query`
+## `iroha ops runtime abi active-query`
 
 Fetch active ABI versions via signed Norito query (core /query)
 
-**Usage:** `iroha_cli ops runtime abi active-query`
+**Usage:** `iroha ops runtime abi active-query`
 
 
 
-## `iroha_cli ops runtime abi hash`
+## `iroha ops runtime abi hash`
 
 Fetch the node's canonical ABI hash for the active policy
 
-**Usage:** `iroha_cli ops runtime abi hash`
+**Usage:** `iroha ops runtime abi hash`
 
 
 
-## `iroha_cli ops runtime upgrade`
+## `iroha ops runtime upgrade`
 
 Runtime upgrade management
 
-**Usage:** `iroha_cli ops runtime upgrade <COMMAND>`
+**Usage:** `iroha ops runtime upgrade <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2896,19 +3121,19 @@ Runtime upgrade management
 
 
 
-## `iroha_cli ops runtime upgrade list`
+## `iroha ops runtime upgrade list`
 
 List proposed/activated runtime upgrades
 
-**Usage:** `iroha_cli ops runtime upgrade list`
+**Usage:** `iroha ops runtime upgrade list`
 
 
 
-## `iroha_cli ops runtime upgrade propose`
+## `iroha ops runtime upgrade propose`
 
 Build a `ProposeRuntimeUpgrade` instruction skeleton via Torii
 
-**Usage:** `iroha_cli ops runtime upgrade propose --file <PATH>`
+**Usage:** `iroha ops runtime upgrade propose --file <PATH>`
 
 ###### **Options:**
 
@@ -2916,11 +3141,11 @@ Build a `ProposeRuntimeUpgrade` instruction skeleton via Torii
 
 
 
-## `iroha_cli ops runtime upgrade activate`
+## `iroha ops runtime upgrade activate`
 
 Build an `ActivateRuntimeUpgrade` instruction skeleton via Torii
 
-**Usage:** `iroha_cli ops runtime upgrade activate --id <HEX>`
+**Usage:** `iroha ops runtime upgrade activate --id <HEX>`
 
 ###### **Options:**
 
@@ -2928,11 +3153,11 @@ Build an `ActivateRuntimeUpgrade` instruction skeleton via Torii
 
 
 
-## `iroha_cli ops runtime upgrade cancel`
+## `iroha ops runtime upgrade cancel`
 
 Build a `CancelRuntimeUpgrade` instruction skeleton via Torii
 
-**Usage:** `iroha_cli ops runtime upgrade cancel --id <HEX>`
+**Usage:** `iroha ops runtime upgrade cancel --id <HEX>`
 
 ###### **Options:**
 
@@ -2940,27 +3165,27 @@ Build a `CancelRuntimeUpgrade` instruction skeleton via Torii
 
 
 
-## `iroha_cli ops runtime status`
+## `iroha ops runtime status`
 
 Show runtime metrics/status summary
 
-**Usage:** `iroha_cli ops runtime status`
+**Usage:** `iroha ops runtime status`
 
 
 
-## `iroha_cli ops runtime capabilities`
+## `iroha ops runtime capabilities`
 
 Fetch node capability advert (ABI + crypto manifest)
 
-**Usage:** `iroha_cli ops runtime capabilities`
+**Usage:** `iroha ops runtime capabilities`
 
 
 
-## `iroha_cli ops sumeragi`
+## `iroha ops sumeragi`
 
 Sumeragi helpers (status)
 
-**Usage:** `iroha_cli ops sumeragi <COMMAND>`
+**Usage:** `iroha ops sumeragi <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -2980,75 +3205,75 @@ Sumeragi helpers (status)
 
 
 
-## `iroha_cli ops sumeragi status`
+## `iroha ops sumeragi status`
 
 Show consensus status snapshot (leader, `HighestQC`, `LockedQC`)
 
-**Usage:** `iroha_cli ops sumeragi status`
+**Usage:** `iroha ops sumeragi status`
 
 
 
-## `iroha_cli ops sumeragi leader`
+## `iroha ops sumeragi leader`
 
 Show leader index (and PRF context when available)
 
-**Usage:** `iroha_cli ops sumeragi leader`
+**Usage:** `iroha ops sumeragi leader`
 
 
 
-## `iroha_cli ops sumeragi params`
+## `iroha ops sumeragi params`
 
 Show on-chain Sumeragi parameters snapshot
 
-**Usage:** `iroha_cli ops sumeragi params`
+**Usage:** `iroha ops sumeragi params`
 
 
 
-## `iroha_cli ops sumeragi collectors`
+## `iroha ops sumeragi collectors`
 
 Show current collector indices and peers
 
-**Usage:** `iroha_cli ops sumeragi collectors`
+**Usage:** `iroha ops sumeragi collectors`
 
 
 
-## `iroha_cli ops sumeragi qc`
+## `iroha ops sumeragi qc`
 
 Show HighestQC/LockedQC snapshot
 
-**Usage:** `iroha_cli ops sumeragi qc`
+**Usage:** `iroha ops sumeragi qc`
 
 
 
-## `iroha_cli ops sumeragi pacemaker`
+## `iroha ops sumeragi pacemaker`
 
 Show pacemaker timers/config snapshot
 
-**Usage:** `iroha_cli ops sumeragi pacemaker`
+**Usage:** `iroha ops sumeragi pacemaker`
 
 
 
-## `iroha_cli ops sumeragi phases`
+## `iroha ops sumeragi phases`
 
 Show latest per-phase latencies (ms)
 
-**Usage:** `iroha_cli ops sumeragi phases`
+**Usage:** `iroha ops sumeragi phases`
 
 
 
-## `iroha_cli ops sumeragi telemetry`
+## `iroha ops sumeragi telemetry`
 
 Show aggregated telemetry snapshot (availability, QC, RBC, VRF)
 
-**Usage:** `iroha_cli ops sumeragi telemetry`
+**Usage:** `iroha ops sumeragi telemetry`
 
 
 
-## `iroha_cli ops sumeragi evidence`
+## `iroha ops sumeragi evidence`
 
 Evidence helpers (list/count/submit)
 
-**Usage:** `iroha_cli ops sumeragi evidence <COMMAND>`
+**Usage:** `iroha ops sumeragi evidence <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3058,11 +3283,11 @@ Evidence helpers (list/count/submit)
 
 
 
-## `iroha_cli ops sumeragi evidence list`
+## `iroha ops sumeragi evidence list`
 
 List persisted evidence entries
 
-**Usage:** `iroha_cli ops sumeragi evidence list [OPTIONS]`
+**Usage:** `iroha ops sumeragi evidence list [OPTIONS]`
 
 ###### **Options:**
 
@@ -3075,19 +3300,19 @@ List persisted evidence entries
 
 
 
-## `iroha_cli ops sumeragi evidence count`
+## `iroha ops sumeragi evidence count`
 
 Show evidence count
 
-**Usage:** `iroha_cli ops sumeragi evidence count`
+**Usage:** `iroha ops sumeragi evidence count`
 
 
 
-## `iroha_cli ops sumeragi evidence submit`
+## `iroha ops sumeragi evidence submit`
 
 Submit hex-encoded evidence payload
 
-**Usage:** `iroha_cli ops sumeragi evidence submit [OPTIONS]`
+**Usage:** `iroha ops sumeragi evidence submit [OPTIONS]`
 
 ###### **Options:**
 
@@ -3096,11 +3321,11 @@ Submit hex-encoded evidence payload
 
 
 
-## `iroha_cli ops sumeragi rbc`
+## `iroha ops sumeragi rbc`
 
 RBC helpers (status/sessions)
 
-**Usage:** `iroha_cli ops sumeragi rbc <COMMAND>`
+**Usage:** `iroha ops sumeragi rbc <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3109,27 +3334,27 @@ RBC helpers (status/sessions)
 
 
 
-## `iroha_cli ops sumeragi rbc status`
+## `iroha ops sumeragi rbc status`
 
 Show RBC session/throughput counters
 
-**Usage:** `iroha_cli ops sumeragi rbc status`
+**Usage:** `iroha ops sumeragi rbc status`
 
 
 
-## `iroha_cli ops sumeragi rbc sessions`
+## `iroha ops sumeragi rbc sessions`
 
 Show RBC sessions snapshot
 
-**Usage:** `iroha_cli ops sumeragi rbc sessions`
+**Usage:** `iroha ops sumeragi rbc sessions`
 
 
 
-## `iroha_cli ops sumeragi vrf-penalties`
+## `iroha ops sumeragi vrf-penalties`
 
 Show VRF penalties for the given epoch
 
-**Usage:** `iroha_cli ops sumeragi vrf-penalties --epoch <EPOCH>`
+**Usage:** `iroha ops sumeragi vrf-penalties --epoch <EPOCH>`
 
 ###### **Options:**
 
@@ -3137,11 +3362,11 @@ Show VRF penalties for the given epoch
 
 
 
-## `iroha_cli ops sumeragi vrf-epoch`
+## `iroha ops sumeragi vrf-epoch`
 
 Show persisted VRF epoch snapshot (seed, participants, penalties)
 
-**Usage:** `iroha_cli ops sumeragi vrf-epoch --epoch <EPOCH>`
+**Usage:** `iroha ops sumeragi vrf-epoch --epoch <EPOCH>`
 
 ###### **Options:**
 
@@ -3149,11 +3374,11 @@ Show persisted VRF epoch snapshot (seed, participants, penalties)
 
 
 
-## `iroha_cli ops sumeragi commit-qc`
+## `iroha ops sumeragi commit-qc`
 
 Fetch commit QC (if present) for a block hash
 
-**Usage:** `iroha_cli ops sumeragi commit-qc <COMMAND>`
+**Usage:** `iroha ops sumeragi commit-qc <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3161,11 +3386,11 @@ Fetch commit QC (if present) for a block hash
 
 
 
-## `iroha_cli ops sumeragi commit-qc get`
+## `iroha ops sumeragi commit-qc get`
 
 Fetch commit QC (if present) for a block hash
 
-**Usage:** `iroha_cli ops sumeragi commit-qc get --hash <HASH>`
+**Usage:** `iroha ops sumeragi commit-qc get --hash <HASH>`
 
 ###### **Options:**
 
@@ -3173,11 +3398,11 @@ Fetch commit QC (if present) for a block hash
 
 
 
-## `iroha_cli ops audit`
+## `iroha ops audit`
 
 Audit helpers (debug endpoints)
 
-**Usage:** `iroha_cli ops audit <COMMAND>`
+**Usage:** `iroha ops audit <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3185,11 +3410,11 @@ Audit helpers (debug endpoints)
 
 
 
-## `iroha_cli ops audit witness`
+## `iroha ops audit witness`
 
 Fetch current execution witness snapshot from Torii debug endpoints
 
-**Usage:** `iroha_cli ops audit witness [OPTIONS]`
+**Usage:** `iroha ops audit witness [OPTIONS]`
 
 ###### **Options:**
 
@@ -3198,7 +3423,7 @@ Fetch current execution witness snapshot from Torii debug endpoints
 * `--decode <PATH>` — Decode a Norito-encoded `ExecWitness` from a file and print with human-readable keys
 * `--filter <PREFIXES>` — Filter decoded entries by key namespace prefix (comma-separated). Shorthand groups supported: - roles => [role, role.binding, perm.account, perm.role] - assets => [asset, `asset_def.total`] - `all_assets` => [asset, `asset_def.total`, `asset_def.detail`] - metadata => [account.detail, domain.detail, nft.detail, `asset_def.detail`] - `all_meta` => [account.detail, domain.detail, nft.detail, `asset_def.detail`] (alias of metadata) - perm | perms | permissions => [perm.account, perm.role] Examples: "assets,metadata", "roles", "account.detail,domain.detail". Applied only with --decode; prefixes match the human-readable key labels.
 
-   Matching on the identifier segment supports: - exact (e.g., `account.detail:alice@wonderland`) - partial substring (e.g., `account.detail:wonderland`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#*@wonderland`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
+   Matching on the identifier segment supports: - exact (e.g., `account.detail:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn`) - partial substring (e.g., `account.detail:6cmzPVPX`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
 * `--fastpq-batches` — Include FASTPQ transition batches recorded in the witness when decoding (enabled by default)
 
   Default value: `true`
@@ -3209,11 +3434,11 @@ Fetch current execution witness snapshot from Torii debug endpoints
 
 
 
-## `iroha_cli ops connect`
+## `iroha ops connect`
 
 Connect diagnostics helpers (queue inspection, evidence export)
 
-**Usage:** `iroha_cli ops connect <COMMAND>`
+**Usage:** `iroha ops connect <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3221,11 +3446,11 @@ Connect diagnostics helpers (queue inspection, evidence export)
 
 
 
-## `iroha_cli ops connect queue`
+## `iroha ops connect queue`
 
 Queue inspection tooling
 
-**Usage:** `iroha_cli ops connect queue <COMMAND>`
+**Usage:** `iroha ops connect queue <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3233,15 +3458,15 @@ Queue inspection tooling
 
 
 
-## `iroha_cli ops connect queue inspect`
+## `iroha ops connect queue inspect`
 
 Inspect on-disk queue diagnostics for a Connect session
 
-**Usage:** `iroha_cli ops connect queue inspect [OPTIONS]`
+**Usage:** `iroha ops connect queue inspect [OPTIONS]`
 
 ###### **Options:**
 
-* `--sid <SID>` — Connect session identifier (base64/base64url/hex). Required unless `--snapshot` is provided
+* `--sid <SID>` — Connect session identifier (base64url, no padding). Required unless `--snapshot` is provided
 * `--snapshot <SNAPSHOT>` — Path to an explicit snapshot JSON file (defaults to `<root>/<sid>/state.json`)
 * `--root <ROOT>` — Root directory containing Connect queue state (defaults to `connect.queue.root` or `~/.iroha/connect`)
 * `--metrics` — Include metrics summary derived from `metrics.ndjson`
@@ -3256,11 +3481,11 @@ Inspect on-disk queue diagnostics for a Connect session
 
 
 
-## `iroha_cli offline`
+## `iroha offline`
 
 Inspect offline allowances and offline-to-online bundles
 
-**Usage:** `iroha_cli offline <COMMAND>`
+**Usage:** `iroha offline <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3275,11 +3500,11 @@ Inspect offline allowances and offline-to-online bundles
 
 
 
-## `iroha_cli offline allowance`
+## `iroha offline allowance`
 
 Inspect offline allowances registered on-ledger
 
-**Usage:** `iroha_cli offline allowance <COMMAND>`
+**Usage:** `iroha offline allowance <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3288,11 +3513,11 @@ Inspect offline allowances registered on-ledger
 
 
 
-## `iroha_cli offline allowance list`
+## `iroha offline allowance list`
 
 List all registered offline allowances
 
-**Usage:** `iroha_cli offline allowance list [OPTIONS]`
+**Usage:** `iroha offline allowance list [OPTIONS]`
 
 ###### **Options:**
 
@@ -3322,11 +3547,11 @@ List all registered offline allowances
 
 
 
-## `iroha_cli offline allowance get`
+## `iroha offline allowance get`
 
 Fetch a specific allowance by certificate id
 
-**Usage:** `iroha_cli offline allowance get --certificate-id <CERTIFICATE_ID>`
+**Usage:** `iroha offline allowance get --certificate-id <CERTIFICATE_ID>`
 
 ###### **Options:**
 
@@ -3334,11 +3559,11 @@ Fetch a specific allowance by certificate id
 
 
 
-## `iroha_cli offline transfer`
+## `iroha offline transfer`
 
 Inspect pending offline-to-online transfer bundles
 
-**Usage:** `iroha_cli offline transfer <COMMAND>`
+**Usage:** `iroha offline transfer <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3348,11 +3573,11 @@ Inspect pending offline-to-online transfer bundles
 
 
 
-## `iroha_cli offline transfer list`
+## `iroha offline transfer list`
 
 List all pending offline-to-online transfer bundles
 
-**Usage:** `iroha_cli offline transfer list [OPTIONS]`
+**Usage:** `iroha offline transfer list [OPTIONS]`
 
 ###### **Options:**
 
@@ -3372,7 +3597,7 @@ List all pending offline-to-online transfer bundles
 * `--receiver <ACCOUNT_ID>` — Optional receiver filter (account identifier)
 * `--status <STATUS>` — Optional lifecycle status filter
 
-  Possible values: `settled`, `archived`
+  Possible values: `settled`, `rejected`, `archived`
 
 * `--certificate-id <HEX>` — Only show bundles whose certificate id matches the provided hex value
 * `--certificate-expires-before-ms <CERTIFICATE_EXPIRES_BEFORE_MS>` — Only show bundles whose certificate expiry is at or before this value
@@ -3394,11 +3619,11 @@ List all pending offline-to-online transfer bundles
 
 
 
-## `iroha_cli offline transfer get`
+## `iroha offline transfer get`
 
 Fetch a specific transfer bundle by id
 
-**Usage:** `iroha_cli offline transfer get --bundle-id <BUNDLE_ID>`
+**Usage:** `iroha offline transfer get --bundle-id <BUNDLE_ID>`
 
 ###### **Options:**
 
@@ -3406,11 +3631,11 @@ Fetch a specific transfer bundle by id
 
 
 
-## `iroha_cli offline transfer proof`
+## `iroha offline transfer proof`
 
 Generate a FASTPQ witness request for a bundle payload
 
-**Usage:** `iroha_cli offline transfer proof [OPTIONS] --bundle <PATH> --kind <KIND>`
+**Usage:** `iroha offline transfer proof [OPTIONS] --bundle <PATH> --kind <KIND>`
 
 ###### **Options:**
 
@@ -3431,11 +3656,11 @@ Generate a FASTPQ witness request for a bundle payload
 
 
 
-## `iroha_cli offline bundle`
+## `iroha offline bundle`
 
 Inspect offline bundle fixtures and aggregate proofs
 
-**Usage:** `iroha_cli offline bundle <COMMAND>`
+**Usage:** `iroha offline bundle <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3443,11 +3668,11 @@ Inspect offline bundle fixtures and aggregate proofs
 
 
 
-## `iroha_cli offline bundle inspect`
+## `iroha offline bundle inspect`
 
 Inspect offline bundle fixtures and compute Poseidon receipts roots
 
-**Usage:** `iroha_cli offline bundle inspect [OPTIONS] <PATH>...`
+**Usage:** `iroha offline bundle inspect [OPTIONS] <PATH>...`
 
 ###### **Arguments:**
 
@@ -3465,11 +3690,11 @@ Inspect offline bundle fixtures and compute Poseidon receipts roots
 
 
 
-## `iroha_cli offline summary`
+## `iroha offline summary`
 
 Inspect derived counter summaries per offline certificate
 
-**Usage:** `iroha_cli offline summary <COMMAND>`
+**Usage:** `iroha offline summary <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3478,11 +3703,11 @@ Inspect derived counter summaries per offline certificate
 
 
 
-## `iroha_cli offline summary list`
+## `iroha offline summary list`
 
 List counter summaries derived from wallet allowances
 
-**Usage:** `iroha_cli offline summary list [OPTIONS]`
+**Usage:** `iroha offline summary list [OPTIONS]`
 
 ###### **Options:**
 
@@ -3501,11 +3726,11 @@ List counter summaries derived from wallet allowances
 
 
 
-## `iroha_cli offline summary export`
+## `iroha offline summary export`
 
 Export counter summaries to a JSON digest for receiver sharing
 
-**Usage:** `iroha_cli offline summary export [OPTIONS] --output <PATH>`
+**Usage:** `iroha offline summary export [OPTIONS] --output <PATH>`
 
 ###### **Options:**
 
@@ -3527,11 +3752,11 @@ Export counter summaries to a JSON digest for receiver sharing
 
 
 
-## `iroha_cli offline revocation`
+## `iroha offline revocation`
 
 Inspect recorded verdict revocations
 
-**Usage:** `iroha_cli offline revocation <COMMAND>`
+**Usage:** `iroha offline revocation <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3539,11 +3764,11 @@ Inspect recorded verdict revocations
 
 
 
-## `iroha_cli offline revocation list`
+## `iroha offline revocation list`
 
 List recorded verdict revocations
 
-**Usage:** `iroha_cli offline revocation list [OPTIONS]`
+**Usage:** `iroha offline revocation list [OPTIONS]`
 
 ###### **Options:**
 
@@ -3562,11 +3787,11 @@ List recorded verdict revocations
 
 
 
-## `iroha_cli offline rejection`
+## `iroha offline rejection`
 
 Fetch offline rejection telemetry snapshots
 
-**Usage:** `iroha_cli offline rejection <COMMAND>`
+**Usage:** `iroha offline rejection <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3574,11 +3799,11 @@ Fetch offline rejection telemetry snapshots
 
 
 
-## `iroha_cli offline rejection stats`
+## `iroha offline rejection stats`
 
 Fetch aggregated offline rejection counters
 
-**Usage:** `iroha_cli offline rejection stats [OPTIONS]`
+**Usage:** `iroha offline rejection stats [OPTIONS]`
 
 ###### **Options:**
 
@@ -3586,11 +3811,11 @@ Fetch aggregated offline rejection counters
 
 
 
-## `iroha_cli offline qr`
+## `iroha offline qr`
 
 Encode/decode QR stream frames for offline payloads
 
-**Usage:** `iroha_cli offline qr <COMMAND>`
+**Usage:** `iroha offline qr <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3599,11 +3824,11 @@ Encode/decode QR stream frames for offline payloads
 
 
 
-## `iroha_cli offline qr encode`
+## `iroha offline qr encode`
 
 Encode a payload into QR stream frames
 
-**Usage:** `iroha_cli offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
+**Usage:** `iroha offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
 
 ###### **Options:**
 
@@ -3646,7 +3871,7 @@ Encode a payload into QR stream frames
 
   Default value: `mono`
 
-  Possible values: `mono`, `sakura`, `sakura-wind`
+  Possible values: `mono`, `sakura`, `sakura-wind`, `sakura-storm`
 
 * `--fps <FPS>` — Frames per second for animated outputs
 
@@ -3654,11 +3879,11 @@ Encode a payload into QR stream frames
 
 
 
-## `iroha_cli offline qr decode`
+## `iroha offline qr decode`
 
 Decode QR stream frames into the original payload
 
-**Usage:** `iroha_cli offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+**Usage:** `iroha offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
 
 ###### **Options:**
 
@@ -3674,24 +3899,27 @@ Decode QR stream frames into the original payload
 
 
 
-## `iroha_cli offline petal`
+## `iroha offline petal`
 
 Encode/decode petal stream frames for offline payloads
 
-**Usage:** `iroha_cli offline petal <COMMAND>`
+**Usage:** `iroha offline petal <COMMAND>`
 
 ###### **Subcommands:**
 
 * `encode` — Encode a payload into petal stream frames
 * `decode` — Decode petal stream frames into the original payload
+* `eval-capture` — Evaluate decode robustness under simulated distant/moving capture
+* `simulate-realtime` — Simulate live camera reading and decode frame-by-frame in real time
+* `score-styles` — Score render styles with deterministic capture simulation and throughput metrics
 
 
 
-## `iroha_cli offline petal encode`
+## `iroha offline petal encode`
 
 Encode a payload into petal stream frames
 
-**Usage:** `iroha_cli offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
+**Usage:** `iroha offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
 
 ###### **Options:**
 
@@ -3705,7 +3933,7 @@ Encode a payload into petal stream frames
 
 * `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
 
-  Default value: `360`
+  Default value: `140`
 * `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
 
   Default value: `0`
@@ -3732,18 +3960,30 @@ Encode a payload into petal stream frames
   Default value: `24`
 * `--style <STYLE>` — Render style for preview images (ignored for --format frames)
 
-  Default value: `sakura-wind`
+  Default value: `sora-temple`
 
-  Possible values: `sakura-wind`
+  Possible values: `sakura-wind`, `sora-temple`, `sora-temple-bold`, `sora-temple-minimal`, `sora-temple-radiant`, `sora-temple-command`, `sora-temple-aegis`, `sora-temple-ghost`
+
+* `--channel <CHANNEL>` — Data channel used for data cells in rendered outputs
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--katakana-preset <KATAKANA_PRESET>` — Katakana channel tuning preset used when grid/chunk are left at defaults
+
+  Default value: `balanced`
+
+  Possible values: `balanced`, `distance-safe`
 
 
 
 
-## `iroha_cli offline petal decode`
+## `iroha offline petal decode`
 
 Decode petal stream frames into the original payload
 
-**Usage:** `iroha_cli offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+**Usage:** `iroha offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
 
 ###### **Options:**
 
@@ -3759,14 +3999,172 @@ Decode petal stream frames into the original payload
 
   Default value: `3`
 * `--output-manifest <FILE>` — Optional JSON manifest output path
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
 
 
 
-## `iroha_cli app`
+
+## `iroha offline petal eval-capture`
+
+Evaluate decode robustness under simulated distant/moving capture
+
+**Usage:** `iroha offline petal eval-capture [OPTIONS] --input-dir <DIR>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing rendered PNG frames
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect from pristine frames)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--profile <PROFILE>` — Capture perturbation profile
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for perturbation sampling
+
+  Default value: `42`
+* `--trials-per-frame <TRIALS_PER_FRAME>` — Number of perturbation trials per frame (0 uses profile default)
+
+  Default value: `0`
+* `--min-success-ratio <MIN_SUCCESS_RATIO>` — Minimum successful decode ratio required to pass
+
+  Default value: `0.95`
+* `--output-report <FILE>` — Optional JSON report output path
+
+
+
+## `iroha offline petal simulate-realtime`
+
+Simulate live camera reading and decode frame-by-frame in real time
+
+**Usage:** `iroha offline petal simulate-realtime [OPTIONS] --input-dir <DIR>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing rendered PNG frames
+* `--output-payload <FILE>` — Optional output file for the decoded payload
+* `--output-report <FILE>` — Optional JSON report output path
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect from the first frame)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--channel <CHANNEL>` — Data channel used by rendered frames
+
+  Default value: `binary`
+
+  Possible values: `binary`, `katakana-base94`
+
+* `--profile <PROFILE>` — Capture perturbation profile used to emulate a moving camera read
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for capture perturbation sampling
+
+  Default value: `42`
+* `--simulate-fps <SIMULATE_FPS>` — Simulated camera frame rate used to compute timeline metrics
+
+  Default value: `24`
+* `--frame-limit <FRAME_LIMIT>` — Optional cap on number of frames to process from the input directory
+* `--realtime-loops <REALTIME_LOOPS>` — Number of playback loops to simulate over the same frame set
+
+  Default value: `1`
+* `--disable-capture-perturbation` — Disable capture perturbation and decode pristine frames only
+* `--allow-incomplete` — Allow incomplete stream reconstruction without returning an error
+
+
+
+## `iroha offline petal score-styles`
+
+Score render styles with deterministic capture simulation and throughput metrics
+
+**Usage:** `iroha offline petal score-styles [OPTIONS] --input <FILE> --output-report <FILE>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to payload bytes used for style scoring
+* `--output-report <FILE>` — JSON report path for scored styles
+* `--style <STYLE>` — Styles to evaluate (repeat flag). Empty means the default temple style set
+
+  Possible values: `sakura-wind`, `sora-temple`, `sora-temple-bold`, `sora-temple-minimal`, `sora-temple-radiant`, `sora-temple-command`, `sora-temple-aegis`, `sora-temple-ghost`
+
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `140`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 selects automatic sizing)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--dimension <DIMENSION>` — Rendered frame size in pixels
+
+  Default value: `512`
+* `--fps <FPS>` — Frames per second used for effective throughput scoring
+
+  Default value: `24`
+* `--profile <PROFILE>` — Capture perturbation profile
+
+  Default value: `default`
+
+  Possible values: `default`, `aggressive`
+
+* `--seed <SEED>` — Deterministic seed for perturbation sampling
+
+  Default value: `42`
+* `--trials-per-frame <TRIALS_PER_FRAME>` — Number of perturbation trials per frame (0 uses profile default)
+
+  Default value: `0`
+* `--min-success-ratio <MIN_SUCCESS_RATIO>` — Minimum capture success ratio used for the pass gate in the report
+
+  Default value: `0.95`
+* `--target-effective-bps <TARGET_EFFECTIVE_BPS>` — Target effective throughput used to normalize throughput scoring
+
+  Default value: `3000`
+
+
+
+## `iroha app`
 
 App API helpers and product tooling
 
-**Usage:** `iroha_cli app <COMMAND>`
+**Usage:** `iroha app <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3784,6 +4182,7 @@ App API helpers and product tooling
 * `endorsement` — Domain endorsement helpers (committees, policies, submissions)
 * `jurisdiction` — Jurisdiction Data Guardian helpers (attestations and SDN registries)
 * `compute` — Compute lane simulation helpers
+* `soracloud` — Soracloud deployment/control-plane simulation helpers
 * `social` — Social incentive helpers (viral follow rewards and escrows)
 * `space-directory` — Space Directory helpers (UAID capability manifests)
 * `kaigi` — Kaigi session helpers
@@ -3796,15 +4195,15 @@ App API helpers and product tooling
 
 
 
-## `iroha_cli app gov`
+## `iroha app gov`
 
 Governance helpers (app API convenience)
 
-**Usage:** `iroha_cli app gov <COMMAND>`
+**Usage:** `iroha app gov <COMMAND>`
 
 ###### **Subcommands:**
 
-* `deploy` — Deployment helpers (propose/meta/audit)
+* `deploy` — Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode
 * `vote` — Submit a governance ballot; auto-detects referendum mode unless overridden
 * `proposal` — Proposal helpers
 * `locks` — Lock helpers
@@ -3819,11 +4218,11 @@ Governance helpers (app API convenience)
 
 
 
-## `iroha_cli app gov deploy`
+## `iroha app gov deploy`
 
-Deployment helpers (propose/meta/audit)
+Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode
 
-**Usage:** `iroha_cli app gov deploy <COMMAND>`
+**Usage:** `iroha app gov deploy <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3833,11 +4232,11 @@ Deployment helpers (propose/meta/audit)
 
 
 
-## `iroha_cli app gov deploy propose`
+## `iroha app gov deploy propose`
 
 Propose deployment of IVM bytecode by code/abi hash via governance (build-only; server returns instruction skeleton)
 
-**Usage:** `iroha_cli app gov deploy propose [OPTIONS] --namespace <NAMESPACE> --contract-id <ID> --code-hash <CODE_HASH> --abi-hash <ABI_HASH>`
+**Usage:** `iroha app gov deploy propose [OPTIONS] --namespace <NAMESPACE> --contract-id <ID> --code-hash <CODE_HASH> --abi-hash <ABI_HASH>`
 
 ###### **Options:**
 
@@ -3857,25 +4256,25 @@ Propose deployment of IVM bytecode by code/abi hash via governance (build-only; 
 
 
 
-## `iroha_cli app gov deploy meta`
+## `iroha app gov deploy meta`
 
 Build deploy metadata JSON for protected namespace admission
 
-**Usage:** `iroha_cli app gov deploy meta [OPTIONS] --namespace <NAMESPACE> --contract-id <CONTRACT_ID>`
+**Usage:** `iroha app gov deploy meta [OPTIONS] --namespace <NAMESPACE> --contract-id <CONTRACT_ID>`
 
 ###### **Options:**
 
 * `--namespace <NAMESPACE>`
 * `--contract-id <CONTRACT_ID>`
-* `--approver <ACCOUNT>` — Optional validator account IDs authorizing the deployment alongside the authority
+* `--approver <ACCOUNT>` — Optional validator account IDs (canonical I105 account literals) authorizing the deployment alongside the authority
 
 
 
-## `iroha_cli app gov deploy audit`
+## `iroha app gov deploy audit`
 
 Audit stored manifests against governance proposals and code storage
 
-**Usage:** `iroha_cli app gov deploy audit [OPTIONS] --namespace <NS>`
+**Usage:** `iroha app gov deploy audit [OPTIONS] --namespace <NS>`
 
 ###### **Options:**
 
@@ -3888,11 +4287,11 @@ Audit stored manifests against governance proposals and code storage
 
 
 
-## `iroha_cli app gov vote`
+## `iroha app gov vote`
 
 Submit a governance ballot; auto-detects referendum mode unless overridden
 
-**Usage:** `iroha_cli app gov vote [OPTIONS] --referendum-id <REFERENDUM_ID>`
+**Usage:** `iroha app gov vote [OPTIONS] --referendum-id <REFERENDUM_ID>`
 
 ###### **Options:**
 
@@ -3911,7 +4310,7 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 
 * `--proof-b64 <PROOF_B64>` — Base64-encoded proof for ZK voting mode
 * `--public <PATH>` — Optional JSON file containing public inputs for ZK voting mode
-* `--owner <OWNER>` — Owner account id for plain voting mode (must equal transaction authority)
+* `--owner <OWNER>` — Owner account id for plain voting mode (canonical I105 account literal; must equal transaction authority)
 * `--amount <AMOUNT>` — Locked amount for plain voting mode (string to preserve large integers)
 * `--duration-blocks <DURATION_BLOCKS>` — Lock duration (in blocks) for plain voting mode
 * `--direction <DIRECTION>` — Ballot direction for plain voting mode: Aye, Nay, or Abstain
@@ -3919,11 +4318,11 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 
 
 
-## `iroha_cli app gov proposal`
+## `iroha app gov proposal`
 
 Proposal helpers
 
-**Usage:** `iroha_cli app gov proposal <COMMAND>`
+**Usage:** `iroha app gov proposal <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3931,11 +4330,11 @@ Proposal helpers
 
 
 
-## `iroha_cli app gov proposal get`
+## `iroha app gov proposal get`
 
 Get a governance proposal by id (hex)
 
-**Usage:** `iroha_cli app gov proposal get --id <ID_HEX>`
+**Usage:** `iroha app gov proposal get --id <ID_HEX>`
 
 ###### **Options:**
 
@@ -3943,11 +4342,11 @@ Get a governance proposal by id (hex)
 
 
 
-## `iroha_cli app gov locks`
+## `iroha app gov locks`
 
 Lock helpers
 
-**Usage:** `iroha_cli app gov locks <COMMAND>`
+**Usage:** `iroha app gov locks <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -3955,11 +4354,11 @@ Lock helpers
 
 
 
-## `iroha_cli app gov locks get`
+## `iroha app gov locks get`
 
 Get locks for a referendum id
 
-**Usage:** `iroha_cli app gov locks get --referendum-id <REFERENDUM_ID>`
+**Usage:** `iroha app gov locks get --referendum-id <REFERENDUM_ID>`
 
 ###### **Options:**
 
@@ -3967,11 +4366,11 @@ Get locks for a referendum id
 
 
 
-## `iroha_cli app gov council`
+## `iroha app gov council`
 
 Get current sortition council or manage council VRF flows
 
-**Usage:** `iroha_cli app gov council [COMMAND]`
+**Usage:** `iroha app gov council [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -3983,9 +4382,9 @@ Get current sortition council or manage council VRF flows
 
 
 
-## `iroha_cli app gov council derive-vrf`
+## `iroha app gov council derive-vrf`
 
-**Usage:** `iroha_cli app gov council derive-vrf [OPTIONS]`
+**Usage:** `iroha app gov council derive-vrf [OPTIONS]`
 
 ###### **Options:**
 
@@ -3997,9 +4396,9 @@ Get current sortition council or manage council VRF flows
 
 
 
-## `iroha_cli app gov council persist`
+## `iroha app gov council persist`
 
-**Usage:** `iroha_cli app gov council persist [OPTIONS] --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
+**Usage:** `iroha app gov council persist [OPTIONS] --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
 
 ###### **Options:**
 
@@ -4007,14 +4406,14 @@ Get current sortition council or manage council VRF flows
 * `--alternate-size <ALTERNATE_SIZE>` — Optional number of alternates to keep (defaults to committee size)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to `height/TERM_BLOCKS`
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (e.g., alice@wonderland)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 
 
 
-## `iroha_cli app gov council gen-vrf`
+## `iroha app gov council gen-vrf`
 
-**Usage:** `iroha_cli app gov council gen-vrf [OPTIONS] --chain-id <CHAIN_ID>`
+**Usage:** `iroha app gov council gen-vrf [OPTIONS] --chain-id <CHAIN_ID>`
 
 ###### **Options:**
 
@@ -4031,7 +4430,7 @@ Get current sortition council or manage council VRF flows
 * `--seed-hex <SEED_HEX>` — Optional seed hex (32 bytes as 64 hex); if omitted, requires --epoch and --beacon-hex
 * `--epoch <EPOCH>` — Epoch index used when deriving the seed (ignored if --seed-hex is provided)
 * `--beacon-hex <BEACON_HEX>` — Beacon hash hex (32 bytes as 64 hex) to derive the seed (ignored if --seed-hex is provided)
-* `--account-prefix <ACCOUNT_PREFIX>` — Account id prefix (final id is `${prefix}-${i}@${domain}`)
+* `--account-prefix <ACCOUNT_PREFIX>` — Seed prefix used when deriving deterministic candidate account keys
 
   Default value: `node`
 * `--domain <DOMAIN>` — Domain used in generated account ids
@@ -4044,9 +4443,9 @@ Get current sortition council or manage council VRF flows
 
 
 
-## `iroha_cli app gov council derive-and-persist`
+## `iroha app gov council derive-and-persist`
 
-**Usage:** `iroha_cli app gov council derive-and-persist [OPTIONS] --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
+**Usage:** `iroha app gov council derive-and-persist [OPTIONS] --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
 
 ###### **Options:**
 
@@ -4054,7 +4453,7 @@ Get current sortition council or manage council VRF flows
 * `--alternate-size <ALTERNATE_SIZE>` — Optional number of alternates to keep (defaults to committee size)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to `height/TERM_BLOCKS` (server-side)
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (e.g., alice@wonderland)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 * `--wait` — Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
 
@@ -4062,24 +4461,24 @@ Get current sortition council or manage council VRF flows
 
 
 
-## `iroha_cli app gov council replace`
+## `iroha app gov council replace`
 
-**Usage:** `iroha_cli app gov council replace [OPTIONS] --missing <MISSING> --authority <AUTHORITY> --private-key <HEX>`
+**Usage:** `iroha app gov council replace [OPTIONS] --missing <MISSING> --authority <AUTHORITY> --private-key <HEX>`
 
 ###### **Options:**
 
-* `--missing <MISSING>` — Account id of the member to replace (e.g., alice@wonderland)
+* `--missing <MISSING>` — Account id of the member to replace (canonical I105 account literal)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to the latest persisted epoch
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (e.g., alice@wonderland)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 
 
 
-## `iroha_cli app gov unlock`
+## `iroha app gov unlock`
 
 Unlock helpers (expired lock stats)
 
-**Usage:** `iroha_cli app gov unlock <COMMAND>`
+**Usage:** `iroha app gov unlock <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4087,19 +4486,19 @@ Unlock helpers (expired lock stats)
 
 
 
-## `iroha_cli app gov unlock stats`
+## `iroha app gov unlock stats`
 
 Show governance unlock sweep stats (expired locks at current height)
 
-**Usage:** `iroha_cli app gov unlock stats`
+**Usage:** `iroha app gov unlock stats`
 
 
 
-## `iroha_cli app gov referendum`
+## `iroha app gov referendum`
 
 Referendum helpers
 
-**Usage:** `iroha_cli app gov referendum <COMMAND>`
+**Usage:** `iroha app gov referendum <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4107,11 +4506,11 @@ Referendum helpers
 
 
 
-## `iroha_cli app gov referendum get`
+## `iroha app gov referendum get`
 
 Get a referendum by id
 
-**Usage:** `iroha_cli app gov referendum get --referendum-id <REFERENDUM_ID>`
+**Usage:** `iroha app gov referendum get --referendum-id <REFERENDUM_ID>`
 
 ###### **Options:**
 
@@ -4119,11 +4518,11 @@ Get a referendum by id
 
 
 
-## `iroha_cli app gov tally`
+## `iroha app gov tally`
 
 Tally helpers
 
-**Usage:** `iroha_cli app gov tally <COMMAND>`
+**Usage:** `iroha app gov tally <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4131,11 +4530,11 @@ Tally helpers
 
 
 
-## `iroha_cli app gov tally get`
+## `iroha app gov tally get`
 
 Get a tally snapshot by referendum id
 
-**Usage:** `iroha_cli app gov tally get --referendum-id <REFERENDUM_ID>`
+**Usage:** `iroha app gov tally get --referendum-id <REFERENDUM_ID>`
 
 ###### **Options:**
 
@@ -4143,11 +4542,11 @@ Get a tally snapshot by referendum id
 
 
 
-## `iroha_cli app gov finalize`
+## `iroha app gov finalize`
 
 Build a finalize transaction for a referendum (server returns instruction skeleton)
 
-**Usage:** `iroha_cli app gov finalize --referendum-id <REFERENDUM_ID> --proposal-id <ID_HEX>`
+**Usage:** `iroha app gov finalize --referendum-id <REFERENDUM_ID> --proposal-id <ID_HEX>`
 
 ###### **Options:**
 
@@ -4156,11 +4555,11 @@ Build a finalize transaction for a referendum (server returns instruction skelet
 
 
 
-## `iroha_cli app gov enact`
+## `iroha app gov enact`
 
 Build an enactment transaction for an approved proposal
 
-**Usage:** `iroha_cli app gov enact [OPTIONS] --proposal-id <ID_HEX>`
+**Usage:** `iroha app gov enact [OPTIONS] --proposal-id <ID_HEX>`
 
 ###### **Options:**
 
@@ -4171,11 +4570,11 @@ Build an enactment transaction for an approved proposal
 
 
 
-## `iroha_cli app gov protected`
+## `iroha app gov protected`
 
 Protected namespace helpers
 
-**Usage:** `iroha_cli app gov protected <COMMAND>`
+**Usage:** `iroha app gov protected <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4185,11 +4584,11 @@ Protected namespace helpers
 
 
 
-## `iroha_cli app gov protected set`
+## `iroha app gov protected set`
 
 Set protected namespaces (custom parameter `gov_protected_namespaces`)
 
-**Usage:** `iroha_cli app gov protected set --namespaces <NAMESPACES>`
+**Usage:** `iroha app gov protected set --namespaces <NAMESPACES>`
 
 ###### **Options:**
 
@@ -4197,11 +4596,11 @@ Set protected namespaces (custom parameter `gov_protected_namespaces`)
 
 
 
-## `iroha_cli app gov protected apply`
+## `iroha app gov protected apply`
 
 Apply protected namespaces on the server (requires API token if configured)
 
-**Usage:** `iroha_cli app gov protected apply --namespaces <NAMESPACES>`
+**Usage:** `iroha app gov protected apply --namespaces <NAMESPACES>`
 
 ###### **Options:**
 
@@ -4209,19 +4608,19 @@ Apply protected namespaces on the server (requires API token if configured)
 
 
 
-## `iroha_cli app gov protected get`
+## `iroha app gov protected get`
 
 Get protected namespaces (custom parameter `gov_protected_namespaces`)
 
-**Usage:** `iroha_cli app gov protected get`
+**Usage:** `iroha app gov protected get`
 
 
 
-## `iroha_cli app gov instance`
+## `iroha app gov instance`
 
 Contract instance helpers
 
-**Usage:** `iroha_cli app gov instance <COMMAND>`
+**Usage:** `iroha app gov instance <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4230,11 +4629,11 @@ Contract instance helpers
 
 
 
-## `iroha_cli app gov instance activate`
+## `iroha app gov instance activate`
 
 Activate a contract instance (namespace, `contract_id`) -> `code_hash` (admin/testing)
 
-**Usage:** `iroha_cli app gov instance activate [OPTIONS] --namespace <NAMESPACE> --contract-id <CONTRACT_ID> --code-hash <HEX64>`
+**Usage:** `iroha app gov instance activate [OPTIONS] --namespace <NAMESPACE> --contract-id <CONTRACT_ID> --code-hash <HEX64>`
 
 ###### **Options:**
 
@@ -4247,11 +4646,11 @@ Activate a contract instance (namespace, `contract_id`) -> `code_hash` (admin/te
 
 
 
-## `iroha_cli app gov instance list`
+## `iroha app gov instance list`
 
 List active contract instances for a namespace
 
-**Usage:** `iroha_cli app gov instance list [OPTIONS] --namespace <NS>`
+**Usage:** `iroha app gov instance list [OPTIONS] --namespace <NS>`
 
 ###### **Options:**
 
@@ -4264,11 +4663,11 @@ List active contract instances for a namespace
 
 
 
-## `iroha_cli app contracts`
+## `iroha app contracts`
 
 Contracts helpers (code storage)
 
-**Usage:** `iroha_cli app contracts <COMMAND>`
+**Usage:** `iroha app contracts <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4281,11 +4680,11 @@ Contracts helpers (code storage)
 
 
 
-## `iroha_cli app contracts code`
+## `iroha app contracts code`
 
 Contract code helpers
 
-**Usage:** `iroha_cli app contracts code <COMMAND>`
+**Usage:** `iroha app contracts code <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4293,11 +4692,11 @@ Contract code helpers
 
 
 
-## `iroha_cli app contracts code get`
+## `iroha app contracts code get`
 
 Fetch on-chain contract code bytes by code hash and write to a file
 
-**Usage:** `iroha_cli app contracts code get --code-hash <HEX64> --out <PATH>`
+**Usage:** `iroha app contracts code get --code-hash <HEX64> --out <PATH>`
 
 ###### **Options:**
 
@@ -4306,31 +4705,30 @@ Fetch on-chain contract code bytes by code hash and write to a file
 
 
 
-## `iroha_cli app contracts deploy`
+## `iroha app contracts deploy`
 
 Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 
-**Usage:** `iroha_cli app contracts deploy [OPTIONS] --authority <AUTHORITY> --private-key <HEX>`
+**Usage:** `iroha app contracts deploy [OPTIONS] --authority <AUTHORITY> --private-key <HEX>`
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
 
 
 
-## `iroha_cli app contracts deploy-activate`
+## `iroha app contracts deploy-activate`
 
 Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 
-**Usage:** `iroha_cli app contracts deploy-activate [OPTIONS] --authority <AUTHORITY> --private-key <HEX> --namespace <NAMESPACE> --contract-id <ID>`
+**Usage:** `iroha app contracts deploy-activate [OPTIONS] --authority <AUTHORITY> --namespace <NAMESPACE> --contract-id <ID>`
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `--private-key <HEX>` — Hex-encoded private key for signing and manifest provenance
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--namespace <NAMESPACE>` — Governance namespace to bind (e.g., apps)
 * `--contract-id <ID>` — Contract identifier within the namespace
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
@@ -4340,11 +4738,11 @@ Deploy bytecode, register manifest, and activate a namespace binding in one tran
 
 
 
-## `iroha_cli app contracts manifest`
+## `iroha app contracts manifest`
 
 Contract manifest helpers
 
-**Usage:** `iroha_cli app contracts manifest <COMMAND>`
+**Usage:** `iroha app contracts manifest <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4353,11 +4751,11 @@ Contract manifest helpers
 
 
 
-## `iroha_cli app contracts manifest get`
+## `iroha app contracts manifest get`
 
 Fetch on-chain contract manifest by code hash and either print or save (if --out is provided)
 
-**Usage:** `iroha_cli app contracts manifest get [OPTIONS] --code-hash <HEX64>`
+**Usage:** `iroha app contracts manifest get [OPTIONS] --code-hash <HEX64>`
 
 ###### **Options:**
 
@@ -4366,11 +4764,11 @@ Fetch on-chain contract manifest by code hash and either print or save (if --out
 
 
 
-## `iroha_cli app contracts manifest build`
+## `iroha app contracts manifest build`
 
 Build a manifest for compiled bytecode (with optional signing)
 
-**Usage:** `iroha_cli app contracts manifest build [OPTIONS]`
+**Usage:** `iroha app contracts manifest build [OPTIONS]`
 
 ###### **Options:**
 
@@ -4381,15 +4779,15 @@ Build a manifest for compiled bytecode (with optional signing)
 
 
 
-## `iroha_cli app contracts simulate`
+## `iroha app contracts simulate`
 
 Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
 
-**Usage:** `iroha_cli app contracts simulate [OPTIONS] --authority <AUTHORITY> --private-key <HEX> --gas-limit <GAS_LIMIT>`
+**Usage:** `iroha app contracts simulate [OPTIONS] --authority <AUTHORITY> --private-key <HEX> --gas-limit <GAS_LIMIT>`
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key used to sign the simulated transaction
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
@@ -4399,11 +4797,11 @@ Run an offline simulation of IVM bytecode to see the queued ISIs and header meta
 
 
 
-## `iroha_cli app contracts instances`
+## `iroha app contracts instances`
 
 List active contract instances in a namespace (supports filters and pagination)
 
-**Usage:** `iroha_cli app contracts instances [OPTIONS] --namespace <NS>`
+**Usage:** `iroha app contracts instances [OPTIONS] --namespace <NS>`
 
 ###### **Options:**
 
@@ -4418,11 +4816,11 @@ List active contract instances in a namespace (supports filters and pagination)
 
 
 
-## `iroha_cli app zk`
+## `iroha app zk`
 
 Zero-knowledge helpers (roots, etc.)
 
-**Usage:** `iroha_cli app zk <COMMAND>`
+**Usage:** `iroha app zk <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4438,16 +4836,17 @@ Zero-knowledge helpers (roots, etc.)
 * `vk` — Verifying-key registry lifecycle (register/update/deprecate/get)
 * `proofs` — Inspect proof registry (list/count/get)
 * `prover` — Inspect background prover reports (list/get/delete)
+* `ivm` — IVM prove helpers (non-consensus, app API)
 * `vote` — ZK Vote helpers (tally)
 * `envelope` — Encode a confidential encrypted payload (memo) into Norito bytes/base64
 
 
 
-## `iroha_cli app zk roots`
+## `iroha app zk roots`
 
 Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
-**Usage:** `iroha_cli app zk roots [OPTIONS] --asset-id <ASSET_ID>`
+**Usage:** `iroha app zk roots [OPTIONS] --asset-id <ASSET_ID>`
 
 ###### **Options:**
 
@@ -4458,11 +4857,11 @@ Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
 
 
-## `iroha_cli app zk verify`
+## `iroha app zk verify`
 
 Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
 
-**Usage:** `iroha_cli app zk verify [OPTIONS]`
+**Usage:** `iroha app zk verify [OPTIONS]`
 
 ###### **Options:**
 
@@ -4471,11 +4870,11 @@ Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /
 
 
 
-## `iroha_cli app zk submit-proof`
+## `iroha app zk submit-proof`
 
 Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
 
-**Usage:** `iroha_cli app zk submit-proof [OPTIONS]`
+**Usage:** `iroha app zk submit-proof [OPTIONS]`
 
 ###### **Options:**
 
@@ -4484,11 +4883,11 @@ Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submi
 
 
 
-## `iroha_cli app zk verify-batch`
+## `iroha app zk verify-batch`
 
 Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
 
-**Usage:** `iroha_cli app zk verify-batch [OPTIONS]`
+**Usage:** `iroha app zk verify-batch [OPTIONS]`
 
 ###### **Options:**
 
@@ -4497,11 +4896,11 @@ Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-ba
 
 
 
-## `iroha_cli app zk schema-hash`
+## `iroha app zk schema-hash`
 
 Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
 
-**Usage:** `iroha_cli app zk schema-hash [OPTIONS]`
+**Usage:** `iroha app zk schema-hash [OPTIONS]`
 
 ###### **Options:**
 
@@ -4510,11 +4909,11 @@ Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print i
 
 
 
-## `iroha_cli app zk attachments`
+## `iroha app zk attachments`
 
 Manage ZK attachments in the app API
 
-**Usage:** `iroha_cli app zk attachments <COMMAND>`
+**Usage:** `iroha app zk attachments <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4526,11 +4925,11 @@ Manage ZK attachments in the app API
 
 
 
-## `iroha_cli app zk attachments upload`
+## `iroha app zk attachments upload`
 
 Upload a file as an attachment. Returns JSON metadata
 
-**Usage:** `iroha_cli app zk attachments upload [OPTIONS] --file <PATH>`
+**Usage:** `iroha app zk attachments upload [OPTIONS] --file <PATH>`
 
 ###### **Options:**
 
@@ -4541,19 +4940,19 @@ Upload a file as an attachment. Returns JSON metadata
 
 
 
-## `iroha_cli app zk attachments list`
+## `iroha app zk attachments list`
 
 List stored attachments (JSON array of metadata)
 
-**Usage:** `iroha_cli app zk attachments list`
+**Usage:** `iroha app zk attachments list`
 
 
 
-## `iroha_cli app zk attachments get`
+## `iroha app zk attachments get`
 
 Download an attachment by id to a file
 
-**Usage:** `iroha_cli app zk attachments get --id <ID> --out <PATH>`
+**Usage:** `iroha app zk attachments get --id <ID> --out <PATH>`
 
 ###### **Options:**
 
@@ -4562,11 +4961,11 @@ Download an attachment by id to a file
 
 
 
-## `iroha_cli app zk attachments delete`
+## `iroha app zk attachments delete`
 
 Delete an attachment by id
 
-**Usage:** `iroha_cli app zk attachments delete --id <ID>`
+**Usage:** `iroha app zk attachments delete --id <ID>`
 
 ###### **Options:**
 
@@ -4574,11 +4973,11 @@ Delete an attachment by id
 
 
 
-## `iroha_cli app zk attachments cleanup`
+## `iroha app zk attachments cleanup`
 
 Cleanup attachments by filters (age/content-type/ids). Deletes individually via API
 
-**Usage:** `iroha_cli app zk attachments cleanup [OPTIONS]`
+**Usage:** `iroha app zk attachments cleanup [OPTIONS]`
 
 ###### **Options:**
 
@@ -4594,11 +4993,11 @@ Cleanup attachments by filters (age/content-type/ids). Deletes individually via 
 
 
 
-## `iroha_cli app zk register-asset`
+## `iroha app zk register-asset`
 
 Register a ZK-capable asset (Hybrid mode) with policy and VK ids
 
-**Usage:** `iroha_cli app zk register-asset [OPTIONS] --asset <ASSET_ID>`
+**Usage:** `iroha app zk register-asset [OPTIONS] --asset <ASSET_ID>`
 
 ###### **Options:**
 
@@ -4615,16 +5014,16 @@ Register a ZK-capable asset (Hybrid mode) with policy and VK ids
 
 
 
-## `iroha_cli app zk shield`
+## `iroha app zk shield`
 
 Shield public funds into a shielded ledger (demo flow)
 
-**Usage:** `iroha_cli app zk shield [OPTIONS] --asset <ASSET_ID> --from <ACCOUNT_ID> --amount <AMOUNT> --note-commitment <HEX32>`
+**Usage:** `iroha app zk shield [OPTIONS] --asset <ASSET_ID> --from <ACCOUNT_ID> --amount <AMOUNT> --note-commitment <HEX32>`
 
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--from <ACCOUNT_ID>` — Account identifier to debit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--from <ACCOUNT_ID>` — Account identifier to debit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
 * `--enc-payload <PATH>` — Encrypted recipient payload envelope (Norito bytes). Optional; empty if not provided
@@ -4634,16 +5033,16 @@ Shield public funds into a shielded ledger (demo flow)
 
 
 
-## `iroha_cli app zk unshield`
+## `iroha app zk unshield`
 
 Unshield funds from shielded ledger to public (demo flow)
 
-**Usage:** `iroha_cli app zk unshield [OPTIONS] --asset <ASSET_ID> --to <ACCOUNT_ID> --amount <AMOUNT> --inputs <HEX32[,HEX32,...]> --proof-json <PATH>`
+**Usage:** `iroha app zk unshield [OPTIONS] --asset <ASSET_ID> --to <ACCOUNT_ID> --amount <AMOUNT> --inputs <HEX32[,HEX32,...]> --proof-json <PATH>`
 
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
 * `--proof-json <PATH>` — Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, `vk_inline{backend,bytes_b64}`, optional `vk_commitment_hex` }
@@ -4651,11 +5050,11 @@ Unshield funds from shielded ledger to public (demo flow)
 
 
 
-## `iroha_cli app zk vk`
+## `iroha app zk vk`
 
 Verifying-key registry lifecycle (register/update/deprecate/get)
 
-**Usage:** `iroha_cli app zk vk <COMMAND>`
+**Usage:** `iroha app zk vk <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4665,11 +5064,11 @@ Verifying-key registry lifecycle (register/update/deprecate/get)
 
 
 
-## `iroha_cli app zk vk register`
+## `iroha app zk vk register`
 
 Register a verifying key record (signed transaction via Torii app API)
 
-**Usage:** `iroha_cli app zk vk register --json <PATH>`
+**Usage:** `iroha app zk vk register --json <PATH>`
 
 ###### **Options:**
 
@@ -4677,11 +5076,11 @@ Register a verifying key record (signed transaction via Torii app API)
 
 
 
-## `iroha_cli app zk vk update`
+## `iroha app zk vk update`
 
 Update an existing verifying key record (version must increase)
 
-**Usage:** `iroha_cli app zk vk update --json <PATH>`
+**Usage:** `iroha app zk vk update --json <PATH>`
 
 ###### **Options:**
 
@@ -4689,11 +5088,11 @@ Update an existing verifying key record (version must increase)
 
 
 
-## `iroha_cli app zk vk get`
+## `iroha app zk vk get`
 
 Get a verifying key record by backend and name
 
-**Usage:** `iroha_cli app zk vk get --backend <BACKEND> --name <NAME>`
+**Usage:** `iroha app zk vk get --backend <BACKEND> --name <NAME>`
 
 ###### **Options:**
 
@@ -4702,11 +5101,11 @@ Get a verifying key record by backend and name
 
 
 
-## `iroha_cli app zk proofs`
+## `iroha app zk proofs`
 
 Inspect proof registry (list/count/get)
 
-**Usage:** `iroha_cli app zk proofs <COMMAND>`
+**Usage:** `iroha app zk proofs <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4718,11 +5117,11 @@ Inspect proof registry (list/count/get)
 
 
 
-## `iroha_cli app zk proofs list`
+## `iroha app zk proofs list`
 
 List proof records maintained by Torii
 
-**Usage:** `iroha_cli app zk proofs list [OPTIONS]`
+**Usage:** `iroha app zk proofs list [OPTIONS]`
 
 ###### **Options:**
 
@@ -4738,11 +5137,11 @@ List proof records maintained by Torii
 
 
 
-## `iroha_cli app zk proofs count`
+## `iroha app zk proofs count`
 
 Count proof records matching the filters
 
-**Usage:** `iroha_cli app zk proofs count [OPTIONS]`
+**Usage:** `iroha app zk proofs count [OPTIONS]`
 
 ###### **Options:**
 
@@ -4757,11 +5156,11 @@ Count proof records matching the filters
 
 
 
-## `iroha_cli app zk proofs get`
+## `iroha app zk proofs get`
 
 Fetch a proof record by backend and proof hash (hex)
 
-**Usage:** `iroha_cli app zk proofs get --backend <BACKEND> --hash <HASH>`
+**Usage:** `iroha app zk proofs get --backend <BACKEND> --hash <HASH>`
 
 ###### **Options:**
 
@@ -4770,19 +5169,19 @@ Fetch a proof record by backend and proof hash (hex)
 
 
 
-## `iroha_cli app zk proofs retention`
+## `iroha app zk proofs retention`
 
 Inspect proof retention configuration and live counters
 
-**Usage:** `iroha_cli app zk proofs retention`
+**Usage:** `iroha app zk proofs retention`
 
 
 
-## `iroha_cli app zk proofs prune`
+## `iroha app zk proofs prune`
 
 Submit a pruning transaction to enforce proof retention immediately
 
-**Usage:** `iroha_cli app zk proofs prune [OPTIONS]`
+**Usage:** `iroha app zk proofs prune [OPTIONS]`
 
 ###### **Options:**
 
@@ -4790,11 +5189,11 @@ Submit a pruning transaction to enforce proof retention immediately
 
 
 
-## `iroha_cli app zk prover`
+## `iroha app zk prover`
 
 Inspect background prover reports (list/get/delete)
 
-**Usage:** `iroha_cli app zk prover <COMMAND>`
+**Usage:** `iroha app zk prover <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4802,11 +5201,11 @@ Inspect background prover reports (list/get/delete)
 
 
 
-## `iroha_cli app zk prover reports`
+## `iroha app zk prover reports`
 
 Manage prover reports
 
-**Usage:** `iroha_cli app zk prover reports <COMMAND>`
+**Usage:** `iroha app zk prover reports <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4818,11 +5217,11 @@ Manage prover reports
 
 
 
-## `iroha_cli app zk prover reports list`
+## `iroha app zk prover reports list`
 
 List available prover reports (JSON array)
 
-**Usage:** `iroha_cli app zk prover reports list [OPTIONS]`
+**Usage:** `iroha app zk prover reports list [OPTIONS]`
 
 ###### **Options:**
 
@@ -4847,11 +5246,11 @@ List available prover reports (JSON array)
 
 
 
-## `iroha_cli app zk prover reports get`
+## `iroha app zk prover reports get`
 
 Get a single prover report by id (JSON)
 
-**Usage:** `iroha_cli app zk prover reports get --id <ID>`
+**Usage:** `iroha app zk prover reports get --id <ID>`
 
 ###### **Options:**
 
@@ -4859,11 +5258,11 @@ Get a single prover report by id (JSON)
 
 
 
-## `iroha_cli app zk prover reports delete`
+## `iroha app zk prover reports delete`
 
 Delete a prover report by id
 
-**Usage:** `iroha_cli app zk prover reports delete --id <ID>`
+**Usage:** `iroha app zk prover reports delete --id <ID>`
 
 ###### **Options:**
 
@@ -4871,11 +5270,11 @@ Delete a prover report by id
 
 
 
-## `iroha_cli app zk prover reports cleanup`
+## `iroha app zk prover reports cleanup`
 
 Cleanup reports in bulk (apply filters, delete matches)
 
-**Usage:** `iroha_cli app zk prover reports cleanup [OPTIONS]`
+**Usage:** `iroha app zk prover reports cleanup [OPTIONS]`
 
 ###### **Options:**
 
@@ -4893,11 +5292,11 @@ Cleanup reports in bulk (apply filters, delete matches)
 
 
 
-## `iroha_cli app zk prover reports count`
+## `iroha app zk prover reports count`
 
 Count reports matching filters (server-side)
 
-**Usage:** `iroha_cli app zk prover reports count [OPTIONS]`
+**Usage:** `iroha app zk prover reports count [OPTIONS]`
 
 ###### **Options:**
 
@@ -4912,11 +5311,98 @@ Count reports matching filters (server-side)
 
 
 
-## `iroha_cli app zk vote`
+## `iroha app zk ivm`
+
+IVM prove helpers (non-consensus, app API)
+
+**Usage:** `iroha app zk ivm <COMMAND>`
+
+###### **Subcommands:**
+
+* `derive` — Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
+* `prove` — Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
+* `get` — Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
+* `delete` — Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
+* `derive-pk` — Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
+
+
+
+## `iroha app zk ivm derive`
+
+Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
+
+**Usage:** `iroha app zk ivm derive --json <PATH>`
+
+###### **Options:**
+
+* `--json <PATH>` — Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode }`
+
+
+
+## `iroha app zk ivm prove`
+
+Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
+
+**Usage:** `iroha app zk ivm prove [OPTIONS] --json <PATH>`
+
+###### **Options:**
+
+* `--json <PATH>` — Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode, proved? }`
+* `--wait` — Poll the job until it reaches `done` or `error`
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — Poll interval (milliseconds) when using --wait
+
+  Default value: `250`
+* `--timeout-secs <TIMEOUT_SECS>` — Optional timeout (seconds) when using --wait (0 = no timeout)
+
+  Default value: `0`
+
+
+
+## `iroha app zk ivm get`
+
+Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
+
+**Usage:** `iroha app zk ivm get --job-id <JOB_ID>`
+
+###### **Options:**
+
+* `--job-id <JOB_ID>` — Prove job id returned by `iroha zk ivm prove`
+
+
+
+## `iroha app zk ivm delete`
+
+Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
+
+**Usage:** `iroha app zk ivm delete --job-id <JOB_ID>`
+
+###### **Options:**
+
+* `--job-id <JOB_ID>` — Prove job id returned by `iroha zk ivm prove`
+
+
+
+## `iroha app zk ivm derive-pk`
+
+Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
+
+**Usage:** `iroha app zk ivm derive-pk [OPTIONS] --vk <PATH> --out <PATH>`
+
+###### **Options:**
+
+* `--backend <BACKEND>` — Backend label for the verifying key bytes (must match Torii `vk_ref.backend`), e.g. `halo2/ipa`
+
+  Default value: `halo2/ipa`
+* `--vk <PATH>` — Path to verifying key bytes (`.vk`) in Halo2 "processed" format
+* `--out <PATH>` — Output path for proving key bytes (`.pk`)
+
+
+
+## `iroha app zk vote`
 
 ZK Vote helpers (tally)
 
-**Usage:** `iroha_cli app zk vote <COMMAND>`
+**Usage:** `iroha app zk vote <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4924,11 +5410,11 @@ ZK Vote helpers (tally)
 
 
 
-## `iroha_cli app zk vote tally`
+## `iroha app zk vote tally`
 
 Get election tally (JSON)
 
-**Usage:** `iroha_cli app zk vote tally --election-id <ELECTION_ID>`
+**Usage:** `iroha app zk vote tally --election-id <ELECTION_ID>`
 
 ###### **Options:**
 
@@ -4936,11 +5422,11 @@ Get election tally (JSON)
 
 
 
-## `iroha_cli app zk envelope`
+## `iroha app zk envelope`
 
 Encode a confidential encrypted payload (memo) into Norito bytes/base64
 
-**Usage:** `iroha_cli app zk envelope [OPTIONS] --ephemeral-pubkey <HEX32> --nonce-hex <HEX24> --ciphertext-b64 <BASE64>`
+**Usage:** `iroha app zk envelope [OPTIONS] --ephemeral-pubkey <HEX32> --nonce-hex <HEX24> --ciphertext-b64 <BASE64>`
 
 ###### **Options:**
 
@@ -4960,11 +5446,11 @@ Encode a confidential encrypted payload (memo) into Norito bytes/base64
 
 
 
-## `iroha_cli app confidential`
+## `iroha app confidential`
 
 Confidential asset tooling helpers
 
-**Usage:** `iroha_cli app confidential <COMMAND>`
+**Usage:** `iroha app confidential <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -4973,11 +5459,11 @@ Confidential asset tooling helpers
 
 
 
-## `iroha_cli app confidential create-keys`
+## `iroha app confidential create-keys`
 
 Derive confidential key hierarchy (nk/ivk/ovk/fvk) from a spend key
 
-**Usage:** `iroha_cli app confidential create-keys [OPTIONS]`
+**Usage:** `iroha app confidential create-keys [OPTIONS]`
 
 ###### **Options:**
 
@@ -4987,11 +5473,11 @@ Derive confidential key hierarchy (nk/ivk/ovk/fvk) from a spend key
 
 
 
-## `iroha_cli app confidential gas`
+## `iroha app confidential gas`
 
 Inspect or update the confidential gas schedule
 
-**Usage:** `iroha_cli app confidential gas <COMMAND>`
+**Usage:** `iroha app confidential gas <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5000,19 +5486,19 @@ Inspect or update the confidential gas schedule
 
 
 
-## `iroha_cli app confidential gas get`
+## `iroha app confidential gas get`
 
 Fetch the current confidential gas schedule
 
-**Usage:** `iroha_cli app confidential gas get`
+**Usage:** `iroha app confidential gas get`
 
 
 
-## `iroha_cli app confidential gas set`
+## `iroha app confidential gas set`
 
 Update the confidential gas schedule
 
-**Usage:** `iroha_cli app confidential gas set --proof-base <UNITS> --per-public-input <UNITS> --per-proof-byte <UNITS> --per-nullifier <UNITS> --per-commitment <UNITS>`
+**Usage:** `iroha app confidential gas set --proof-base <UNITS> --per-public-input <UNITS> --per-proof-byte <UNITS> --per-nullifier <UNITS> --per-commitment <UNITS>`
 
 ###### **Options:**
 
@@ -5024,11 +5510,11 @@ Update the confidential gas schedule
 
 
 
-## `iroha_cli app taikai`
+## `iroha app taikai`
 
 Taikai publisher tooling (CAR bundler, envelopes)
 
-**Usage:** `iroha_cli app taikai <COMMAND>`
+**Usage:** `iroha app taikai <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5039,11 +5525,11 @@ Taikai publisher tooling (CAR bundler, envelopes)
 
 
 
-## `iroha_cli app taikai bundle`
+## `iroha app taikai bundle`
 
 Bundle a Taikai segment into a CAR archive and Norito envelope
 
-**Usage:** `iroha_cli app taikai bundle [OPTIONS] --payload <PATH> --car-out <PATH> --envelope-out <PATH> --event-id <NAME> --stream-id <NAME> --rendition-id <NAME> --track-kind <TRACK_KIND> --codec <CODEC> --bitrate-kbps <KBPS> --segment-sequence <SEGMENT_SEQUENCE> --segment-start-pts <SEGMENT_START_PTS> --segment-duration <SEGMENT_DURATION> --wallclock-unix-ms <WALLCLOCK_UNIX_MS> --manifest-hash <HEX> --storage-ticket <HEX>`
+**Usage:** `iroha app taikai bundle [OPTIONS] --payload <PATH> --car-out <PATH> --envelope-out <PATH> --event-id <NAME> --stream-id <NAME> --rendition-id <NAME> --track-kind <TRACK_KIND> --codec <CODEC> --bitrate-kbps <KBPS> --segment-sequence <SEGMENT_SEQUENCE> --segment-start-pts <SEGMENT_START_PTS> --segment-duration <SEGMENT_DURATION> --wallclock-unix-ms <WALLCLOCK_UNIX_MS> --manifest-hash <HEX> --storage-ticket <HEX>`
 
 ###### **Options:**
 
@@ -5076,11 +5562,11 @@ Bundle a Taikai segment into a CAR archive and Norito envelope
 
 
 
-## `iroha_cli app taikai cek-rotate`
+## `iroha app taikai cek-rotate`
 
 Emit a CEK rotation receipt for a Taikai stream
 
-**Usage:** `iroha_cli app taikai cek-rotate [OPTIONS] --event-id <NAME> --stream-id <NAME> --kms-profile <KMS_PROFILE> --new-wrap-key-label <NEW_WRAP_KEY_LABEL> --effective-segment <SEQ> --out <PATH>`
+**Usage:** `iroha app taikai cek-rotate [OPTIONS] --event-id <NAME> --stream-id <NAME> --kms-profile <KMS_PROFILE> --new-wrap-key-label <NEW_WRAP_KEY_LABEL> --effective-segment <SEQ> --out <PATH>`
 
 ###### **Options:**
 
@@ -5098,11 +5584,11 @@ Emit a CEK rotation receipt for a Taikai stream
 
 
 
-## `iroha_cli app taikai rpt-attest`
+## `iroha app taikai rpt-attest`
 
 Generate a replication proof token (RPT) attestation
 
-**Usage:** `iroha_cli app taikai rpt-attest [OPTIONS] --event-id <NAME> --stream-id <NAME> --rendition-id <NAME> --gar <PATH> --cek-receipt <PATH> --bundle <PATH> --out <PATH>`
+**Usage:** `iroha app taikai rpt-attest [OPTIONS] --event-id <NAME> --stream-id <NAME> --rendition-id <NAME> --gar <PATH> --cek-receipt <PATH> --bundle <PATH> --out <PATH>`
 
 ###### **Options:**
 
@@ -5121,11 +5607,11 @@ Generate a replication proof token (RPT) attestation
 
 
 
-## `iroha_cli app taikai ingest`
+## `iroha app taikai ingest`
 
 Taikai ingest helpers (watchers, automation)
 
-**Usage:** `iroha_cli app taikai ingest <COMMAND>`
+**Usage:** `iroha app taikai ingest <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5134,11 +5620,11 @@ Taikai ingest helpers (watchers, automation)
 
 
 
-## `iroha_cli app taikai ingest watch`
+## `iroha app taikai ingest watch`
 
 Watch a directory for CMAF fragments and bundle them into CAR + Norito artifacts
 
-**Usage:** `iroha_cli app taikai ingest watch [OPTIONS] --source-dir <PATH> --event-id <NAME> --stream-id <NAME> --rendition-id <NAME>`
+**Usage:** `iroha app taikai ingest watch [OPTIONS] --source-dir <PATH> --event-id <NAME> --stream-id <NAME> --rendition-id <NAME>`
 
 ###### **Options:**
 
@@ -5227,11 +5713,11 @@ Watch a directory for CMAF fragments and bundle them into CAR + Norito artifacts
 
 
 
-## `iroha_cli app taikai ingest edge`
+## `iroha app taikai ingest edge`
 
 Prototype edge receiver that emits CMAF fragments and drift logs for the watcher
 
-**Usage:** `iroha_cli app taikai ingest edge [OPTIONS] --payload <PATH>`
+**Usage:** `iroha app taikai ingest edge [OPTIONS] --payload <PATH>`
 
 ###### **Options:**
 
@@ -5264,11 +5750,11 @@ Prototype edge receiver that emits CMAF fragments and drift logs for the watcher
 
 
 
-## `iroha_cli app content`
+## `iroha app content`
 
 Content hosting helpers
 
-**Usage:** `iroha_cli app content <COMMAND>`
+**Usage:** `iroha app content <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5277,11 +5763,11 @@ Content hosting helpers
 
 
 
-## `iroha_cli app content publish`
+## `iroha app content publish`
 
 Publish a content bundle (tar archive) to the content lane
 
-**Usage:** `iroha_cli app content publish [OPTIONS]`
+**Usage:** `iroha app content publish [OPTIONS]`
 
 ###### **Options:**
 
@@ -5298,11 +5784,11 @@ Publish a content bundle (tar archive) to the content lane
 
 
 
-## `iroha_cli app content pack`
+## `iroha app content pack`
 
 Pack a directory into a deterministic tarball + manifest without submitting it
 
-**Usage:** `iroha_cli app content pack [OPTIONS] --root <DIR> --bundle-out <PATH> --manifest-out <PATH>`
+**Usage:** `iroha app content pack [OPTIONS] --root <DIR> --bundle-out <PATH> --manifest-out <PATH>`
 
 ###### **Options:**
 
@@ -5317,11 +5803,11 @@ Pack a directory into a deterministic tarball + manifest without submitting it
 
 
 
-## `iroha_cli app da`
+## `iroha app da`
 
 Data availability helpers (ingest tooling)
 
-**Usage:** `iroha_cli app da <COMMAND>`
+**Usage:** `iroha app da <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5330,16 +5816,24 @@ Data availability helpers (ingest tooling)
 * `get-blob` — Download manifest + chunk plan artifacts for an existing DA storage ticket
 * `prove` — Generate Proof-of-Retrievability witnesses for a manifest/payload pair
 * `prove-availability` — Download + verify availability for a storage ticket using a Torii manifest
+* `proof-policies` — Fetch the current DA proof-policy bundle from Torii
+* `proof-policy-snapshot` — Fetch the DA proof-policy snapshot from Torii
+* `commitments-list` — List DA commitments with optional filters
+* `commitments-prove` — Build a DA commitment proof with optional filters
+* `commitments-verify` — Verify a DA commitment proof from a JSON file
+* `pin-intents-list` — List DA pin intents with optional filters
+* `pin-intents-prove` — Build a DA pin intent proof with optional filters
+* `pin-intents-verify` — Verify a DA pin intent proof from a JSON file
 * `rent-quote` — Quote rent/incentive breakdown for a blob size/retention combo
 * `rent-ledger` — Convert a rent quote into deterministic ledger transfer instructions
 
 
 
-## `iroha_cli app da submit`
+## `iroha app da submit`
 
 Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
 
-**Usage:** `iroha_cli app da submit [OPTIONS] --payload <PATH>`
+**Usage:** `iroha app da submit [OPTIONS] --payload <PATH>`
 
 ###### **Options:**
 
@@ -5398,11 +5892,11 @@ Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
 
 
 
-## `iroha_cli app da get`
+## `iroha app da get`
 
 Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`)
 
-**Usage:** `iroha_cli app da get [OPTIONS] --gateway-provider <SPEC>`
+**Usage:** `iroha app da get [OPTIONS] --gateway-provider <SPEC>`
 
 ###### **Options:**
 
@@ -5441,11 +5935,11 @@ Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`)
 
 
 
-## `iroha_cli app da get-blob`
+## `iroha app da get-blob`
 
 Download manifest + chunk plan artifacts for an existing DA storage ticket
 
-**Usage:** `iroha_cli app da get-blob [OPTIONS] --storage-ticket <HEX>`
+**Usage:** `iroha app da get-blob [OPTIONS] --storage-ticket <HEX>`
 
 ###### **Options:**
 
@@ -5456,11 +5950,11 @@ Download manifest + chunk plan artifacts for an existing DA storage ticket
 
 
 
-## `iroha_cli app da prove`
+## `iroha app da prove`
 
 Generate Proof-of-Retrievability witnesses for a manifest/payload pair
 
-**Usage:** `iroha_cli app da prove [OPTIONS] --manifest <PATH> --payload <PATH>`
+**Usage:** `iroha app da prove [OPTIONS] --manifest <PATH> --payload <PATH>`
 
 ###### **Options:**
 
@@ -5478,11 +5972,11 @@ Generate Proof-of-Retrievability witnesses for a manifest/payload pair
 
 
 
-## `iroha_cli app da prove-availability`
+## `iroha app da prove-availability`
 
 Download + verify availability for a storage ticket using a Torii manifest
 
-**Usage:** `iroha_cli app da prove-availability [OPTIONS] --storage-ticket <HEX> --gateway-provider <SPEC>`
+**Usage:** `iroha app da prove-availability [OPTIONS] --storage-ticket <HEX> --gateway-provider <SPEC>`
 
 ###### **Options:**
 
@@ -5505,11 +5999,131 @@ Download + verify availability for a storage ticket using a Torii manifest
 
 
 
-## `iroha_cli app da rent-quote`
+## `iroha app da proof-policies`
+
+Fetch the current DA proof-policy bundle from Torii
+
+**Usage:** `iroha app da proof-policies`
+
+
+
+## `iroha app da proof-policy-snapshot`
+
+Fetch the DA proof-policy snapshot from Torii
+
+**Usage:** `iroha app da proof-policy-snapshot`
+
+
+
+## `iroha app da commitments-list`
+
+List DA commitments with optional filters
+
+**Usage:** `iroha app da commitments-list [OPTIONS]`
+
+###### **Options:**
+
+* `--manifest-hash <HEX>` — Optional manifest hash filter (32-byte hex)
+* `--lane-id <U32>` — Optional lane id filter (requires epoch + sequence for direct lookup)
+* `--epoch <U64>` — Optional epoch filter (requires lane-id + sequence for direct lookup)
+* `--sequence <U64>` — Optional sequence filter (requires lane-id + epoch for direct lookup)
+* `--limit <U64>` — Optional list limit (`>0`)
+* `--offset <U64>` — Optional list offset
+
+  Default value: `0`
+
+
+
+## `iroha app da commitments-prove`
+
+Build a DA commitment proof with optional filters
+
+**Usage:** `iroha app da commitments-prove [OPTIONS]`
+
+###### **Options:**
+
+* `--manifest-hash <HEX>` — Optional manifest hash filter (32-byte hex)
+* `--lane-id <U32>` — Optional lane id filter (requires epoch + sequence for direct lookup)
+* `--epoch <U64>` — Optional epoch filter (requires lane-id + sequence for direct lookup)
+* `--sequence <U64>` — Optional sequence filter (requires lane-id + epoch for direct lookup)
+* `--limit <U64>` — Optional list limit (`>0`)
+* `--offset <U64>` — Optional list offset
+
+  Default value: `0`
+
+
+
+## `iroha app da commitments-verify`
+
+Verify a DA commitment proof from a JSON file
+
+**Usage:** `iroha app da commitments-verify --proof-json <PATH>`
+
+###### **Options:**
+
+* `--proof-json <PATH>` — Path to a JSON-encoded `DaCommitmentProof`
+
+
+
+## `iroha app da pin-intents-list`
+
+List DA pin intents with optional filters
+
+**Usage:** `iroha app da pin-intents-list [OPTIONS]`
+
+###### **Options:**
+
+* `--manifest-hash <HEX>` — Optional manifest hash filter (32-byte hex)
+* `--storage-ticket <HEX>` — Optional storage ticket filter (32-byte hex)
+* `--alias <TEXT>` — Optional alias filter
+* `--lane-id <U32>` — Optional lane id filter (requires epoch + sequence for direct lookup)
+* `--epoch <U64>` — Optional epoch filter (requires lane-id + sequence for direct lookup)
+* `--sequence <U64>` — Optional sequence filter (requires lane-id + epoch for direct lookup)
+* `--limit <U64>` — Optional list limit (`>0`)
+* `--offset <U64>` — Optional list offset
+
+  Default value: `0`
+
+
+
+## `iroha app da pin-intents-prove`
+
+Build a DA pin intent proof with optional filters
+
+**Usage:** `iroha app da pin-intents-prove [OPTIONS]`
+
+###### **Options:**
+
+* `--manifest-hash <HEX>` — Optional manifest hash filter (32-byte hex)
+* `--storage-ticket <HEX>` — Optional storage ticket filter (32-byte hex)
+* `--alias <TEXT>` — Optional alias filter
+* `--lane-id <U32>` — Optional lane id filter (requires epoch + sequence for direct lookup)
+* `--epoch <U64>` — Optional epoch filter (requires lane-id + sequence for direct lookup)
+* `--sequence <U64>` — Optional sequence filter (requires lane-id + epoch for direct lookup)
+* `--limit <U64>` — Optional list limit (`>0`)
+* `--offset <U64>` — Optional list offset
+
+  Default value: `0`
+
+
+
+## `iroha app da pin-intents-verify`
+
+Verify a DA pin intent proof from a JSON file
+
+**Usage:** `iroha app da pin-intents-verify --proof-json <PATH>`
+
+###### **Options:**
+
+* `--proof-json <PATH>` — Path to a JSON-encoded `DaPinIntentWithLocation`
+
+
+
+## `iroha app da rent-quote`
 
 Quote rent/incentive breakdown for a blob size/retention combo
 
-**Usage:** `iroha_cli app da rent-quote [OPTIONS] --gib <GIB> --months <MONTHS>`
+**Usage:** `iroha app da rent-quote [OPTIONS] --gib <GIB> --months <MONTHS>`
 
 ###### **Options:**
 
@@ -5522,11 +6136,11 @@ Quote rent/incentive breakdown for a blob size/retention combo
 
 
 
-## `iroha_cli app da rent-ledger`
+## `iroha app da rent-ledger`
 
 Convert a rent quote into deterministic ledger transfer instructions
 
-**Usage:** `iroha_cli app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
 
 ###### **Options:**
 
@@ -5541,11 +6155,11 @@ Convert a rent quote into deterministic ledger transfer instructions
 
 
 
-## `iroha_cli app streaming`
+## `iroha app streaming`
 
 Streaming helpers (HPKE fingerprints, suite listings)
 
-**Usage:** `iroha_cli app streaming <COMMAND>`
+**Usage:** `iroha app streaming <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5554,11 +6168,11 @@ Streaming helpers (HPKE fingerprints, suite listings)
 
 
 
-## `iroha_cli app streaming fingerprint`
+## `iroha app streaming fingerprint`
 
 Compute the ML-KEM fingerprint advertised in `EncryptionSuite::Kyber*`
 
-**Usage:** `iroha_cli app streaming fingerprint [OPTIONS] --public-key <HEX>`
+**Usage:** `iroha app streaming fingerprint [OPTIONS] --public-key <HEX>`
 
 ###### **Options:**
 
@@ -5567,19 +6181,19 @@ Compute the ML-KEM fingerprint advertised in `EncryptionSuite::Kyber*`
 
 
 
-## `iroha_cli app streaming suites`
+## `iroha app streaming suites`
 
 List supported ML-KEM suite identifiers
 
-**Usage:** `iroha_cli app streaming suites`
+**Usage:** `iroha app streaming suites`
 
 
 
-## `iroha_cli app nexus`
+## `iroha app nexus`
 
 Nexus helpers (lanes, governance)
 
-**Usage:** `iroha_cli app nexus <COMMAND>`
+**Usage:** `iroha app nexus <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5588,11 +6202,11 @@ Nexus helpers (lanes, governance)
 
 
 
-## `iroha_cli app nexus lane-report`
+## `iroha app nexus lane-report`
 
 Show governance manifest status per lane
 
-**Usage:** `iroha_cli app nexus lane-report [OPTIONS]`
+**Usage:** `iroha app nexus lane-report [OPTIONS]`
 
 ###### **Options:**
 
@@ -5608,11 +6222,11 @@ Show governance manifest status per lane
 
 
 
-## `iroha_cli app nexus public-lane`
+## `iroha app nexus public-lane`
 
 Inspect public-lane validator lifecycle and stake state
 
-**Usage:** `iroha_cli app nexus public-lane <COMMAND>`
+**Usage:** `iroha app nexus public-lane <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5621,11 +6235,11 @@ Inspect public-lane validator lifecycle and stake state
 
 
 
-## `iroha_cli app nexus public-lane validators`
+## `iroha app nexus public-lane validators`
 
 List validators for a public lane with lifecycle hints
 
-**Usage:** `iroha_cli app nexus public-lane validators [OPTIONS]`
+**Usage:** `iroha app nexus public-lane validators [OPTIONS]`
 
 ###### **Options:**
 
@@ -5635,20 +6249,14 @@ List validators for a public lane with lifecycle hints
 * `--summary` — Render a compact table instead of raw JSON
 
   Default value: `false`
-* `--address-format <ADDRESS_FORMAT>` — Preferred address literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
 
 
 
-
-## `iroha_cli app nexus public-lane stake`
+## `iroha app nexus public-lane stake`
 
 List bonded stake and pending unbonds for a public lane
 
-**Usage:** `iroha_cli app nexus public-lane stake [OPTIONS]`
+**Usage:** `iroha app nexus public-lane stake [OPTIONS]`
 
 ###### **Options:**
 
@@ -5659,20 +6267,14 @@ List bonded stake and pending unbonds for a public lane
 * `--summary` — Render a compact table instead of raw JSON
 
   Default value: `false`
-* `--address-format <ADDRESS_FORMAT>` — Preferred address literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
 
 
 
-
-## `iroha_cli app staking`
+## `iroha app staking`
 
 Public-lane staking helpers (register/activate/exit)
 
-**Usage:** `iroha_cli app staking <COMMAND>`
+**Usage:** `iroha app staking <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5682,54 +6284,54 @@ Public-lane staking helpers (register/activate/exit)
 
 
 
-## `iroha_cli app staking register`
+## `iroha app staking register`
 
 Register a stake-elected validator on a public lane
 
-**Usage:** `iroha_cli app staking register [OPTIONS] --lane-id <LANE_ID> --validator <ACCOUNT_ID> --initial-stake <AMOUNT>`
+**Usage:** `iroha app staking register [OPTIONS] --lane-id <LANE_ID> --validator <ACCOUNT_ID> --initial-stake <AMOUNT>`
 
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id to register against
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 * `--stake-account <ACCOUNT_ID>` — Optional staking account (defaults to validator)
 * `--initial-stake <AMOUNT>` — Initial self-bond (integer, uses the staking asset scale)
 * `--metadata <PATH>` — Optional metadata JSON (Norito JSON object)
 
 
 
-## `iroha_cli app staking activate`
+## `iroha app staking activate`
 
 Activate a pending validator once its activation epoch is reached
 
-**Usage:** `iroha_cli app staking activate --lane-id <LANE_ID> --validator <ACCOUNT_ID>`
+**Usage:** `iroha app staking activate --lane-id <LANE_ID> --validator <ACCOUNT_ID>`
 
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the pending validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 
 
 
-## `iroha_cli app staking exit`
+## `iroha app staking exit`
 
 Schedule or finalize a validator exit
 
-**Usage:** `iroha_cli app staking exit --lane-id <LANE_ID> --validator <ACCOUNT_ID> --release-at-ms <MILLIS>`
+**Usage:** `iroha app staking exit --lane-id <LANE_ID> --validator <ACCOUNT_ID> --release-at-ms <MILLIS>`
 
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 * `--release-at-ms <MILLIS>` — Release timestamp in milliseconds (must not precede current block timestamp)
 
 
 
-## `iroha_cli app subscriptions`
+## `iroha app subscriptions`
 
 Subscription plan and billing helpers
 
-**Usage:** `iroha_cli app subscriptions <COMMAND>`
+**Usage:** `iroha app subscriptions <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5738,11 +6340,11 @@ Subscription plan and billing helpers
 
 
 
-## `iroha_cli app subscriptions plan`
+## `iroha app subscriptions plan`
 
 Manage subscription plans (asset definition metadata)
 
-**Usage:** `iroha_cli app subscriptions plan <COMMAND>`
+**Usage:** `iroha app subscriptions plan <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5751,26 +6353,26 @@ Manage subscription plans (asset definition metadata)
 
 
 
-## `iroha_cli app subscriptions plan create`
+## `iroha app subscriptions plan create`
 
 Register a subscription plan on an asset definition
 
-**Usage:** `iroha_cli app subscriptions plan create [OPTIONS] --authority <ACCOUNT_ID> --private-key <HEX> --plan-id <ASSET_DEF_ID>`
+**Usage:** `iroha app subscriptions plan create [OPTIONS] --authority <ACCOUNT_ID> --private-key <HEX> --plan-id <ASSET_DEF_ID>`
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--plan-id <ASSET_DEF_ID>` — Asset definition id where the plan metadata is stored
 * `--plan-json <PATH>` — Path to JSON plan payload (reads stdin when omitted)
 
 
 
-## `iroha_cli app subscriptions plan list`
+## `iroha app subscriptions plan list`
 
 List subscription plans, optionally filtered by provider
 
-**Usage:** `iroha_cli app subscriptions plan list [OPTIONS]`
+**Usage:** `iroha app subscriptions plan list [OPTIONS]`
 
 ###### **Options:**
 
@@ -5782,11 +6384,11 @@ List subscription plans, optionally filtered by provider
 
 
 
-## `iroha_cli app subscriptions subscription`
+## `iroha app subscriptions subscription`
 
 Manage subscriptions and billing actions
 
-**Usage:** `iroha_cli app subscriptions subscription <COMMAND>`
+**Usage:** `iroha app subscriptions subscription <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5802,15 +6404,15 @@ Manage subscriptions and billing actions
 
 
 
-## `iroha_cli app subscriptions subscription create`
+## `iroha app subscriptions subscription create`
 
 Create a subscription and billing trigger
 
-**Usage:** `iroha_cli app subscriptions subscription create [OPTIONS] --authority <ACCOUNT_ID> --private-key <HEX> --subscription-id <NFT_ID> --plan-id <ASSET_DEF_ID>`
+**Usage:** `iroha app subscriptions subscription create [OPTIONS] --authority <ACCOUNT_ID> --private-key <HEX> --subscription-id <NFT_ID> --plan-id <ASSET_DEF_ID>`
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--subscription-id <NFT_ID>` — Subscription NFT id to register
 * `--plan-id <ASSET_DEF_ID>` — Subscription plan asset definition id
@@ -5824,11 +6426,11 @@ Create a subscription and billing trigger
 
 
 
-## `iroha_cli app subscriptions subscription list`
+## `iroha app subscriptions subscription list`
 
 List subscriptions with optional filters
 
-**Usage:** `iroha_cli app subscriptions subscription list [OPTIONS]`
+**Usage:** `iroha app subscriptions subscription list [OPTIONS]`
 
 ###### **Options:**
 
@@ -5842,11 +6444,11 @@ List subscriptions with optional filters
 
 
 
-## `iroha_cli app subscriptions subscription get`
+## `iroha app subscriptions subscription get`
 
 Fetch a subscription by id
 
-**Usage:** `iroha_cli app subscriptions subscription get --subscription-id <NFT_ID>`
+**Usage:** `iroha app subscriptions subscription get --subscription-id <NFT_ID>`
 
 ###### **Options:**
 
@@ -5854,96 +6456,96 @@ Fetch a subscription by id
 
 
 
-## `iroha_cli app subscriptions subscription pause`
+## `iroha app subscriptions subscription pause`
 
 Pause billing for a subscription
 
-**Usage:** `iroha_cli app subscriptions subscription pause [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
+**Usage:** `iroha app subscriptions subscription pause [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
 
 
 
-## `iroha_cli app subscriptions subscription resume`
+## `iroha app subscriptions subscription resume`
 
 Resume billing for a subscription
 
-**Usage:** `iroha_cli app subscriptions subscription resume [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
+**Usage:** `iroha app subscriptions subscription resume [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
 
 
 
-## `iroha_cli app subscriptions subscription cancel`
+## `iroha app subscriptions subscription cancel`
 
 Cancel a subscription and remove its billing trigger
 
-**Usage:** `iroha_cli app subscriptions subscription cancel [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
+**Usage:** `iroha app subscriptions subscription cancel [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
 
 
 
-## `iroha_cli app subscriptions subscription keep`
+## `iroha app subscriptions subscription keep`
 
 Undo a scheduled period-end cancellation
 
-**Usage:** `iroha_cli app subscriptions subscription keep [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
+**Usage:** `iroha app subscriptions subscription keep [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
 
 
 
-## `iroha_cli app subscriptions subscription charge-now`
+## `iroha app subscriptions subscription charge-now`
 
 Execute billing immediately
 
-**Usage:** `iroha_cli app subscriptions subscription charge-now [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
+**Usage:** `iroha app subscriptions subscription charge-now [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
 
 
 
-## `iroha_cli app subscriptions subscription usage`
+## `iroha app subscriptions subscription usage`
 
 Record usage for a subscription usage plan
 
-**Usage:** `iroha_cli app subscriptions subscription usage [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX> --unit-key <UNIT_KEY> --delta <DELTA>`
+**Usage:** `iroha app subscriptions subscription usage [OPTIONS] --subscription-id <NFT_ID> --authority <ACCOUNT_ID> --private-key <HEX> --unit-key <UNIT_KEY> --delta <DELTA>`
 
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--unit-key <UNIT_KEY>` — Usage counter key to update
 * `--delta <DELTA>` — Usage increment (must be non-negative)
@@ -5951,11 +6553,11 @@ Record usage for a subscription usage plan
 
 
 
-## `iroha_cli app endorsement`
+## `iroha app endorsement`
 
 Domain endorsement helpers (committees, policies, submissions)
 
-**Usage:** `iroha_cli app endorsement <COMMAND>`
+**Usage:** `iroha app endorsement <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -5969,11 +6571,11 @@ Domain endorsement helpers (committees, policies, submissions)
 
 
 
-## `iroha_cli app endorsement prepare`
+## `iroha app endorsement prepare`
 
 Build a domain endorsement (optionally signing it) and emit JSON to stdout
 
-**Usage:** `iroha_cli app endorsement prepare [OPTIONS] --domain <DOMAIN> --issued-at-height <HEIGHT> --expires-at-height <HEIGHT>`
+**Usage:** `iroha app endorsement prepare [OPTIONS] --domain <DOMAIN> --issued-at-height <HEIGHT> --expires-at-height <HEIGHT>`
 
 ###### **Options:**
 
@@ -5991,11 +6593,11 @@ Build a domain endorsement (optionally signing it) and emit JSON to stdout
 
 
 
-## `iroha_cli app endorsement submit`
+## `iroha app endorsement submit`
 
 Submit a domain endorsement into the chain state for later reuse
 
-**Usage:** `iroha_cli app endorsement submit [OPTIONS]`
+**Usage:** `iroha app endorsement submit [OPTIONS]`
 
 ###### **Options:**
 
@@ -6003,11 +6605,11 @@ Submit a domain endorsement into the chain state for later reuse
 
 
 
-## `iroha_cli app endorsement list`
+## `iroha app endorsement list`
 
 List recorded endorsements for a domain
 
-**Usage:** `iroha_cli app endorsement list --domain <DOMAIN>`
+**Usage:** `iroha app endorsement list --domain <DOMAIN>`
 
 ###### **Options:**
 
@@ -6015,11 +6617,11 @@ List recorded endorsements for a domain
 
 
 
-## `iroha_cli app endorsement policy`
+## `iroha app endorsement policy`
 
 Fetch the endorsement policy for a domain
 
-**Usage:** `iroha_cli app endorsement policy --domain <DOMAIN>`
+**Usage:** `iroha app endorsement policy --domain <DOMAIN>`
 
 ###### **Options:**
 
@@ -6027,11 +6629,11 @@ Fetch the endorsement policy for a domain
 
 
 
-## `iroha_cli app endorsement committee`
+## `iroha app endorsement committee`
 
 Fetch a registered endorsement committee
 
-**Usage:** `iroha_cli app endorsement committee --committee-id <COMMITTEE_ID>`
+**Usage:** `iroha app endorsement committee --committee-id <COMMITTEE_ID>`
 
 ###### **Options:**
 
@@ -6039,11 +6641,11 @@ Fetch a registered endorsement committee
 
 
 
-## `iroha_cli app endorsement register-committee`
+## `iroha app endorsement register-committee`
 
 Register an endorsement committee (quorum + members)
 
-**Usage:** `iroha_cli app endorsement register-committee [OPTIONS] --committee-id <COMMITTEE_ID> --quorum <QUORUM> --member <PUBLIC_KEY>`
+**Usage:** `iroha app endorsement register-committee [OPTIONS] --committee-id <COMMITTEE_ID> --quorum <QUORUM> --member <PUBLIC_KEY>`
 
 ###### **Options:**
 
@@ -6054,11 +6656,11 @@ Register an endorsement committee (quorum + members)
 
 
 
-## `iroha_cli app endorsement set-policy`
+## `iroha app endorsement set-policy`
 
 Set or replace the endorsement policy for a domain
 
-**Usage:** `iroha_cli app endorsement set-policy [OPTIONS] --domain <DOMAIN> --committee-id <COMMITTEE_ID> --max-endorsement-age <BLOCKS>`
+**Usage:** `iroha app endorsement set-policy [OPTIONS] --domain <DOMAIN> --committee-id <COMMITTEE_ID> --max-endorsement-age <BLOCKS>`
 
 ###### **Options:**
 
@@ -6071,11 +6673,11 @@ Set or replace the endorsement policy for a domain
 
 
 
-## `iroha_cli app jurisdiction`
+## `iroha app jurisdiction`
 
 Jurisdiction Data Guardian helpers (attestations and SDN registries)
 
-**Usage:** `iroha_cli app jurisdiction <COMMAND>`
+**Usage:** `iroha app jurisdiction <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6083,11 +6685,11 @@ Jurisdiction Data Guardian helpers (attestations and SDN registries)
 
 
 
-## `iroha_cli app jurisdiction verify`
+## `iroha app jurisdiction verify`
 
 Validate a JDG attestation (structural + SDN commitments)
 
-**Usage:** `iroha_cli app jurisdiction verify [OPTIONS]`
+**Usage:** `iroha app jurisdiction verify [OPTIONS]`
 
 ###### **Options:**
 
@@ -6104,11 +6706,11 @@ Validate a JDG attestation (structural + SDN commitments)
 
 
 
-## `iroha_cli app compute`
+## `iroha app compute`
 
 Compute lane simulation helpers
 
-**Usage:** `iroha_cli app compute <COMMAND>`
+**Usage:** `iroha app compute <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6117,11 +6719,11 @@ Compute lane simulation helpers
 
 
 
-## `iroha_cli app compute simulate`
+## `iroha app compute simulate`
 
 Simulate a compute call offline and emit the receipt/response
 
-**Usage:** `iroha_cli app compute simulate [OPTIONS]`
+**Usage:** `iroha app compute simulate [OPTIONS]`
 
 ###### **Options:**
 
@@ -6139,11 +6741,11 @@ Simulate a compute call offline and emit the receipt/response
 
 
 
-## `iroha_cli app compute invoke`
+## `iroha app compute invoke`
 
 Invoke a running compute gateway using the shared fixtures
 
-**Usage:** `iroha_cli app compute invoke [OPTIONS]`
+**Usage:** `iroha app compute invoke [OPTIONS]`
 
 ###### **Options:**
 
@@ -6162,11 +6764,710 @@ Invoke a running compute gateway using the shared fixtures
 
 
 
-## `iroha_cli app social`
+## `iroha app soracloud`
+
+Soracloud deployment/control-plane simulation helpers
+
+**Usage:** `iroha app soracloud <COMMAND>`
+
+###### **Subcommands:**
+
+* `init` — Scaffold baseline container/service manifests and initialize registry state
+* `deploy` — Validate manifests and register a new service deployment
+* `status` — Show current registry state (all services or one service)
+* `upgrade` — Validate manifests and upgrade an existing deployed service
+* `rollback` — Roll back a deployed service to a previous (or specified) version
+* `rollout` — Advance or fail a rollout step using health-gated canary controls
+* `agent-deploy` — Register a persistent AI apartment manifest into local scheduler state
+* `agent-lease-renew` — Renew an apartment lease in local scheduler state
+* `agent-restart` — Request deterministic apartment restart in local scheduler state
+* `agent-status` — Show local apartment scheduler status
+* `agent-wallet-spend` — Submit an apartment wallet spend request under policy guardrails
+* `agent-wallet-approve` — Approve a pending apartment wallet spend request
+* `agent-policy-revoke` — Revoke an apartment policy capability
+* `agent-message-send` — Send a deterministic mailbox message between apartments
+* `agent-message-ack` — Acknowledge (consume) a mailbox message from an apartment queue
+* `agent-mailbox-status` — Inspect mailbox queue state for an apartment
+* `agent-artifact-allow` — Add an artifact hash (and optional provenance hash) to autonomy allowlist
+* `agent-autonomy-run` — Approve an autonomous run under allowlist/provenance/budget guardrails
+* `agent-autonomy-status` — Show autonomous-run policy state for an apartment
+* `training-job-start` — Start a distributed training job in live Torii control-plane mode
+* `training-job-checkpoint` — Record a training checkpoint in live Torii control-plane mode
+* `training-job-retry` — Submit a training retry request in live Torii control-plane mode
+* `training-job-status` — Query training job status in live Torii control-plane mode
+* `model-artifact-register` — Register model-artifact metadata in live Torii control-plane mode
+* `model-artifact-status` — Query model-artifact status in live Torii control-plane mode
+* `model-weight-register` — Register a model weight version in live Torii control-plane mode
+* `model-weight-promote` — Promote a model weight version in live Torii control-plane mode
+* `model-weight-rollback` — Roll back a model weight version in live Torii control-plane mode
+* `model-weight-status` — Query model weight status in live Torii control-plane mode
+
+
+
+## `iroha app soracloud init`
+
+Scaffold baseline container/service manifests and initialize registry state
+
+**Usage:** `iroha app soracloud init [OPTIONS]`
+
+###### **Options:**
+
+* `--output-dir <DIR>` — Directory where manifests and registry state will be created
+
+  Default value: `.soracloud`
+* `--service-name <NAME>` — Logical service name used in the scaffolded service manifest
+
+  Default value: `web_portal`
+* `--service-version <VERSION>` — Version string used in the scaffolded service manifest
+
+  Default value: `0.1.0`
+* `--template <TEMPLATE>` — Scaffolding template to generate in addition to control-plane manifests
+
+  Default value: `baseline`
+
+  Possible values:
+  - `baseline`:
+    Generate only Soracloud control-plane manifests
+  - `site`:
+    Generate a Vue3/Vite static SPA starter with SoraFS publish workflow
+  - `webapp`:
+    Generate a Vue3 SPA + API starter with deterministic challenge-signature auth
+  - `pii-app`:
+    Generate a private PII app starter with consent + retention workflows
+
+* `--overwrite` — Overwrite existing files in the output directory
+
+
+
+## `iroha app soracloud deploy`
+
+Validate manifests and register a new service deployment
+
+**Usage:** `iroha app soracloud deploy [OPTIONS]`
+
+###### **Options:**
+
+* `--container <PATH>` — Path to a `SoraContainerManifestV1` JSON document
+
+  Default value: `fixtures/soracloud/sora_container_manifest_v1.json`
+* `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
+
+  Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--torii-url <URL>` — Optional Torii base URL to execute deploy against live control-plane APIs
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud status`
+
+Show current registry state (all services or one service)
+
+**Usage:** `iroha app soracloud status [OPTIONS]`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--service-name <NAME>` — Optional service name filter
+* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v1/soracloud/status` from a live control plane
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
+* `--timeout-secs <SECS>` — HTTP timeout for Torii status requests
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud upgrade`
+
+Validate manifests and upgrade an existing deployed service
+
+**Usage:** `iroha app soracloud upgrade [OPTIONS]`
+
+###### **Options:**
+
+* `--container <PATH>` — Path to a `SoraContainerManifestV1` JSON document
+
+  Default value: `fixtures/soracloud/sora_container_manifest_v1.json`
+* `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
+
+  Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--torii-url <URL>` — Optional Torii base URL to execute upgrade against live control-plane APIs
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud rollback`
+
+Roll back a deployed service to a previous (or specified) version
+
+**Usage:** `iroha app soracloud rollback [OPTIONS] --service-name <NAME>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--service-name <NAME>` — Service name to roll back
+* `--target-version <VERSION>` — Optional target version. When omitted, rolls back to the previous version
+* `--torii-url <URL>` — Optional Torii base URL to execute rollback against live control-plane APIs
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud rollout`
+
+Advance or fail a rollout step using health-gated canary controls
+
+**Usage:** `iroha app soracloud rollout [OPTIONS] --service-name <NAME> --rollout-handle <HANDLE> --governance-tx-hash <HASH>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--service-name <NAME>` — Service name with an active rollout
+* `--rollout-handle <HANDLE>` — Rollout handle emitted by `upgrade` output (`rollout_handle`)
+* `--health <HEALTH>` — Health signal for this rollout step
+
+  Default value: `healthy`
+
+  Possible values: `healthy`, `unhealthy`
+
+* `--promote-to-percent <PERCENT>` — Optional target traffic percentage for healthy promotions
+* `--governance-tx-hash <HASH>` — Governance transaction hash linked to this rollout action
+* `--torii-url <URL>` — Optional Torii base URL to execute rollout against live control-plane APIs
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-deploy`
+
+Register a persistent AI apartment manifest into local scheduler state
+
+**Usage:** `iroha app soracloud agent-deploy [OPTIONS]`
+
+###### **Options:**
+
+* `--manifest <PATH>` — Path to an `AgentApartmentManifestV1` JSON document
+
+  Default value: `fixtures/soracloud/agent_apartment_manifest_v1.json`
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--lease-ticks <TICKS>` — Lease length, measured in deterministic control-plane sequence ticks
+
+  Default value: `120`
+* `--autonomy-budget-units <UNITS>` — Initial autonomy execution budget units
+
+  Default value: `10000`
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/deploy` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-lease-renew`
+
+Renew an apartment lease in local scheduler state
+
+**Usage:** `iroha app soracloud agent-lease-renew [OPTIONS] --apartment-name <NAME>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name to renew
+* `--lease-ticks <TICKS>` — Lease extension ticks
+
+  Default value: `120`
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/lease/renew` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-restart`
+
+Request deterministic apartment restart in local scheduler state
+
+**Usage:** `iroha app soracloud agent-restart [OPTIONS] --apartment-name <NAME> --reason <TEXT>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name to restart
+* `--reason <TEXT>` — Human-readable reason captured in scheduler events
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/restart` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-status`
+
+Show local apartment scheduler status
+
+**Usage:** `iroha app soracloud agent-status [OPTIONS]`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Optional apartment name filter
+* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/status` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane status query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-wallet-spend`
+
+Submit an apartment wallet spend request under policy guardrails
+
+**Usage:** `iroha app soracloud agent-wallet-spend [OPTIONS] --apartment-name <NAME> --asset-definition <ASSET> --amount-nanos <NANOS>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name issuing the spend request
+* `--asset-definition <ASSET>` — Asset definition identifier (`definition#domain`)
+* `--amount-nanos <NANOS>` — Spend amount in nanos
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/spend` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-wallet-approve`
+
+Approve a pending apartment wallet spend request
+
+**Usage:** `iroha app soracloud agent-wallet-approve [OPTIONS] --apartment-name <NAME> --request-id <REQUEST>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name owning the request
+* `--request-id <REQUEST>` — Wallet request identifier emitted by `agent-wallet-spend`
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/approve` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-policy-revoke`
+
+Revoke an apartment policy capability
+
+**Usage:** `iroha app soracloud agent-policy-revoke [OPTIONS] --apartment-name <NAME> --capability <CAPABILITY>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name whose policy should be updated
+* `--capability <CAPABILITY>` — Capability identifier to revoke (for example `wallet.sign`)
+* `--reason <TEXT>` — Optional reason included in audit events
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/policy/revoke` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-message-send`
+
+Send a deterministic mailbox message between apartments
+
+**Usage:** `iroha app soracloud agent-message-send [OPTIONS] --from-apartment <NAME> --to-apartment <NAME> --payload <TEXT>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--from-apartment <NAME>` — Sender apartment name
+* `--to-apartment <NAME>` — Recipient apartment name
+* `--channel <CHANNEL>` — Logical mailbox channel
+
+  Default value: `default`
+* `--payload <TEXT>` — Message payload (UTF-8 text)
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/message/send` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-message-ack`
+
+Acknowledge (consume) a mailbox message from an apartment queue
+
+**Usage:** `iroha app soracloud agent-message-ack [OPTIONS] --apartment-name <NAME> --message-id <MESSAGE>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name consuming the message
+* `--message-id <MESSAGE>` — Message identifier emitted by `agent-message-send`
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/message/ack` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-mailbox-status`
+
+Inspect mailbox queue state for an apartment
+
+**Usage:** `iroha app soracloud agent-mailbox-status [OPTIONS] --apartment-name <NAME>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name to inspect
+* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/mailbox/status` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane status query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-artifact-allow`
+
+Add an artifact hash (and optional provenance hash) to autonomy allowlist
+
+**Usage:** `iroha app soracloud agent-artifact-allow [OPTIONS] --apartment-name <NAME> --artifact-hash <HASH>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name whose allowlist should be updated
+* `--artifact-hash <HASH>` — Artifact hash identifier
+* `--provenance-hash <HASH>` — Optional provenance hash required for this artifact
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/autonomy/allow` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-autonomy-run`
+
+Approve an autonomous run under allowlist/provenance/budget guardrails
+
+**Usage:** `iroha app soracloud agent-autonomy-run [OPTIONS] --apartment-name <NAME> --artifact-hash <HASH> --budget-units <UNITS> --run-label <LABEL>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name requesting autonomous execution
+* `--artifact-hash <HASH>` — Artifact hash identifier
+* `--provenance-hash <HASH>` — Optional provenance hash for this run request
+* `--budget-units <UNITS>` — Budget units requested for this run
+* `--run-label <LABEL>` — Human-readable run label
+* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/autonomy/run` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud agent-autonomy-status`
+
+Show autonomous-run policy state for an apartment
+
+**Usage:** `iroha app soracloud agent-autonomy-status [OPTIONS] --apartment-name <NAME>`
+
+###### **Options:**
+
+* `--registry <PATH>` — Registry state JSON path
+
+  Default value: `.soracloud/registry.json`
+* `--apartment-name <NAME>` — Apartment name to inspect
+* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/autonomy/status` instead of local registry simulation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud training-job-start`
+
+Start a distributed training job in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud training-job-start [OPTIONS] --service-name <NAME> --model-name <NAME> --job-id <ID> --target-steps <STEPS> --checkpoint-interval-steps <STEPS> --step-compute-units <UNITS> --compute-budget-units <UNITS> --storage-budget-bytes <BYTES>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the training job
+* `--model-name <NAME>` — Model name for the training job
+* `--job-id <ID>` — Deterministic training job identifier
+* `--worker-group-size <COUNT>` — Worker-group size for the distributed training run
+
+  Default value: `1`
+* `--target-steps <STEPS>` — Target number of steps to complete the training job
+* `--checkpoint-interval-steps <STEPS>` — Step cadence for checkpoint creation
+* `--max-retries <COUNT>` — Maximum allowed retries for the training job
+
+  Default value: `3`
+* `--step-compute-units <UNITS>` — Compute units charged per step
+* `--compute-budget-units <UNITS>` — Total compute budget units for the training job
+* `--storage-budget-bytes <BYTES>` — Total storage budget bytes for checkpoints
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud training-job-checkpoint`
+
+Record a training checkpoint in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud training-job-checkpoint [OPTIONS] --service-name <NAME> --job-id <ID> --completed-step <STEP> --checkpoint-size-bytes <BYTES> --metrics-hash <HASH>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the training job
+* `--job-id <ID>` — Training job identifier
+* `--completed-step <STEP>` — Completed step represented by this checkpoint
+* `--checkpoint-size-bytes <BYTES>` — Checkpoint payload size in bytes
+* `--metrics-hash <HASH>` — Hash of metrics/telemetry emitted for this checkpoint
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud training-job-retry`
+
+Submit a training retry request in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud training-job-retry [OPTIONS] --service-name <NAME> --job-id <ID> --reason <TEXT>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the training job
+* `--job-id <ID>` — Training job identifier
+* `--reason <TEXT>` — Human-readable retry reason recorded in audit logs
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud training-job-status`
+
+Query training job status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud training-job-status [OPTIONS] --service-name <NAME> --job-id <ID>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the training job
+* `--job-id <ID>` — Training job identifier
+* `--torii-url <URL>` — Torii base URL for live control-plane query
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-artifact-register`
+
+Register model-artifact metadata in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-artifact-register [OPTIONS] --service-name <NAME> --model-name <NAME> --training-job-id <ID> --weight-artifact-hash <HASH> --dataset-ref <REF> --training-config-hash <HASH> --reproducibility-hash <HASH> --provenance-attestation-hash <HASH>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model
+* `--model-name <NAME>` — Model name
+* `--training-job-id <ID>` — Training job identifier backing this artifact registration
+* `--weight-artifact-hash <HASH>` — Weight artifact hash
+* `--dataset-ref <REF>` — Dataset reference identifier
+* `--training-config-hash <HASH>` — Hash of training config used for the run
+* `--reproducibility-hash <HASH>` — Reproducibility metadata hash
+* `--provenance-attestation-hash <HASH>` — Provenance attestation hash
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-artifact-status`
+
+Query model-artifact status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-artifact-status [OPTIONS] --service-name <NAME> --training-job-id <ID>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model artifact
+* `--training-job-id <ID>` — Training job identifier associated with the artifact
+* `--torii-url <URL>` — Torii base URL for live control-plane query
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-weight-register`
+
+Register a model weight version in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-weight-register [OPTIONS] --service-name <NAME> --model-name <NAME> --weight-version <VERSION> --training-job-id <ID> --weight-artifact-hash <HASH> --dataset-ref <REF> --training-config-hash <HASH> --reproducibility-hash <HASH> --provenance-attestation-hash <HASH>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model
+* `--model-name <NAME>` — Model name
+* `--weight-version <VERSION>` — New weight version identifier
+* `--training-job-id <ID>` — Training job identifier backing this weight version
+* `--parent-version <VERSION>` — Optional lineage parent version
+* `--weight-artifact-hash <HASH>` — Weight artifact hash
+* `--dataset-ref <REF>` — Dataset reference identifier
+* `--training-config-hash <HASH>` — Hash of training config used for the run
+* `--reproducibility-hash <HASH>` — Reproducibility metadata hash
+* `--provenance-attestation-hash <HASH>` — Provenance attestation hash
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-weight-promote`
+
+Promote a model weight version in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-weight-promote [OPTIONS] --service-name <NAME> --model-name <NAME> --weight-version <VERSION> --gate-report-hash <HASH>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model
+* `--model-name <NAME>` — Model name
+* `--weight-version <VERSION>` — Weight version to promote
+* `--gate-approved` — Gate approval flag
+* `--gate-report-hash <HASH>` — Hash of gate report/evidence for this promotion decision
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-weight-rollback`
+
+Roll back a model weight version in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-weight-rollback [OPTIONS] --service-name <NAME> --model-name <NAME> --target-version <VERSION> --reason <TEXT>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model
+* `--model-name <NAME>` — Model name
+* `--target-version <VERSION>` — Target version to roll back to
+* `--reason <TEXT>` — Human-readable rollback reason
+* `--torii-url <URL>` — Torii base URL for live control-plane mutation
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-weight-status`
+
+Query model weight status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-weight-status [OPTIONS] --service-name <NAME> --model-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the model
+* `--model-name <NAME>` — Model name
+* `--torii-url <URL>` — Torii base URL for live control-plane query
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app social`
 
 Social incentive helpers (viral follow rewards and escrows)
 
-**Usage:** `iroha_cli app social <COMMAND>`
+**Usage:** `iroha app social <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6176,11 +7477,11 @@ Social incentive helpers (viral follow rewards and escrows)
 
 
 
-## `iroha_cli app social claim-twitter-follow-reward`
+## `iroha app social claim-twitter-follow-reward`
 
 Claim a promotional reward for a verified Twitter follow binding
 
-**Usage:** `iroha_cli app social claim-twitter-follow-reward --binding-hash-json <PATH>`
+**Usage:** `iroha app social claim-twitter-follow-reward --binding-hash-json <PATH>`
 
 ###### **Options:**
 
@@ -6190,11 +7491,11 @@ Claim a promotional reward for a verified Twitter follow binding
 
 
 
-## `iroha_cli app social send-to-twitter`
+## `iroha app social send-to-twitter`
 
 Send funds to a Twitter handle; funds are escrowed until a follow binding appears
 
-**Usage:** `iroha_cli app social send-to-twitter --binding-hash-json <PATH> --amount <AMOUNT>`
+**Usage:** `iroha app social send-to-twitter --binding-hash-json <PATH> --amount <AMOUNT>`
 
 ###### **Options:**
 
@@ -6207,11 +7508,11 @@ Send funds to a Twitter handle; funds are escrowed until a follow binding appear
 
 
 
-## `iroha_cli app social cancel-twitter-escrow`
+## `iroha app social cancel-twitter-escrow`
 
 Cancel an existing escrow created by `send-to-twitter`
 
-**Usage:** `iroha_cli app social cancel-twitter-escrow --binding-hash-json <PATH>`
+**Usage:** `iroha app social cancel-twitter-escrow --binding-hash-json <PATH>`
 
 ###### **Options:**
 
@@ -6221,11 +7522,11 @@ Cancel an existing escrow created by `send-to-twitter`
 
 
 
-## `iroha_cli app space-directory`
+## `iroha app space-directory`
 
 Space Directory helpers (UAID capability manifests)
 
-**Usage:** `iroha_cli app space-directory <COMMAND>`
+**Usage:** `iroha app space-directory <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6234,11 +7535,11 @@ Space Directory helpers (UAID capability manifests)
 
 
 
-## `iroha_cli app space-directory manifest`
+## `iroha app space-directory manifest`
 
 Manage UAID capability manifests
 
-**Usage:** `iroha_cli app space-directory manifest <COMMAND>`
+**Usage:** `iroha app space-directory manifest <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6252,11 +7553,11 @@ Manage UAID capability manifests
 
 
 
-## `iroha_cli app space-directory manifest publish`
+## `iroha app space-directory manifest publish`
 
 Publish or replace a capability manifest (.to payload)
 
-**Usage:** `iroha_cli app space-directory manifest publish [OPTIONS]`
+**Usage:** `iroha app space-directory manifest publish [OPTIONS]`
 
 ###### **Options:**
 
@@ -6266,11 +7567,11 @@ Publish or replace a capability manifest (.to payload)
 
 
 
-## `iroha_cli app space-directory manifest encode`
+## `iroha app space-directory manifest encode`
 
 Encode manifest JSON into Norito bytes and record its hash
 
-**Usage:** `iroha_cli app space-directory manifest encode [OPTIONS] --json <PATH>`
+**Usage:** `iroha app space-directory manifest encode [OPTIONS] --json <PATH>`
 
 ###### **Options:**
 
@@ -6280,11 +7581,11 @@ Encode manifest JSON into Norito bytes and record its hash
 
 
 
-## `iroha_cli app space-directory manifest revoke`
+## `iroha app space-directory manifest revoke`
 
 Revoke a manifest for a UAID/dataspace pair
 
-**Usage:** `iroha_cli app space-directory manifest revoke [OPTIONS] --uaid <UAID> --dataspace <ID> --revoked-epoch <EPOCH>`
+**Usage:** `iroha app space-directory manifest revoke [OPTIONS] --uaid <UAID> --dataspace <ID> --revoked-epoch <EPOCH>`
 
 ###### **Options:**
 
@@ -6295,11 +7596,11 @@ Revoke a manifest for a UAID/dataspace pair
 
 
 
-## `iroha_cli app space-directory manifest expire`
+## `iroha app space-directory manifest expire`
 
 Expire a manifest that reached its scheduled end-of-life
 
-**Usage:** `iroha_cli app space-directory manifest expire --uaid <UAID> --dataspace <ID> --expired-epoch <EPOCH>`
+**Usage:** `iroha app space-directory manifest expire --uaid <UAID> --dataspace <ID> --expired-epoch <EPOCH>`
 
 ###### **Options:**
 
@@ -6309,11 +7610,11 @@ Expire a manifest that reached its scheduled end-of-life
 
 
 
-## `iroha_cli app space-directory manifest audit-bundle`
+## `iroha app space-directory manifest audit-bundle`
 
 Produce an audit bundle for an existing capability manifest + dataspace profile
 
-**Usage:** `iroha_cli app space-directory manifest audit-bundle [OPTIONS] --profile <PATH> --out-dir <DIR>`
+**Usage:** `iroha app space-directory manifest audit-bundle [OPTIONS] --profile <PATH> --out-dir <DIR>`
 
 ###### **Options:**
 
@@ -6325,11 +7626,11 @@ Produce an audit bundle for an existing capability manifest + dataspace profile
 
 
 
-## `iroha_cli app space-directory manifest fetch`
+## `iroha app space-directory manifest fetch`
 
 Fetch manifests for a UAID via Torii
 
-**Usage:** `iroha_cli app space-directory manifest fetch [OPTIONS] --uaid <UAID>`
+**Usage:** `iroha app space-directory manifest fetch [OPTIONS] --uaid <UAID>`
 
 ###### **Options:**
 
@@ -6343,21 +7644,15 @@ Fetch manifests for a UAID via Torii
 
 * `--limit <N>` — Maximum number of manifests to return
 * `--offset <N>` — Offset for pagination
-* `--address-format <ADDRESS_FORMAT>` — Preferred account literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 * `--json-out <PATH>` — Optional path where the JSON response will be stored
 
 
 
-## `iroha_cli app space-directory manifest scaffold`
+## `iroha app space-directory manifest scaffold`
 
 Scaffold manifest/profile templates for a UAID + dataspace pair
 
-**Usage:** `iroha_cli app space-directory manifest scaffold [OPTIONS] --uaid <UAID> --dataspace <ID> --activation-epoch <EPOCH>`
+**Usage:** `iroha app space-directory manifest scaffold [OPTIONS] --uaid <UAID> --dataspace <ID> --activation-epoch <EPOCH>`
 
 ###### **Options:**
 
@@ -6402,11 +7697,11 @@ Scaffold manifest/profile templates for a UAID + dataspace pair
 
 
 
-## `iroha_cli app space-directory bindings`
+## `iroha app space-directory bindings`
 
 Inspect UAID bindings surfaced by Torii
 
-**Usage:** `iroha_cli app space-directory bindings <COMMAND>`
+**Usage:** `iroha app space-directory bindings <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6414,30 +7709,24 @@ Inspect UAID bindings surfaced by Torii
 
 
 
-## `iroha_cli app space-directory bindings fetch`
+## `iroha app space-directory bindings fetch`
 
 Fetch UAID dataspace bindings via Torii
 
-**Usage:** `iroha_cli app space-directory bindings fetch [OPTIONS] --uaid <UAID>`
+**Usage:** `iroha app space-directory bindings fetch [OPTIONS] --uaid <UAID>`
 
 ###### **Options:**
 
 * `--uaid <UAID>` — UAID literal whose bindings should be fetched
-* `--address-format <ADDRESS_FORMAT>` — Preferred account literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 * `--json-out <PATH>` — Optional path where the JSON response will be stored
 
 
 
-## `iroha_cli app kaigi`
+## `iroha app kaigi`
 
 Kaigi session helpers
 
-**Usage:** `iroha_cli app kaigi <COMMAND>`
+**Usage:** `iroha app kaigi <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6451,24 +7740,24 @@ Kaigi session helpers
 
 
 
-## `iroha_cli app kaigi create`
+## `iroha app kaigi create`
 
 Create a new Kaigi session
 
-**Usage:** `iroha_cli app kaigi create [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --host <ACCOUNT-ID>`
+**Usage:** `iroha app kaigi create [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --host <ACCOUNT-ID>`
 
 ###### **Options:**
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call (e.g. `kaigi`)
 * `--call-name <NAME>` — Call name within the domain (e.g. `daily-sync`)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical I105 account literal)
 * `--title <TITLE>` — Optional human friendly title
 * `--description <DESCRIPTION>` — Optional description for participants
 * `--max-participants <U32>` — Maximum concurrent participants (excluding host)
 * `--gas-rate-per-minute <U64>` — Gas rate charged per minute (defaults to 0)
 
   Default value: `0`
-* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (canonical I105 account literal)
 * `--scheduled-start-ms <U64>` — Optional scheduled start timestamp (milliseconds since epoch)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
@@ -6487,11 +7776,11 @@ Create a new Kaigi session
 
 
 
-## `iroha_cli app kaigi quickstart`
+## `iroha app kaigi quickstart`
 
 Bootstrap a Kaigi session for demos and shareable testing metadata
 
-**Usage:** `iroha_cli app kaigi quickstart [OPTIONS]`
+**Usage:** `iroha app kaigi quickstart [OPTIONS]`
 
 ###### **Options:**
 
@@ -6499,7 +7788,7 @@ Bootstrap a Kaigi session for demos and shareable testing metadata
 
   Default value: `wonderland`
 * `--call-name <NAME>` — Call name within the domain (defaults to a timestamp-based identifier)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical I105 account literal)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
   Default value: `transparent`
@@ -6522,17 +7811,17 @@ Bootstrap a Kaigi session for demos and shareable testing metadata
 
 
 
-## `iroha_cli app kaigi join`
+## `iroha app kaigi join`
 
 Join a Kaigi session
 
-**Usage:** `iroha_cli app kaigi join [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --participant <ACCOUNT-ID>`
+**Usage:** `iroha app kaigi join [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --participant <ACCOUNT-ID>`
 
 ###### **Options:**
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account joining the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--participant <ACCOUNT-ID>` — Participant account joining the call (canonical I105 account literal)
 * `--commitment-hex <HEX>` — Commitment hash (hex) for privacy mode joins
 * `--commitment-alias <COMMITMENT_ALIAS>` — Alias tag describing the commitment (privacy mode)
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate joins (privacy mode)
@@ -6542,17 +7831,17 @@ Join a Kaigi session
 
 
 
-## `iroha_cli app kaigi leave`
+## `iroha app kaigi leave`
 
 Leave a Kaigi session
 
-**Usage:** `iroha_cli app kaigi leave [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --participant <ACCOUNT-ID>`
+**Usage:** `iroha app kaigi leave [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --participant <ACCOUNT-ID>`
 
 ###### **Options:**
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account leaving the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--participant <ACCOUNT-ID>` — Participant account leaving the call (canonical I105 account literal)
 * `--commitment-hex <HEX>` — Commitment hash (hex) identifying the participant in privacy mode
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate leaves (privacy mode)
 * `--nullifier-issued-at-ms <U64>` — Nullifier issuance timestamp (milliseconds since epoch)
@@ -6561,11 +7850,11 @@ Leave a Kaigi session
 
 
 
-## `iroha_cli app kaigi end`
+## `iroha app kaigi end`
 
 End an active Kaigi session
 
-**Usage:** `iroha_cli app kaigi end [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME>`
+**Usage:** `iroha app kaigi end [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME>`
 
 ###### **Options:**
 
@@ -6575,11 +7864,11 @@ End an active Kaigi session
 
 
 
-## `iroha_cli app kaigi record-usage`
+## `iroha app kaigi record-usage`
 
 Record usage statistics for a Kaigi session
 
-**Usage:** `iroha_cli app kaigi record-usage [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --duration-ms <U64>`
+**Usage:** `iroha app kaigi record-usage [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --duration-ms <U64>`
 
 ###### **Options:**
 
@@ -6594,17 +7883,17 @@ Record usage statistics for a Kaigi session
 
 
 
-## `iroha_cli app kaigi report-relay-health`
+## `iroha app kaigi report-relay-health`
 
 Report the health status of a relay used by a Kaigi session
 
-**Usage:** `iroha_cli app kaigi report-relay-health [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --relay <ACCOUNT-ID> --status <STATUS> --reported-at-ms <U64>`
+**Usage:** `iroha app kaigi report-relay-health [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME> --relay <ACCOUNT-ID> --status <STATUS> --reported-at-ms <U64>`
 
 ###### **Options:**
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (canonical I105 account literal)
 * `--status <STATUS>` — Observed health status for the relay
 
   Possible values: `healthy`, `degraded`, `unavailable`
@@ -6614,11 +7903,11 @@ Report the health status of a relay used by a Kaigi session
 
 
 
-## `iroha_cli app sorafs`
+## `iroha app sorafs`
 
 SoraFS helpers (pin registry, aliases, replication orders, storage)
 
-**Usage:** `iroha_cli app sorafs <COMMAND>`
+**Usage:** `iroha app sorafs <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6639,11 +7928,11 @@ SoraFS helpers (pin registry, aliases, replication orders, storage)
 
 
 
-## `iroha_cli app sorafs pin`
+## `iroha app sorafs pin`
 
 Interact with the pin registry
 
-**Usage:** `iroha_cli app sorafs pin <COMMAND>`
+**Usage:** `iroha app sorafs pin <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6653,11 +7942,11 @@ Interact with the pin registry
 
 
 
-## `iroha_cli app sorafs pin list`
+## `iroha app sorafs pin list`
 
 List manifests registered in the pin registry
 
-**Usage:** `iroha_cli app sorafs pin list [OPTIONS]`
+**Usage:** `iroha app sorafs pin list [OPTIONS]`
 
 ###### **Options:**
 
@@ -6667,11 +7956,11 @@ List manifests registered in the pin registry
 
 
 
-## `iroha_cli app sorafs pin show`
+## `iroha app sorafs pin show`
 
 Fetch a single manifest, aliases, and replication orders
 
-**Usage:** `iroha_cli app sorafs pin show --digest <HEX>`
+**Usage:** `iroha app sorafs pin show --digest <HEX>`
 
 ###### **Options:**
 
@@ -6679,11 +7968,11 @@ Fetch a single manifest, aliases, and replication orders
 
 
 
-## `iroha_cli app sorafs pin register`
+## `iroha app sorafs pin register`
 
 Register a manifest in the pin registry via Torii
 
-**Usage:** `iroha_cli app sorafs pin register [OPTIONS] --manifest <PATH> --chunk-digest <HEX> --submitted-epoch <SUBMITTED_EPOCH>`
+**Usage:** `iroha app sorafs pin register [OPTIONS] --manifest <PATH> --chunk-digest <HEX> --submitted-epoch <SUBMITTED_EPOCH>`
 
 ###### **Options:**
 
@@ -6697,11 +7986,11 @@ Register a manifest in the pin registry via Torii
 
 
 
-## `iroha_cli app sorafs alias`
+## `iroha app sorafs alias`
 
 List alias bindings
 
-**Usage:** `iroha_cli app sorafs alias <COMMAND>`
+**Usage:** `iroha app sorafs alias <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6709,11 +7998,11 @@ List alias bindings
 
 
 
-## `iroha_cli app sorafs alias list`
+## `iroha app sorafs alias list`
 
 List alias bindings exposed via Torii
 
-**Usage:** `iroha_cli app sorafs alias list [OPTIONS]`
+**Usage:** `iroha app sorafs alias list [OPTIONS]`
 
 ###### **Options:**
 
@@ -6724,11 +8013,11 @@ List alias bindings exposed via Torii
 
 
 
-## `iroha_cli app sorafs replication`
+## `iroha app sorafs replication`
 
 List replication orders
 
-**Usage:** `iroha_cli app sorafs replication <COMMAND>`
+**Usage:** `iroha app sorafs replication <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6736,11 +8025,11 @@ List replication orders
 
 
 
-## `iroha_cli app sorafs replication list`
+## `iroha app sorafs replication list`
 
 List replication orders
 
-**Usage:** `iroha_cli app sorafs replication list [OPTIONS]`
+**Usage:** `iroha app sorafs replication list [OPTIONS]`
 
 ###### **Options:**
 
@@ -6751,11 +8040,11 @@ List replication orders
 
 
 
-## `iroha_cli app sorafs storage`
+## `iroha app sorafs storage`
 
 Storage helpers (pin, etc.)
 
-**Usage:** `iroha_cli app sorafs storage <COMMAND>`
+**Usage:** `iroha app sorafs storage <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6764,11 +8053,11 @@ Storage helpers (pin, etc.)
 
 
 
-## `iroha_cli app sorafs storage pin`
+## `iroha app sorafs storage pin`
 
 Submit a manifest + payload to local storage for pinning
 
-**Usage:** `iroha_cli app sorafs storage pin --manifest <PATH> --payload <PATH>`
+**Usage:** `iroha app sorafs storage pin --manifest <PATH> --payload <PATH>`
 
 ###### **Options:**
 
@@ -6777,11 +8066,11 @@ Submit a manifest + payload to local storage for pinning
 
 
 
-## `iroha_cli app sorafs storage token`
+## `iroha app sorafs storage token`
 
 Issue and inspect stream tokens for chunk-range gateways
 
-**Usage:** `iroha_cli app sorafs storage token <COMMAND>`
+**Usage:** `iroha app sorafs storage token <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6789,11 +8078,11 @@ Issue and inspect stream tokens for chunk-range gateways
 
 
 
-## `iroha_cli app sorafs storage token issue`
+## `iroha app sorafs storage token issue`
 
 Issue a stream token for a manifest/provider pair
 
-**Usage:** `iroha_cli app sorafs storage token issue [OPTIONS] --manifest-id <HEX> --provider-id <HEX> --client-id <STRING>`
+**Usage:** `iroha app sorafs storage token issue [OPTIONS] --manifest-id <HEX> --provider-id <HEX> --client-id <STRING>`
 
 ###### **Options:**
 
@@ -6808,11 +8097,11 @@ Issue a stream token for a manifest/provider pair
 
 
 
-## `iroha_cli app sorafs gateway`
+## `iroha app sorafs gateway`
 
 Gateway policy and configuration helpers
 
-**Usage:** `iroha_cli app sorafs gateway <COMMAND>`
+**Usage:** `iroha app sorafs gateway <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6828,11 +8117,11 @@ Gateway policy and configuration helpers
 
 
 
-## `iroha_cli app sorafs gateway lint-denylist`
+## `iroha app sorafs gateway lint-denylist`
 
 Validate a denylist file against gateway policy rules
 
-**Usage:** `iroha_cli app sorafs gateway lint-denylist --path <PATH>`
+**Usage:** `iroha app sorafs gateway lint-denylist --path <PATH>`
 
 ###### **Options:**
 
@@ -6840,11 +8129,11 @@ Validate a denylist file against gateway policy rules
 
 
 
-## `iroha_cli app sorafs gateway update-denylist`
+## `iroha app sorafs gateway update-denylist`
 
 Apply additions/removals to a denylist bundle with deterministic ordering
 
-**Usage:** `iroha_cli app sorafs gateway update-denylist [OPTIONS] --base <PATH>`
+**Usage:** `iroha app sorafs gateway update-denylist [OPTIONS] --base <PATH>`
 
 ###### **Options:**
 
@@ -6862,11 +8151,11 @@ Apply additions/removals to a denylist bundle with deterministic ordering
 
 
 
-## `iroha_cli app sorafs gateway template-config`
+## `iroha app sorafs gateway template-config`
 
 Emit a TOML snippet with gateway configuration defaults
 
-**Usage:** `iroha_cli app sorafs gateway template-config [OPTIONS]`
+**Usage:** `iroha app sorafs gateway template-config [OPTIONS]`
 
 ###### **Options:**
 
@@ -6877,11 +8166,11 @@ Emit a TOML snippet with gateway configuration defaults
 
 
 
-## `iroha_cli app sorafs gateway generate-hosts`
+## `iroha app sorafs gateway generate-hosts`
 
 Derive canonical/vanity hostnames for a provider
 
-**Usage:** `iroha_cli app sorafs gateway generate-hosts [OPTIONS] --provider-id <HEX>`
+**Usage:** `iroha app sorafs gateway generate-hosts [OPTIONS] --provider-id <HEX>`
 
 ###### **Options:**
 
@@ -6892,11 +8181,11 @@ Derive canonical/vanity hostnames for a provider
 
 
 
-## `iroha_cli app sorafs gateway route-plan`
+## `iroha app sorafs gateway route-plan`
 
 Render the headers + route binding plan for a manifest rollout
 
-**Usage:** `iroha_cli app sorafs gateway route-plan [OPTIONS] --manifest-json <PATH> --hostname <HOSTNAME>`
+**Usage:** `iroha app sorafs gateway route-plan [OPTIONS] --manifest-json <PATH> --hostname <HOSTNAME>`
 
 ###### **Options:**
 
@@ -6921,11 +8210,11 @@ Render the headers + route binding plan for a manifest rollout
 
 
 
-## `iroha_cli app sorafs gateway cache-invalidate`
+## `iroha app sorafs gateway cache-invalidate`
 
 Generate a cache invalidation payload and curl snippet for GAR/SoraFS gateways
 
-**Usage:** `iroha_cli app sorafs gateway cache-invalidate [OPTIONS] --endpoint <URL> --alias <NAMESPACE:NAME> --manifest-digest <HEX>`
+**Usage:** `iroha app sorafs gateway cache-invalidate [OPTIONS] --endpoint <URL> --alias <NAMESPACE:NAME> --manifest-digest <HEX>`
 
 ###### **Options:**
 
@@ -6941,11 +8230,11 @@ Generate a cache invalidation payload and curl snippet for GAR/SoraFS gateways
 
 
 
-## `iroha_cli app sorafs gateway evidence`
+## `iroha app sorafs gateway evidence`
 
 Emit an evidence summary for a denylist bundle
 
-**Usage:** `iroha_cli app sorafs gateway evidence [OPTIONS]`
+**Usage:** `iroha app sorafs gateway evidence [OPTIONS]`
 
 ###### **Options:**
 
@@ -6959,11 +8248,11 @@ Emit an evidence summary for a denylist bundle
 
 
 
-## `iroha_cli app sorafs gateway direct-mode`
+## `iroha app sorafs gateway direct-mode`
 
 Direct-mode planning and configuration helpers
 
-**Usage:** `iroha_cli app sorafs gateway direct-mode <COMMAND>`
+**Usage:** `iroha app sorafs gateway direct-mode <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -6973,11 +8262,11 @@ Direct-mode planning and configuration helpers
 
 
 
-## `iroha_cli app sorafs gateway direct-mode plan`
+## `iroha app sorafs gateway direct-mode plan`
 
 Analyse manifest/admission data and emit a direct-mode readiness plan
 
-**Usage:** `iroha_cli app sorafs gateway direct-mode plan [OPTIONS] --manifest <PATH>`
+**Usage:** `iroha app sorafs gateway direct-mode plan [OPTIONS] --manifest <PATH>`
 
 ###### **Options:**
 
@@ -6991,11 +8280,11 @@ Analyse manifest/admission data and emit a direct-mode readiness plan
 
 
 
-## `iroha_cli app sorafs gateway direct-mode enable`
+## `iroha app sorafs gateway direct-mode enable`
 
 Emit a configuration snippet enabling direct-mode overrides from a plan
 
-**Usage:** `iroha_cli app sorafs gateway direct-mode enable --plan <PATH>`
+**Usage:** `iroha app sorafs gateway direct-mode enable --plan <PATH>`
 
 ###### **Options:**
 
@@ -7003,19 +8292,19 @@ Emit a configuration snippet enabling direct-mode overrides from a plan
 
 
 
-## `iroha_cli app sorafs gateway direct-mode rollback`
+## `iroha app sorafs gateway direct-mode rollback`
 
 Emit a configuration snippet restoring default gateway security settings
 
-**Usage:** `iroha_cli app sorafs gateway direct-mode rollback`
+**Usage:** `iroha app sorafs gateway direct-mode rollback`
 
 
 
-## `iroha_cli app sorafs gateway merkle`
+## `iroha app sorafs gateway merkle`
 
 Merkle snapshot/proof tooling for denylist bundles
 
-**Usage:** `iroha_cli app sorafs gateway merkle <COMMAND>`
+**Usage:** `iroha app sorafs gateway merkle <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7024,11 +8313,11 @@ Merkle snapshot/proof tooling for denylist bundles
 
 
 
-## `iroha_cli app sorafs gateway merkle snapshot`
+## `iroha app sorafs gateway merkle snapshot`
 
 Compute the Merkle root summary for a denylist bundle
 
-**Usage:** `iroha_cli app sorafs gateway merkle snapshot [OPTIONS]`
+**Usage:** `iroha app sorafs gateway merkle snapshot [OPTIONS]`
 
 ###### **Options:**
 
@@ -7042,11 +8331,11 @@ Compute the Merkle root summary for a denylist bundle
 
 
 
-## `iroha_cli app sorafs gateway merkle proof`
+## `iroha app sorafs gateway merkle proof`
 
 Emit a membership proof for a single denylist entry
 
-**Usage:** `iroha_cli app sorafs gateway merkle proof [OPTIONS]`
+**Usage:** `iroha app sorafs gateway merkle proof [OPTIONS]`
 
 ###### **Options:**
 
@@ -7062,11 +8351,11 @@ Emit a membership proof for a single denylist entry
 
 
 
-## `iroha_cli app sorafs incentives`
+## `iroha app sorafs incentives`
 
 Offline helpers for relay payouts, disputes, and dashboards
 
-**Usage:** `iroha_cli app sorafs incentives <COMMAND>`
+**Usage:** `iroha app sorafs incentives <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7077,11 +8366,11 @@ Offline helpers for relay payouts, disputes, and dashboards
 
 
 
-## `iroha_cli app sorafs incentives compute`
+## `iroha app sorafs incentives compute`
 
 Compute a relay reward instruction from metrics and bond state
 
-**Usage:** `iroha_cli app sorafs incentives compute [OPTIONS] --config <PATH> --metrics <PATH> --bond <PATH> --beneficiary <ACCOUNT_ID>`
+**Usage:** `iroha app sorafs incentives compute [OPTIONS] --config <PATH> --metrics <PATH> --bond <PATH> --beneficiary <ACCOUNT_ID>`
 
 ###### **Options:**
 
@@ -7098,11 +8387,11 @@ Compute a relay reward instruction from metrics and bond state
 
 
 
-## `iroha_cli app sorafs incentives open-dispute`
+## `iroha app sorafs incentives open-dispute`
 
 Open a dispute against an existing reward instruction
 
-**Usage:** `iroha_cli app sorafs incentives open-dispute [OPTIONS] --instruction <PATH> --treasury-account <ACCOUNT_ID> --submitted-by <ACCOUNT_ID> --requested-amount <NUMERIC> --reason <TEXT>`
+**Usage:** `iroha app sorafs incentives open-dispute [OPTIONS] --instruction <PATH> --treasury-account <ACCOUNT_ID> --submitted-by <ACCOUNT_ID> --requested-amount <NUMERIC> --reason <TEXT>`
 
 ###### **Options:**
 
@@ -7121,11 +8410,11 @@ Open a dispute against an existing reward instruction
 
 
 
-## `iroha_cli app sorafs incentives dashboard`
+## `iroha app sorafs incentives dashboard`
 
 Summarise reward instructions into an earnings dashboard
 
-**Usage:** `iroha_cli app sorafs incentives dashboard --instruction <PATH>...`
+**Usage:** `iroha app sorafs incentives dashboard --instruction <PATH>...`
 
 ###### **Options:**
 
@@ -7133,11 +8422,11 @@ Summarise reward instructions into an earnings dashboard
 
 
 
-## `iroha_cli app sorafs incentives service`
+## `iroha app sorafs incentives service`
 
 Manage the persistent treasury payout state and disputes
 
-**Usage:** `iroha_cli app sorafs incentives service <COMMAND>`
+**Usage:** `iroha app sorafs incentives service <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7153,11 +8442,11 @@ Manage the persistent treasury payout state and disputes
 
 
 
-## `iroha_cli app sorafs incentives service init`
+## `iroha app sorafs incentives service init`
 
 Initialise a new payout ledger state file
 
-**Usage:** `iroha_cli app sorafs incentives service init [OPTIONS] --state <PATH> --config <PATH> --treasury-account <ACCOUNT_ID>`
+**Usage:** `iroha app sorafs incentives service init [OPTIONS] --state <PATH> --config <PATH> --treasury-account <ACCOUNT_ID>`
 
 ###### **Options:**
 
@@ -7173,11 +8462,11 @@ Initialise a new payout ledger state file
 
 
 
-## `iroha_cli app sorafs incentives service process`
+## `iroha app sorafs incentives service process`
 
 Evaluate metrics, record the payout, and persist the updated state
 
-**Usage:** `iroha_cli app sorafs incentives service process [OPTIONS] --state <PATH>`
+**Usage:** `iroha app sorafs incentives service process [OPTIONS] --state <PATH>`
 
 ###### **Options:**
 
@@ -7198,11 +8487,11 @@ Evaluate metrics, record the payout, and persist the updated state
 
 
 
-## `iroha_cli app sorafs incentives service record`
+## `iroha app sorafs incentives service record`
 
 Record an externally prepared reward instruction into the state
 
-**Usage:** `iroha_cli app sorafs incentives service record [OPTIONS] --state <PATH> --instruction <PATH>`
+**Usage:** `iroha app sorafs incentives service record [OPTIONS] --state <PATH> --instruction <PATH>`
 
 ###### **Options:**
 
@@ -7220,11 +8509,11 @@ Record an externally prepared reward instruction into the state
 
 
 
-## `iroha_cli app sorafs incentives service dispute`
+## `iroha app sorafs incentives service dispute`
 
 Manage payout disputes recorded in the state
 
-**Usage:** `iroha_cli app sorafs incentives service dispute <COMMAND>`
+**Usage:** `iroha app sorafs incentives service dispute <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7234,11 +8523,11 @@ Manage payout disputes recorded in the state
 
 
 
-## `iroha_cli app sorafs incentives service dispute file`
+## `iroha app sorafs incentives service dispute file`
 
 File a new dispute against a recorded payout
 
-**Usage:** `iroha_cli app sorafs incentives service dispute file [OPTIONS] --state <PATH> --relay-id <HEX> --epoch <EPOCH> --submitted-by <ACCOUNT_ID> --requested-amount <NUMERIC> --reason <TEXT>`
+**Usage:** `iroha app sorafs incentives service dispute file [OPTIONS] --state <PATH> --relay-id <HEX> --epoch <EPOCH> --submitted-by <ACCOUNT_ID> --requested-amount <NUMERIC> --reason <TEXT>`
 
 ###### **Options:**
 
@@ -7260,11 +8549,11 @@ File a new dispute against a recorded payout
 
 
 
-## `iroha_cli app sorafs incentives service dispute resolve`
+## `iroha app sorafs incentives service dispute resolve`
 
 Resolve a dispute with the supplied outcome
 
-**Usage:** `iroha_cli app sorafs incentives service dispute resolve [OPTIONS] --state <PATH> --dispute-id <ID> --resolution <RESOLUTION> --notes <TEXT>`
+**Usage:** `iroha app sorafs incentives service dispute resolve [OPTIONS] --state <PATH> --dispute-id <ID> --resolution <RESOLUTION> --notes <TEXT>`
 
 ###### **Options:**
 
@@ -7286,11 +8575,11 @@ Resolve a dispute with the supplied outcome
 
 
 
-## `iroha_cli app sorafs incentives service dispute reject`
+## `iroha app sorafs incentives service dispute reject`
 
 Reject a dispute without altering the ledger
 
-**Usage:** `iroha_cli app sorafs incentives service dispute reject [OPTIONS] --state <PATH> --dispute-id <ID> --notes <TEXT>`
+**Usage:** `iroha app sorafs incentives service dispute reject [OPTIONS] --state <PATH> --dispute-id <ID> --notes <TEXT>`
 
 ###### **Options:**
 
@@ -7306,11 +8595,11 @@ Reject a dispute without altering the ledger
 
 
 
-## `iroha_cli app sorafs incentives service dashboard`
+## `iroha app sorafs incentives service dashboard`
 
 Render an earnings dashboard sourced from the persisted ledger
 
-**Usage:** `iroha_cli app sorafs incentives service dashboard --state <PATH>`
+**Usage:** `iroha app sorafs incentives service dashboard --state <PATH>`
 
 ###### **Options:**
 
@@ -7318,11 +8607,11 @@ Render an earnings dashboard sourced from the persisted ledger
 
 
 
-## `iroha_cli app sorafs incentives service audit`
+## `iroha app sorafs incentives service audit`
 
 Audit bond/payout governance readiness for relay incentives
 
-**Usage:** `iroha_cli app sorafs incentives service audit [OPTIONS] --state <PATH> --config <PATH>`
+**Usage:** `iroha app sorafs incentives service audit [OPTIONS] --state <PATH> --config <PATH>`
 
 ###### **Options:**
 
@@ -7342,11 +8631,11 @@ Audit bond/payout governance readiness for relay incentives
 
 
 
-## `iroha_cli app sorafs incentives service shadow-run`
+## `iroha app sorafs incentives service shadow-run`
 
 Run a shadow simulation across relay metrics and summarise fairness
 
-**Usage:** `iroha_cli app sorafs incentives service shadow-run [OPTIONS] --state <PATH> --config <PATH> --metrics-dir <PATH>`
+**Usage:** `iroha app sorafs incentives service shadow-run [OPTIONS] --state <PATH> --config <PATH> --metrics-dir <PATH>`
 
 ###### **Options:**
 
@@ -7365,11 +8654,11 @@ Run a shadow simulation across relay metrics and summarise fairness
 
 
 
-## `iroha_cli app sorafs incentives service reconcile`
+## `iroha app sorafs incentives service reconcile`
 
 Reconcile recorded payouts against XOR ledger exports
 
-**Usage:** `iroha_cli app sorafs incentives service reconcile [OPTIONS] --state <PATH> --ledger-export <PATH>`
+**Usage:** `iroha app sorafs incentives service reconcile [OPTIONS] --state <PATH> --ledger-export <PATH>`
 
 ###### **Options:**
 
@@ -7383,11 +8672,11 @@ Reconcile recorded payouts against XOR ledger exports
 
 
 
-## `iroha_cli app sorafs incentives service daemon`
+## `iroha app sorafs incentives service daemon`
 
 Run the treasury daemon against a metrics spool
 
-**Usage:** `iroha_cli app sorafs incentives service daemon [OPTIONS] --state <PATH> --config <PATH> --metrics-dir <PATH>`
+**Usage:** `iroha app sorafs incentives service daemon [OPTIONS] --state <PATH> --config <PATH> --metrics-dir <PATH>`
 
 ###### **Options:**
 
@@ -7414,11 +8703,11 @@ Run the treasury daemon against a metrics spool
 
 
 
-## `iroha_cli app sorafs handshake`
+## `iroha app sorafs handshake`
 
 Observe or modify the Torii `SoraNet` handshake configuration
 
-**Usage:** `iroha_cli app sorafs handshake <COMMAND>`
+**Usage:** `iroha app sorafs handshake <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7428,19 +8717,19 @@ Observe or modify the Torii `SoraNet` handshake configuration
 
 
 
-## `iroha_cli app sorafs handshake show`
+## `iroha app sorafs handshake show`
 
 Display the current `SoraNet` handshake summary as reported by Torii
 
-**Usage:** `iroha_cli app sorafs handshake show`
+**Usage:** `iroha app sorafs handshake show`
 
 
 
-## `iroha_cli app sorafs handshake update`
+## `iroha app sorafs handshake update`
 
 Update one or more `SoraNet` handshake parameters via `/v1/config`
 
-**Usage:** `iroha_cli app sorafs handshake update [OPTIONS]`
+**Usage:** `iroha app sorafs handshake update [OPTIONS]`
 
 ###### **Options:**
 
@@ -7469,11 +8758,11 @@ Update one or more `SoraNet` handshake parameters via `/v1/config`
 
 
 
-## `iroha_cli app sorafs handshake token`
+## `iroha app sorafs handshake token`
 
 Admission token helpers (issuance, fingerprinting, revocation digests)
 
-**Usage:** `iroha_cli app sorafs handshake token <COMMAND>`
+**Usage:** `iroha app sorafs handshake token <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7483,11 +8772,11 @@ Admission token helpers (issuance, fingerprinting, revocation digests)
 
 
 
-## `iroha_cli app sorafs handshake token issue`
+## `iroha app sorafs handshake token issue`
 
 Issue an ML-DSA admission token bound to a relay and transcript hash
 
-**Usage:** `iroha_cli app sorafs handshake token issue [OPTIONS] --relay-id <HEX> --transcript-hash <HEX>`
+**Usage:** `iroha app sorafs handshake token issue [OPTIONS] --relay-id <HEX> --transcript-hash <HEX>`
 
 ###### **Options:**
 
@@ -7506,7 +8795,7 @@ Issue an ML-DSA admission token bound to a relay and transcript hash
 * `--issued-at <RFC3339>` — RFC3339 issuance timestamp (defaults to current UTC time)
 * `--expires-at <RFC3339>` — RFC3339 expiry timestamp
 * `--ttl <SECONDS>` — Token lifetime in seconds (defaults to 600s when --expires-at is omitted)
-* `--flags <FLAGS>` — Token flags (opaque 8-bit field, defaults to 0)
+* `--flags <FLAGS>` — Token flags (reserved; must be 0 for v1 tokens)
 * `--output <PATH>` — Optional path to write the encoded token
 * `--token-encoding <TOKEN_ENCODING>` — Encoding used when writing the token to --output (base64, hex, binary)
 
@@ -7517,11 +8806,11 @@ Issue an ML-DSA admission token bound to a relay and transcript hash
 
 
 
-## `iroha_cli app sorafs handshake token id`
+## `iroha app sorafs handshake token id`
 
 Compute the canonical revocation identifier for an admission token
 
-**Usage:** `iroha_cli app sorafs handshake token id [OPTIONS]`
+**Usage:** `iroha app sorafs handshake token id [OPTIONS]`
 
 ###### **Options:**
 
@@ -7531,11 +8820,11 @@ Compute the canonical revocation identifier for an admission token
 
 
 
-## `iroha_cli app sorafs handshake token fingerprint`
+## `iroha app sorafs handshake token fingerprint`
 
 Compute the issuer fingerprint from an ML-DSA public key
 
-**Usage:** `iroha_cli app sorafs handshake token fingerprint [OPTIONS]`
+**Usage:** `iroha app sorafs handshake token fingerprint [OPTIONS]`
 
 ###### **Options:**
 
@@ -7544,11 +8833,11 @@ Compute the issuer fingerprint from an ML-DSA public key
 
 
 
-## `iroha_cli app sorafs toolkit`
+## `iroha app sorafs toolkit`
 
 Local tooling for packaging manifests and payloads
 
-**Usage:** `iroha_cli app sorafs toolkit <COMMAND>`
+**Usage:** `iroha app sorafs toolkit <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7556,11 +8845,11 @@ Local tooling for packaging manifests and payloads
 
 
 
-## `iroha_cli app sorafs toolkit pack`
+## `iroha app sorafs toolkit pack`
 
 Package a payload into a CAR + manifest bundle using the canonical tooling
 
-**Usage:** `iroha_cli app sorafs toolkit pack [OPTIONS] <INPUT>`
+**Usage:** `iroha app sorafs toolkit pack [OPTIONS] <INPUT>`
 
 ###### **Arguments:**
 
@@ -7578,11 +8867,11 @@ Package a payload into a CAR + manifest bundle using the canonical tooling
 
 
 
-## `iroha_cli app sorafs guard-directory`
+## `iroha app sorafs guard-directory`
 
 Guard directory helpers (fetch/verify snapshots)
 
-**Usage:** `iroha_cli app sorafs guard-directory <COMMAND>`
+**Usage:** `iroha app sorafs guard-directory <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7591,11 +8880,11 @@ Guard directory helpers (fetch/verify snapshots)
 
 
 
-## `iroha_cli app sorafs guard-directory fetch`
+## `iroha app sorafs guard-directory fetch`
 
 Fetch a guard directory snapshot over HTTPS, verify it, and emit a summary
 
-**Usage:** `iroha_cli app sorafs guard-directory fetch [OPTIONS] --url <URL>`
+**Usage:** `iroha app sorafs guard-directory fetch [OPTIONS] --url <URL>`
 
 ###### **Options:**
 
@@ -7609,11 +8898,11 @@ Fetch a guard directory snapshot over HTTPS, verify it, and emit a summary
 
 
 
-## `iroha_cli app sorafs guard-directory verify`
+## `iroha app sorafs guard-directory verify`
 
 Verify a guard directory snapshot stored on disk
 
-**Usage:** `iroha_cli app sorafs guard-directory verify [OPTIONS] --path <PATH>`
+**Usage:** `iroha app sorafs guard-directory verify [OPTIONS] --path <PATH>`
 
 ###### **Options:**
 
@@ -7622,11 +8911,11 @@ Verify a guard directory snapshot stored on disk
 
 
 
-## `iroha_cli app sorafs reserve`
+## `iroha app sorafs reserve`
 
 Reserve + rent policy helpers
 
-**Usage:** `iroha_cli app sorafs reserve <COMMAND>`
+**Usage:** `iroha app sorafs reserve <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7635,11 +8924,11 @@ Reserve + rent policy helpers
 
 
 
-## `iroha_cli app sorafs reserve quote`
+## `iroha app sorafs reserve quote`
 
 Quote reserve requirements and effective rent for a given tier/capacity
 
-**Usage:** `iroha_cli app sorafs reserve quote [OPTIONS] --storage-class <STORAGE_CLASS> --tier <TIER> --gib <GIB>`
+**Usage:** `iroha app sorafs reserve quote [OPTIONS] --storage-class <STORAGE_CLASS> --tier <TIER> --gib <GIB>`
 
 ###### **Options:**
 
@@ -7667,11 +8956,11 @@ Quote reserve requirements and effective rent for a given tier/capacity
 
 
 
-## `iroha_cli app sorafs reserve ledger`
+## `iroha app sorafs reserve ledger`
 
 Convert a reserve quote into rent/reserve transfer instructions
 
-**Usage:** `iroha_cli app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
 
 ###### **Options:**
 
@@ -7683,11 +8972,11 @@ Convert a reserve quote into rent/reserve transfer instructions
 
 
 
-## `iroha_cli app sorafs gar`
+## `iroha app sorafs gar`
 
 GAR policy evidence helpers
 
-**Usage:** `iroha_cli app sorafs gar <COMMAND>`
+**Usage:** `iroha app sorafs gar <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7695,11 +8984,11 @@ GAR policy evidence helpers
 
 
 
-## `iroha_cli app sorafs gar receipt`
+## `iroha app sorafs gar receipt`
 
 Render a GAR enforcement receipt artefact (JSON + optional Norito bytes)
 
-**Usage:** `iroha_cli app sorafs gar receipt [OPTIONS] --gar-name <LABEL> --canonical-host <HOST> --operator <ACCOUNT_ID> --reason <TEXT>`
+**Usage:** `iroha app sorafs gar receipt [OPTIONS] --gar-name <LABEL> --canonical-host <HOST> --operator <ACCOUNT_ID> --reason <TEXT>`
 
 ###### **Options:**
 
@@ -7727,11 +9016,11 @@ Render a GAR enforcement receipt artefact (JSON + optional Norito bytes)
 
 
 
-## `iroha_cli app sorafs repair`
+## `iroha app sorafs repair`
 
 Repair queue helpers (list, claim, close, escalate)
 
-**Usage:** `iroha_cli app sorafs repair <COMMAND>`
+**Usage:** `iroha app sorafs repair <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7743,11 +9032,11 @@ Repair queue helpers (list, claim, close, escalate)
 
 
 
-## `iroha_cli app sorafs repair list`
+## `iroha app sorafs repair list`
 
 List repair tickets (optionally filtered by manifest/provider/status)
 
-**Usage:** `iroha_cli app sorafs repair list [OPTIONS]`
+**Usage:** `iroha app sorafs repair list [OPTIONS]`
 
 ###### **Options:**
 
@@ -7757,11 +9046,11 @@ List repair tickets (optionally filtered by manifest/provider/status)
 
 
 
-## `iroha_cli app sorafs repair claim`
+## `iroha app sorafs repair claim`
 
 Claim a queued repair ticket as a repair worker
 
-**Usage:** `iroha_cli app sorafs repair claim [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX>`
+**Usage:** `iroha app sorafs repair claim [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX>`
 
 ###### **Options:**
 
@@ -7773,11 +9062,11 @@ Claim a queued repair ticket as a repair worker
 
 
 
-## `iroha_cli app sorafs repair complete`
+## `iroha app sorafs repair complete`
 
 Mark a repair ticket as completed
 
-**Usage:** `iroha_cli app sorafs repair complete [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX>`
+**Usage:** `iroha app sorafs repair complete [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX>`
 
 ###### **Options:**
 
@@ -7790,11 +9079,11 @@ Mark a repair ticket as completed
 
 
 
-## `iroha_cli app sorafs repair fail`
+## `iroha app sorafs repair fail`
 
 Mark a repair ticket as failed
 
-**Usage:** `iroha_cli app sorafs repair fail [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX> --reason <TEXT>`
+**Usage:** `iroha app sorafs repair fail [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX> --reason <TEXT>`
 
 ###### **Options:**
 
@@ -7807,11 +9096,11 @@ Mark a repair ticket as failed
 
 
 
-## `iroha_cli app sorafs repair escalate`
+## `iroha app sorafs repair escalate`
 
 Escalate a repair ticket into a slash proposal
 
-**Usage:** `iroha_cli app sorafs repair escalate [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX> --penalty-nano <NANO> --rationale <TEXT>`
+**Usage:** `iroha app sorafs repair escalate [OPTIONS] --ticket-id <ID> --manifest-digest <HEX> --provider-id <HEX> --penalty-nano <NANO> --rationale <TEXT>`
 
 ###### **Options:**
 
@@ -7830,11 +9119,11 @@ Escalate a repair ticket into a slash proposal
 
 
 
-## `iroha_cli app sorafs gc`
+## `iroha app sorafs gc`
 
 GC inspection helpers (no manual deletions)
 
-**Usage:** `iroha_cli app sorafs gc <COMMAND>`
+**Usage:** `iroha app sorafs gc <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7843,11 +9132,11 @@ GC inspection helpers (no manual deletions)
 
 
 
-## `iroha_cli app sorafs gc inspect`
+## `iroha app sorafs gc inspect`
 
 Inspect retained manifests and retention deadlines
 
-**Usage:** `iroha_cli app sorafs gc inspect [OPTIONS]`
+**Usage:** `iroha app sorafs gc inspect [OPTIONS]`
 
 ###### **Options:**
 
@@ -7857,11 +9146,11 @@ Inspect retained manifests and retention deadlines
 
 
 
-## `iroha_cli app sorafs gc dry-run`
+## `iroha app sorafs gc dry-run`
 
 Report which manifests would be evicted by GC (dry-run only)
 
-**Usage:** `iroha_cli app sorafs gc dry-run [OPTIONS]`
+**Usage:** `iroha app sorafs gc dry-run [OPTIONS]`
 
 ###### **Options:**
 
@@ -7871,11 +9160,11 @@ Report which manifests would be evicted by GC (dry-run only)
 
 
 
-## `iroha_cli app sorafs fetch`
+## `iroha app sorafs fetch`
 
 Orchestrate multi-provider chunk fetches via gateways
 
-**Usage:** `iroha_cli app sorafs fetch [OPTIONS] --gateway-provider <SPEC>`
+**Usage:** `iroha app sorafs fetch [OPTIONS] --gateway-provider <SPEC>`
 
 ###### **Options:**
 
@@ -7914,11 +9203,11 @@ Orchestrate multi-provider chunk fetches via gateways
 
 
 
-## `iroha_cli app soracles`
+## `iroha app soracles`
 
 Soracles helpers (evidence bundling)
 
-**Usage:** `iroha_cli app soracles <COMMAND>`
+**Usage:** `iroha app soracles <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -7928,11 +9217,11 @@ Soracles helpers (evidence bundling)
 
 
 
-## `iroha_cli app soracles bundle`
+## `iroha app soracles bundle`
 
 Build an audit bundle containing oracle feed events and evidence files
 
-**Usage:** `iroha_cli app soracles bundle [OPTIONS] --events <PATH> --output <DIR>`
+**Usage:** `iroha app soracles bundle [OPTIONS] --events <PATH> --output <DIR>`
 
 ###### **Options:**
 
@@ -7946,11 +9235,11 @@ Build an audit bundle containing oracle feed events and evidence files
 
 
 
-## `iroha_cli app soracles catalog`
+## `iroha app soracles catalog`
 
 Show the oracle rejection/error catalog for SDK parity
 
-**Usage:** `iroha_cli app soracles catalog [OPTIONS]`
+**Usage:** `iroha app soracles catalog [OPTIONS]`
 
 ###### **Options:**
 
@@ -7965,11 +9254,11 @@ Show the oracle rejection/error catalog for SDK parity
 
 
 
-## `iroha_cli app soracles evidence-gc`
+## `iroha app soracles evidence-gc`
 
 Garbage-collect evidence bundles and prune unreferenced artifacts
 
-**Usage:** `iroha_cli app soracles evidence-gc [OPTIONS]`
+**Usage:** `iroha app soracles evidence-gc [OPTIONS]`
 
 ###### **Options:**
 
@@ -7988,11 +9277,11 @@ Garbage-collect evidence bundles and prune unreferenced artifacts
 
 
 
-## `iroha_cli app sns`
+## `iroha app sns`
 
 Sora Name Service helpers (registrar + policy tooling)
 
-**Usage:** `iroha_cli app sns <COMMAND>`
+**Usage:** `iroha app sns <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8008,11 +9297,11 @@ Sora Name Service helpers (registrar + policy tooling)
 
 
 
-## `iroha_cli app sns register`
+## `iroha app sns register`
 
 Register a SNS name via `/v1/sns/registrations`
 
-**Usage:** `iroha_cli app sns register [OPTIONS] --label <LABEL> --suffix-id <U16>`
+**Usage:** `iroha app sns register [OPTIONS] --label <LABEL> --suffix-id <U16>`
 
 ###### **Options:**
 
@@ -8028,19 +9317,19 @@ Register a SNS name via `/v1/sns/registrations`
 * `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `xor#sora`)
 * `--payment-gross <U64>` — Gross payment amount (base + surcharges) in native units
 * `--payment-net <U64>` — Net payment amount forwarded to the registry. Defaults to `payment-gross`
-* `--payment-settlement <JSON-OR-STRING>` — Settlement transaction reference (string or JSON literal)
+* `--payment-settlement <JSON>` — Settlement transaction reference (JSON literal)
 * `--payment-payer <ACCOUNT-ID>` — Account that authorised the payment. Defaults to the CLI config account
-* `--payment-signature <JSON-OR-STRING>` — Steward/treasury signature attesting to the payment (string or JSON literal)
+* `--payment-signature <JSON>` — Steward/treasury signature attesting to the payment (JSON literal)
 * `--metadata-json <PATH>` — Optional path to a JSON object that will populate `Metadata`
 * `--governance-json <PATH>` — Optional path to a JSON document describing `GovernanceHookV1`
 
 
 
-## `iroha_cli app sns renew`
+## `iroha app sns renew`
 
 Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
 
-**Usage:** `iroha_cli app sns renew [OPTIONS] --selector <LABEL.SUFFIX>`
+**Usage:** `iroha app sns renew [OPTIONS] --selector <LABEL.SUFFIX>`
 
 ###### **Options:**
 
@@ -8052,17 +9341,17 @@ Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
 * `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `xor#sora`)
 * `--payment-gross <U64>` — Gross payment amount (base + surcharges) in native units
 * `--payment-net <U64>` — Net payment amount forwarded to the registry. Defaults to `payment-gross`
-* `--payment-settlement <JSON-OR-STRING>` — Settlement transaction reference (string or JSON literal)
+* `--payment-settlement <JSON>` — Settlement transaction reference (JSON literal)
 * `--payment-payer <ACCOUNT-ID>` — Account that authorised the payment. Defaults to the CLI config account
-* `--payment-signature <JSON-OR-STRING>` — Steward/treasury signature attesting to the payment (string or JSON literal)
+* `--payment-signature <JSON>` — Steward/treasury signature attesting to the payment (JSON literal)
 
 
 
-## `iroha_cli app sns transfer`
+## `iroha app sns transfer`
 
 Transfer ownership of a SNS name
 
-**Usage:** `iroha_cli app sns transfer --selector <LABEL.SUFFIX> --new-owner <ACCOUNT-ID> --governance-json <PATH>`
+**Usage:** `iroha app sns transfer --selector <LABEL.SUFFIX> --new-owner <ACCOUNT-ID> --governance-json <PATH>`
 
 ###### **Options:**
 
@@ -8072,11 +9361,11 @@ Transfer ownership of a SNS name
 
 
 
-## `iroha_cli app sns update-controllers`
+## `iroha app sns update-controllers`
 
 Replace controllers on a SNS name
 
-**Usage:** `iroha_cli app sns update-controllers [OPTIONS] --selector <LABEL.SUFFIX>`
+**Usage:** `iroha app sns update-controllers [OPTIONS] --selector <LABEL.SUFFIX>`
 
 ###### **Options:**
 
@@ -8085,26 +9374,26 @@ Replace controllers on a SNS name
 
 
 
-## `iroha_cli app sns freeze`
+## `iroha app sns freeze`
 
 Freeze a SNS name
 
-**Usage:** `iroha_cli app sns freeze --selector <LABEL.SUFFIX> --reason <TEXT> --until-ms <U64> --guardian-ticket <JSON-OR-STRING>`
+**Usage:** `iroha app sns freeze --selector <LABEL.SUFFIX> --reason <TEXT> --until-ms <U64> --guardian-ticket <JSON>`
 
 ###### **Options:**
 
 * `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
 * `--reason <TEXT>` — Reason recorded in the freeze log
 * `--until-ms <U64>` — Timestamp (ms since epoch) when the freeze should auto-expire
-* `--guardian-ticket <JSON-OR-STRING>` — Guardian ticket signature (string or JSON literal)
+* `--guardian-ticket <JSON>` — Guardian ticket signature (JSON literal)
 
 
 
-## `iroha_cli app sns unfreeze`
+## `iroha app sns unfreeze`
 
 Unfreeze a SNS name
 
-**Usage:** `iroha_cli app sns unfreeze --selector <LABEL.SUFFIX> --governance-json <PATH>`
+**Usage:** `iroha app sns unfreeze --selector <LABEL.SUFFIX> --governance-json <PATH>`
 
 ###### **Options:**
 
@@ -8113,23 +9402,23 @@ Unfreeze a SNS name
 
 
 
-## `iroha_cli app sns registration`
+## `iroha app sns registration`
 
 Fetch a SNS name record
 
-**Usage:** `iroha_cli app sns registration --selector <SELECTOR>`
+**Usage:** `iroha app sns registration --selector <SELECTOR>`
 
 ###### **Options:**
 
-* `--selector <SELECTOR>` — Selector literal (`label.suffix`). IH58 (preferred)/sora (second-best) inputs are accepted
+* `--selector <SELECTOR>` — Selector literal (`label.suffix`) in canonical I105 form
 
 
 
-## `iroha_cli app sns policy`
+## `iroha app sns policy`
 
 Fetch the policy for a suffix
 
-**Usage:** `iroha_cli app sns policy --suffix-id <U16>`
+**Usage:** `iroha app sns policy --suffix-id <U16>`
 
 ###### **Options:**
 
@@ -8137,11 +9426,11 @@ Fetch the policy for a suffix
 
 
 
-## `iroha_cli app sns governance`
+## `iroha app sns governance`
 
 Governance helpers (arbitration, transparency exports, etc.)
 
-**Usage:** `iroha_cli app sns governance <COMMAND>`
+**Usage:** `iroha app sns governance <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8149,11 +9438,11 @@ Governance helpers (arbitration, transparency exports, etc.)
 
 
 
-## `iroha_cli app sns governance case`
+## `iroha app sns governance case`
 
 Manage arbitration cases referenced by SN-6a
 
-**Usage:** `iroha_cli app sns governance case <COMMAND>`
+**Usage:** `iroha app sns governance case <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8162,11 +9451,11 @@ Manage arbitration cases referenced by SN-6a
 
 
 
-## `iroha_cli app sns governance case create`
+## `iroha app sns governance case create`
 
 Validate and submit a dispute case payload
 
-**Usage:** `iroha_cli app sns governance case create [OPTIONS] --case-json <PATH>`
+**Usage:** `iroha app sns governance case create [OPTIONS] --case-json <PATH>`
 
 ###### **Options:**
 
@@ -8176,11 +9465,11 @@ Validate and submit a dispute case payload
 
 
 
-## `iroha_cli app sns governance case export`
+## `iroha app sns governance case export`
 
 Export cases for transparency reporting
 
-**Usage:** `iroha_cli app sns governance case export [OPTIONS]`
+**Usage:** `iroha app sns governance case export [OPTIONS]`
 
 ###### **Options:**
 
@@ -8190,11 +9479,11 @@ Export cases for transparency reporting
 
 
 
-## `iroha_cli app alias`
+## `iroha app alias`
 
 Alias helpers (placeholder pipeline)
 
-**Usage:** `iroha_cli app alias <COMMAND>`
+**Usage:** `iroha app alias <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8204,11 +9493,11 @@ Alias helpers (placeholder pipeline)
 
 
 
-## `iroha_cli app alias voprf-evaluate`
+## `iroha app alias voprf-evaluate`
 
 Evaluate a blinded element using the alias VOPRF service (placeholder)
 
-**Usage:** `iroha_cli app alias voprf-evaluate --blinded-element-hex <HEX>`
+**Usage:** `iroha app alias voprf-evaluate --blinded-element-hex <HEX>`
 
 ###### **Options:**
 
@@ -8216,11 +9505,11 @@ Evaluate a blinded element using the alias VOPRF service (placeholder)
 
 
 
-## `iroha_cli app alias resolve`
+## `iroha app alias resolve`
 
 Resolve an alias by its canonical name (placeholder)
 
-**Usage:** `iroha_cli app alias resolve [OPTIONS] --alias <ALIAS>`
+**Usage:** `iroha app alias resolve [OPTIONS] --alias <ALIAS>`
 
 ###### **Options:**
 
@@ -8231,11 +9520,11 @@ Resolve an alias by its canonical name (placeholder)
 
 
 
-## `iroha_cli app alias resolve-index`
+## `iroha app alias resolve-index`
 
 Resolve an alias by Merkle index (placeholder)
 
-**Usage:** `iroha_cli app alias resolve-index --index <INDEX>`
+**Usage:** `iroha app alias resolve-index --index <INDEX>`
 
 ###### **Options:**
 
@@ -8243,11 +9532,11 @@ Resolve an alias by Merkle index (placeholder)
 
 
 
-## `iroha_cli app repo`
+## `iroha app repo`
 
 Repo settlement helpers
 
-**Usage:** `iroha_cli app repo <COMMAND>`
+**Usage:** `iroha app repo <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8259,11 +9548,11 @@ Repo settlement helpers
 
 
 
-## `iroha_cli app repo initiate`
+## `iroha app repo initiate`
 
 Initiate or roll a repo agreement between two counterparties
 
-**Usage:** `iroha_cli app repo initiate [OPTIONS] --agreement-id <AGREEMENT_ID> --initiator <INITIATOR> --counterparty <COUNTERPARTY> --cash-asset <CASH_ASSET> --cash-quantity <CASH_QUANTITY> --collateral-asset <COLLATERAL_ASSET> --collateral-quantity <COLLATERAL_QUANTITY> --rate-bps <RATE_BPS> --maturity-timestamp-ms <MATURITY_TIMESTAMP_MS> --haircut-bps <HAIRCUT_BPS> --margin-frequency-secs <MARGIN_FREQUENCY_SECS>`
+**Usage:** `iroha app repo initiate [OPTIONS] --agreement-id <AGREEMENT_ID> --initiator <INITIATOR> --counterparty <COUNTERPARTY> --cash-asset <CASH_ASSET> --cash-quantity <CASH_QUANTITY> --collateral-asset <COLLATERAL_ASSET> --collateral-quantity <COLLATERAL_QUANTITY> --rate-bps <RATE_BPS> --maturity-timestamp-ms <MATURITY_TIMESTAMP_MS> --haircut-bps <HAIRCUT_BPS> --margin-frequency-secs <MARGIN_FREQUENCY_SECS>`
 
 ###### **Options:**
 
@@ -8282,11 +9571,11 @@ Initiate or roll a repo agreement between two counterparties
 
 
 
-## `iroha_cli app repo unwind`
+## `iroha app repo unwind`
 
 Unwind an active repo agreement (reverse repo leg)
 
-**Usage:** `iroha_cli app repo unwind --agreement-id <AGREEMENT_ID> --initiator <INITIATOR> --counterparty <COUNTERPARTY> --cash-asset <CASH_ASSET> --cash-quantity <CASH_QUANTITY> --collateral-asset <COLLATERAL_ASSET> --collateral-quantity <COLLATERAL_QUANTITY> --settlement-timestamp-ms <SETTLEMENT_TIMESTAMP_MS>`
+**Usage:** `iroha app repo unwind --agreement-id <AGREEMENT_ID> --initiator <INITIATOR> --counterparty <COUNTERPARTY> --cash-asset <CASH_ASSET> --cash-quantity <CASH_QUANTITY> --collateral-asset <COLLATERAL_ASSET> --collateral-quantity <COLLATERAL_QUANTITY> --settlement-timestamp-ms <SETTLEMENT_TIMESTAMP_MS>`
 
 ###### **Options:**
 
@@ -8301,11 +9590,11 @@ Unwind an active repo agreement (reverse repo leg)
 
 
 
-## `iroha_cli app repo query`
+## `iroha app repo query`
 
 Inspect repo agreements stored on-chain
 
-**Usage:** `iroha_cli app repo query <COMMAND>`
+**Usage:** `iroha app repo query <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8314,19 +9603,19 @@ Inspect repo agreements stored on-chain
 
 
 
-## `iroha_cli app repo query list`
+## `iroha app repo query list`
 
 List all repo agreements recorded on-chain
 
-**Usage:** `iroha_cli app repo query list`
+**Usage:** `iroha app repo query list`
 
 
 
-## `iroha_cli app repo query get`
+## `iroha app repo query get`
 
 Fetch a single repo agreement by identifier
 
-**Usage:** `iroha_cli app repo query get --id <ID>`
+**Usage:** `iroha app repo query get --id <ID>`
 
 ###### **Options:**
 
@@ -8334,11 +9623,11 @@ Fetch a single repo agreement by identifier
 
 
 
-## `iroha_cli app repo margin`
+## `iroha app repo margin`
 
 Compute the next margin checkpoint for an agreement
 
-**Usage:** `iroha_cli app repo margin [OPTIONS] --agreement-id <AGREEMENT_ID>`
+**Usage:** `iroha app repo margin [OPTIONS] --agreement-id <AGREEMENT_ID>`
 
 ###### **Options:**
 
@@ -8347,11 +9636,11 @@ Compute the next margin checkpoint for an agreement
 
 
 
-## `iroha_cli app repo margin-call`
+## `iroha app repo margin-call`
 
 Record a margin call for an active repo agreement
 
-**Usage:** `iroha_cli app repo margin-call --agreement-id <AGREEMENT_ID>`
+**Usage:** `iroha app repo margin-call --agreement-id <AGREEMENT_ID>`
 
 ###### **Options:**
 
@@ -8359,11 +9648,11 @@ Record a margin call for an active repo agreement
 
 
 
-## `iroha_cli app settlement`
+## `iroha app settlement`
 
 Delivery-versus-payment and payment-versus-payment helpers
 
-**Usage:** `iroha_cli app settlement <COMMAND>`
+**Usage:** `iroha app settlement <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8372,11 +9661,11 @@ Delivery-versus-payment and payment-versus-payment helpers
 
 
 
-## `iroha_cli app settlement dvp`
+## `iroha app settlement dvp`
 
 Create a delivery-versus-payment instruction
 
-**Usage:** `iroha_cli app settlement dvp [OPTIONS] --settlement-id <SETTLEMENT_ID> --delivery-asset <DELIVERY_ASSET> --delivery-quantity <DELIVERY_QUANTITY> --delivery-from <DELIVERY_FROM> --delivery-to <DELIVERY_TO> --payment-asset <PAYMENT_ASSET> --payment-quantity <PAYMENT_QUANTITY> --payment-from <PAYMENT_FROM> --payment-to <PAYMENT_TO>`
+**Usage:** `iroha app settlement dvp [OPTIONS] --settlement-id <SETTLEMENT_ID> --delivery-asset <DELIVERY_ASSET> --delivery-quantity <DELIVERY_QUANTITY> --delivery-from <DELIVERY_FROM> --delivery-to <DELIVERY_TO> --payment-asset <PAYMENT_ASSET> --payment-quantity <PAYMENT_QUANTITY> --payment-from <PAYMENT_FROM> --payment-to <PAYMENT_TO>`
 
 ###### **Options:**
 
@@ -8417,11 +9706,11 @@ Create a delivery-versus-payment instruction
 
 
 
-## `iroha_cli app settlement pvp`
+## `iroha app settlement pvp`
 
 Create a payment-versus-payment instruction
 
-**Usage:** `iroha_cli app settlement pvp [OPTIONS] --settlement-id <SETTLEMENT_ID> --primary-asset <PRIMARY_ASSET> --primary-quantity <PRIMARY_QUANTITY> --primary-from <PRIMARY_FROM> --primary-to <PRIMARY_TO> --counter-asset <COUNTER_ASSET> --counter-quantity <COUNTER_QUANTITY> --counter-from <COUNTER_FROM> --counter-to <COUNTER_TO>`
+**Usage:** `iroha app settlement pvp [OPTIONS] --settlement-id <SETTLEMENT_ID> --primary-asset <PRIMARY_ASSET> --primary-quantity <PRIMARY_QUANTITY> --primary-from <PRIMARY_FROM> --primary-to <PRIMARY_TO> --counter-asset <COUNTER_ASSET> --counter-quantity <COUNTER_QUANTITY> --counter-from <COUNTER_FROM> --counter-to <COUNTER_TO>`
 
 ###### **Options:**
 
@@ -8459,15 +9748,15 @@ Create a payment-versus-payment instruction
 
 
 
-## `iroha_cli tools`
+## `iroha tools`
 
 Developer utilities and diagnostics
 
-**Usage:** `iroha_cli tools <COMMAND>`
+**Usage:** `iroha tools <COMMAND>`
 
 ###### **Subcommands:**
 
-* `address` — Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+* `address` — Account address helpers (canonical I105 conversions)
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -8475,11 +9764,11 @@ Developer utilities and diagnostics
 
 
 
-## `iroha_cli tools address`
+## `iroha tools address`
 
-Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+Account address helpers (canonical I105 conversions)
 
-**Usage:** `iroha_cli tools address <COMMAND>`
+**Usage:** `iroha tools address <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8489,46 +9778,44 @@ Account address helpers (IH58 (preferred)/sora (second-best) conversions)
 
 
 
-## `iroha_cli tools address convert`
+## `iroha tools address convert`
 
 Convert account addresses between supported textual encodings
 
-**Usage:** `iroha_cli tools address convert [OPTIONS] <ADDRESS>`
+**Usage:** `iroha tools address convert [OPTIONS] <ADDRESS>`
 
 ###### **Arguments:**
 
-* `<ADDRESS>` — Address literal to parse (IH58, `sora…`, or canonical `0x…`)
+* `<ADDRESS>` — Address literal to parse (canonical I105 encoded)
 
 ###### **Options:**
 
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
-* `--format <FORMAT>` — Desired output format (defaults to IH58)
+* `--format <FORMAT>` — Desired output format (defaults to I105)
 
-  Default value: `ih58`
+  Default value: `i105`
 
-  Possible values: `ih58`, `compressed`, `canonical-hex`, `json`
-
-* `--append-domain` — Append the provided domain to the output (requires `<address>@<domain>` input)
+  Possible values: `i105`, `canonical-hex`, `json`
 
 
 
-## `iroha_cli tools address audit`
+
+## `iroha tools address audit`
 
 Scan a list of addresses and emit conversion summaries
 
-**Usage:** `iroha_cli tools address audit [OPTIONS]`
+**Usage:** `iroha tools address audit [OPTIONS]`
 
 ###### **Options:**
 
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
-* `--fail-on-warning` — Return a non-zero status code when Local-domain selectors are detected
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
 * `--format <FORMAT>` — Output format (`json` for structured reports, `csv` for spreadsheet ingestion)
 
@@ -8539,37 +9826,35 @@ Scan a list of addresses and emit conversion summaries
 
 
 
-## `iroha_cli tools address normalize`
+## `iroha tools address normalize`
 
 Rewrite newline-separated addresses into canonical encodings
 
-**Usage:** `iroha_cli tools address normalize [OPTIONS]`
+**Usage:** `iroha tools address normalize [OPTIONS]`
 
 ###### **Options:**
 
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
 * `--output <PATH>` — Write the converted addresses to a file (defaults to STDOUT)
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
-* `--format <FORMAT>` — Desired output format (defaults to IH58)
+* `--format <FORMAT>` — Desired output format (defaults to I105)
 
-  Default value: `ih58`
+  Default value: `i105`
 
-  Possible values: `ih58`, `compressed`, `canonical-hex`, `json`
+  Possible values: `i105`, `canonical-hex`, `json`
 
-* `--append-domain` — Append the provided domain to the output (requires `<address>@<domain>` input)
-* `--only-local` — Only emit conversions for Local-domain selectors
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
 
 
 
-## `iroha_cli tools crypto`
+## `iroha tools crypto`
 
 Cryptography helpers (SM2/SM3/SM4)
 
-**Usage:** `iroha_cli tools crypto <COMMAND>`
+**Usage:** `iroha tools crypto <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8579,11 +9864,11 @@ Cryptography helpers (SM2/SM3/SM4)
 
 
 
-## `iroha_cli tools crypto sm2`
+## `iroha tools crypto sm2`
 
 SM2 key management helpers
 
-**Usage:** `iroha_cli tools crypto sm2 <COMMAND>`
+**Usage:** `iroha tools crypto sm2 <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8593,11 +9878,11 @@ SM2 key management helpers
 
 
 
-## `iroha_cli tools crypto sm2 keygen`
+## `iroha tools crypto sm2 keygen`
 
 Generate a new SM2 key pair (distinguishing ID aware)
 
-**Usage:** `iroha_cli tools crypto sm2 keygen [OPTIONS]`
+**Usage:** `iroha tools crypto sm2 keygen [OPTIONS]`
 
 ###### **Options:**
 
@@ -8608,11 +9893,11 @@ Generate a new SM2 key pair (distinguishing ID aware)
 
 
 
-## `iroha_cli tools crypto sm2 import`
+## `iroha tools crypto sm2 import`
 
 Import an existing SM2 private key and derive metadata
 
-**Usage:** `iroha_cli tools crypto sm2 import [OPTIONS]`
+**Usage:** `iroha tools crypto sm2 import [OPTIONS]`
 
 ###### **Options:**
 
@@ -8628,11 +9913,11 @@ Import an existing SM2 private key and derive metadata
 
 
 
-## `iroha_cli tools crypto sm2 export`
+## `iroha tools crypto sm2 export`
 
 Export SM2 key material with config snippets
 
-**Usage:** `iroha_cli tools crypto sm2 export [OPTIONS]`
+**Usage:** `iroha tools crypto sm2 export [OPTIONS]`
 
 ###### **Options:**
 
@@ -8647,11 +9932,11 @@ Export SM2 key material with config snippets
 
 
 
-## `iroha_cli tools crypto sm3`
+## `iroha tools crypto sm3`
 
 SM3 hashing helpers
 
-**Usage:** `iroha_cli tools crypto sm3 <COMMAND>`
+**Usage:** `iroha tools crypto sm3 <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8659,11 +9944,11 @@ SM3 hashing helpers
 
 
 
-## `iroha_cli tools crypto sm3 hash`
+## `iroha tools crypto sm3 hash`
 
 Hash input data with SM3
 
-**Usage:** `iroha_cli tools crypto sm3 hash [OPTIONS]`
+**Usage:** `iroha tools crypto sm3 hash [OPTIONS]`
 
 ###### **Options:**
 
@@ -8675,11 +9960,11 @@ Hash input data with SM3
 
 
 
-## `iroha_cli tools crypto sm4`
+## `iroha tools crypto sm4`
 
 SM4 AEAD helpers (GCM/CCM modes)
 
-**Usage:** `iroha_cli tools crypto sm4 <COMMAND>`
+**Usage:** `iroha tools crypto sm4 <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8690,11 +9975,11 @@ SM4 AEAD helpers (GCM/CCM modes)
 
 
 
-## `iroha_cli tools crypto sm4 gcm-seal`
+## `iroha tools crypto sm4 gcm-seal`
 
 Encrypt data with SM4-GCM
 
-**Usage:** `iroha_cli tools crypto sm4 gcm-seal [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX24>`
+**Usage:** `iroha tools crypto sm4 gcm-seal [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX24>`
 
 ###### **Options:**
 
@@ -8711,11 +9996,11 @@ Encrypt data with SM4-GCM
 
 
 
-## `iroha_cli tools crypto sm4 gcm-open`
+## `iroha tools crypto sm4 gcm-open`
 
 Decrypt data with SM4-GCM
 
-**Usage:** `iroha_cli tools crypto sm4 gcm-open [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX24>`
+**Usage:** `iroha tools crypto sm4 gcm-open [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX24>`
 
 ###### **Options:**
 
@@ -8733,11 +10018,11 @@ Decrypt data with SM4-GCM
 
 
 
-## `iroha_cli tools crypto sm4 ccm-seal`
+## `iroha tools crypto sm4 ccm-seal`
 
 Encrypt data with SM4-CCM
 
-**Usage:** `iroha_cli tools crypto sm4 ccm-seal [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX14-26>`
+**Usage:** `iroha tools crypto sm4 ccm-seal [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX14-26>`
 
 ###### **Options:**
 
@@ -8757,11 +10042,11 @@ Encrypt data with SM4-CCM
 
 
 
-## `iroha_cli tools crypto sm4 ccm-open`
+## `iroha tools crypto sm4 ccm-open`
 
 Decrypt data with SM4-CCM
 
-**Usage:** `iroha_cli tools crypto sm4 ccm-open [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX14-26>`
+**Usage:** `iroha tools crypto sm4 ccm-open [OPTIONS] --key-hex <HEX32> --nonce-hex <HEX14-26>`
 
 ###### **Options:**
 
@@ -8780,11 +10065,11 @@ Decrypt data with SM4-CCM
 
 
 
-## `iroha_cli tools ivm`
+## `iroha tools ivm`
 
 IVM/ABI helpers (e.g., compute ABI hash)
 
-**Usage:** `iroha_cli tools ivm <COMMAND>`
+**Usage:** `iroha tools ivm <COMMAND>`
 
 ###### **Subcommands:**
 
@@ -8794,11 +10079,11 @@ IVM/ABI helpers (e.g., compute ABI hash)
 
 
 
-## `iroha_cli tools ivm abi-hash`
+## `iroha tools ivm abi-hash`
 
 Print the current ABI hash for a given policy (default: v1)
 
-**Usage:** `iroha_cli tools ivm abi-hash [OPTIONS]`
+**Usage:** `iroha tools ivm abi-hash [OPTIONS]`
 
 ###### **Options:**
 
@@ -8809,11 +10094,11 @@ Print the current ABI hash for a given policy (default: v1)
 
 
 
-## `iroha_cli tools ivm syscalls`
+## `iroha tools ivm syscalls`
 
 Print the canonical syscall list (min or markdown table)
 
-**Usage:** `iroha_cli tools ivm syscalls [OPTIONS]`
+**Usage:** `iroha tools ivm syscalls [OPTIONS]`
 
 ###### **Options:**
 
@@ -8823,11 +10108,11 @@ Print the canonical syscall list (min or markdown table)
 
 
 
-## `iroha_cli tools ivm manifest-gen`
+## `iroha tools ivm manifest-gen`
 
 Generate a minimal manifest (`code_hash` + `abi_hash`) from a compiled .to file
 
-**Usage:** `iroha_cli tools ivm manifest-gen --file <PATH>`
+**Usage:** `iroha tools ivm manifest-gen --file <PATH>`
 
 ###### **Options:**
 
@@ -8835,19 +10120,19 @@ Generate a minimal manifest (`code_hash` + `abi_hash`) from a compiled .to file
 
 
 
-## `iroha_cli tools markdown-help`
+## `iroha tools markdown-help`
 
 Output CLI documentation in Markdown format
 
-**Usage:** `iroha_cli tools markdown-help`
+**Usage:** `iroha tools markdown-help`
 
 
 
-## `iroha_cli tools version`
+## `iroha tools version`
 
 Show versions and git SHA of client and server
 
-**Usage:** `iroha_cli tools version`
+**Usage:** `iroha tools version`
 
 
 

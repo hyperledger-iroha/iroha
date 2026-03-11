@@ -228,7 +228,7 @@ Enum RegistryEventKind {
 ##5.الاحداث القياسية و المزامنة للبوابات
 
 اشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:1. اخر جلب `NameRecordV1` ما اليه في سلسلة الاحداث.
-2. إعادة توليد قوالب المحلل (عناوين IH58 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
+2. إعادة توليد قوالب المحلل (عناوين I105 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
 3. تثبيت بيانات المنطقة عبر تدفق SoraDNS الموضح في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:
@@ -248,7 +248,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58...",
+    owner: "i105...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -275,7 +275,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58...",
+    steward: "i105...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -288,10 +288,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58...",
+    fund_splitter_account: "i105...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

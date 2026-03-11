@@ -457,15 +457,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_data_model::account::AccountId;
 
     use super::*;
 
     fn mk_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

@@ -6,8 +6,8 @@
 )]
 
 //! Theme intro with animated ASCII prologue and optional audio playback.
-//! The builtin audio path now renders a retro synthesizer arrangement of
-//! Etenraku as outlined in “Designing a Retro Synthesizer for Etenraku.”
+//! The builtin audio path renders a gagaku-inspired chamber arrangement of
+//! Etenraku with softer winds and a slower shō bed.
 
 use std::io::Write as _;
 
@@ -125,7 +125,7 @@ async fn render_ascii_intro() -> Result<()> {
         for line in frame {
             println!("{line}");
         }
-        println!("\n   ♪  Etenraku echoes across the sakura night...  ♪   ");
+        println!("\n   ♪  Etenraku drifts in a slower court-music breath...  ♪   ");
         stdout.flush().wrap_err("flush intro")?;
         sleep(Duration::from_millis(140)).await;
         anim.advance();

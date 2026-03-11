@@ -64,7 +64,7 @@ har bir qo'riqchi tomonidan imzolangan tasdiqnoma va uning xeshini o'z ichiga ol
 
 | Qo'riqchi | Fayl | SHA-256 | Eslatmalar |
 |----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Himoya oynasi, marshrutlash hisobi va burg'ulash kontaktlarini qamrab olgan imzolangan SLA. |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Himoya oynasi, marshrutlash hisobi va burg'ulash kontaktlarini qamrab olgan imzolangan SLA. |
 
 > Tasdiqni boshqa dalillar yonida saqlang (`artifacts/finance/repo/<slug>/`)
 > shuning uchun `scripts/repo_evidence_manifest.py` faylni xuddi shu daraxtga yozadi

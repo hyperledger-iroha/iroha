@@ -413,6 +413,7 @@ fn clip_lines(mut lines: Vec<String>, limit: usize) -> Vec<String> {
     lines
 }
 
+#[allow(dead_code)]
 pub fn center_line(text: &str, width: usize) -> String {
     pad_center(text, width)
 }

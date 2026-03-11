@@ -1674,8 +1674,7 @@ pub async fn handle_gov_protected_set(
     let dummy_auth = {
         use iroha_crypto::{Algorithm, KeyPair};
         let kp = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-        let domain = "default".parse().expect("default domain must parse");
-        iroha_data_model::account::AccountId::of(domain, kp.public_key().clone())
+        iroha_data_model::account::AccountId::of(kp.public_key().clone())
     };
     isi.execute(&dummy_auth, &mut stx).map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -2802,7 +2801,7 @@ mod tests {
     #[test]
     fn parse_candidates_rejects_invalid_account_id_literal() {
         let candidates = vec![VrfCandidateDto {
-            account_id: "not-an-ih58@invalid-domain".to_string(),
+            account_id: "not-an-i105@invalid-domain".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
@@ -2845,8 +2844,8 @@ mod tests {
             .into_account_id();
         account_id
             .to_account_address()
-            .and_then(|address| address.to_compressed_sora())
-            .expect("compressed literal")
+            .and_then(|address| address.to_i105())
+            .expect("non-canonical I105 literal")
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -2875,12 +2874,14 @@ mod tests {
     fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         let authority_keypair = KeyPair::random();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let authority = AccountId::of(domain_id.clone(), authority_keypair.public_key().clone());
+        let authority = AccountId::of(authority_keypair.public_key().clone());
         let escrow: AccountId =
             iroha_config::parameters::defaults::governance::bond_escrow_account_id();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let authority_account = Account::new(authority.clone()).build(&authority);
-        let escrow_account = Account::new(escrow.clone()).build(&escrow);
+        let authority_account =
+            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+        let escrow_account =
+            Account::new(escrow.clone().to_account_id(domain_id.clone())).build(&escrow);
         let asset_def_id: AssetDefinitionId =
             "vote#wonderland".parse().expect("asset definition id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);

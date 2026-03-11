@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` يغلف CLI `iroha` لإنتاج:
   - `audit.json` - هيكل البنية الخارجة من `iroha tools address audit --format json`.
-  - `normalized.txt` - تحويل حرفي IH58 (مفضل) / مضغوط (`sora`) (الخيار الأفضل الثاني) لكل محدد نطاق محلي.
+  - `normalized.txt` - تحويل حرفي I105 (مفضل) / مضغوط (`sora`) (الخيار الأفضل الثاني) لكل محدد نطاق محلي.
 - دمج النص مع لوحة معلومات إدخال الاتجاهات (`dashboards/grafana/address_ingest.json`)
   وأنظمة Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاختبار القطع Local-8 /
   محلي - 12 آمن. شاهد لوحات التصادم Local-8 و Local-12 والتنبيهات
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## أوسو
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 الخيارات:
 
-- `--format compressed (`sora`)` للخروج `sora...` في مكان IH58.
+- `--format I105` للخروج `sora...` في مكان I105.
 - `domainless output (default)` للإصدار الحرفي بدون ملكية.
 - `--audit-only` لحذف خطوة التحويل.
 - `--allow-errors` لمتابعة المسح عند ظهور ملفات مشوهة (تتزامن مع سلوك CLI).يصف النص مسارات القطع الأثرية في نهاية عملية الإخراج. Adjunta ambos archives أ

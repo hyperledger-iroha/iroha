@@ -227,19 +227,19 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
 - **Torii/CLI quickstart:**
   - `iroha app nexus lane-report --summary` מציג רשומות קטלוג lanes, readiness של manifests, ומצבי מאמתים
     (stake-elected לעומת admin-managed) כדי לאשר אם staking admission פעיל עבור lane.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     מציג סמני lifecycle/activation (pending target epoch, `activation_epoch` / `activation_height`,
     exit release, slash id) לצד stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]` משקף את
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` משקף את
     endpoint `/stake` עם רמזי pending-unbond לכל זוג `(validator, staker)`.
   - Torii snapshots ל‑dashboards ו‑SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `address_format=ih58|compressed` שולט בהצגת literals (IH58 מועדף; compressed (`sora`) הוא אפשרות שנייה ל-Sora בלבד).
+      `canonical I105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=ih58...`
-      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `address_format` חל על כל literals.
+      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=i105...`
+      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical I105 rendering` חל על כל literals.
   - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v1/transactions`
     או CLI instruction pipeline). דוגמאות payloads של Norito JSON:
 

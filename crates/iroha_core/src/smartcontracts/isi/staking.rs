@@ -1802,12 +1802,14 @@ mod tests {
             .unwrap();
         let (sink, _) = gen_account_in("wonderland");
         let (validator, _) = gen_account_in("wonderland");
-        Register::account(Account::new(sink.clone()))
+        Register::account(Account::new(sink.clone().to_account_id(domain_id.clone())))
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Register::account(Account::new(validator.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        Register::account(Account::new(
+            validator.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
 
         let asset_def_id: AssetDefinitionId =
             "xor#wonderland".parse().expect("asset definition id");
@@ -1869,24 +1871,33 @@ mod tests {
             .unwrap();
         // Ensure the authority account exists in the test ledger so subsequent instructions
         // can execute under Alice's identity.
-        Register::domain(Domain::new(ALICE_ID.domain().clone()))
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(alice_domain_id.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(alice_domain_id),
+        ))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         let (validator, _kp) = gen_account_in("nexus");
         let (delegator, _kp) = gen_account_in("nexus");
         let (escrow, _kp) = gen_account_in("nexus");
-        Register::account(Account::new(validator.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
-        Register::account(Account::new(delegator.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
-        Register::account(Account::new(escrow.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        Register::account(Account::new(
+            validator.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
+        Register::account(Account::new(
+            delegator.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
+        Register::account(Account::new(
+            escrow.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         register_peer_for_account(stx, &validator);
         register_peer_for_account(stx, &delegator);
         register_peer_for_account(stx, &escrow);
@@ -1916,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn stake_context_accepts_ih58_account_literals() {
+    fn stake_context_accepts_i105_account_literals() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -1928,7 +1939,7 @@ mod tests {
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
 
         let stake_ctx = stake_context(&stx.world, &stx.nexus.staking, &validator, None)
-            .expect("stake context should accept IH58 literals");
+            .expect("stake context should accept I105 literals");
 
         assert_eq!(
             stake_ctx.escrow_asset.account(),
@@ -2343,10 +2354,12 @@ mod tests {
             ],
         )
         .expect("policy");
-        let admin_id = AccountId::new_multisig(domain_id.clone(), policy);
-        Register::account(Account::new(admin_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register multisig admin");
+        let admin_id = AccountId::new_multisig(policy);
+        Register::account(Account::new(
+            admin_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register multisig admin");
 
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = crate::PeerId::new(bls.public_key().clone());
@@ -2792,10 +2805,13 @@ mod tests {
         stx.nexus.staking.max_validators = nonzero!(1u32);
 
         let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
-        Register::account(Account::new(replacement.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            replacement.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         register_peer_for_account(&mut stx, &replacement);
         stx.commit_topology.get_mut().push(crate::PeerId::from(
             replacement
@@ -2909,10 +2925,13 @@ mod tests {
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
 
+        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
-        Register::account(Account::new(replacement.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new(
+            replacement.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let replacement_peer = register_peer_for_account(&mut stx, &replacement);
         stx.commit_topology.get_mut().push(replacement_peer);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
@@ -3105,10 +3124,13 @@ mod tests {
         let mut state_block = state.block(block2.as_ref().header());
         let replacement = {
             let mut stx = state_block.transaction();
+            let domain_id: DomainId = "nexus".parse().expect("domain id");
             let (replacement, _kp) = gen_account_in("nexus");
-            Register::account(Account::new(replacement.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::account(Account::new(
+                replacement.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             let replacement_peer = register_peer_for_account(&mut stx, &replacement);
             stx.commit_topology.get_mut().push(replacement_peer.clone());
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
@@ -3800,10 +3822,13 @@ mod tests {
         setup_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         setup_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         setup_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
+        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _replacement_kp) = gen_account_in("nexus");
-        Register::account(Account::new(replacement.clone()))
-            .execute(&ALICE_ID, &mut setup_tx)
-            .unwrap();
+        Register::account(Account::new(
+            replacement.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut setup_tx)
+        .unwrap();
         let replacement_peer = register_peer_for_account(&mut setup_tx, &replacement);
         setup_tx
             .commit_topology
@@ -4331,7 +4356,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_rewards_accepts_ih58_fee_sink() {
+    fn claim_rewards_accepts_i105_fee_sink() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());

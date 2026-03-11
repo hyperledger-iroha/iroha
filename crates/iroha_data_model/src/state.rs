@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn key_roundtrip_and_ordering() {
         let domain: DomainId = "wonderland".parse().unwrap();
-        let alice = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+        let alice = AccountId::new(KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
         let nft_id: NftId = "nft0$wonderland".parse().unwrap();

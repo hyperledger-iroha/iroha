@@ -61,7 +61,7 @@ listadas en `roadmap.md`, vinculando cada flujo de trabajo con la evidencia,
 | Carta + anexos KPI | `docs/source/sns/governance_addenda/` | Cartas firmadas con control de version, covenants KPI y decisiones de gobernanza referenciadas por votos de CLI. |
 | Esquema de registro | [`registry-schema.md`](./registry-schema.md) | Estructuras Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato del registrador | [`registrar-api.md`](./registrar-api.md) | מטענים REST/gRPC, מדדים `sns_registrar_status_total` והוק ציפיות לממשל. |
-| Guia UX de direcciones | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizados canonicos IH58 (preferido) y comprimidos (segunda mejor opcion) reflejados por ארנקים/חוקרים. |
+| Guia UX de direcciones | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizados canonicos I105 (preferido) y comprimidos (segunda mejor opcion) reflejados por ארנקים/חוקרים. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivacion deterministica de hosts, flujo detailer de transparencia y regglas de alertas. |
 | תזכירים רגולטוריים | `docs/source/sns/regulatory/` | Notas de ingreso jurisdiccional (עמ' ej., EU DSA), ecuses de steward, anexos plantilla. |
 | יומן מקדחה | `ops/drill-log.md` | Registro de ensayos de caos e IR requeridos antes de salir de phase. |
@@ -105,7 +105,7 @@ Todas las acciones de gobernanza deben referenciar al menos un artefacto en la
 6. **גילוי לקוחות:** עדכון לקוחות חשבונות
    (ארנק/חוקר) דרך los fixtures compartidos en
    [`address-display-guidelines.md`](./address-display-guidelines.md), asegurando
-   que los renderizados IH58 y comprimidos coincidan con la guia de copia/QR.
+   que los renderizados I105 y comprimidos coincidan con la guia de copia/QR.
 
 ### 4.3 Renovaciones, facturacion y reconciliacion de tesoreria- **Flujo de renovacion:** Los registradores aplican las ventanas de gracia de
   30 dias + redencion de 60 dias especificadas en `SuffixPolicyV1`. Despues de 60
@@ -136,11 +136,11 @@ Todas las acciones de gobernanza deben referenciar al menos un artefacto en la
 | פאזה | דואנו | Accion y evidencia | SLA |
 |-------|-------|------------------------|-----|
 | Solicitud de freeze soft | דייל / soporte | Presentar כרטיס `SNS-DF-<id>` con pruebas de pago, referencia de bond de disputa y selector(es) afectados. | <=4 שעות לאחר מכן. |
-| Ticket de Guardian | Junta de Guardianes | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` לייצר `GuardianFreezeTicketV1`. Guardar el JSON del ticket en `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות פליטה. |
+| Ticket de Guardian | Junta de Guardianes | `sns governance freeze --selector <I105> --reason <text> --until <ts>` לייצר `GuardianFreezeTicketV1`. Guardar el JSON del ticket en `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות פליטה. |
 | Ratificacion del Consejo | Consejo de gobernanza | Aprobar o rechazar congelamientos, החלטה תיעודית enlazada al ticket de guardian y digest del bond de disputa. | Proxima sesion del consejo o voto asincrono. |
 | Panel de arbitraje | Cumplimiento + דייל | Convocar Panel de 7 Jurados (מפת דרכים) עם נקודות התקדמות דרך `sns governance dispute ballot`. Adjuntar recibos de voto anonimizados al paquete de incidente. | Veredicto <=7 dias despues del deposito de bond. |
 | Apelacion | Guardianes + consejo | Las apelaciones duplican el bond y repiten el processo de jurados; רשם מניפיסטו Norito `DisputeAppealV1` y referenceciar ticket primario. | <=10 dias. |
-| Descongelar y remediar | Registrador + ops de resolver | Ejecutar `sns governance unfreeze --selector <IH58> --ticket <id>`, בפועל estado del registrador y propagar diffs GAR/resolver. | Inmediato despues del veredicto. |Los canones de emergencia (congelamientos activados por guardianes <=72 h) סיואן
+| Descongelar y remediar | Registrador + ops de resolver | Ejecutar `sns governance unfreeze --selector <I105> --ticket <id>`, בפועל estado del registrador y propagar diffs GAR/resolver. | Inmediato despues del veredicto. |Los canones de emergencia (congelamientos activados por guardianes <=72 h) סיואן
 el mismo flujo pero requieren revisie retroactiva del consejo y una not de
 transparencia en `docs/source/sns/regulatory/`.
 

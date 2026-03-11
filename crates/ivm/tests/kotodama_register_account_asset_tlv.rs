@@ -33,11 +33,11 @@ fn kotodama_register_account_and_unregister_asset() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
 
-    let account_map: HashMap<u64, ivm::mock_wsv::AccountSubjectId> = HashMap::new();
+    let account_map: HashMap<u64, ivm::mock_wsv::AccountId> = HashMap::new();
     let asset_map: HashMap<u64, ivm::AssetDefinitionId> = HashMap::new();
     let host = WsvHost::new_with_subject_map(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         account_map,
         asset_map,
     );

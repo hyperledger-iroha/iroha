@@ -29,7 +29,7 @@ yertutanları və faylı bölməsində təsvir edilən idarəetmə paketinin bir
 | Sahə | Dəyər |
 |-------|-------|
 | Müqavilə identifikatoru | `<repo-yyMMdd-XX>` |
-| Saxlayan hesab id | `<ih58...>` |
+| Saxlayan hesab id | `<i105...>` |
 | / tarix tərəfindən hazırlanmışdır | `<custodian ops lead>` |
 | Masa kontaktları qəbul edildi | `<desk lead + counterparty>` |
 | Sübut kataloqu | ``artifacts/finance/repo/<slug>/`` |

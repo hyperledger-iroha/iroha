@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` envuelve la CLI `iroha` パラ プロデューサー:
   - `audit.json` -- `iroha tools address audit --format json` の構造。
-  - `normalized.txt` -- リテラル IH58 (preferido) / 圧縮 (`sora`) (重要なオプション) ローカルの変換セレクター。
+  - `normalized.txt` -- リテラル I105 (preferido) / 圧縮 (`sora`) (重要なオプション) ローカルの変換セレクター。
 - ダッシュボードと指示の取り込みとスクリプトの組み合わせ (`dashboards/grafana/address_ingest.json`)
   Local-8 のカットオーバーに関する Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) の規則
   Local-12 エスセグロ。ローカル-8 y ローカル-12 y の衝突を観察してください
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## うそ
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 オプション:
 
-- IH58 の `--format compressed (`sora`)` パラサリダ `sora...`。
+- I105 の `--format I105` パラサリダ `sora...`。
 - `domainless output (default)` パラエミミール リテラル シン ドミニオ。
 - `--audit-only` 変換パラメータを省略します。
 - `--allow-errors` エスカネアンド クアンド アパレスカン フィラス マルフォルマダを確認してください (CLI のコンポルタミエントと一致)。

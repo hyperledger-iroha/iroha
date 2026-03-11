@@ -172,19 +172,16 @@ impl RelayPerformanceAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{account::AccountId, domain::DomainId, metadata::Metadata};
+    use iroha_data_model::{account::AccountId, metadata::Metadata};
 
     use super::*;
 
     const RELAY: RelayId = [7_u8; 32];
 
     fn sample_account(seed: u8) -> AccountId {
-        let domain = DomainId::from_str("sora").expect("domain id");
         let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn proof(

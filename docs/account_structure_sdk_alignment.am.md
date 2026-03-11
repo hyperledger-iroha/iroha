@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# IH58 ልቀት ማስታወሻ ለኤስዲኬ እና ኮዴክ ባለቤቶች
+# I105 ልቀት ማስታወሻ ለኤስዲኬ እና ኮዴክ ባለቤቶች
 
 ቡድኖች፡ Rust SDK፣ TypeScript/JavaScript SDK፣ Python SDK፣ Kotlin SDK፣ Codec tooling
 
-አውድ፡ I18NI0000000X አሁን የመላኪያ IH58 መለያ መታወቂያውን ያንጸባርቃል
+አውድ፡ I18NI0000000X አሁን የመላኪያ I105 መለያ መታወቂያውን ያንጸባርቃል
 ትግበራ. እባክዎ የኤስዲኬ ባህሪን እና ሙከራዎችን ከቀኖናዊው ዝርዝር ጋር ያስተካክሉ።
 
 ቁልፍ ማጣቀሻዎች፡-
@@ -24,17 +24,11 @@ translator: machine-google-reviewed
 - ቋሚ ቬክተሮች - `fixtures/account/address_vectors.json`
 
 የእርምጃ እቃዎች፡-
-1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ IH58 ብቻ መልቀቅ አለበት
+1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ I105 ብቻ መልቀቅ አለበት
    (አይ18NI00000006X ቅጥያ የለም)። ቀኖናዊ ሄክስ ለማረም (`0x...`) ነው።
-2. ** ተቀባይነት ያላቸው ግብዓቶች፡** ተንታኞች IH58 (የተመረጡ)፣ `sora` የታመቀ፣
-   እና ቀኖናዊ ሄክስ (`0x...` ብቻ፤ ባዶ ሄክስ ውድቅ ተደርጓል)። ግብዓቶች MAY ይይዛሉ
-   የ `@<domain>` ቅጥያ ጥቆማዎችን ለመምራት; `<label>@<domain>` (rejected legacy form) ተለዋጭ ስሞች ያስፈልጋቸዋል
-   ፈቺ. ጥሬው 
-3. **መፍትሄዎች፡** ጎራ የለሽ IH58/sora መተንተን ጎራ-መራጭ ያስፈልገዋል።
-   መራጩ በተዘዋዋሪ ነባሪ ካልሆነ በስተቀር መፍትሄ ሰጪ (የተዋቀረውን ነባሪ ይጠቀሙ
-   የጎራ መለያ)። UAID (`uaid:...`) እና ግልጽ ያልሆነ (`opaque:...`) ቀጥተኛ ቃላት ያስፈልጋቸዋል
-   ፈታኞች.
-4. **IH58 checksum:** Blake2b-512 ከ `IH58PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **I105 checksum:** Blake2b-512 ከ `I105PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
    የመጀመሪያዎቹ 2 ባይት. የታመቀ ፊደል መሠረት **105** ነው።
 5. ** ከርቭ ጋቲንግ፡** ኤስዲኬዎች ነባሪ ወደ Ed25519-ብቻ። ለ ግልጽ መርጦ መግባትን ያቅርቡ
    ML-DSA/GOST/SM (ፈጣን የግንባታ ባንዲራዎች፣ JS/Android `configureCurveSupport`)። አድርግ

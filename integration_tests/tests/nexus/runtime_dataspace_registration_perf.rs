@@ -99,6 +99,26 @@ fn runtime_registration_builder() -> NetworkBuilder {
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
 
+            let mut ds_benchmark = Table::new();
+            ds_benchmark.insert(
+                "alias".into(),
+                TomlValue::String("runtime-benchmark".to_owned()),
+            );
+            ds_benchmark.insert(
+                "id".into(),
+                TomlValue::Integer(
+                    i64::try_from(BENCH_MANIFEST_DATASPACE.as_u64())
+                        .expect("benchmark dataspace id fits i64"),
+                ),
+            );
+            ds_benchmark.insert(
+                "description".into(),
+                TomlValue::String(
+                    "runtime benchmark dataspace for manifest publish/revoke metrics".to_owned(),
+                ),
+            );
+            ds_benchmark.insert("fault_tolerance".into(), TomlValue::Integer(1));
+
             let mut routing_policy = Table::new();
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
@@ -128,7 +148,10 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 )
                 .write(
                     ["nexus", "dataspace_catalog"],
-                    TomlValue::Array(vec![TomlValue::Table(ds_nexus)]),
+                    TomlValue::Array(vec![
+                        TomlValue::Table(ds_nexus),
+                        TomlValue::Table(ds_benchmark),
+                    ]),
                 )
                 .write(
                     ["nexus", "routing_policy"],
@@ -141,7 +164,7 @@ fn wait_for_lane_visibility(client: &Client, lane_id: LaneId, context: &str) -> 
     let started = Instant::now();
     let mut last_error = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id, None) {
+        match client.get_public_lane_validators(lane_id) {
             Ok(snapshot) => return Ok(snapshot),
             Err(err) => {
                 last_error = err.to_string();
@@ -174,7 +197,7 @@ fn wait_for_all_peers_lane_visibility(
         let mut resolved = Vec::new();
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();
-            match client.get_public_lane_validators(lane_id, None) {
+            match client.get_public_lane_validators(lane_id) {
                 Ok(_snapshot) => resolved.push(peer_index),
                 Err(err) => {
                     last_errors.insert(peer_index, err.to_string());
@@ -201,7 +224,7 @@ fn wait_for_lane_absence(client: &Client, lane_id: LaneId, context: &str) -> Res
     let started = Instant::now();
     let mut last_present = String::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.get_public_lane_validators(lane_id, None) {
+        match client.get_public_lane_validators(lane_id) {
             Ok(snapshot) => {
                 if snapshot.get("total").and_then(JsonValue::as_u64) == Some(0) {
                     return Ok(());
@@ -238,7 +261,7 @@ fn wait_for_all_peers_lane_absence(
         let mut resolved = Vec::new();
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();
-            match client.get_public_lane_validators(lane_id, None) {
+            match client.get_public_lane_validators(lane_id) {
                 Ok(snapshot) => {
                     if snapshot.get("total").and_then(JsonValue::as_u64) == Some(0) {
                         resolved.push(peer_index);
@@ -280,7 +303,7 @@ fn wait_for_lane_visibility_with_status(
             .get_sumeragi_status_wire()
             .map_err(|err| eyre!(err))?;
         last_height = status.commit_qc.height;
-        match client.get_public_lane_validators(lane_id, None) {
+        match client.get_public_lane_validators(lane_id) {
             Ok(_snapshot) => return Ok(status),
             Err(err) => {
                 last_error = err.to_string();
@@ -309,7 +332,6 @@ fn wait_for_manifest_status(
             status: Some(UaidManifestStatusFilter::All),
             limit: Some(16),
             offset: Some(0),
-            address_format: None,
         };
         match client.get_uaid_manifests(uaid_literal, Some(query)) {
             Ok(response) => {
@@ -372,7 +394,6 @@ fn wait_for_all_peers_manifest_status(
             status: Some(UaidManifestStatusFilter::All),
             limit: Some(16),
             offset: Some(0),
-            address_format: None,
         };
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();

@@ -23,6 +23,33 @@ use crate::{
 mod model {
     use super::*;
 
+    /// Balance partition policy for transparent asset ownership buckets.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Default,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[repr(u8)]
+    pub enum AssetBalancePolicy {
+        /// Keep balances in a global bucket shared across dataspaces.
+        #[default]
+        #[display("Global")]
+        Global,
+        /// Partition balances by the transaction dataspace context.
+        #[display("DataspaceRestricted")]
+        DataspaceRestricted,
+    }
+
     /// Asset definition defines the type of that asset.
     #[derive(
         Debug,
@@ -65,6 +92,11 @@ mod model {
         /// Metadata of this asset definition as a key-value store.
         #[registrable_builder(default = Metadata::default())]
         pub metadata: Metadata,
+        /// Balance partition policy for concrete ownership buckets.
+        #[getset(get_copy = "pub")]
+        #[registrable_builder(default = AssetBalancePolicy::default())]
+        #[norito(default)]
+        pub balance_scope_policy: AssetBalancePolicy,
         /// The account that owns this asset. Usually the [`Account`] that registered it.
         #[getset(get = "pub")]
         #[registrable_builder(skip, init = authority.clone())]
@@ -545,6 +577,17 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
 }
 
 #[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for AssetBalancePolicy {
+    fn write_json(&self, out: &mut String) {
+        let label = match self {
+            AssetBalancePolicy::Global => "Global",
+            AssetBalancePolicy::DataspaceRestricted => "DataspaceRestricted",
+        };
+        norito::json::write_json_string(label, out);
+    }
+}
+
+#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -556,6 +599,23 @@ impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
             "Convertible" => Ok(ConfidentialPolicyMode::Convertible),
             other => Err(norito::json::Error::InvalidField {
                 field: String::from("ConfidentialPolicyMode"),
+                message: format!("unknown variant '{other}'"),
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AssetBalancePolicy {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let label = parser.parse_string()?;
+        match label.as_str() {
+            "Global" => Ok(AssetBalancePolicy::Global),
+            "DataspaceRestricted" => Ok(AssetBalancePolicy::DataspaceRestricted),
+            other => Err(norito::json::Error::InvalidField {
+                field: String::from("AssetBalancePolicy"),
                 message: format!("unknown variant '{other}'"),
             }),
         }
@@ -747,6 +807,7 @@ mod json_tests {
                     .expect("ipfs path"),
             ),
             metadata: metadata.clone(),
+            balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
             confidential_policy: policy,
         };
 
@@ -760,6 +821,10 @@ mod json_tests {
         assert_eq!(decoded.mintable, new_definition.mintable);
         assert_eq!(decoded.logo, new_definition.logo);
         assert_eq!(decoded.metadata, metadata);
+        assert_eq!(
+            decoded.balance_scope_policy,
+            new_definition.balance_scope_policy
+        );
         assert_eq!(decoded.confidential_policy, policy);
     }
 
@@ -773,6 +838,7 @@ mod json_tests {
             mintable: Mintable::Once,
             logo: None,
             metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
             confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 

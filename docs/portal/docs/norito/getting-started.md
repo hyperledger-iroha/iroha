@@ -76,7 +76,7 @@ Base64 payload:
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority ih58... \
+  --authority i105... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

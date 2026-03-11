@@ -727,6 +727,9 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                validation_queue_full_inline_cutover_divisor:
+                    iroha_config::parameters::defaults::sumeragi::
+                        VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
                 qc_verify_worker_threads:
                     iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap:
@@ -1121,8 +1124,7 @@ mod tests {
         }
 
         // Public lane validator with matching signatory
-        let domain: DomainId = "test".parse().expect("domain id");
-        let validator: AccountId = AccountId::new(domain.clone(), kp.public_key().clone());
+        let validator: AccountId = AccountId::new(kp.public_key().clone());
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
@@ -1688,10 +1690,9 @@ mod tests {
         }
 
         let domain: DomainId = "test".parse().expect("domain id");
-        let validator: AccountId = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let validator: AccountId = AccountId::new(key_pair.public_key().clone());
         let escrow_key_pair = KeyPair::random();
-        let escrow_account: AccountId =
-            AccountId::new(domain.clone(), escrow_key_pair.public_key().clone());
+        let escrow_account: AccountId = AccountId::new(escrow_key_pair.public_key().clone());
         let stake_asset_id: AssetDefinitionId = "xor#test".parse().expect("asset definition id");
         let slash_amount = Numeric::new(100, 0);
         {
@@ -1980,10 +1981,9 @@ mod tests {
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
 
-        let domain: DomainId = "test".parse().expect("domain id");
         let keypair = KeyPair::random();
         let peer = PeerId::new(keypair.public_key().clone());
-        let validator = AccountId::new(domain.clone(), keypair.public_key().clone());
+        let validator = AccountId::new(keypair.public_key().clone());
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),

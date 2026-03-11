@@ -8,22 +8,12 @@ const SIGNATORY: &str = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BF
 const DOMAIN: &str = "wonderland";
 
 fn account_id() -> AccountId {
-    AccountId::new(
-        DOMAIN.parse().expect("domain"),
-        SIGNATORY.parse().expect("public key"),
-    )
-}
-
-fn default_domain_id() -> iroha_data_model::domain::DomainId {
-    iroha_data_model::account::address::default_domain_name()
-        .as_ref()
-        .parse()
-        .expect("default domain")
+    AccountId::new(SIGNATORY.parse().expect("public key"))
 }
 
 fn asset_id() -> AssetId {
-    let domain = default_domain_id();
-    let account_id = AccountId::new(domain.clone(), SIGNATORY.parse().expect("public key"));
+    let domain = DOMAIN.parse().expect("asset domain");
+    let account_id = AccountId::new(SIGNATORY.parse().expect("public key"));
     let definition = AssetDefinitionId::new(domain, "xor".parse().expect("asset name"));
     AssetId::new(definition, account_id)
 }
@@ -31,20 +21,14 @@ fn asset_id() -> AssetId {
 #[test]
 fn account_id_json_roundtrip() {
     let account_id = account_id();
-    let canonical = account_id.canonical_ih58().expect("canonical ih58");
+    let canonical = account_id.canonical_i105().expect("canonical i105");
 
     let json = norito::json::to_json(&account_id).expect("serialize account id");
     let expected = format!("\"{canonical}\"");
     assert_eq!(json, expected);
 
     let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
-    let default_domain: iroha_data_model::domain::DomainId =
-        iroha_data_model::account::address::default_domain_name()
-            .as_ref()
-            .parse()
-            .expect("default domain");
     assert_eq!(decoded.controller(), account_id.controller());
-    assert_eq!(decoded.domain(), &default_domain);
 }
 
 #[test]

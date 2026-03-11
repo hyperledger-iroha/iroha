@@ -2,7 +2,6 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 
 /** Query parameters for Torii offline listing endpoints. */
@@ -12,7 +11,6 @@ public final class OfflineListParams {
   private final Long limit;
   private final Long offset;
   private final String sort;
-  private final String addressFormat;
   private final String assetId;
   private final Long certificateExpiresBeforeMs;
   private final Long certificateExpiresAfterMs;
@@ -28,7 +26,6 @@ public final class OfflineListParams {
     this.limit = builder.limit;
     this.offset = builder.offset;
     this.sort = builder.sort;
-    this.addressFormat = builder.addressFormat;
     this.assetId = builder.assetId;
     this.certificateExpiresBeforeMs = builder.certificateExpiresBeforeMs;
     this.certificateExpiresAfterMs = builder.certificateExpiresAfterMs;
@@ -56,10 +53,6 @@ public final class OfflineListParams {
     return Optional.ofNullable(sort);
   }
 
-  public Optional<String> addressFormat() {
-    return Optional.ofNullable(addressFormat);
-  }
-
   /** Encodes the parameters into a string map suitable for query strings. */
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
@@ -67,9 +60,6 @@ public final class OfflineListParams {
     limit().ifPresent(value -> params.put("limit", String.valueOf(value)));
     offset().ifPresent(value -> params.put("offset", String.valueOf(value)));
     sort().filter(value -> !value.isBlank()).ifPresent(value -> params.put("sort", value));
-    addressFormat()
-        .filter(value -> !value.isBlank())
-        .ifPresent(value -> params.put("address_format", value));
     if (assetId != null && !assetId.isBlank()) {
       params.put("asset_id", assetId.trim());
     }
@@ -109,7 +99,6 @@ public final class OfflineListParams {
     private Long limit;
     private Long offset;
     private String sort;
-    private String addressFormat;
     private String assetId;
     private Long certificateExpiresBeforeMs;
     private Long certificateExpiresAfterMs;
@@ -145,11 +134,6 @@ public final class OfflineListParams {
 
     public Builder sort(final String sort) {
       this.sort = sort;
-      return this;
-    }
-
-    public Builder addressFormat(final String addressFormat) {
-      this.addressFormat = addressFormat;
       return this;
     }
 

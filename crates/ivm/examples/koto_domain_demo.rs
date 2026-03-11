@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    let alice_subject = AccountId::from_account_id(&alice);
+    let alice_subject = AccountId::from(&alice);
 
     // No account index map needed for this sample (we pass pointers via TLVs)
     let host = WsvHost::new_with_subject(wsv, alice_subject, HashMap::new());

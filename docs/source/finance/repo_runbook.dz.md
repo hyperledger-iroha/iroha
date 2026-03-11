@@ -27,9 +27,9 @@ Norito གི་དངུལ་ཕོགས་ཚུ་ མ་བྲིས་པ
 iroha --config client.toml --output \
   repo initiate \
   --agreement-id daily_repo \
-  --initiator ih58... \
-  --counterparty ih58... \
-  --custodian ih58... \
+  --initiator i105... \
+  --counterparty i105... \
+  --custodian i105... \
   --cash-asset usd#wonderland \
   --cash-quantity 1000 \
   --collateral-asset bond#wonderland \
@@ -43,8 +43,8 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   repo unwind \
   --agreement-id daily_repo \
-  --initiator ih58... \
-  --counterparty ih58... \
+  --initiator i105... \
+  --counterparty i105... \
   --cash-asset usd#wonderland \
   --cash-quantity 1005 \
   --collateral-asset bond#wonderland \
@@ -91,11 +91,11 @@ collateral = RepoCollateralLeg(
 )
 governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="ih58..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="ih58...",
-    counterparty="ih58...",
+    initiator="i105...",
+    counterparty="i105...",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -127,13 +127,13 @@ iroha --config client.toml --output \
   --settlement-id trade_dvp \
   --delivery-asset bond#wonderland \
   --delivery-quantity 10 \
-  --delivery-from ih58... \
-  --delivery-to ih58... \
+  --delivery-from i105... \
+  --delivery-to i105... \
   --delivery-instrument-id US0378331005 \
   --payment-asset usd#wonderland \
   --payment-quantity 1000 \
-  --payment-from ih58... \
-  --payment-to ih58... \
+  --payment-from i105... \
+  --payment-to i105... \
   --order payment-then-delivery \
   --atomicity all-or-nothing \
   --iso-reference-crosswalk /opt/iso/isin_crosswalk.json \
@@ -145,12 +145,12 @@ iroha --config client.toml --output \
   --settlement-id trade_pvp \
   --primary-asset usd#wonderland \
   --primary-quantity 500 \
-  --primary-from ih58... \
-  --primary-to ih58... \
+  --primary-from i105... \
+  --primary-to i105... \
   --counter-asset eur#wonderland \
   --counter-quantity 460 \
-  --counter-from ih58... \
-  --counter-to ih58... \
+  --counter-from i105... \
+  --counter-to i105... \
   --iso-xml-out trade_pvp.xml
 ```
 
@@ -178,19 +178,19 @@ from iroha_python import (
     TransactionDraft,
 )
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="ih58..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
 delivery = SettlementLeg(
     asset_definition_id="bond#wonderland",
     quantity="10",
-    from_account="ih58...",
-    to_account="ih58...",
+    from_account="i105...",
+    to_account="i105...",
     metadata={"isin": "ABC123"},
 )
 payment = SettlementLeg(
     asset_definition_id="usd#wonderland",
     quantity="1000",
-    from_account="ih58...",
-    to_account="ih58...",
+    from_account="i105...",
+    to_account="i105...",
 )
 plan = SettlementPlan(order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY)
 
@@ -200,14 +200,14 @@ draft.settlement_pvp(
     SettlementLeg(
         asset_definition_id="usd#wonderland",
         quantity="500",
-        from_account="ih58...",
-        to_account="ih58...",
+        from_account="i105...",
+        to_account="i105...",
     ),
     SettlementLeg(
         asset_definition_id="eur#wonderland",
         quantity="460",
-        from_account="ih58...",
-        to_account="ih58...",
+        from_account="i105...",
+        to_account="i105...",
     ),
 )
 ```

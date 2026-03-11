@@ -203,8 +203,8 @@ mod tests {
 
     fn sample_account_id() -> AccountId {
         let key_pair = KeyPair::random();
-        let domain = DomainId::from_str("wonderland").expect("valid domain");
-        AccountId::new(domain, key_pair.public_key().clone())
+        let _domain = DomainId::from_str("wonderland").expect("valid domain");
+        AccountId::new(key_pair.public_key().clone())
     }
 
     #[test]

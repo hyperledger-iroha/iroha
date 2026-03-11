@@ -18,7 +18,7 @@ xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
 
 ## Xavfsiz almashish oqimlari
 
-- IH58 manziliga nusxa ko'chirish/ulashish uchun har bir amalni standart qilib qo'ying. Yechilganlarni ko'rsatish
+- I105 manziliga nusxa ko'chirish/ulashish uchun har bir amalni standart qilib qo'ying. Yechilganlarni ko'rsatish
   domenni qo'llab-quvvatlovchi kontekst sifatida ishlating, shuning uchun nazorat yig'indisi qatori old va markazda qoladi.
 - Toʻliq matnli manzil va QRni birlashtirgan “Ulashish” imtiyozini taklif qiling
   bir xil foydali yukdan olingan kod. Foydalanuvchilarga amal qilishdan oldin ikkalasini ham tekshirishga ruxsat bering.
@@ -27,7 +27,7 @@ xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
   nazorat summasi langari saqlanib qoladi. Toʻliq nusxa olish uchun teginish/klaviatura yorligʻini taqdim eting
   kesilmasdan string.
 - Oldindan ko'rib chiqadigan tasdiqlovchi tostni chiqarish orqali almashish buferining sinxronlanishini oldini oling
-  ko'chirilgan aniq IH58 qatori. Telemetriya mavjud bo'lgan joyda nusxasini hisoblang
+  ko'chirilgan aniq I105 qatori. Telemetriya mavjud bo'lgan joyda nusxasini hisoblang
   UX regressiyalari tezda yuzaga kelishi uchun harakatlarni almashishga urinishlar.
 
 ## IME va kiritish himoyasi
@@ -51,19 +51,19 @@ xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
 - Hududni muloyim jonli yangilash orqali muvaffaqiyatli nusxa ko'chirish/ulashish voqealarini e'lon qiling. O'z ichiga oladi
   maqsad (bufer, almashish varag'i, QR), shuning uchun foydalanuvchi harakatni biladi
   diqqatni harakatlantirmasdan yakunlandi.
-- QR oldindan koʻrish uchun tavsiflovchi `alt` matnini taqdim eting (masalan, “IH58 manzili
+- QR oldindan koʻrish uchun tavsiflovchi `alt` matnini taqdim eting (masalan, “I105 manzili
   `<account>` zanjirida `0x1234`”). “Manzilni matn sifatida nusxalash”ni taqdim eting
   ko'rish qobiliyati past bo'lgan foydalanuvchilar uchun QR tuvaliga ulashgan zaxira.
 
 ## Sora-faqat siqilgan manzillar
 
-- Gating: `sora…` siqilgan qatorni aniq tasdiqlash orqasida yashiring.
+- Gating: `i105` siqilgan qatorni aniq tasdiqlash orqasida yashiring.
   Tasdiqlash ariza faqat Sora Nexus zanjirlarida ishlashini takrorlashi kerak.
 - Yorliqlash: har bir hodisada ko'rinadigan "Faqat Sora" nishoni va a bo'lishi kerak
-  Boshqa tarmoqlar nima uchun IH58 shaklini talab qilishini tavsiflovchi maslahat.
+  Boshqa tarmoqlar nima uchun I105 shaklini talab qilishini tavsiflovchi maslahat.
 - Guardrails: agar faol zanjir diskriminanti Nexus taqsimoti bo'lmasa,
   siqilgan manzilni to'liq yaratishdan bosh torting va foydalanuvchini qaytib yo'naltiring
-  IH58.
+  I105.
 - Telemetriya: siqilgan shakl qanchalik tez-tez so'ralishini va shuning uchun nusxa ko'chirilishini yozib oling
   voqea o'yin kitobi tasodifiy almashish keskinliklarini aniqlay oladi.
 
@@ -74,5 +74,5 @@ xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
   paydo bo'ladi.
 - IME kiritish (kana, pinyin), ekranni o'qish uchun o'tish uchun qo'lda QA stsenariylarini qo'shing
   (VoiceOver/NVDA) va yuqori kontrastli mavzularda QR nusxasini chiqarishdan oldin.
-- Ushbu tekshiruvlarni IH58 paritet testlari bilan bir qatorda relizlar ro'yxatida ko'rsating
+- Ushbu tekshiruvlarni I105 paritet testlari bilan bir qatorda relizlar ro'yxatida ko'rsating
   shuning uchun regressiyalar tuzatilmaguncha bloklanadi.

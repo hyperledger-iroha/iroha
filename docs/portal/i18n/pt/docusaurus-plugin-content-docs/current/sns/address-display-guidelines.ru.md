@@ -19,8 +19,8 @@ Esta página contém `docs/source/sns/address_display_guidelines.md` e temperatu
 não é uma carga útil. Exemplo de aplicativo Android em
 `examples/android/retail-wallet` método de demonstração do padrão UX:
 
-- **Dве цели копирования.** Предоставьте две явные кнопки copia: IH58
-  (предпочтительно) e use a forma somente Sora (`sora...`, второй по предпочтению). IH58 é melhorado
+- **Dве цели копирования.** Предоставьте две явные кнопки copia: I105
+  (предпочтительно) e use a forma somente Sora (`sora...`, второй по предпочтению). I105 é melhorado
   делиться наружу e он используется na carga útil QR. Сжатая форма должна включать
   встроенное предупреждение, потому что работает только в Sora-aware приложениях.
   Exemplo de aplicativo Android para usar os botões Material e suas dicas de ferramentas em
@@ -35,7 +35,7 @@ não é uma carga útil. Exemplo de aplicativo Android em
   Novo domínio `default`, ajuste de posição, ajuste de operação, isso
   суффикс не требуется. Обозреватели также должны выделять канонический доменный
   ярлык, когда селектор кодирует resumo.
-- **QR para IH58.** QR-коды должны кодировать строку IH58. Если генерация QR
+- **QR para I105.** QR-коды должны кодировать строку I105. Если генерация QR
   провалилась, покажите явную ошибку вместо пустого изображения.
 - **Сообщение буфера обмена.** После копирования сжатой формы отправьте brinde
   ou snackbar, напоминающий пользователям, что она Sora-only e подвержена
@@ -59,7 +59,7 @@ botão, dicas de ferramentas e sugestões de configuração da plataforma:
 
 ## SDK SDK
 
-O SDK do SDK fornece um auxiliar útil, configurando os formatos IH58 e сжатую, e
+O SDK do SDK fornece um auxiliar útil, configurando os formatos I105 e сжатую, e
 также строку предупреждения, чтобы UI-слои оставались согласованными:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -82,7 +82,7 @@ No seletor Local-12 ou no registro, não é possível analisar a carga útil nec
 
 Обозреватели должны отражать телеметрию и доступность кошелька:
 
-- Coloque `data-copy-mode="ih58|compressed|qr"` em um botão de cópia, чтобы
+- Coloque `data-copy-mode="i105|i105_default|qr"` em um botão de cópia, чтобы
   Os frontais podem ser usados ​​para obter uma conexão de rede com sistema métrico Torii
   `torii_address_format_total`. O componente de demonstração será ativado
   событие `iroha:address-copy` com `{mode,timestamp}` - подключите его к своему
@@ -93,7 +93,7 @@ No seletor Local-12 ou no registro, não é possível analisar a carga útil nec
   provерки вывода Local-12 могли экспортировать 30-дневное доказательство
   `domain_kind="local12"` é colocado no painel Grafana `address_ingest`.
 - Сопоставляйте каждому контролу отдельные `aria-label`/`aria-describedby`,
-  объясняющие, безопасен ли literal para обмена (IH58) ou только para Sora
+  объясняющие, безопасен ли literal para обмена (I105) ou только para Sora
   (сжатый). Включайте подпись неявного домена описание, чтобы вспомогательные
   A tecnologia está disponível para esse contato.
 - Exibição de região ao vivo (por exemplo, `<output aria-live="polite">...</output>`),
@@ -108,7 +108,7 @@ selecionador.
 
 Use [Local -> Global toolkit](local-to-global-toolkit.md) para
 автоматизации аудита и конверсии устаревших Seletores locais. Ajudante выводит и
-JSON-отчет аудита, e конвертированный список IH58/сжатых значений, который
+JSON-отчет аудита, e конвертированный список I105/сжатых значений, который
 операторы прикладывают к prontidão тикетам, а сопутствующий runbook связывает
 no painel Grafana e no Alertmanager, que executa a transição estrita.
 
@@ -160,16 +160,16 @@ e `docs/account_structure.md` para diagramas de rede.
 
 ## Formato canônico padrão
 
-Operadores, conversão de configuração de código local no canônico IH58 ou
+Operadores, conversão de configuração de código local no canônico I105 ou
 Selecione o ícone, use a interface CLI do ADDR-5:
 
-1. `iroha tools address inspect` теперь выдает структурированное JSON-резюме с IH58,
+1. `iroha tools address inspect` теперь выдает структурированное JSON-резюме с I105,
    carga útil hexadecimal compactada e canônica. Selecione o item `domain`
    no modelo `kind`/`warning` e no local de trabalho mais difícil
    `input_domain`. O produto `kind` é `local12`, CLI está pronto para uso
    stderr, um JSON-резюме отражает ту же подсказку, contém pacotes CI e SDK moгли
    ее показывать. Instale `legacy  suffix`, exceto o que você deseja
-   codificação convertível como `<ih58>@<domain>`.
+   codificação convertível como `<i105>@<domain>`.
 2. O SDK pode ter um aviso/resumo para o auxiliar JavaScript:
 
    ```js
@@ -179,12 +179,12 @@ Selecione o ícone, use a interface CLI do ADDR-5:
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  Helper сохраняет IH58 префикс, извлеченный из literal, если только вы явно не
+  Helper сохраняет I105 префикс, извлеченный из literal, если только вы явно не
   указали `networkPrefix`, поэтому резюме para не-default сетей не перерисовываются
-  Este é o perfil padrão.3. Converta a carga útil canônica, usando `ih58.value` ou
-   `compressed` из резюме (или запросите другой encoding через `--format`). Эти
+  Este é o perfil padrão.3. Converta a carga útil canônica, usando `i105.value` ou
+   `i105_default` из резюме (или запросите другой encoding через `--format`). Эти
    As barras são adequadas para o seu trabalho.
 4. Abra manifestos, registros e documentos de clientes, formulários canônicos e
    уведомите контрагентов, что Local селекторы будут отклоняться после cutover.
@@ -192,7 +192,7 @@ Selecione o ícone, use a interface CLI do ADDR-5:
    `iroha tools address audit --input addresses.txt --network-prefix 753`. Comando
    literais читает, разделенные переводом строки (comentários com `#` игнорируются,
    em `--input -` ou em uma bandeira usando STDIN), você precisa de um JSON
-   каноническими/IH58/сжатыми резюме для каждой записи и считает ошибки парсинга
+   каноническими/I105/сжатыми резюме для каждой записи и считает ошибки парсинга
    e предупреждения Domínio local. Use `--allow-errors` por auditoria
    `strict CI post-check`, o operador de operação seleciona o seletor local no CI.
 6. Não há necessidade de testar, usar
@@ -200,7 +200,7 @@ Selecione o ícone, use a interface CLI do ADDR-5:
   para transporte CSV `input,status,format,...`, que pode ser canônico
   кодировки, предупреждения и ошибки парсинга один проход.
    Helper по умолчанию пропускает не-Local строки, конвертирует каждую оставшуюся
-   Use a codificação codificada (IH58/сжатый/hex/JSON) e administre o domínio
+   Use a codificação codificada (I105/сжатый/hex/JSON) e administre o domínio
    por `legacy  suffix`. Совмещайте с `--allow-errors`, чтобы продолжать скан даже
    exceto dump que contém literais.
 7. CI/lint automático pode ser usado para substituir `ci/check_address_normalize.sh`, caixa
@@ -243,6 +243,6 @@ Ative o marcador nas notas de lançamento do código/recuperação do cutover:
 > **Адреса:** Auxiliar auxiliar `iroha tools address normalize`
 > e colocado em CI (`ci/check_address_normalize.sh`), este pacote de cola/
 > обозревателя могли конвертировать устаревшие Seletores locais em канонические
-> IH58/formas de configuração para blocos Local-8/Local-12 na mainnet. Обновите любые
+> I105/formas de configuração para blocos Local-8/Local-12 na mainnet. Обновите любые
 > кастомные экспорты, чтобы запускать команду и прикладывать нормализованный
 > список к pacote de evidências релиза.

@@ -77,8 +77,10 @@ fn build_bench_state() -> BenchState {
     let (recipient, _) = gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority);
-    let authority_account = Account::new(authority.clone()).build(&authority);
-    let recipient_account = Account::new(recipient.clone()).build(&recipient);
+    let authority_account =
+        Account::new(authority.to_account_id(domain_id.clone())).build(&authority);
+    let recipient_account =
+        Account::new(recipient.to_account_id(domain_id.clone())).build(&recipient);
     let world = World::with([domain], [authority_account, recipient_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -200,7 +202,10 @@ fn run_benchmarks(c: &mut Criterion) {
     });
     bench_isi(c, "RegisterAccount", setup_none, |_ctx| {
         let (acc, _) = gen_account_in("wonderland");
-        Register::account(Account::new(acc)).into()
+        Register::account(Account::new(
+            acc.to_account_id("wonderland".parse().expect("valid domain id")),
+        ))
+        .into()
     });
     bench_isi(c, "RegisterAssetDef", setup_none, |_ctx| {
         let ad: AssetDefinitionId = "xor#wonderland".parse().unwrap();

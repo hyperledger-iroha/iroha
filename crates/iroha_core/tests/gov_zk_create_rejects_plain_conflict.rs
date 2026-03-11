@@ -14,7 +14,7 @@ use iroha_data_model::{
     asset::AssetDefinition,
     block::BlockHeader,
     confidential::ConfidentialStatus,
-    domain::Domain,
+    domain::{Domain, DomainId},
     isi::{verifying_keys, zk::CreateElection},
     permission::Permission,
     prelude::Grant,
@@ -29,10 +29,14 @@ use nonzero_ext::nonzero;
 fn create_election_rejects_plain_conflict() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain =
-        Domain::new("wonderland".parse().expect("domain")).build(&iroha_test_samples::ALICE_ID);
-    let account =
-        Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
+    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain = Domain::new(domain_id.clone()).build(&iroha_test_samples::ALICE_ID);
+    let account = Account::new(
+        iroha_test_samples::ALICE_ID
+            .clone()
+            .to_account_id(domain_id),
+    )
+    .build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     let state = State::new_for_testing(world, kura, query_handle);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

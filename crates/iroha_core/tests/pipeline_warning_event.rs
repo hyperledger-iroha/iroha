@@ -41,12 +41,13 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(
@@ -159,12 +160,13 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(

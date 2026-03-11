@@ -86,7 +86,7 @@ Le coureur imprime le journal `info("Hello from Kotodama")` et exécute l'appel 
 
 ## 4. Envie du bytecode via ToriiComme ce n'est pas le cas, j'aimerais le bytecode compilé pour Torii en utilisant la CLI. L'identité du responsable du développement et dérivée de la personne publique sur `defaults/client.toml`, portant l'ID du compte
 ```
-ih58...
+i105...
 ```
 
 Utilisez le fichier de configuration pour fournir une URL de Torii, un ID de chaîne et une clé d'Assurance :
@@ -106,7 +106,7 @@ Utilisez votre profil CLI pour rechercher les détails du compte correspondant a
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

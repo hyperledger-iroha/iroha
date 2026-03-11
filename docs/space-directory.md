@@ -107,11 +107,11 @@ iroha app space-directory manifest scaffold \
   --deny-program cbdc.kit \
   --deny-method withdraw \
   --deny-reason "Withdrawals disabled for this UAID." \
-  --profile-governance-issuer ih58... \
+  --profile-governance-issuer i105... \
   --profile-governance-ticket gov-2026-02-rotation \
-  --profile-validator ih58... \
-  --profile-validator ih58... \
-  --profile-da-attester ih58...
+  --profile-validator i105... \
+  --profile-validator i105... \
+  --profile-da-attester i105...
 ```
 
 The command writes `manifest.json` + `profile.json` (defaults to
@@ -240,8 +240,8 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `?address_format=compressed` if you need the `sora…` literals for QR
-  payloads; IH58 strings remain the default.【docs/source/torii/portfolio_api.md】
+  `canonical I105 output` if you need the I105 literals for QR
+  payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
 
@@ -254,7 +254,6 @@ manifest change (or during audits) to capture deterministic JSON snapshots:
 iroha app space-directory manifest fetch \
   --uaid uaid:0f4d…ab11 \
   --status active \
-  --address-format compressed \
   --json-out artifacts/nexus/cbdc/2026-05-01T00Z/uaid_manifests.json
 
 # Inspect the dataspace bindings and persist the response for auditors
@@ -311,7 +310,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 ```
 
 Use the optional `dataspace` query parameter (u64) to filter the response to a
-single dataspace. `address_format=compressed` rewrites the embedded `accounts`
+single dataspace. `canonical I105 output` rewrites the embedded `accounts`
 arrays to the Sora-specific `sora` encoding for wallet/UI parity. Each entry
 includes the manifest hash, lifecycle metadata, ledger bindings, and the
 canonical `AssetPermissionManifest` JSON:
@@ -330,7 +329,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["ih58..."],
+      "accounts": ["i105..."],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -388,7 +387,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -445,7 +444,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -465,7 +464,7 @@ fee-policy gates match the read endpoints.
 Profiles capture everything a new validator needs before connecting. The
 `profile/cbdc_lane_profile.json` fixture documents:
 
-- Governance issuer/quorum (`ih58...` + evidence ticket ID).
+- Governance issuer/quorum (`i105...` + evidence ticket ID).
 - Validator set + quorum and protected namespaces (`cbdc`, `gov`).
 - DA profile (class A, attester roster, rotation cadence).
 - Composability group ID and whitelist linking UAIDs to capability manifests.
@@ -705,8 +704,8 @@ activation_epoch: 4097
 expiry_epoch: 4600
 change_type: activation
 owners:
-  - ih58...
-  - ih58...
+  - i105...
+  - i105...
 approvals_required: 5
 ---
 

@@ -23,24 +23,23 @@ function buildAccountForDomain(domain) {
   });
   return {
     address,
-    ih58: address.toIH58(),
+    i105: address.toI105(),
     canonicalHex: address.canonicalHex(),
-    compressed: address.toCompressedSora(),
   };
 }
 
 test("inspectAccountId reports selector-free domain summary", () => {
-  const { ih58, canonicalHex, compressed } = buildAccountForDomain("wonderland");
-  const summary = inspectAccountId(ih58);
+  const { i105, canonicalHex } = buildAccountForDomain("wonderland");
+  const summary = inspectAccountId(i105);
 
   assert.equal(summary.domain.kind, "default");
   assert.equal(summary.domain.warning, null);
   assert.deepEqual(summary.warnings, []);
-  assert.equal(summary.ih58.value, ih58);
-  assert.equal(summary.ih58.networkPrefix, 753);
-  assert.equal(summary.compressed, compressed);
+  assert.equal(summary.i105.value, i105);
+  assert.equal(summary.i105.chainDiscriminant, 753);
+  assert.equal(summary.i105Warning.length > 0, true);
   assert.equal(summary.canonicalHex, canonicalHex);
-  assert.equal(summary.detectedFormat.kind, "ih58");
+  assert.equal(summary.detectedFormat.kind, "i105");
   assert.equal(summary.inputDomain, null);
 
   assert.throws(
@@ -52,29 +51,29 @@ test("inspectAccountId reports selector-free domain summary", () => {
 });
 
 test("inspectAccountId handles default-domain addresses without warnings", () => {
-  const { ih58 } = buildAccountForDomain(DEFAULT_DOMAIN_NAME);
-  const summary = inspectAccountId(ih58, { networkPrefix: 7 });
+  const { i105 } = buildAccountForDomain(DEFAULT_DOMAIN_NAME);
+  const summary = inspectAccountId(i105, { chainDiscriminant: 7 });
   assert.equal(summary.domain.kind, "default");
   assert.equal(summary.domain.warning, null);
   assert.deepEqual(summary.warnings, []);
-  assert.equal(summary.ih58.networkPrefix, 7);
+  assert.equal(summary.i105.chainDiscriminant, 7);
 });
 
 test("inspectAccountId accepts literals without domain suffix", () => {
-  const { ih58 } = buildAccountForDomain("wonderland");
-  const summary = inspectAccountId(ih58);
+  const { i105 } = buildAccountForDomain("wonderland");
+  const summary = inspectAccountId(i105);
   assert.equal(summary.inputDomain, null);
-  assert.equal(summary.detectedFormat.kind, "ih58");
+  assert.equal(summary.detectedFormat.kind, "i105");
 });
 
-test("inspectAccountId warns when a compressed literal is provided", () => {
+test("inspectAccountId treats `sora` sentinel literals as canonical I105", () => {
   const { address } = buildAccountForDomain(DEFAULT_DOMAIN_NAME);
-  const compressed = address.toCompressedSora();
+  const literal = address.toI105Default();
 
-  const summary = inspectAccountId(compressed);
-  assert.equal(summary.detectedFormat.kind, "compressed");
-  assert.equal(summary.compressedWarning.includes("Compressed Sora"), true);
-  assert.deepEqual(summary.warnings, [summary.compressedWarning]);
+  const summary = inspectAccountId(literal);
+  assert.equal(summary.detectedFormat.kind, "i105");
+  assert.equal(summary.i105.value, literal);
+  assert.deepEqual(summary.warnings, []);
 });
 
 test("inspectAccountId rejects malformed literals", () => {
@@ -83,14 +82,14 @@ test("inspectAccountId rejects malformed literals", () => {
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
   );
   assert.throws(
-    () => inspectAccountId("ih58@"),
+    () => inspectAccountId("i105@"),
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
   );
 });
 
 test("inspectAccountId rejects encoded literals with domain suffix", () => {
-  const { ih58 } = buildAccountForDomain("wonderland");
-  const mismatched = `${ih58}@${DEFAULT_DOMAIN_NAME}`;
+  const { i105 } = buildAccountForDomain("wonderland");
+  const mismatched = `${i105}@${DEFAULT_DOMAIN_NAME}`;
   assert.throws(
     () => inspectAccountId(mismatched),
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
@@ -98,22 +97,22 @@ test("inspectAccountId rejects encoded literals with domain suffix", () => {
 });
 
 test("inspectAccountId normalizes prefix options and enforces validation", () => {
-  const { address, ih58 } = buildAccountForDomain("wonderland");
-  const summary = inspectAccountId(ih58, { expectPrefix: "753", networkPrefix: "7" });
-  assert.equal(summary.ih58.networkPrefix, 7);
-  assert.equal(summary.ih58.value, address.toIH58(7));
+  const { address, i105 } = buildAccountForDomain("wonderland");
+  const summary = inspectAccountId(i105, { expectDiscriminant: "753", chainDiscriminant: "7" });
+  assert.equal(summary.i105.chainDiscriminant, 7);
+  assert.equal(summary.i105.value, address.toI105(7));
 
-  const literal = address.toIH58();
+  const literal = address.toI105();
   assert.throws(
-    () => inspectAccountId(literal, { expectPrefix: "7" }),
+    () => inspectAccountId(literal, { expectDiscriminant: "7" }),
     (error) =>
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
   );
   assert.throws(
-    () => inspectAccountId(literal, { networkPrefix: "padded" }),
+    () => inspectAccountId(literal, { chainDiscriminant: "padded" }),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+      error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
   );
 });

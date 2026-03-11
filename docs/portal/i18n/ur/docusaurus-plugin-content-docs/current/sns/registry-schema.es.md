@@ -234,7 +234,7 @@ Enum RegistryEventKind {
 گیٹ ویز `RegistryEventV1` کو سبسکرائب کریں اور DNS/SoraFS میں ہم آہنگی کا استعمال کرتے ہوئے:
 
 1. آخری `NameRecordV1` کو واقعات کی ترتیب کے ذریعہ حوالہ دیا گیا ہے۔
-2. دوبارہ حل کرنے والے ریزولور ٹیمپلیٹس (ترجیحی IH58 ایڈریس + کمپریسڈ (`sora`) دوسرے آپشن کے طور پر ، ٹیکسٹ ریکارڈز)۔
+2. دوبارہ حل کرنے والے ریزولور ٹیمپلیٹس (ترجیحی I105 ایڈریس + کمپریسڈ (`sora`) دوسرے آپشن کے طور پر ، ٹیکسٹ ریکارڈز)۔
 3. [`soradns_registry_rfc.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Soradns فلو کے ذریعے زون کا ڈیٹا PIN کریں۔
 
 واقعہ کی فراہمی کی ضمانتیں:
@@ -254,7 +254,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58...",
+    owner: "i105...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -281,7 +281,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58...",
+    steward: "i105...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -294,10 +294,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58...",
+    fund_splitter_account: "i105...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

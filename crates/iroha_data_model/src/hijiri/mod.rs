@@ -509,7 +509,7 @@ mod tests {
     fn incentive_apply_respects_cap() {
         let reward_account = {
             let kp = KeyPair::random();
-            AccountId::new("fraud".parse().unwrap(), kp.public_key().clone())
+            AccountId::new(kp.public_key().clone())
         };
         let schedule = RegistryCreditSchedule {
             reward_account,
@@ -532,7 +532,7 @@ mod tests {
     fn incentive_rewards_scale_linearly() {
         let reward_account = {
             let kp = KeyPair::random();
-            AccountId::new("fraud".parse().unwrap(), kp.public_key().clone())
+            AccountId::new(kp.public_key().clone())
         };
         let schedule = RegistryCreditSchedule {
             reward_account,
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn profile_positive_incentive_lookup() {
         let kp = KeyPair::random();
-        let reward_account = AccountId::new("fraud".parse().unwrap(), kp.public_key().clone());
+        let reward_account = AccountId::new(kp.public_key().clone());
         let schedule = RegistryCreditSchedule {
             reward_account,
             reward_per_attestation: 250,

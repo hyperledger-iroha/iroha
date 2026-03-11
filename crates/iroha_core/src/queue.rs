@@ -707,13 +707,13 @@ impl Queue {
         let mut approvals = BTreeSet::new();
         let signed = tx.as_ref().as_ref();
         let authority = signed.authority();
-        let authority_ih58 = authority.canonical_ih58().map_err(|err| {
+        let authority_i105 = authority.canonical_i105().map_err(|err| {
             Self::enforcement_error(
                 alias,
-                format!("failed to encode authority `{authority}` as ih58: {err}"),
+                format!("failed to encode authority `{authority}` as i105: {err}"),
             )
         })?;
-        approvals.insert(authority_ih58);
+        approvals.insert(authority_i105);
 
         let metadata = signed.metadata();
         let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
@@ -750,13 +750,13 @@ impl Queue {
     ) -> Result<BTreeSet<String>, Error> {
         let mut validators = BTreeSet::new();
         for validator in &rules.validators {
-            let ih58 = validator.canonical_ih58().map_err(|err| {
+            let i105 = validator.canonical_i105().map_err(|err| {
                 Self::enforcement_error(
                     alias,
-                    format!("failed to encode validator `{validator}` as ih58: {err}"),
+                    format!("failed to encode validator `{validator}` as i105: {err}"),
                 )
             })?;
-            validators.insert(ih58);
+            validators.insert(i105);
         }
         Ok(validators)
     }
@@ -5445,10 +5445,10 @@ pub mod tests {
 
     /// Build a minimal world with a single domain and account for tests.
     pub fn world_with_test_domains() -> World {
-        let domain_id = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = "wonderland".parse().expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
-        let domain = Domain::new(domain_id).build(&account_id);
-        let account = Account::new(account_id.clone()).build(&account_id);
+        let domain = Domain::new(domain_id.clone()).build(&account_id);
+        let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
         World::with([domain], [account], [])
     }
 
@@ -5712,8 +5712,9 @@ pub mod tests {
         bind_manifest: bool,
     ) -> (World, AccountId, KeyPair) {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let domain = Domain::new(account_id.domain().clone()).build(&account_id);
-        let account = Account::new(account_id.clone())
+        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain = Domain::new(domain_id.clone()).build(&account_id);
+        let account = Account::new(account_id.clone().to_account_id(domain_id))
             .with_uaid(Some(uaid))
             .build(&account_id);
 
@@ -7439,10 +7440,11 @@ pub mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, bob_keypair) = gen_account_in("wonderland");
         let world = {
-            let domain_id = "wonderland".parse().expect("Valid");
-            let domain = Domain::new(domain_id).build(&alice_id);
-            let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-            let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+            let domain_id: DomainId = "wonderland".parse().expect("Valid");
+            let domain = Domain::new(domain_id.clone()).build(&alice_id);
+            let alice_account =
+                Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+            let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&bob_id);
             World::with([domain], [alice_account, bob_account], [])
         };
         let query_handle = LiveQueryStore::start_test();

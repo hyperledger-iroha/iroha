@@ -8,10 +8,9 @@ use iroha_schema::Ident;
 
 #[test]
 fn transfer_isi_should_be_valid() {
-    let domain: DomainId = "crypto".parse().expect("domain");
-    let source_account = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
-    let destination_account =
-        AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+    let _domain: DomainId = "crypto".parse().expect("domain");
+    let source_account = AccountId::new(KeyPair::random().public_key().clone());
+    let destination_account = AccountId::new(KeyPair::random().public_key().clone());
     let asset_definition_id: AssetDefinitionId = "btc#crypto".parse().expect("asset definition");
     let source_asset_id = AssetId::new(asset_definition_id, source_account);
     let _instruction = Transfer::asset_numeric(source_asset_id, 12u32, destination_account);
@@ -46,11 +45,7 @@ fn compound_predicate_roundtrip() {
 #[test]
 fn role_permission_changed_permission_accessor_exposes_inner_permission() {
     let role_id: RoleId = "moderator".parse().expect("valid role id");
-    let account_ref = AccountId::new(
-        "wonderland".parse().expect("domain"),
-        KeyPair::random().public_key().clone(),
-    )
-    .to_string();
+    let account_ref = AccountId::new(KeyPair::random().public_key().clone()).to_string();
     let permission = Permission::new(
         Ident::from_str("CanModifyAccountMetadata").expect("valid identifier"),
         norito::json!({"account": account_ref}),
@@ -63,8 +58,8 @@ fn role_permission_changed_permission_accessor_exposes_inner_permission() {
 
 #[test]
 fn account_permission_changed_permission_accessor_exposes_inner_permission() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
-    let account_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+    let _domain_id: DomainId = "wonderland".parse().expect("domain");
+    let account_id = AccountId::new(KeyPair::random().public_key().clone());
     let account_ref = account_id.to_string();
     let permission = Permission::new(
         Ident::from_str("CanModifyAccountMetadata").expect("valid identifier"),

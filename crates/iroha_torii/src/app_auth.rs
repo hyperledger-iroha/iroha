@@ -226,12 +226,12 @@ mod tests {
 
     use super::*;
 
-    const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(account);
-        let account_value = Account::new(account.clone()).build(account);
+        let account_value = Account::new(account.to_account_id(domain_id)).build(account);
         Arc::new(State::new_for_testing(
             World::with([domain], [account_value], []),
             Kura::blank_kura_for_testing(),
@@ -248,12 +248,12 @@ mod tests {
 
     #[test]
     fn canonical_message_includes_body_hash() {
-        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=5")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=5")
             .parse()
             .expect("uri");
         let msg = canonical_request_message(&Method::GET, &uri, b"{\"foo\":1}");
         let rendered = String::from_utf8(msg).expect("utf8");
-        assert!(rendered.contains(&format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets")));
+        assert!(rendered.contains(&format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets")));
         assert!(rendered.contains("limit=5"));
         assert!(
             rendered.ends_with("37a76343c8e3c695feeaadfe52329673ff129c65f99f55ae6056c9254f4c481d")
@@ -263,13 +263,10 @@ mod tests {
     #[test]
     fn verify_accepts_valid_signature() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=10")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);
@@ -290,13 +287,10 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_signature() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
         let bad_sig = Signature::new(KeyPair::random().private_key(), b"forged");
@@ -320,17 +314,11 @@ mod tests {
     #[tokio::test]
     async fn verify_rejects_mismatched_path_account() {
         let kp = KeyPair::random();
-        let account: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
-        let other: AccountId = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let account: AccountId = AccountId::new(kp.public_key().clone());
+        let other: AccountId = AccountId::new(KeyPair::random().public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_IH58}/assets?limit=1")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);

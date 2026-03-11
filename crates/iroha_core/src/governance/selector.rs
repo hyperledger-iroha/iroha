@@ -64,7 +64,7 @@ pub fn derive_parliament_bodies(council: &ParliamentTerm) -> ParliamentBodies {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_data_model::account::AccountId;
 
     use super::*;
 
@@ -72,8 +72,7 @@ mod tests {
         use iroha_crypto::{Algorithm, KeyPair};
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

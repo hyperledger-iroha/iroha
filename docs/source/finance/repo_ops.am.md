@@ -803,8 +803,8 @@ hashesን ወይም የክስተት ዥረቶችን እንደገና ለመፍጠ
 
 1. ** ቅጽበታዊ ሒሳቦች።** ኃይል የሚሰጠውን የ`FindAssets` መጠይቁን ይጠቀሙ።
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) ወይም
-   የXOR ቀሪ ሒሳቦችን ለ`ih58...` ለመላክ `iroha_python` አጋዥ፣
-   `ih58...` እና በግምገማው ውስጥ የተሳተፈ እያንዳንዱ የጠረጴዛ መለያ። ማከማቻ
+   የXOR ቀሪ ሒሳቦችን ለ`i105...` ለመላክ `iroha_python` አጋዥ፣
+   `i105...` እና በግምገማው ውስጥ የተሳተፈ እያንዳንዱ የጠረጴዛ መለያ። ማከማቻ
    JSON ስር
    `artifacts/finance/repo/<period>/treasury_assets.json` እና git ይቅረጹ
    መፈጸም/የመሳሪያ ሰንሰለት በተጓዳኝ `README.md`።

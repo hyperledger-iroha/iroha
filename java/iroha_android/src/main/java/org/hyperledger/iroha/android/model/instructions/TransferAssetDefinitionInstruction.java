@@ -99,7 +99,7 @@ public final class TransferAssetDefinitionInstruction implements InstructionTemp
 
     public Builder setSourceAccountId(final String sourceAccountId) {
       this.sourceAccountId =
-          AccountIdLiteral.extractIh58Address(
+          AccountIdLiteral.extractI105Address(
               Objects.requireNonNull(sourceAccountId, "sourceAccountId"));
       return this;
     }
@@ -111,7 +111,7 @@ public final class TransferAssetDefinitionInstruction implements InstructionTemp
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          AccountIdLiteral.extractIh58Address(
+          AccountIdLiteral.extractI105Address(
               Objects.requireNonNull(destinationAccountId, "destinationAccountId"));
       return this;
     }

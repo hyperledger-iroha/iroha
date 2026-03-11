@@ -78,6 +78,7 @@ npm run start
 次のコンポーネントは `docusaurus.config.js` から値を読み取ります:
 
 - **Swagger UI** - `/reference/torii-swagger` で表示。トークンがある場合に bearer スキームを pre-authorize し、`X-TryIt-Client` でリクエストにタグ付けし、`X-TryIt-Auth` を挿入し、`TRYIT_PROXY_PUBLIC_URL` が設定されている場合はプロキシ経由に書き換えます。
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
 - **RapiDoc** - `/reference/torii-rapidoc` で表示。トークン欄を反映し、Swagger と同じ headers を再利用し、URL が設定されると自動的にプロキシをターゲットにします。
 - **Try it console** - API overview ページに埋め込み。任意のリクエスト送信、headers の表示、レスポンスボディの確認ができます。
 

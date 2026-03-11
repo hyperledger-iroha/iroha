@@ -122,7 +122,7 @@ impl Ed25519Sha512 {
             let canonical = point.compress();
 
             // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
-            // byte representation to keep deterministic IH58/in-memory forms in sync).
+            // byte representation to keep deterministic I105/in-memory forms in sync).
             if canonical.as_bytes() != bytes {
                 return Err(ParseError(
                     "non-canonical ed25519 public key encoding".to_string(),
@@ -132,7 +132,7 @@ impl Ed25519Sha512 {
             let key = PublicKey::from(point);
 
             // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
-            // byte representation to keep deterministic IH58/in-memory forms in sync).
+            // byte representation to keep deterministic I105/in-memory forms in sync).
             if key.is_weak() {
                 return Err(ParseError(
                     "ed25519 public key is small-order (weak); rejected".to_string(),

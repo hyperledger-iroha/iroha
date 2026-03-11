@@ -2996,7 +2996,6 @@ mod model {
         #[test]
         fn revocation_bundle_signing_roundtrip() {
             let operator = AccountId::new(
-                "wonderland".parse().expect("domain id"),
                 "ed0120F00DBABE0EDFACE0000000000000000000000000000000000000000000000000"
                     .parse()
                     .expect("public key"),
@@ -3633,8 +3632,8 @@ mod tests {
     }
 
     fn account_from_key(key: &PublicKey, domain: &str) -> AccountId {
-        let domain_id = DomainId::from_str(domain).expect("domain id");
-        AccountId::new(domain_id, key.clone())
+        let _domain_id = DomainId::from_str(domain).expect("domain id");
+        AccountId::new(key.clone())
     }
 
     fn sample_account(seed: u8, domain: &str) -> AccountId {
@@ -4152,8 +4151,8 @@ mod pos_manifest_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
         )
         .expect("public key");
-        let domain = DomainId::from_str("wonderland").expect("domain id");
-        let operator = AccountId::new(domain, public_key.clone());
+        let _domain = DomainId::from_str("wonderland").expect("domain id");
+        let operator = AccountId::new(public_key.clone());
         let backend_root = OfflinePosBackendRoot {
             label: "torii-admission".to_string(),
             role: "offline_admission_signer".to_string(),
@@ -4199,14 +4198,14 @@ mod receipt_challenge_tests {
 
     fn sample_account() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
-        let domain = DomainId::from_str("wonderland").expect("domain id");
-        AccountId::new(domain, key_pair.public_key().clone())
+        let _domain = DomainId::from_str("wonderland").expect("domain id");
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_receiver() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xB2; 32], Algorithm::Ed25519);
-        let domain = DomainId::from_str("soramitsu").expect("domain id");
-        AccountId::new(domain, key_pair.public_key().clone())
+        let _domain = DomainId::from_str("soramitsu").expect("domain id");
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {

@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Парк регистрации
 
-- Убедитесь, что адрес назначения (например, `ih58...`) существует, и отражается на этапе планирования на месте в каждом быстром запуске SDK.
+- Убедитесь, что адрес назначения (например, `i105...`) существует, и отражается на этапе планирования на месте в каждом быстром запуске SDK.
 - Вызовите точку входа `register_and_mint` для создания определения действия ROSE и 250 единиц для Алисы в отдельной транзакции.
-- Проверьте продажи через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить, что фраппе по-русски.
+- Проверьте продажи через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account i105...`, чтобы подтвердить, что фраппе по-русски.
 
 ## Руководства для партнеров SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

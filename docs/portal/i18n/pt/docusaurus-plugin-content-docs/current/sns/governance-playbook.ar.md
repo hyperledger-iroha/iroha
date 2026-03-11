@@ -57,7 +57,7 @@ Você pode usar o CLI `sns governance ...` e o Norito
 | Indicador + Indicador KPI | `docs/source/sns/governance_addenda/` | Ele pode ser usado para definir o KPI e o KPI e o CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | Verifique Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | Você pode usar REST/gRPC, usar `sns_registrar_status_total` e usar ganchos. |
-| UX UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض IH58 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
+| UX UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض I105 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
 | Aplicativo SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | اشتقاق المضيفات الحتمي, سير عمل tailer للشفافية, وقواعد التنبيه. |
 | Máquinas de lavar louça | `docs/source/sns/regulatory/` | ملاحظات استقبال حسب الولاية (مثل EU DSA), اقرارات steward, ملاحق قوالب. |
 | brocas | `ops/drill-log.md` | سجل لتجارب الفوضى وIR المطلوبة قبل الخروج من المراحل. |
@@ -92,11 +92,11 @@ Você pode fazer isso em 24 dias.
 ### 4.4 Perguntas e respostas e| المرحلة | المالك | Produtos e serviços | SLA |
 |--------|--------|------------------|-----|
 | Produtos macios | mordomo / الدعم | Você pode usar `SNS-DF-<id>` para obter títulos de dívida e títulos de dívida. | <=4 horas de semana. |
-| تذكرة guardião | Guardião principal | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` é `GuardianFreezeTicketV1`. O JSON é definido como `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
+| تذكرة guardião | Guardião principal | `sns governance freeze --selector <I105> --reason <text> --until <ts>` é `GuardianFreezeTicketV1`. O JSON é definido como `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
 | تصديق المجلس | مجلس الحوكمة | يوافق او يرفض التجميدات, ويوثق القرار مع رابط لتذكرة guardião وبصمة bond النزاع. | جلسة المجلس التالية او تصويت غير متزامن. |
 | لجنة التحكيم | الامتثال + mordomo | No final de 7 meses (roteiro do mapa) você pode encontrar o `sns governance dispute ballot`. ارفق ايصالات التصويت المجهولة بحزمة الحادث. | الحكم <=7 ايام بعد ايداع bond. |
 | ستئناف | guardião + المجلس | يضاعف الاستئناف vínculo ويعيد عملية المحلفين; Verifique se o Norito `DisputeAppealV1` está funcionando corretamente. | <=10 dias. |
-| فك التجميد والمعالجة | Resolver + resolver | Em `sns governance unfreeze --selector <IH58> --ticket <id>`, você pode usar o GAR/resolver. | مباشرة بعد الحكم. |
+| فك التجميد والمعالجة | Resolver + resolver | Em `sns governance unfreeze --selector <I105> --ticket <id>`, você pode usar o GAR/resolver. | مباشرة بعد الحكم. |
 
 القوانين الطارئة (تجميدات يطلقها guardião <=72 h) تتبع نفس التدفق لكنها تتطلب
 A máquina de lavar roupa e a máquina de lavar roupa são `docs/source/sns/regulatory/`.

@@ -19,8 +19,8 @@ use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
-use iroha_data_model::{account::AccountId, domain::DomainId};
 use norito::{
     decode_from_bytes,
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -51,11 +51,7 @@ fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
         b"sorafs-cli-manifest-submit-authority".to_vec(),
         Algorithm::Ed25519,
     );
-    let authority = AccountId::new(
-        "wonderland".parse::<DomainId>().expect("domain id parses"),
-        keypair.public_key().clone(),
-    )
-    .to_string();
+    let authority = AccountId::new(keypair.public_key().clone()).to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
 }

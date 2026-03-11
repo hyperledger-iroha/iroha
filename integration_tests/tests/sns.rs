@@ -44,7 +44,11 @@ async fn sns_registrar_round_trip() -> Result<()> {
         response.name_record.selector.normalized_label(),
         request.selector.normalized_label()
     );
-    assert_eq!(response.name_record.owner, request.owner);
+    assert_same_owner_controller(
+        &response.name_record.owner,
+        &request.owner,
+        "register response owner should match request owner controller",
+    );
     assert!(
         matches!(response.name_record.status, NameStatus::Active),
         "new registrations must start in the Active state"
@@ -53,7 +57,11 @@ async fn sns_registrar_round_trip() -> Result<()> {
     let selector_literal = format!("{}.sora", request.selector.normalized_label());
     let fetched = client.sns().get_registration(&selector_literal)?;
     assert_eq!(fetched.name_hash, response.name_record.name_hash);
-    assert_eq!(fetched.owner, request.owner);
+    assert_same_owner_controller(
+        &fetched.owner,
+        &request.owner,
+        "fetched owner should preserve request owner controller",
+    );
 
     let policy = client.sns().get_policy(request.selector.suffix_id)?;
     assert_eq!(policy.suffix_key(), "sora");
@@ -239,15 +247,17 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
     let transferred = client
         .sns()
         .transfer(&selector_literal, &transfer_request)?;
-    assert_eq!(
-        transferred.owner, *BOB_ID,
-        "transfer should reassign ownership to Bob"
+    assert_same_owner_controller(
+        &transferred.owner,
+        &BOB_ID,
+        "transfer should reassign ownership to Bob's controller",
     );
 
     let fetched = client.sns().get_registration(&selector_literal)?;
-    assert_eq!(
-        fetched.owner, *BOB_ID,
-        "persisted record should reflect the transfer"
+    assert_same_owner_controller(
+        &fetched.owner,
+        &BOB_ID,
+        "persisted record should reflect Bob's controller after transfer",
     );
     assert!(
         fetched.expires_at_ms >= renewed.expires_at_ms,
@@ -365,6 +375,14 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+fn assert_same_owner_controller(actual: &AccountId, expected: &AccountId, context: &str) {
+    assert_eq!(
+        actual.controller(),
+        expected.controller(),
+        "{context}; expected owner controller `{expected}`, got `{actual}`"
+    );
 }
 
 async fn read_metric_sample(

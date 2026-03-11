@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## باركور دو ريجيستري
 
-- تأكد من أن تعريف NFT (على سبيل المثال `n0#wonderland`) موجود مع الحسابات الشخصية/الوجهة المستخدمة في المقتطف (`ih58...`، `ih58...`).
+- تأكد من أن تعريف NFT (على سبيل المثال `n0#wonderland`) موجود مع الحسابات الشخصية/الوجهة المستخدمة في المقتطف (`i105...`، `i105...`).
 - قم باستدعاء نقطة الدخول `nft_issue_and_transfer` لضبط NFT ونقل Alice إلى Bob وإرفاق مؤشر ميتادونييز صادر عن الإصدار.
 - افحص حالة تسجيل NFT مع `iroha_cli ledger nfts list --account <id>` أو SDK المكافئة للتحقق من النقل، ثم تأكد من أن النشاط قد تم حذفه مرة واحدة حتى يتم تنفيذ تعليمات النسخ.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("ih58...");
+    let owner = account!("i105...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("ih58...");
+    let to = account!("i105...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

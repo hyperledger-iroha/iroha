@@ -404,11 +404,8 @@ mod tests {
     const BOB_SIGNATORY: &str =
         "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
 
-    fn account(signatory: &str, domain: &str) -> AccountId {
-        AccountId::new(
-            domain.parse().expect("domain id"),
-            signatory.parse().expect("public key"),
-        )
+    fn account(signatory: &str, _domain: &str) -> AccountId {
+        AccountId::new(signatory.parse().expect("public key"))
     }
 
     fn asset(id: &str) -> AssetDefinitionId {

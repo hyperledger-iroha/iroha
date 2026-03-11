@@ -462,7 +462,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level,
+        AccountId, ChainId, Level,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
@@ -480,9 +480,8 @@ mod tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let authority = AccountId::new(domain_id, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(0));
         let tx = builder

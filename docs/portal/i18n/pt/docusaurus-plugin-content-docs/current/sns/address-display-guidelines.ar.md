@@ -19,8 +19,8 @@ Não instale o SDK e o SDK do seu computador para que você possa usá-lo
 Bem. Como usar o Android no Android
 `examples/android/retail-wallet` Nome do UX:
 
-- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
-  O nome de usuário é Sora (`sora...`, número de telefone). IH58 امن دائما للمشاركة خارجيا ويغذي
+- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: I105 (المفضل) والصيغة
+  O nome de usuário é Sora (`sora...`, número de telefone). I105 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. Não se preocupe, você pode fazer isso sem parar.
   تطبيقات واعية بـ Sora. Como Android não tem material e material para Android
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, ويطابق
@@ -33,7 +33,7 @@ Bem. Como usar o Android no Android
 - **اشارات النطاق الافتراضي الضمني.** عندما يشير المحدد الى النطاق الضمني
   `default`; يجب على
   المستكشفات ايضا تمييز تسمية النطاق القانونية عندما يشفر المحدد digest.
-- **حمولات QR IH58.** يجب ان ترمز رموز QR سلسلة IH58. اذا فشل توليد QR, اعرض
+- **حمولات QR I105.** يجب ان ترمز رموز QR سلسلة I105. اذا فشل توليد QR, اعرض
   Isso é o que acontece com o dinheiro.
 - **رسائل الحافظة.** بعد نسخ الصيغة المضغوطة, ارسل torradas e snackbar يذكر
   Você pode usar Sora e acessar o IME.
@@ -56,7 +56,7 @@ Você pode usar o Unicode/IME para usar o ADDR-6
 
 ## SDK do SDK
 
-O SDK não é compatível com IH58 e com a interface do usuário
+O SDK não é compatível com I105 e com a interface do usuário
 Exemplo:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -79,7 +79,7 @@ E isso pode ser um problema para você.
 
 
 
-يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="ih58|compressed|qr"` على ازرار النسخ حتى تتمكن الواجهات
+يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
   O código de barras do produto Torii
   `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
   `iroha:address-copy` com `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -89,7 +89,7 @@ E isso pode ser um problema para você.
   مراجعات تقاعد Local-12 من تصدير دليل 30 يوم `domain_kind="local12"` مباشرة من
   O `address_ingest` é o Grafana.
 - اربط كل عنصر تحكم بتلميحات `aria-label`/`aria-describedby` مميزة تشرح ما اذا
-  كانت السلسلة امنة للمشاركة (IH58) e خاصة بـ Sora (مضغوطة). ادرج تسمية
+  كانت السلسلة امنة للمشاركة (I105) e خاصة بـ Sora (مضغوطة). ادرج تسمية
   No entanto, você pode usar o recurso de segurança para obter mais informações.
 - O problema é o mesmo (como `<output aria-live="polite">...</output>`) تعلن
   نتائج النسخ والتحذيرات, بما يطابق سلوك VoiceOver/TalkBack Como usar o VoiceOver/TalkBack no Facebook
@@ -102,7 +102,7 @@ O ADDR-6b é um dispositivo de armazenamento de dados que pode ser instalado no 
 
 استخدم [عدة Local -> Global](local-to-global-toolkit.md).
 محددات Local القديمة. Obtenha o JSON e o arquivo JSON
-IH58/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية, بينما يربط دليل التشغيل
+I105/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية, بينما يربط دليل التشغيل
 O Grafana e o Alertmanager não alteram o cutover no site.
 
 ## مرجع سريع للتخطيط الثنائي (ADDR-1a)
@@ -152,13 +152,13 @@ A interface do usuário e os SDKs estão disponíveis para você:
 
 ## فرض الصيغ القانونية
 
-يجب على المشغلين الذين يحولون ترميزات Local القديمة الى IH58 قانوني او سلاسل
-مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
+يجب على المشغلين الذين يحولون ترميزات Local القديمة الى I105 قانوني او سلاسل
+مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع I105 والحمولة المضغوطة
    e hexadecimal. A solução `domain` é igual a `kind`/`warning`
    O problema é o `input_domain`. Eu tenho `kind` e `local12`
    A CLI é usada para stderr e JSON para ser usada no CI e
    SDKs estão disponíveis. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
-   كـ `<ih58>@<domain>`.
+   كـ `<i105>@<domain>`.
 2. Use SDKs para usar JavaScript:
 
    ```js
@@ -168,12 +168,12 @@ A interface do usuário e os SDKs estão disponíveis para você:
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  O código IH58 é literalmente `networkPrefix`
+  O código I105 é literalmente `networkPrefix`
   Não se preocupe, você pode usar o telefone para obter mais informações.
 
-3. Verifique o tamanho do arquivo `ih58.value` e `compressed`
+3. Verifique o tamanho do arquivo `i105.value` e `i105_default`
    Isso é feito (ou seja, o arquivo `--format`). هذه السلاسل امنة بالفعل
    Não.
 4. حدث manifestos والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ
@@ -189,7 +189,7 @@ A interface do usuário e os SDKs estão disponíveis para você:
   لملفات الجداول الخاصة بمعالجة محددات Local, استخدم
   A remoção de CSV `input,status,format,...` é feita por meio de arquivos e arquivos
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا,
-  ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON), ويحافظ على
+  ويحول كل ادخال متبق الى الترميز المطلوب (I105/مضغوط/hex/JSON), ويحافظ على
   O código de segurança é `legacy  suffix`. Modelo `--allow-errors`
   Não há necessidade de usar literais.
 7. Use CI/lint como `ci/check_address_normalize.sh` para obter mais informações
@@ -229,6 +229,6 @@ Use `domain_kind="local12"` para obter mais informações em 30 dias.
 
 > **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
-> من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
+> من تحويل محددات Local القديمة الى صيغ I105/مضغوطة قانونية قبل حظر Local-8/Local-12
 > Em mainnet. Você pode fazer isso com uma chave de fenda e uma caixa de som
 > بحزمة دليل الاصدار.

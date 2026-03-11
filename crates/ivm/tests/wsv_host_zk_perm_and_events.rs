@@ -45,9 +45,7 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
 fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
     let value = norito::json::to_value(&account).expect("serialize account");
     let literal = value.as_str().expect("account literal");
-    ScopedAccountId::parse_encoded(literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("canonical account id must parse")
+    ScopedAccountId::parse_encoded(literal).expect("canonical account id must parse")
 }
 
 fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64, label: &str) {
@@ -112,7 +110,7 @@ fn zk_register_shield_permissions_and_events() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -194,7 +192,7 @@ fn unshield_requires_verify_even_with_permission() {
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -280,7 +278,7 @@ fn zk_transfer_requires_matching_vk_reference() {
 
     let mut host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

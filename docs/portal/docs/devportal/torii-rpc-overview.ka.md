@@ -58,6 +58,7 @@ SDK-ს სპეციფიკური მითითებები:
 1. [გაუშვით პროქსი](./try-it.md#start-the-proxy-locally) და დააყენეთ
    `TRYIT_PROXY_PUBLIC_URL`, რათა ვიჯეტებმა იცოდნენ სად გაგზავნონ ტრაფიკი.
 2. გახსენით **სცადეთ** ბარათი ამ გვერდზე ან `/reference/torii-swagger`
+   For MCP/agent flows, use `/reference/torii-mcp`.
    პანელი და აირჩიეთ საბოლოო წერტილი, როგორიცაა `POST /v1/pipeline/submit`.
 3. გადართეთ **Content-Type** `application/x-norito`-ზე, აირჩიეთ **ორობითი**
    რედაქტორი და ატვირთეთ `fixtures/norito_rpc/transfer_asset.norito`

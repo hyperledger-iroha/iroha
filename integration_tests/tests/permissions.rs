@@ -4,7 +4,6 @@
 use std::{
     io::ErrorKind,
     path::PathBuf,
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -24,9 +23,7 @@ use iroha_executor_data_model::permission::{
     nft::CanModifyNftMetadata,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
-};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
 use tokio::{
     runtime::Runtime,
     time::{sleep, timeout},
@@ -94,22 +91,14 @@ async fn read_peer_log_with_retry(
 fn debug_print_genesis_transactions() {
     let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
     let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
-    let transfer_domain = Transfer::domain(
-        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-        kingdom_id.clone(),
-        ALICE_ID.clone(),
-    );
-    let asset_definition_id = "xor#kingdom".parse().expect("Valid");
-    let invalid_instruction =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
+    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let Some(network) = sandbox::build_network_or_skip(
         NetworkBuilder::new()
             .with_config_layer(|layer| {
                 layer.write(["confidential", "enabled"], true);
             })
             .with_genesis_instruction(register_domain)
-            .with_genesis_instruction(transfer_domain)
-            .with_genesis_instruction(invalid_instruction),
+            .with_genesis_instruction(duplicate_domain),
         stringify!(debug_print_genesis_transactions),
     ) else {
         return;
@@ -159,25 +148,17 @@ fn debug_print_genesis_transactions() {
 
 #[tokio::test]
 async fn genesis_transactions_are_validated_by_executor() {
-    // Create a domain and transfer it away from genesis, then attempt a forbidden registration.
+    // Registering the same domain twice must be rejected during genesis execution.
     let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
     let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
-    let transfer_domain = Transfer::domain(
-        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-        kingdom_id.clone(),
-        ALICE_ID.clone(),
-    );
-    let asset_definition_id = "xor#kingdom".parse().expect("Valid");
-    let invalid_instruction =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
+    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let Some(network) = sandbox::build_network_or_skip(
         NetworkBuilder::new()
             .with_config_layer(|layer| {
                 layer.write(["confidential", "enabled"], true);
             })
             .with_genesis_instruction(register_domain)
-            .with_genesis_instruction(transfer_domain)
-            .with_genesis_instruction(invalid_instruction),
+            .with_genesis_instruction(duplicate_domain),
         stringify!(genesis_transactions_are_validated_by_executor),
     ) else {
         return;
@@ -189,58 +170,33 @@ async fn genesis_transactions_are_validated_by_executor() {
     let genesis = network.genesis();
     let peer = network.peer();
 
-    let mut events = peer.events();
-    let termination = Arc::new(Mutex::new(None));
-    let termination_wait = {
-        let capture = Arc::clone(&termination);
-        async move {
-            while let Ok(event) = events.recv().await {
-                if let PeerLifecycleEvent::Terminated { status } = event {
-                    *capture.lock().expect("termination mutex poisoned") = Some(status);
-                    break;
-                }
-            }
-        }
-    };
-
-    // Start the peer; skip when sandbox restrictions prevent binding sockets.
-    if let Err(err) = peer.start(network.config_layers(), Some(&genesis)).await {
-        if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-            panic!(
-                "sandboxed network restriction detected while starting genesis_transactions_are_validated_by_executor: {reason}"
-            );
-        }
-        panic!("failed to start peer: {err:?}");
-    }
-
-    timeout(Duration::from_secs(30), termination_wait)
-        .await
-        .expect("peer should panic within timeout");
-
-    let status = termination
-        .lock()
-        .expect("termination mutex poisoned")
-        .expect("termination status captured");
-    assert!(
-        !status.success(),
-        "expected invalid genesis to exit with non-zero status, got {status:?}"
-    );
-    if let Some(code) = status.code() {
-        assert_eq!(
-            code, 1,
-            "invalid genesis should exit with status code 1, got {code}"
+    let startup_result = timeout(
+        Duration::from_secs(30),
+        peer.start_checked(network.config_layers(), Some(&genesis)),
+    )
+    .await
+    .expect("peer startup should complete within timeout");
+    let err = startup_result.expect_err("invalid genesis should prevent peer startup");
+    if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
+        panic!(
+            "sandboxed network restriction detected while starting genesis_transactions_are_validated_by_executor: {reason}"
         );
     }
+    let err_text = format!("{err:?}");
 
     let stderr_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stderr_log_path).await;
     let stdout_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stdout_log_path).await;
-    let mentions_invalid_genesis = stderr_log.contains("Invalid genesis block")
+    let mentions_invalid_genesis = err_text.contains("Invalid genesis block")
+        || err_text.contains("Genesis block execution failed during validation")
+        || stderr_log.contains("Invalid genesis block")
         || stdout_log.contains("Invalid genesis block")
+        || stderr_log.contains("Genesis block execution failed during validation")
+        || stdout_log.contains("Genesis block execution failed during validation")
         || stderr_log.contains("genesis consensus metadata validation failed")
         || stdout_log.contains("genesis consensus metadata validation failed");
     assert!(
         mentions_invalid_genesis,
-        "logs should mention genesis validation failure; stdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
+        "startup failure should mention genesis validation; error was:\n{err_text}\nstdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
     );
 }
 
@@ -340,7 +296,10 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let metrics_url = client.torii_url.join("/metrics")?;
 
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    client.submit_blocking(Register::account(Account::new(mouse_id.clone())))?;
+    let wonderland_domain: DomainId = "wonderland".parse()?;
+    client.submit_blocking(Register::account(Account::new(
+        mouse_id.to_account_id(wonderland_domain.clone()),
+    )))?;
 
     let perm: Permission = CanModifyAccountMetadata {
         account: mouse_id.clone(),
@@ -524,7 +483,8 @@ fn permissions_differ_not_only_by_names() {
     // Registering mouse
     let outfit_domain: DomainId = "outfit".parse().unwrap();
     let create_outfit_domain = Register::domain(Domain::new(outfit_domain.clone()));
-    let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let register_mouse_account =
+        Register::account(Account::new(mouse_id.to_account_id(outfit_domain.clone())));
     client
         .submit_all_blocking::<InstructionBox>([
             create_outfit_domain.into(),
@@ -612,7 +572,10 @@ fn stored_vs_granted_permission_payload() {
     let create_asset =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+    let register_mouse_account = Register::account(Account::new(
+        mouse_id.to_account_id(wonderland_domain.clone()),
+    ));
     iroha
         .submit_all_blocking::<InstructionBox>([register_mouse_account.into(), create_asset.into()])
         .expect("Failed to register mouse");
@@ -653,7 +616,8 @@ fn permissions_are_unified() {
 
     // Given
     let alice_id = ALICE_ID.clone();
-    let rose_definition: AssetDefinitionId = format!("rose#{}", alice_id.domain())
+    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+    let rose_definition: AssetDefinitionId = format!("rose#{wonderland_domain}")
         .parse()
         .expect("valid rose definition");
     let rose_asset = AssetId::new(rose_definition, alice_id.clone());

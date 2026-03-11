@@ -115,6 +115,9 @@ struct Args {
     /// Language code for messages, overrides system language
     #[arg(long, value_name("LANG"))]
     language: Option<String>,
+    /// Enable deterministic machine mode (no startup chatter, strict config loading).
+    #[arg(long)]
+    machine: bool,
     /// Commands
     #[command(subcommand)]
     command: Command,
@@ -615,7 +618,7 @@ mod tools {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+        /// Account address helpers (canonical I105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
@@ -646,6 +649,8 @@ mod tools {
 
 #[derive(Error, Debug)]
 enum MainError {
+    #[error("Failed to parse command-line arguments: {0}")]
+    CliArgs(String),
     #[error("Failed to load config")]
     Config,
     #[error("Failed to serialize config")]
@@ -769,24 +774,29 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
                 print!("{}", err.render());
                 return Ok(());
             }
-            _ => err.exit(),
+            _ => {
+                return Err(Report::new(MainError::CliArgs(err.to_string())));
+            }
         },
     };
-    let args = Args::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let args = Args::from_arg_matches(&matches)
+        .map_err(|err| Report::new(MainError::CliArgs(err.to_string())))?;
 
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
-    eprintln!("{}", i18n.t("info.started"));
-    let build_line_value = build_line.to_string();
-    eprintln!(
-        "{}",
-        i18n.t_with(
-            "info.build_line",
-            &[("build_line", build_line_value.as_str())]
-        )
-    );
+    if !args.machine {
+        eprintln!("{}", i18n.t("info.started"));
+        let build_line_value = build_line.to_string();
+        eprintln!(
+            "{}",
+            i18n.t_with(
+                "info.build_line",
+                &[("build_line", build_line_value.as_str())]
+            )
+        );
+    }
 
-    if let Command::Tools(tools::Command::MarkdownHelp(_md)) = args.command {
+    if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();
         return Ok(());
     }
@@ -808,6 +818,12 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
                 return Err(report
                     .change_context(MainError::Config)
                     .attach(i18n.t("error.config_path")));
+            }
+            if args.machine {
+                return Err(report
+                    .change_context(MainError::Config)
+                    .attach(i18n.t("error.config_path"))
+                    .attach("machine mode requires an explicit readable config"));
             } else {
                 eprintln!("{}", i18n.t("warning.config_missing_offline"));
                 fallback_config()
@@ -950,11 +966,7 @@ fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
 }
 
 fn effective_output_format(args: &Args) -> CliOutputFormat {
-    if matches!(&args.command, Command::Tools(tools::Command::Address(_))) {
-        CliOutputFormat::Text
-    } else {
-        args.output_format
-    }
+    args.output_format
 }
 
 fn color_mode() -> ColorMode {
@@ -1005,10 +1017,9 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
 
 pub(crate) fn fallback_config() -> Config {
     let chain = ChainId::from("offline-cli");
-    let domain: DomainId = "offline".parse().expect("offline domain parses");
     let seed = vec![0u8; 32];
     let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    let account = ScopedAccountId::new(domain, key_pair.public_key().clone());
+    let account = AccountId::new(key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
@@ -1083,12 +1094,12 @@ fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<Str
     while let Some(cause) = current {
         if let Some(admission) = cause.downcast_ref::<AccountAdmissionError>() {
             return Some(match admission {
-                AccountAdmissionError::ImplicitAccountCreationDisabled(domain) => format!(
-                    "Implicit account creation is disabled for domain `{domain}`; register the destination or pass `--ensure-destination` to add an explicit registration."
+                AccountAdmissionError::ImplicitAccountCreationDisabled => format!(
+                    "Implicit account creation is disabled; register the destination or pass `--ensure-destination` to add an explicit registration."
                 ),
                 AccountAdmissionError::InvalidPolicy(invalid) => format!(
-                    "Account admission policy for `{}` is invalid: {}",
-                    invalid.domain, invalid.reason
+                    "Account admission policy is invalid: {}",
+                    invalid.reason
                 ),
                 AccountAdmissionError::DefaultRoleError(default_role_error) => format!(
                     "Default role `{}` could not be assigned during implicit account creation: {}",
@@ -1527,10 +1538,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account identifier (IH58 (preferred) or sora compressed literal)
+        /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -1659,7 +1670,7 @@ mod account {
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let account_id = parse_register_account_id(&args.id)?;
+                    let account_id = parse_register_account_id(&args.id, &args.domain)?;
                     let instruction =
                         iroha::data_model::isi::Register::account(Account::new(account_id));
                     context
@@ -1793,21 +1804,24 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account identifier (IH58 (preferred) or sora compressed literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
-        /// Account identifier for registration (IH58 (preferred) or sora compressed literal)
+        /// Canonical domainless account identifier for registration (canonical I105 literal)
         #[arg(short, long)]
         id: String,
+        /// Domain in which to materialize the account link
+        #[arg(short = 'd', long)]
+        domain: DomainId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account identifier (IH58 (preferred) or sora compressed literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1823,7 +1837,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account identifier (IH58 (preferred) or sora compressed literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1839,7 +1853,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account identifier (IH58 (preferred) or sora compressed literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub id: String,
         /// Role name
@@ -1917,36 +1931,14 @@ mod account {
 
 mod asset {
     use super::*;
-    use iroha::data_model::{
-        account::{Account, AccountAdmissionMode},
-        isi::Register,
-    };
+    use iroha::data_model::account::AccountAdmissionMode;
 
-    fn admission_policy_for_domain(
+    fn admission_policy(
         client: &Client,
-        domain: &DomainId,
     ) -> Result<iroha::data_model::account::AccountAdmissionPolicy> {
         use iroha::data_model::{
-            account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionPolicy},
-            name::Name,
-            parameter::Parameters,
-            prelude::{FindDomains, FindParameters},
+            account::AccountAdmissionPolicy, parameter::Parameters, prelude::FindParameters,
         };
-
-        let domains = client.query(FindDomains).execute_all()?;
-        let domain = domains
-            .into_iter()
-            .find(|entry| entry.id() == domain)
-            .ok_or_else(|| eyre!("Domain `{domain}` not found"))?;
-
-        let policy_key: Name = ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-            .parse()
-            .wrap_err("invalid account admission policy metadata key")?;
-        if let Some(policy_json) = domain.metadata().get(&policy_key) {
-            return policy_json
-                .try_into_any_norito::<AccountAdmissionPolicy>()
-                .wrap_err("failed to decode domain account admission policy");
-        }
 
         let params: Parameters = client.query_single(FindParameters)?;
         params
@@ -1983,9 +1975,9 @@ mod asset {
 
     fn asset_transfer_instructions(
         args: &Transfer,
-        to: &ScopedAccountId,
+        to: &AccountId,
         policy: Option<&AccountAdmissionPolicy>,
-    ) -> Vec<InstructionBox> {
+    ) -> Result<Vec<InstructionBox>> {
         let mut instructions: Vec<InstructionBox> = Vec::new();
         if args.ensure_destination
             && matches!(
@@ -1993,9 +1985,9 @@ mod asset {
                 Some(AccountAdmissionMode::ExplicitOnly)
             )
         {
-            instructions.push(InstructionBox::from(Register::account(Account::new(
-                to.clone(),
-            ))));
+            eyre::bail!(
+                "`--ensure-destination` no longer infers a registration domain; register the destination account explicitly before transferring when implicit account creation is disabled"
+            );
         }
 
         instructions.push(InstructionBox::from(
@@ -2005,7 +1997,7 @@ mod asset {
                 to.clone(),
             ),
         ));
-        instructions
+        Ok(instructions)
     }
 
     impl Run for Command {
@@ -2045,12 +2037,12 @@ mod asset {
                         .wrap_err("failed to resolve --to account")?;
                     let policy = if args.ensure_destination {
                         let client = context.client_from_config();
-                        Some(admission_policy_for_domain(&client, to.domain())?)
+                        Some(admission_policy(&client)?)
                     } else {
                         None
                     };
 
-                    let instructions = asset_transfer_instructions(&args, &to, policy.as_ref());
+                    let instructions = asset_transfer_instructions(&args, &to, policy.as_ref())?;
                     context
                         .finish(instructions)
                         .wrap_err("Failed to transfer numeric asset")
@@ -2197,10 +2189,10 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Source account identifier (IH58 (preferred) or sora compressed literal)
+            /// Source account identifier (canonical I105 literal)
             #[arg(short, long)]
             pub from: String,
-            /// Destination account identifier (IH58 (preferred) or sora compressed literal)
+            /// Destination account identifier (canonical I105 literal)
             #[arg(short, long)]
             pub to: String,
         }
@@ -2381,7 +2373,7 @@ mod asset {
         /// Encoded asset identifier (`norito:<hex>`)
         #[arg(short, long, value_parser = parse_asset_id_literal)]
         pub id: AssetId,
-        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
         /// Transfer amount (integer or decimal)
@@ -2490,7 +2482,7 @@ mod asset {
             let owner = ScopedAccountId::new(domain.clone(), src.public_key().clone());
             let to = ScopedAccountId::new(domain, dest.public_key().clone());
             let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
-            let asset_id = AssetId::new(asset_def_id, owner);
+            let asset_id = AssetId::new(asset_def_id, owner.clone().into());
             let args = Transfer {
                 id: asset_id,
                 to: to.to_string(),
@@ -2508,7 +2500,7 @@ mod asset {
                 .expect("register instruction");
             match reg {
                 RegisterBox::Account(account_reg) => {
-                    assert_eq!(account_reg.object().id(), expected);
+                    assert_eq!(&account_reg.object().scoped_id(), expected);
                 }
                 other => panic!("unexpected register variant: {other:?}"),
             }
@@ -2523,7 +2515,7 @@ mod asset {
             let TransferBox::Asset(asset_transfer) = transfer else {
                 panic!("expected asset transfer");
             };
-            assert_eq!(&asset_transfer.destination, to);
+            assert_eq!(&asset_transfer.destination, to.account());
         }
 
         #[test]
@@ -2533,7 +2525,8 @@ mod asset {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(&args, &to, Some(&policy));
+            let instructions = asset_transfer_instructions(&args, to.account(), Some(&policy))
+                .expect("instructions");
             assert_eq!(instructions.len(), 2);
             assert_register_account(&instructions[0], &to);
             assert_transfer_destination(&instructions[1], &to);
@@ -2542,8 +2535,12 @@ mod asset {
         #[test]
         fn implicit_policy_skips_register_instruction() {
             let (args, to) = sample_transfer_args(true);
-            let instructions =
-                asset_transfer_instructions(&args, &to, Some(&AccountAdmissionPolicy::default()));
+            let instructions = asset_transfer_instructions(
+                &args,
+                to.account(),
+                Some(&AccountAdmissionPolicy::default()),
+            )
+            .expect("instructions");
             assert_eq!(instructions.len(), 1);
             assert_transfer_destination(&instructions[0], &to);
         }
@@ -2555,7 +2552,8 @@ mod asset {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(&args, &to, Some(&policy));
+            let instructions = asset_transfer_instructions(&args, to.account(), Some(&policy))
+                .expect("instructions");
             assert_eq!(instructions.len(), 1);
             assert_transfer_destination(&instructions[0], &to);
         }
@@ -2634,10 +2632,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account identifier (IH58 (preferred) or sora compressed literal)
+        /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred) or sora compressed literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -2900,7 +2898,7 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account (IH58 (preferred) or sora compressed literal)
+        /// List of signatories for the multisig account (canonical I105 literal)
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
@@ -2910,8 +2908,8 @@ mod multisig {
         #[arg(short, long)]
         pub quorum: u16,
         /// Account id to use for the multisig controller. If omitted, a new
-        /// random account is generated in the configured default domain and
-        /// the private key is discarded locally.
+        /// random domainless account id is generated locally, the private key is
+        /// discarded, and the registration uses the configured default home domain.
         #[arg(long)]
         pub account: Option<String>,
         /// Time-to-live for multisig transactions.
@@ -2936,31 +2934,39 @@ mod multisig {
                     .wrap_err_with(|| format!("failed to resolve signatory `{literal}`"))?;
                 signatories.push(account);
             }
+            let mut signatories_with_weights = BTreeMap::new();
+            for (account, weight) in signatories.into_iter().zip(self.weights.into_iter()) {
+                if weight == 0 {
+                    return Err(eyre!("signatory weights must be non-zero"));
+                }
+                if signatories_with_weights.insert(account, weight).is_some() {
+                    return Err(eyre!("duplicate signatory entries are not allowed"));
+                }
+            }
             let account = if let Some(literal) = self.account {
                 resolve_account_id(context, &literal).wrap_err("failed to resolve --account")?
             } else {
-                let default_domain: iroha::data_model::domain::DomainId =
-                    iroha::data_model::account::address::default_domain_name()
-                        .as_ref()
-                        .parse()
-                        .map_err(|_| eyre!("configured default domain label is invalid"))?;
                 let generated = KeyPair::random();
-                ScopedAccountId::new(default_domain, generated.public_key().clone())
+                AccountId::new(generated.public_key().clone())
             };
-            let spec = MultisigSpec::new(
-                signatories.into_iter().zip(self.weights).collect(),
-                NonZeroU16::new(self.quorum).expect("quorum should not be 0"),
-                self.transaction_ttl
-                    .as_millis()
-                    .try_into()
-                    .ok()
-                    .and_then(NonZeroU64::new)
-                    .expect("ttl should be between 1 ms and 584942417 years"),
-            );
+            let quorum =
+                NonZeroU16::new(self.quorum).ok_or_else(|| eyre!("quorum should not be 0"))?;
+            let transaction_ttl_ms = self
+                .transaction_ttl
+                .as_millis()
+                .try_into()
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or_else(|| eyre!("ttl should be between 1 ms and 584942417 years"))?;
+            let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
+            let home_domain: DomainId = iroha::account_address::default_domain_name()
+                .as_ref()
+                .parse()
+                .wrap_err("failed to parse default multisig home domain")?;
             if !context.output_instructions() {
                 context.println(format!("multisig account id: {account}"))?;
             }
-            let instruction = MultisigRegister::with_account(account, spec);
+            let instruction = MultisigRegister::with_account(account.clone(), home_domain, spec);
 
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(instruction)])
@@ -3213,7 +3219,7 @@ mod multisig {
 
     fn surface_policy_ttl<C: RunContext>(
         context: &mut C,
-        multisig_account: &ScopedAccountId,
+        multisig_account: &AccountId,
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
         use iroha::data_model::prelude::FindAccounts;
@@ -3292,7 +3298,7 @@ mod multisig {
         context: &mut C,
         effective_ttl_ms: NonZeroU64,
         policy_ttl_ms: NonZeroU64,
-        account: Option<&ScopedAccountId>,
+        account: Option<&AccountId>,
     ) -> Result<()> {
         let now = SystemTime::now();
         let expiry = now
@@ -3317,19 +3323,13 @@ mod multisig {
         format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}")
     }
 
-    fn multisig_account_from(role: &RoleId) -> Option<ScopedAccountId> {
+    fn multisig_account_from(role: &RoleId) -> Option<AccountId> {
         role.name()
             .as_ref()
             .strip_prefix(MULTISIG_SIGNATORY)?
             .rsplit_once(DELIMITER)
-            .and_then(|(init, last)| {
-                let domain = init.trim_matches(DELIMITER).parse().ok()?;
-                let parsed = ScopedAccountId::parse_encoded(last).ok()?;
-                Some(ScopedAccountId {
-                    domain,
-                    controller: parsed.account_id().controller().clone(),
-                })
-            })
+            .and_then(|(_, last)| AccountId::parse_encoded(last).ok())
+            .map(|parsed| parsed.into_account_id())
     }
 
     type PendingProposals = BTreeMap<ProposalKey, ProposalView>;
@@ -3351,7 +3351,7 @@ mod multisig {
         has_approved: bool,
         got: u16,
         quorum: u16,
-        target: ScopedAccountId,
+        target: AccountId,
     }
 
     impl ApprovalEdge {
@@ -3362,8 +3362,8 @@ mod multisig {
 
     #[derive(Debug, Constructor, Clone, PartialEq, Eq)]
     struct Context {
-        child: ScopedAccountId,
-        this: ScopedAccountId,
+        child: AccountId,
+        this: AccountId,
         key_span: Option<(ProposalKey, ProposalKey)>,
     }
 
@@ -3372,7 +3372,7 @@ mod multisig {
         stack: &mut Vec<Context>,
         client: &Client,
     ) -> Result<()> {
-        let mut fetch = |account_id: &ScopedAccountId| {
+        let mut fetch = |account_id: &AccountId| {
             client
                 .query(FindAccounts)
                 .execute_all()?
@@ -3389,7 +3389,7 @@ mod multisig {
         fetch: &mut F,
     ) -> Result<()>
     where
-        F: FnMut(&ScopedAccountId) -> Result<Account>,
+        F: FnMut(&AccountId) -> Result<Account>,
     {
         let Some(context) = stack.pop() else {
             return Ok(());
@@ -3497,29 +3497,22 @@ mod multisig {
         MultisigInstructionBox::try_from(&custom.payload).ok()
     }
 
-    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &ScopedAccountId) -> Option<u8> {
+    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &AccountId) -> Option<u8> {
         let subject = account.subject_id();
         spec.signatories
             .iter()
             .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
     }
 
-    fn approval_contains_subject(
-        approvals: &BTreeSet<ScopedAccountId>,
-        account: &ScopedAccountId,
-    ) -> bool {
+    fn approval_contains_subject(approvals: &BTreeSet<AccountId>, account: &AccountId) -> bool {
         let subject = account.subject_id();
         approvals
             .iter()
             .any(|approved| approved.subject_id() == subject)
     }
 
-    fn approval_weight_by_subject(
-        spec: &MultisigSpec,
-        approvals: &BTreeSet<ScopedAccountId>,
-    ) -> u16 {
-        let approved_subjects: BTreeSet<_> =
-            approvals.iter().map(ScopedAccountId::subject_id).collect();
+    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u16 {
+        let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
         spec.signatories
             .iter()
             .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
@@ -3531,29 +3524,24 @@ mod multisig {
     mod tests {
         use super::*;
         use iroha::crypto::{Algorithm, KeyPair};
-        use iroha::data_model::{
-            Level,
-            account::{Account, ScopedAccountId},
-            domain::DomainId,
-            isi::Log,
-        };
+        use iroha::data_model::{Level, account::Account, domain::DomainId, isi::Log};
         use iroha_crypto::HashOf;
         use std::{
             collections::{BTreeMap, BTreeSet},
             num::{NonZeroU16, NonZeroU64},
         };
 
-        fn account_from_seed(seed: u8, domain: &DomainId) -> ScopedAccountId {
+        fn account_from_seed(seed: u8, domain: &DomainId) -> AccountId {
             let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-            ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
+            let _ = domain;
+            AccountId::new(key_pair.public_key().clone())
         }
 
         #[test]
         fn approval_weight_by_subject_deduplicates_cross_domain_subjects() {
             let home: DomainId = "home".parse().unwrap();
-            let alt: DomainId = "alt".parse().unwrap();
             let shared = account_from_seed(1, &home);
-            let shared_alt = ScopedAccountId::new(alt, shared.signatory().clone());
+            let shared_alt = shared.clone();
             let peer = account_from_seed(2, &home);
             let spec = MultisigSpec::new(
                 BTreeMap::from([(shared.clone(), 1), (peer.clone(), 1)]),
@@ -3576,14 +3564,15 @@ mod multisig {
         fn fold_proposals_skips_accounts_without_spec_metadata() {
             let domain: DomainId = "wonderland".parse().unwrap();
             let account_id = account_from_seed(9, &domain);
-            let account = Account::new(account_id.clone()).build(&account_id);
+            let account =
+                Account::new(account_id.clone().to_account_id(domain.clone())).build(&account_id);
 
             let mut accounts = BTreeMap::new();
             accounts.insert(account_id.clone(), account);
 
             let mut proposals = BTreeMap::new();
             let mut stack = vec![Context::new(account_id.clone(), account_id.clone(), None)];
-            let mut fetch = |id: &ScopedAccountId| {
+            let mut fetch = |id: &AccountId| {
                 accounts
                     .get(id)
                     .cloned()
@@ -4591,7 +4580,7 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (IH58 (preferred) or sora compressed literal)
+        /// Account executing the trigger (canonical I105 literal)
         #[arg(long)]
         pub authority: Option<String>,
         /// Filter type for the trigger
@@ -4609,7 +4598,7 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account (IH58 (preferred) or sora compressed literal)
+        /// Data filter preset: events for an account (canonical I105 literal)
         #[arg(long)]
         pub data_account: Option<String>,
         /// Data filter preset: events for an encoded asset (`norito:<hex>`)
@@ -5600,7 +5589,6 @@ mod settlement {
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
-        account::ScopedAccountId,
         isi::{
             InstructionBox,
             settlement::{
@@ -6169,7 +6157,7 @@ mod settlement {
             if value { b"true" } else { b"false" }
         }
 
-        fn write_party(prefix: &str, account: &ScopedAccountId) {
+        fn write_party(prefix: &str, account: &AccountId) {
             let bic = bic_from_account(account);
             msg_set(format!("{prefix}/Pty/Bic").as_str(), bic.as_bytes());
             msg_set(
@@ -6178,19 +6166,8 @@ mod settlement {
             );
         }
 
-        fn bic_from_account(account: &ScopedAccountId) -> String {
-            let mut country: String = account
-                .domain()
-                .name()
-                .as_ref()
-                .chars()
-                .filter(char::is_ascii_alphabetic)
-                .take(2)
-                .map(|c| c.to_ascii_uppercase())
-                .collect();
-            while country.len() < 2 {
-                country.push('X');
-            }
+        fn bic_from_account(account: &AccountId) -> String {
+            let country = "XX";
             let mut location: String = account
                 .to_string()
                 .chars()
@@ -6244,9 +6221,10 @@ mod settlement {
             use std::io::Write;
             use tempfile::NamedTempFile;
 
-            fn account_with_seed(domain: &DomainId, seed: u8) -> ScopedAccountId {
+            fn account_with_seed(domain: &DomainId, seed: u8) -> AccountId {
                 let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-                ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
+                let _ = domain;
+                AccountId::new(key_pair.public_key().clone())
             }
 
             fn sample_dvp() -> DvpIsi {
@@ -6509,85 +6487,28 @@ where
     norito::json::from_json(s).map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
 
-fn resolve_account_id_with(literal: &str) -> Result<ScopedAccountId> {
+fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("account literal must not be empty");
     }
 
     if trimmed.contains('@') {
-        eyre::bail!("account literal must not include '@domain'; use IH58 or sora compressed only");
+        eyre::bail!("account literal must not include '@domain'; use canonical I105 only");
     }
     if trimmed
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!(
-            "account literal must be IH58 or sora compressed; canonical hex is not accepted"
-        );
+        eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
-    let parsed = ScopedAccountId::parse_encoded(trimmed)
-        .map_err(|err| eyre!("account literal must be IH58 or sora compressed: {err}"))?;
+    let parsed = AccountId::parse_encoded(trimmed)
+        .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
 }
 
-fn resolve_scoped_account_for_subject(
-    parsed: &ScopedAccountId,
-    subject_accounts: std::collections::BTreeSet<ScopedAccountId>,
-) -> Result<ScopedAccountId> {
-    match subject_accounts.len() {
-        0 => Ok(parsed.clone()),
-        1 => Ok(subject_accounts
-            .into_iter()
-            .next()
-            .expect("set length of 1 must contain one account")),
-        _ => {
-            if subject_accounts.contains(parsed) {
-                return Ok(parsed.clone());
-            }
-            let candidates = subject_accounts
-                .into_iter()
-                .map(|account| account.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            eyre::bail!(
-                "account literal resolves to a subject with multiple scoped accounts; pass one of: {candidates}"
-            );
-        }
-    }
-}
-
-fn resolve_account_id_against_chain<C: RunContext>(
-    context: &C,
-    parsed: &ScopedAccountId,
-) -> Result<Option<ScopedAccountId>> {
-    let accounts = match context
-        .client_from_config()
-        .query(FindAccounts)
-        .execute_all()
-    {
-        Ok(accounts) => accounts,
-        Err(_) => return Ok(None),
-    };
-
-    let subject = parsed.subject_id();
-    let subject_accounts = accounts
-        .into_iter()
-        .map(|entry| entry.id().clone())
-        .filter(|account_id| account_id.subject_id() == subject)
-        .collect::<std::collections::BTreeSet<_>>();
-    resolve_scoped_account_for_subject(parsed, subject_accounts).map(Some)
-}
-
-pub(crate) fn resolve_account_id<C: RunContext>(
-    context: &C,
-    literal: &str,
-) -> Result<ScopedAccountId> {
-    let parsed = resolve_account_id_with(literal)?;
-    match resolve_account_id_against_chain(context, &parsed)? {
-        Some(resolved) => Ok(resolved),
-        None => Ok(parsed),
-    }
+pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
+    resolve_account_id_with(literal)
 }
 
 fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
@@ -6598,14 +6519,14 @@ fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
     parse_asset_id_literal_with(literal, "asset literal")
 }
 
-fn parse_register_account_id(literal: &str) -> Result<ScopedAccountId> {
+fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
-        eyre::bail!("`ledger account register --id` must be an IH58 or sora compressed account id");
+        eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
-            "`ledger account register --id` must not include '@domain'; use IH58 or sora compressed only"
+            "`ledger account register --id` must not include '@domain'; pass the scope via `--domain`"
         );
     }
     if trimmed
@@ -6613,13 +6534,16 @@ fn parse_register_account_id(literal: &str) -> Result<ScopedAccountId> {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
         eyre::bail!(
-            "`ledger account register --id` must be IH58 or sora compressed; canonical hex is not accepted"
+            "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
-    let parsed = ScopedAccountId::parse_encoded(trimmed).map_err(|err| {
-        eyre!("`ledger account register --id` must be an IH58 or sora compressed account id: {err}")
+    let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
+        eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
-    Ok(parsed.into_account_id())
+    Ok(ScopedAccountId::from_account_id(
+        parsed.into_account_id(),
+        domain.clone(),
+    ))
 }
 
 fn string_from_stdin() -> Result<String> {
@@ -6664,6 +6588,7 @@ type ReportResult<T, E> = core::result::Result<T, Report<E>>;
 
 fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
     match report.current_context() {
+        MainError::CliArgs(_) => CliErrorKind::Input,
         MainError::Config => CliErrorKind::Config,
         MainError::TransactionMetadata => CliErrorKind::Input,
         MainError::SerializeConfig => CliErrorKind::Internal,
@@ -6765,10 +6690,10 @@ mod tests {
         }
     }
 
-    fn account_with_seed(domain_literal: &str, seed: u8) -> ScopedAccountId {
-        let domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
+    fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
+        let _domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        ScopedAccountId::new(domain, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     #[test]
@@ -6786,7 +6711,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_output_format_for_address_tools_is_text() {
+    fn effective_output_format_for_address_tools_uses_cli_flag() {
         let args = Args::try_parse_from([
             "iroha",
             "--output-format",
@@ -6797,7 +6722,7 @@ mod tests {
             "0x00",
         ])
         .expect("parse args");
-        assert_eq!(effective_output_format(&args), CliOutputFormat::Text);
+        assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
     }
 
     #[test]
@@ -6845,6 +6770,25 @@ mod tests {
     }
 
     #[test]
+    fn render_cli_error_marks_cli_argument_failures_as_input() {
+        let report = Report::new(MainError::CliArgs("unknown flag".to_string()));
+        let rendered = render_cli_error(&report, CliOutputFormat::Json);
+        assert_eq!(rendered.kind, CliErrorKind::Input);
+        let value: norito::json::Value =
+            norito::json::from_str(&rendered.output).expect("parse error json");
+        let err = value
+            .as_object()
+            .and_then(|obj| obj.get("error"))
+            .and_then(|err| err.get("message"))
+            .and_then(norito::json::Value::as_str)
+            .expect("error message");
+        assert!(
+            err.contains("unknown flag"),
+            "message should include parse context: {err}"
+        );
+    }
+
+    #[test]
     fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
         let mut ctx = test_context(CliOutputFormat::Json);
         ctx.println("hello").expect("println");
@@ -6878,16 +6822,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_register_account_id_accepts_ih58() {
-        let domain: DomainId = iroha::account_address::default_domain_name()
-            .as_ref()
-            .parse()
-            .expect("default domain");
+    fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
+        let key_pair = KeyPair::from_seed(vec![8_u8; 32], Algorithm::Ed25519);
+        let literal = AccountId::new(key_pair.public_key().clone())
+            .to_account_address()
+            .expect("account address")
+            .to_i105()
+            .expect("i105 literal");
+
+        let err =
+            resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
+
+        assert!(
+            err.to_string().contains("must be canonical I105"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_register_account_id_uses_explicit_domain() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
-        let literal = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone())
-            .canonical_ih58()
-            .expect("canonical ih58");
-        let resolved = parse_register_account_id(&literal).expect("register account id");
+        let literal = AccountId::new(key_pair.public_key().clone())
+            .canonical_i105()
+            .expect("canonical i105");
+        let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
         assert_eq!(
             resolved,
             ScopedAccountId::new(domain, key_pair.public_key().clone())
@@ -6896,22 +6855,30 @@ mod tests {
 
     #[test]
     fn parse_register_account_id_rejects_alias_like_literal() {
-        let err = parse_register_account_id("inori@invalid-domain").expect_err("alias should fail");
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let err = parse_register_account_id("inori@invalid-domain", &domain)
+            .expect_err("alias should fail");
         assert!(
-            err.to_string().contains("must not include '@domain'"),
+            err.to_string()
+                .contains("must not include '@domain'; pass the scope via `--domain`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn parse_register_account_id_rejects_encoded_address_suffix() {
+    fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
-        let account = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
-        let literal = format!("{}@{}", account.canonical_ih58().expect("ih58"), domain);
-        let err = parse_register_account_id(&literal).expect_err("encoded address should fail");
+        let literal = AccountId::new(key_pair.public_key().clone())
+            .to_account_address()
+            .expect("account address")
+            .to_i105()
+            .expect("i105 literal");
+        let err = parse_register_account_id(&literal, &domain)
+            .expect_err("non-canonical I105 literal should fail");
         assert!(
-            err.to_string().contains("must not include '@domain'"),
+            err.to_string()
+                .contains("must be a canonical I105 account id"),
             "unexpected error: {err}"
         );
     }
@@ -6920,10 +6887,11 @@ mod tests {
     fn parse_register_account_id_rejects_canonical_hex() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
-        let literal = ScopedAccountId::new(domain, key_pair.public_key().clone())
+        let literal = AccountId::new(key_pair.public_key().clone())
             .to_canonical_hex()
             .expect("canonical hex");
-        let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
+        let err =
+            parse_register_account_id(&literal, &domain).expect_err("canonical hex should fail");
         assert!(
             err.to_string().contains("canonical hex is not accepted"),
             "unexpected error: {err}"
@@ -6991,10 +6959,9 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_resolves_encoded_literal() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
-        let account = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
-        let canonical = account.canonical_ih58().expect("canonical ih58");
+        let account = AccountId::new(key_pair.public_key().clone());
+        let canonical = account.canonical_i105().expect("canonical i105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());
@@ -7269,7 +7236,7 @@ transaction_status_timeout = "77s"
     }
 
     impl CaptureContext {
-        fn new(account: ScopedAccountId) -> Self {
+        fn new(account: AccountId) -> Self {
             let key_pair = KeyPair::from_seed(vec![0u8; 32], Algorithm::Ed25519);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
@@ -7398,10 +7365,7 @@ transaction_status_timeout = "77s"
     fn admission_hint_reports_disabled_domain() {
         use iroha::data_model::isi::error::AccountAdmissionError;
 
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let err = eyre::Report::from(AccountAdmissionError::ImplicitAccountCreationDisabled(
-            domain,
-        ));
+        let err = eyre::Report::from(AccountAdmissionError::ImplicitAccountCreationDisabled);
         let hint = account_admission_hint(err.as_ref()).expect("hint should be present");
         assert!(
             hint.contains("Implicit account creation is disabled"),
@@ -7539,7 +7503,7 @@ transaction_status_timeout = "77s"
             iroha::data_model::events::EventFilterBox::ExecuteTrigger(f) => {
                 let expected = ExecuteTriggerEventFilter::new()
                     .for_trigger("my_trigger".parse().unwrap())
-                    .under_authority(account);
+                    .under_authority(account.into());
                 assert_eq!(f, &expected);
             }
             _ => panic!("expected ExecuteTrigger filter"),
@@ -7702,13 +7666,17 @@ mod multisig_json_tests {
     fn multisig_register_payload_contains_account() {
         let account = multisig_account();
         let mut signatories = BTreeMap::new();
-        signatories.insert(account.clone(), 1);
+        signatories.insert(account.account().clone(), 1);
         let spec = MultisigSpec::new(
             signatories,
             NonZeroU16::new(1).expect("nonzero quorum"),
             NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
         );
-        let register = MultisigRegister::with_account(account, spec);
+        let register = MultisigRegister::with_account(
+            account.account().clone(),
+            account.domain().clone(),
+            spec,
+        );
         let instruction: InstructionBox = register.into();
         let payload = instruction
             .as_any()

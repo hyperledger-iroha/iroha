@@ -82,6 +82,7 @@ npm run start
 הקומפוננטים הבאים קוראים את הערכים מ-`docusaurus.config.js`:
 
 - **Swagger UI** - מוצג ב-`/reference/torii-swagger`; מבצע pre-authorize לסכימת bearer כאשר קיים token,
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   מתייג בקשות עם `X-TryIt-Client`, מזריק `X-TryIt-Auth`, ומבצע rewrite לקריאות דרך ה-proxy כאשר
   `TRYIT_PROXY_PUBLIC_URL` מוגדר.
 - **RapiDoc** - מוצג ב-`/reference/torii-rapidoc`; משקף את שדה ה-token,

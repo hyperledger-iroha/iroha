@@ -55,7 +55,7 @@ fn unregister_account_with_existing_nft_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -116,7 +116,7 @@ fn unregister_domain_with_only_accounts_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -158,7 +158,7 @@ fn unregister_domain_with_only_assets_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

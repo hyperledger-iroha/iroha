@@ -92,11 +92,8 @@ fn has_test_network_feature(feature: &str) -> bool {
 
 fn localnet_builder() -> NetworkBuilder {
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
-    let gas_account_str = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    )
-    .to_string();
+    let gas_account_str =
+        AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -269,15 +266,15 @@ fn npos_multilane_genesis_post_topology_transactions(
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = AccountId::new(
-        ivm_domain.clone(),
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain)).into(),
-        Register::account(Account::new(gas_account_id)).into(),
+        Register::domain(Domain::new(ivm_domain.clone())).into(),
+        Register::account(Account::new(
+            gas_account_id.to_account_id(ivm_domain.clone()),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
     ];
 
@@ -287,8 +284,13 @@ fn npos_multilane_genesis_post_topology_transactions(
         VALIDATOR_STAKE_PER_LANE.saturating_mul(u64::try_from(lanes.len()).unwrap_or(u64::MAX));
 
     for peer in topology {
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
-        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        let validator_id = AccountId::new(peer.public_key().clone());
+        bootstrap_tx.push(
+            Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            ))
+            .into(),
+        );
         bootstrap_tx.push(
             Mint::asset_numeric(
                 mint_amount,
@@ -352,9 +354,7 @@ fn expected_lane_validators(network: &sandbox::SerializedNetwork) -> BTreeSet<St
     network
         .peers()
         .iter()
-        .map(|peer| {
-            AccountId::new(validator_domain.clone(), peer.id().public_key().clone()).to_string()
-        })
+        .map(|peer| AccountId::new(peer.id().public_key().clone()).to_string())
         .collect()
 }
 
@@ -409,7 +409,7 @@ async fn wait_for_active_lane_validators(
 
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let snapshot = client
-            .get_public_lane_validators(lane_id, None)
+            .get_public_lane_validators(lane_id)
             .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
         last_total = total;
@@ -1014,10 +1014,7 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let nexus_observer_id = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
@@ -1147,10 +1144,7 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let nexus_observer_id = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
@@ -1279,10 +1273,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let nexus_observer_id = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
@@ -1441,10 +1432,7 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
     let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let nexus_observer_id = AccountId::new(
-        ivm_domain,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),

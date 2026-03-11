@@ -416,6 +416,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                validation_queue_full_inline_cutover_divisor: iroha_config::parameters::defaults::
+                    sumeragi::VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
                 qc_verify_worker_threads:
                     iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
                 qc_verify_work_queue_cap:

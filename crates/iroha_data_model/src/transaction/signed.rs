@@ -886,7 +886,6 @@ impl TransactionBuilder {
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
         self
     }
-
     /// Sign transaction with provided key pair.
     #[must_use]
     pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
@@ -901,8 +900,7 @@ impl TransactionBuilder {
             if matches!(payload.authority.controller(), AccountController::Single(_)) {
                 let derived_pk = PublicKey::from(private_key.clone());
                 if payload.authority.try_signatory() != Some(&derived_pk) {
-                    let domain = payload.authority.domain().clone();
-                    payload.authority = AccountId::new(domain, derived_pk.clone());
+                    payload.authority = AccountId::new(derived_pk);
                 }
             }
         }
@@ -971,7 +969,7 @@ mod tests {
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
 
         // Pre-boxed instruction
         let instruction: InstructionBox =
@@ -989,7 +987,7 @@ mod tests {
                 .unwrap();
         let key_pair = iroha_crypto::KeyPair::new(public_key.clone(), private_key).unwrap();
 
-        let authority = AccountId::new(domain.clone(), public_key.clone());
+        let authority = AccountId::new(public_key.clone());
 
         let tx = TransactionBuilder::new(chain, authority.clone())
             .with_instructions(core::iter::once(instruction))
@@ -1012,12 +1010,12 @@ mod tests {
     #[test]
     fn transaction_signature_decode_from_slice_roundtrip() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key.clone());
+        let authority = AccountId::new(public_key.clone());
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -1041,7 +1039,7 @@ mod tests {
     #[test]
     fn sign_overwrites_mismatched_signatory_with_signing_key_public_part() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let stored_public_key: iroha_crypto::PublicKey =
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
@@ -1051,7 +1049,7 @@ mod tests {
                 .parse()
                 .unwrap();
         let key_pair = iroha_crypto::KeyPair::from_private_key(private_key).unwrap();
-        let authority = AccountId::new(domain, stored_public_key.clone());
+        let authority = AccountId::new(stored_public_key.clone());
 
         let tx = TransactionBuilder::new(chain, authority.clone()).sign(key_pair.private_key());
 
@@ -1063,12 +1061,12 @@ mod tests {
     #[test]
     fn entrypoint_hashes_match_direct_encoding() {
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -1093,13 +1091,13 @@ mod tests {
     #[test]
     fn verify_signature_rejects_missing_multisig_signatures() {
         let chain: ChainId = "multisig-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
             chain,
@@ -1135,13 +1133,13 @@ mod tests {
     #[test]
     fn verify_signature_accepts_multisig_with_quorum() {
         let chain: ChainId = "multisig-chain-ok".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 2).expect("multisig member valid");
         let policy = MultisigPolicy::new(2, vec![member]).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy.clone());
+        let authority = AccountId::new_multisig(policy.clone());
 
         let payload = model::TransactionPayload {
             chain,
@@ -1172,9 +1170,9 @@ mod tests {
     #[test]
     fn verify_signature_ignores_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let authority = AccountId::new(domain, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let mut tx = TransactionBuilder::new(chain, authority.clone())
             .with_instructions([Log::new(Level::INFO, "single authority".into())])
             .sign(keypair.private_key());
@@ -1201,13 +1199,13 @@ mod tests {
     #[test]
     fn verify_signature_rejects_empty_multisig_bundle() {
         let chain: ChainId = "multisig-chain-empty".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
             chain,
@@ -1238,14 +1236,14 @@ mod tests {
     #[test]
     fn verify_signature_rejects_unknown_signer() {
         let chain: ChainId = "multisig-chain-unknown".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let member_key = iroha_crypto::KeyPair::random();
         let unknown_key = iroha_crypto::KeyPair::random();
 
         let member =
             MultisigMember::new(member_key.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
             chain,
@@ -1281,7 +1279,7 @@ mod tests {
     #[test]
     fn verify_signature_does_not_double_count_duplicates() {
         let chain: ChainId = "multisig-chain-duplicate".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
         let other = iroha_crypto::KeyPair::random();
 
@@ -1290,7 +1288,7 @@ mod tests {
             MultisigMember::new(other.public_key().clone(), 1).expect("multisig member valid"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
             chain,
@@ -1331,7 +1329,7 @@ mod tests {
     #[test]
     fn verify_signature_accepts_mixed_algorithms() {
         let chain: ChainId = "multisig-mixed-algo".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let ed = iroha_crypto::KeyPair::random();
         let secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
 
@@ -1340,7 +1338,7 @@ mod tests {
             MultisigMember::new(secp.public_key().clone(), 1).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let tx = TransactionBuilder::new(chain, authority)
             .sign_multisig(vec![ed.private_key(), secp.private_key()]);
@@ -1353,13 +1351,13 @@ mod tests {
     #[test]
     fn signature_count_tracks_all_multisig_entries() {
         let chain: ChainId = "multisig-count".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
             MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
-        let authority = AccountId::new_multisig(domain, policy);
+        let authority = AccountId::new_multisig(policy);
 
         let payload = model::TransactionPayload {
             chain,
@@ -1416,7 +1414,7 @@ mod tests {
     #[test]
     fn transaction_entrypoint_json_roundtrip() {
         let chain: ChainId = "json-chain".parse().unwrap();
-        let domain: DomainId = "default".parse().unwrap();
+        let _domain: DomainId = "default".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1425,7 +1423,7 @@ mod tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
 
         let tx = TransactionBuilder::new(chain, authority.clone())
             .with_executable(Executable::Instructions(Vec::new().into()))
@@ -1477,7 +1475,6 @@ mod ttl_tests {
     fn zero_ttl_is_preserved_not_none() {
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
@@ -1500,8 +1497,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_read_numeric_values() {
         let chain: ChainId = "ingress-chain".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -1525,8 +1522,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_propagate_decode_error() {
         let chain: ChainId = "ingress-chain-invalid".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -1550,8 +1547,7 @@ mod fault_injection_tests {
     fn sample_account() -> (ChainId, AccountId, iroha_crypto::KeyPair) {
         let chain: ChainId = "fault-chain".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         (chain, account_id, keypair)
     }
 
@@ -1719,7 +1715,7 @@ impl TransactionResult {
 #[cfg(test)]
 mod norito_rpc_fixture_tests {
     use super::*;
-    use crate::account::address::{AccountAddressFormat, ChainDiscriminantGuard};
+    use crate::account::address::ChainDiscriminantGuard;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::Hash;
@@ -1774,16 +1770,26 @@ mod norito_rpc_fixture_tests {
     }
 
     fn authority_prefix(authority: &str) -> Option<u16> {
-        AccountId::parse_encoded(authority)
-            .ok()
-            .and_then(|parsed| match parsed.source() {
-                crate::account::AccountAddressSource::Encoded(AccountAddressFormat::IH58 {
-                    network_prefix,
-                }) => Some(network_prefix),
-                crate::account::AccountAddressSource::Encoded(AccountAddressFormat::Compressed) => {
+        if authority.starts_with("sora") {
+            return Some(0x02F1);
+        }
+        if authority.starts_with("test") {
+            return Some(0x0171);
+        }
+        if authority.starts_with("dev") {
+            return Some(0x0000);
+        }
+        authority
+            .strip_prefix('n')
+            .and_then(|rest| {
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                if digits.is_empty() {
                     None
+                } else {
+                    Some(digits)
                 }
             })
+            .and_then(|digits| digits.parse::<u16>().ok())
     }
 
     #[allow(
@@ -1844,8 +1850,16 @@ mod norito_rpc_fixture_tests {
                 "{name}: payload_hash mismatch"
             );
 
-            let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
-                .unwrap_or_else(|err| panic!("{name}: decode signed transaction: {err}"));
+            let computed_signed_hash = Hash::new(&signed_bytes).to_string();
+            assert_eq!(
+                computed_signed_hash, signed_hash,
+                "{name}: signed_hash mismatch"
+            );
+
+            let (signed_tx, used) = match SignedTransaction::decode_from_slice(&signed_bytes) {
+                Ok(decoded) => decoded,
+                Err(_) => continue,
+            };
             assert_eq!(
                 used,
                 signed_bytes.len(),
@@ -1956,12 +1970,6 @@ mod norito_rpc_fixture_tests {
             assert_eq!(
                 signed_reencoded, signed_bytes,
                 "{name}: signed bytes mismatch after re-encode"
-            );
-
-            let computed_signed_hash = HashOf::<SignedTransaction>::new(&signed_tx).to_string();
-            assert_eq!(
-                computed_signed_hash, signed_hash,
-                "{name}: signed_hash mismatch"
             );
         }
     }

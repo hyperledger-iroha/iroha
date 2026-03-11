@@ -94,7 +94,7 @@ address-manifest-<REVISION>/
 
 6. **エントリの健全性。**
    - `global_domain` エントリは `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }` を必ず含む。
-   - `local_alias` エントリは Norm v1 の 12 バイト digest を含める（`iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` で確認。JSON 概要は `input_domain` にドメインを反映し、`legacy  suffix` は `<ih58>@<domain>` 形式の再エンコードを示す）。
+   - `local_alias` エントリは Norm v1 の 12 バイト digest を含める（`iroha tools address convert <address-or-account_id> --format json --expect-prefix 753` で確認。JSON 概要は `input_domain` にドメインを反映し、`legacy  suffix` は `<i105>@<domain>` 形式の再エンコードを示す）。
    - `tombstone` エントリは退役対象の selector を正確に参照し、`reason_code`、`ticket`、`replaces_sequence` を含める。
 
 7. **フィクスチャ整合性。** 正規ベクトルを再生成し、Local digest
@@ -128,7 +128,7 @@ address-manifest-<REVISION>/
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **マニフェストのドラフト。** 次の形式の JSON を追加します。
@@ -171,7 +171,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — 2 つの Local‑12 ラベルが同一 digest に
     なると即発火。マニフェスト昇格を停止し、`scripts/address_local_toolkit.sh`
     で digest マッピングを確認し、Nexus ガバナンスと調整して再発行します。
-  - `AddressInvalidRatioSlo` — 無効 IH58/圧縮アドレスの割合が 10 分間 0.1% SLO
+  - `AddressInvalidRatioSlo` — 無効 I105/圧縮アドレスの割合が 10 分間 0.1% SLO
     を超えると警告（Local‑8/strict‑mode 拒否は除外）。`torii_address_invalid_total`
     を原因別に調査し、SDK オーナーと調整して strict‑mode を再開します。
 - ログ: Torii の `manifest_refresh` ログとガバナンスチケット番号を `notes.md`

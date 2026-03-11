@@ -140,15 +140,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -157,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` يعكس JSON `/v1/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية حسب التنسيق المطلوب، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة. اترك `ExplorerAccountQrOptions` فارغًا لاستخدام مخرجات IH58 المفضلة أو اضبط `address_format: Some(AddressFormat::Compressed)` للحصول على متغير `sora…` المستخدم في ADDR-6b.
+`ExplorerAccountQrSnapshot` يعكس JSON `/v1/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية حسب التنسيق المطلوب، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة. اترك `ExplorerAccountQrOptions` فارغًا لاستخدام مخرجات I105 المفضلة أو اضبط canonical I105 output للحصول على متغير `i105` المستخدم في ADDR-6b.
 
 ## 7. اشترك في الأحداث
 

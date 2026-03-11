@@ -10,8 +10,8 @@ Ce document décrit la pile d'adressage des comptes d'expédition implémentée 
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) et le
 outillage compagnon. Il fournit :
 
-- Une **adresse Iroha Base58 (IH58)** avec somme de contrôle et face humaine produite par
-  `AccountAddress::to_ih58` qui lie une chaîne discriminante au compte
+- Une **adresse Iroha Base58 (I105)** avec somme de contrôle et face humaine produite par
+  `AccountAddress::to_i105` qui lie une chaîne discriminante au compte
   contrôleur et propose des formes textuelles déterministes et conviviales pour l’interopérabilité.
 - Sélecteurs de domaine pour les domaines par défaut implicites et les résumés locaux, avec un
   balise de sélection de registre global réservée pour le futur routage basé sur Nexus (la
@@ -36,7 +36,7 @@ et une cartographie déterministe du nom de domaine à la chaîne faisant autori
 
 ## Objectifs
 
-- Décrire l'enveloppe IH58 Base58 implémentée dans le modèle de données et le
+- Décrire l'enveloppe I105 Base58 implémentée dans le modèle de données et le
   règles canoniques d'analyse/alias que `AccountId` et `AccountAddress` suivent.
 - Encodez le discriminant de chaîne configuré directement dans chaque adresse et
   définir son processus de gouvernance/registre.
@@ -60,9 +60,9 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical IH58 literal (no `@domain` suffix)
+Display: canonical I105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Encoded account identifiers only: I105.
 - Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -120,29 +120,29 @@ pub struct Common {
 ### 2. Codecs d'adresses canoniques
 
 Le modèle de données Rust expose une seule représentation canonique de la charge utile
-(`AccountAddress`) qui peut être émis sous plusieurs formats destinés aux humains. IH58 est
+(`AccountAddress`) qui peut être émis sous plusieurs formats destinés aux humains. I105 est
 le format de compte préféré pour le partage et la sortie canonique ; le compressé
 Le formulaire `sora` est une option de deuxième choix, réservée à Sora, pour l'UX où l'alphabet kana
 ajoute de la valeur. L'hexagone canonique reste une aide au débogage.
 
-- **IH58 (Iroha Base58)** – une enveloppe Base58 qui intègre la chaîne
+- **I105 (Iroha Base58)** – une enveloppe Base58 qui intègre la chaîne
   discriminant. Les décodeurs valident le préfixe avant de promouvoir la charge utile vers
   la forme canonique.
 - **Vue compressée Sora** – un alphabet Sora uniquement de **105 symboles** construit par
   ajouter le poème イロハ demi-chasse (comprenant ヰ et ヱ) aux 58 caractères
-  Ensemble IH58. Les chaînes commencent par la sentinelle `sora`, intègrent un dérivé de Bech32m
+  Ensemble I105. Les chaînes commencent par la sentinelle `sora`, intègrent un dérivé de Bech32m
   somme de contrôle et omettez le préfixe réseau (Sora Nexus est implicite par la sentinelle).
 
 ```
-  IH58  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
   Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
   ```
 - **Canonical hex** – un encodage `0x…` convivial pour le débogage de l'octet canonique
   enveloppe.
 
-`AccountAddress::parse_encoded` détecte automatiquement IH58 (de préférence), compressé (`sora`, deuxième meilleur) ou hexadécimal canonique
+`AccountAddress::parse_encoded` détecte automatiquement I105 (de préférence), compressé (`sora`, deuxième meilleur) ou hexadécimal canonique
 (`0x...` uniquement ; l'hexagone nu est rejeté) saisit et renvoie à la fois la charge utile décodée et la charge détectée.
-`AccountAddressFormat`. Torii appelle désormais `parse_encoded` pour la norme ISO 20022 supplémentaire
+`AccountAddress`. Torii appelle désormais `parse_encoded` pour la norme ISO 20022 supplémentaire
 traite et stocke la forme hexadécimale canonique afin que les métadonnées restent déterministes
 quelle que soit la représentation originale.
 
@@ -172,15 +172,19 @@ L'encodeur Rust écrit `0x02` pour les contrôleurs à touche unique (version 0,
 norme v1, indicateur d'extension effacé) et `0x0A` pour les contrôleurs multisig (version 0,
 classe 1, norme v1, drapeau d'extension effacé).
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -283,15 +287,15 @@ Détails clés de la mise en œuvre :
 - La charge utile du contrôleur binaire (`ControllerPayload::Multisig`) code
   `version:u8`, `threshold:u16`, `member_count:u8`, puis celui de chaque membre
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. C'est exactement ce que
-  `AccountAddress::canonical_bytes()` écrit sur les charges utiles IH58 (préféré)/sora (deuxième meilleur).
+  `AccountAddress::canonical_bytes()` écrit sur les charges utiles I105 (préféré)/sora (deuxième meilleur).
 - Hashing (`MultisigPolicy::digest_blake2b256()`) utilise Blake2b-256 avec le
   `iroha-ms-policy` chaîne de personnalisation afin que les manifestes de gouvernance puissent se lier à un
-  ID de stratégie déterministe qui correspond aux octets du contrôleur intégrés dans IH58.
+  ID de stratégie déterministe qui correspond aux octets du contrôleur intégrés dans I105.
 - La couverture des luminaires réside dans `fixtures/account/address_vectors.json` (cas
-  `addr-multisig-*`). Les portefeuilles et les SDK doivent affirmer les chaînes canoniques IH58
+  `addr-multisig-*`). Les portefeuilles et les SDK doivent affirmer les chaînes canoniques I105
   ci-dessous pour confirmer que leurs encodeurs correspondent à l'implémentation de Rust.
 
-| Numéro d'identification du cas | Seuil / membres | Littéral IH58 (préfixe `0x02F1`) | Sora compressé (`sora`) littéral | Remarques |
+| Numéro d'identification du cas | Seuil / membres | Littéral I105 (préfixe `0x02F1`) | Sora compressé (`sora`) littéral | Remarques |
 |---------|----------|--------------------------------|-------------------------|-------|
 | `addr-multisig-council-threshold3` | `≥3` poids, membres `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Quorum de gouvernance du domaine du Conseil. |
 | `addr-multisig-wonderland-threshold2` | `≥2`, membres `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Exemple de pays des merveilles à double signature (poids 1 + 2). |
@@ -304,10 +308,10 @@ Détails clés de la mise en œuvre :
 - Les balises de sélecteur/contrôleur inconnues génèrent `UnknownDomainTag` ou `UnknownControllerTag`.
 - Les éléments de clé surdimensionnés ou mal formés soulèvent `KeyPayloadTooLong` ou `InvalidPublicKey`.
 - Les contrôleurs Multisig dépassant 255 membres génèrent `MultisigMemberOverflow`.
-- Conversions IME/NFKC : les Sora kana demi-largeur peuvent être normalisés dans leur forme pleine largeur sans interrompre le décodage, mais la sentinelle ASCII `sora` et les chiffres/lettres IH58 DOIVENT rester ASCII. Les sentinelles pleine largeur ou pliées font surface `ERR_MISSING_COMPRESSED_SENTINEL`, les charges utiles ASCII pleine largeur augmentent `ERR_INVALID_COMPRESSED_CHAR` et les discordances de somme de contrôle apparaissent sous la forme `ERR_CHECKSUM_MISMATCH`. Les tests de propriété dans `crates/iroha_data_model/src/account/address.rs` couvrent ces chemins afin que les SDK et les portefeuilles puissent s'appuyer sur des échecs déterministes.
-- L'analyse Torii et SDK des alias `address@domain` (rejected legacy form) émettent désormais les mêmes codes `ERR_*` lorsque les entrées IH58 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
+- Conversions IME/NFKC : les Sora kana demi-largeur peuvent être normalisés dans leur forme pleine largeur sans interrompre le décodage, mais la sentinelle ASCII `sora` et les chiffres/lettres I105 DOIVENT rester ASCII. Les sentinelles pleine largeur ou pliées font surface `ERR_MISSING_COMPRESSED_SENTINEL`, les charges utiles ASCII pleine largeur augmentent `ERR_INVALID_COMPRESSED_CHAR` et les discordances de somme de contrôle apparaissent sous la forme `ERR_CHECKSUM_MISMATCH`. Les tests de propriété dans `crates/iroha_data_model/src/account/address.rs` couvrent ces chemins afin que les SDK et les portefeuilles puissent s'appuyer sur des échecs déterministes.
+- L'analyse Torii et SDK des alias `address@domain` (rejected legacy form) émettent désormais les mêmes codes `ERR_*` lorsque les entrées I105 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
 - Les charges utiles du sélecteur local de moins de 12 octets apparaissent `ERR_LOCAL8_DEPRECATED`, préservant un basculement définitif à partir des anciens résumés Local‑8.
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Vecteurs binaires normatifs
 
@@ -318,7 +322,7 @@ Détails clés de la mise en œuvre :
   Hex canonique : `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
   Répartition : `0x02` en-tête, balise de sélection `0x01` plus résumé `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, suivi de la charge utile à clé unique (`0x00` balise, `0x01` identifiant de courbe, `0x20` longueur, 32 octets Ed25519 clé).
 
-Les tests unitaires (`account::address::tests::parse_encoded_accepts_all_formats`) affirment les vecteurs V1 ci-dessous via `AccountAddress::parse_encoded`, garantissant que les outils peuvent s'appuyer sur la charge utile canonique sur les formulaires hexadécimaux, IH58 (de préférence) et compressés (`sora`, deuxième meilleur). Régénérez le jeu de luminaires étendu avec `cargo run -p iroha_data_model --example address_vectors`.
+Les tests unitaires (`account::address::tests::parse_encoded_accepts_all_formats`) affirment les vecteurs V1 ci-dessous via `AccountAddress::parse_encoded`, garantissant que les outils peuvent s'appuyer sur la charge utile canonique sur les formulaires hexadécimaux, I105 (de préférence) et compressés (`sora`, deuxième meilleur). Régénérez le jeu de luminaires étendu avec `cargo run -p iroha_data_model --example address_vectors`.
 
 | Domaine | Octet de départ | Hex canonique | Compressé (`sora`) |
 |-------------|-----------|-------------------------------------------------------------------------------------------------------|------------|
@@ -341,19 +345,19 @@ Révisé par : Groupe de travail sur le modèle de données, Groupe de travail s
 
 Les réseaux Sora Nexus sont par défaut `chain_discriminant = 0x02F1`
 (`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). Le
-Les helpers `AccountAddress::to_ih58` et `to_compressed_sora` émettent donc
+Les helpers `AccountAddress::to_i105` et `to_i105` émettent donc
 des formes textuelles cohérentes pour chaque charge utile canonique. Luminaires sélectionnés de
 `fixtures/account/address_vectors.json` (généré via
 `cargo xtask address-vectors`) sont présentés ci-dessous pour référence rapide :
 
-| Compte / sélecteur | Littéral IH58 (préfixe `0x02F1`) | Sora compressé (`sora`) littéral |
+| Compte / sélecteur | Littéral I105 (préfixe `0x02F1`) | Sora compressé (`sora`) littéral |
 |------------------------|--------------------------------|-----------------------------|
 | `default` domaine (sélecteur implicite, graine `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (suffixe `@default` facultatif lors de la fourniture d'indications de routage explicites) |
 | `treasury` (sélecteur de résumé local, graine `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Pointeur de registre global (`registry_id = 0x0000_002A`, équivalent à `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Ces chaînes correspondent à celles émises par la CLI (`iroha tools address convert`), Torii
-réponses (`address_format=ih58|compressed`) et assistants SDK, donc copier/coller UX
+réponses (`canonical I105 literal rendering`) et assistants SDK, donc copier/coller UX
 les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>` (rejected legacy form) uniquement lorsque vous avez besoin d'un indice de routage explicite ; le suffixe ne fait pas partie de la sortie canonique.
 
 #### 2.6 Alias textuels pour l'interopérabilité (prévu)
@@ -361,57 +365,57 @@ les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>`
 - **Style d'alias de chaîne :** `ih:<chain-alias>:<alias@domain>` pour les journaux et les humains
   entrée. Les portefeuilles doivent analyser le préfixe, vérifier la chaîne intégrée et bloquer
   inadéquations.
-- **Formulaire CAIP-10 :** `iroha:<caip-2-id>:<ih58-addr>` pour les chaînes indépendantes
+- **Formulaire CAIP-10 :** `iroha:<caip-2-id>:<i105-addr>` pour les chaînes indépendantes
   intégrations. Ce mappage n'est **pas encore implémenté** dans la version livrée
   chaînes d'outils.
 - **Aide machine :** Publiez des codecs pour Rust, TypeScript/JavaScript, Python,
-  et Kotlin couvrant IH58 et les formats compressés (`AccountAddress::to_ih58`,
+  et Kotlin couvrant I105 et les formats compressés (`AccountAddress::to_i105`,
   `AccountAddress::parse_encoded` et leurs équivalents SDK). Les assistants CAIP-10 sont
   travaux futurs.
 
-#### 2.7 Alias ​​déterministe IH58
+#### 2.7 Alias ​​déterministe I105
 
-- **Mappage de préfixe :** Réutilisez le `chain_discriminant` comme préfixe réseau IH58.
-  `encode_ih58_prefix()` (voir `crates/iroha_data_model/src/account/address.rs`)
+- **Mappage de préfixe :** Réutilisez le `chain_discriminant` comme préfixe réseau I105.
+  `encode_i105_prefix()` (voir `crates/iroha_data_model/src/account/address.rs`)
   émet un préfixe de 6 bits (un seul octet) pour les valeurs `<64` et un préfixe de 14 bits sur deux octets
   forme pour les réseaux plus grands. Les missions faisant autorité vivent dans
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md) ;
   Les SDK DOIVENT maintenir le registre JSON correspondant synchronisé pour éviter les collisions.
-- **Matériel du compte :** IH58 encode la charge utile canonique créée par
+- **Matériel du compte :** I105 encode la charge utile canonique créée par
   `AccountAddress::canonical_bytes()` : octet d'en-tête, sélecteur de domaine et
-  charge utile du contrôleur. Il n’y a aucune étape de hachage supplémentaire ; IH58 intègre le
+  charge utile du contrôleur. Il n’y a aucune étape de hachage supplémentaire ; I105 intègre le
   charge utile du contrôleur binaire (clé unique ou multisig) telle que produite par Rust
   encodeur, pas la carte CTAP2 utilisée pour les résumés de politique multisig.
-- **Encodage :** `encode_ih58()` concatène les octets du préfixe avec le canonique
+- **Encodage :** `encode_i105()` concatène les octets du préfixe avec le canonique
   charge utile et ajoute une somme de contrôle de 16 bits dérivée de Blake2b-512 avec le fixe
-  préfixe `IH58PRE` (`b"IH58PRE" || prefix || payload`). Le résultat est codé en Base58 via `bs58`.
+  préfixe `I105PRE` (`b"I105PRE" || prefix || payload`). Le résultat est codé en Base58 via `bs58`.
   Les assistants CLI/SDK exposent la même procédure et `AccountAddress::parse_encoded`
-  l'inverse via `decode_ih58`.
+  l'inverse via `decode_i105`.
 
 #### 2.8 Vecteurs de tests textuels normatifs
 
-`fixtures/account/address_vectors.json` contient un IH58 complet (de préférence) et compressé (`sora`, deuxième meilleur)
+`fixtures/account/address_vectors.json` contient un I105 complet (de préférence) et compressé (`sora`, deuxième meilleur)
 des littéraux pour chaque charge utile canonique. Points forts :
 
 - **`addr-single-default-ed25519` (Sora Nexus, préfixe `0x02F1`).**  
-  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, compressé (`sora`)
+  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, compressé (`sora`)
   `sora2QG…U4N5E5`. Torii émet ces chaînes exactes à partir de `AccountId`
-  `Display` implémentation (canonique IH58) et `AccountAddress::to_compressed_sora`.
+  `Display` implémentation (canonique I105) et `AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (sélecteur de registre → trésorerie).**  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressé (`sora`)
+  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressé (`sora`)
   `sorakX…CM6AEP`. Démontre que les sélecteurs de registre décodent toujours en
   la même charge utile canonique que le résumé local correspondant.
-- **Cas d'échec (`ih58-prefix-mismatch`).**  
-  Analyse d'un littéral IH58 codé avec le préfixe `NETWORK_PREFIX + 1` sur un nœud
+- **Cas d'échec (`i105-prefix-mismatch`).**  
+  Analyse d'un littéral I105 codé avec le préfixe `NETWORK_PREFIX + 1` sur un nœud
   s'attendre à ce que le préfixe par défaut donne
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  avant que le routage de domaine ne soit tenté. Le luminaire `ih58-checksum-mismatch`
+  avant que le routage de domaine ne soit tenté. Le luminaire `i105-checksum-mismatch`
   exerce une détection de falsification sur la somme de contrôle Blake2b.
 
 #### 2.9 Calendriers de conformité
 
 ADDR‑2 est livré avec un pack de luminaires rejouables couvrant les aspects positifs et négatifs
-scénarios sur l'hexagone canonique, IH58 (préféré), compressé (`sora`, demi-/pleine largeur), implicite
+scénarios sur l'hexagone canonique, I105 (préféré), compressé (`sora`, demi-/pleine largeur), implicite
 sélecteurs par défaut, alias de registre global et contrôleurs multisignatures. Le
 Le JSON canonique réside dans `fixtures/account/address_vectors.json` et peut être
 régénéré avec :
@@ -550,12 +554,12 @@ Points de terminaison HTTP afin que les auditeurs puissent rejouer textuellement
 
 | Tapez | Objectif | Champs obligatoires |
 |------|---------|-----------------|
-| `global_domain` | Déclare qu'un domaine est enregistré globalement et doit correspondre à un discriminant de chaîne et à un préfixe IH58. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
+| `global_domain` | Déclare qu'un domaine est enregistré globalement et doit correspondre à un discriminant de chaîne et à un préfixe I105. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
 | `tombstone` | Supprime définitivement un alias/sélecteur. Requis lors de l’effacement des résumés Local‑8 ou de la suppression d’un domaine. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 Les entrées `global_domain` peuvent éventuellement inclure un `manifest_url` ou un `sorafs_cid`
 pour pointer les portefeuilles vers les métadonnées de la chaîne signée, mais le tuple canonique reste
-`{domain, chain, discriminant/ih58_prefix}`. `tombstone` enregistrements **doivent** citer
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` enregistrements **doivent** citer
 le sélecteur étant retiré et l'artefact de ticket/gouvernance qui a autorisé
 le changement afin que la piste d'audit soit reconstructible hors ligne.
 
@@ -579,14 +583,14 @@ le changement afin que la piste d'audit soit reconstructible hors ligne.
    `iroha tools address convert <address> --format json --expect-prefix 753`
    (ou consommez `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) pour capturer le `digest_hex` exact.
-   La CLI accepte les littéraux IH58, `sora…` et canoniques `0x…` ; ajouter
+   La CLI accepte les littéraux I105, `i105` et canoniques `0x…` ; ajouter
    `@<domain>` uniquement lorsque vous devez conserver une étiquette pour les manifestes.
    Le résumé JSON fait apparaître ce domaine via le champ `input_domain`, et
    `legacy  suffix` relit l'encodage converti sous la forme `<address>@<domain>` (rejected legacy form) pour
    différences manifestes (ce suffixe est une métadonnée, pas un identifiant de compte canonique).
    Pour les exportations orientées vers une nouvelle ligne, utilisez
    `iroha tools address normalize --input <file> legacy-selector input mode` pour convertir en masse Local
-   sélecteurs en formats canoniques IH58 (de préférence), compressés (`sora`, deuxième meilleur), hexadécimaux ou JSON tout en sautant
+   sélecteurs en formats canoniques I105 (de préférence), compressés (`sora`, deuxième meilleur), hexadécimaux ou JSON tout en sautant
    lignes non locales. Lorsque les auditeurs ont besoin de preuves sous forme de tableur, exécutez
    `iroha tools address audit --input <file> --format csv` pour émettre un résumé CSV
    (`input,status,format,domain_kind,…`) qui met en avant les sélecteurs locaux,
@@ -596,7 +600,7 @@ le changement afin que la piste d'audit soit reconstructible hors ligne.
    le manifeste avec `cargo xtask address-vectors` avant de demander des signatures.
 4. **Vérifier et publier.** Suivez la liste de contrôle du runbook (hachages, Sigstore,
    monotonie de la séquence) avant de mettre en miroir le bundle sur SoraFS. Torii maintenant
-   canonise les littéraux IH58 (préféré)/sora (deuxième meilleur) immédiatement après l'atterrissage du bundle.
+   canonise les littéraux I105 (préféré)/sora (deuxième meilleur) immédiatement après l'atterrissage du bundle.
 5. **Surveiller et restaurer.** Gardez les panneaux de collision Local‑8 et Local‑12 à
    zéro pendant 30 jours ; si des régressions apparaissent, republier le manifeste précédent
    uniquement dans l'environnement de non-production concerné jusqu'à ce que la télémétrie se stabilise.
@@ -608,19 +612,19 @@ leurs billets de change.
 
 ### 5. Ergonomie du Wallet & des API
 
-- **Affichage par défaut :** Les portefeuilles affichent l'adresse IH58 (courte, avec somme de contrôle)
+- **Affichage par défaut :** Les portefeuilles affichent l'adresse I105 (courte, avec somme de contrôle)
   plus le domaine résolu sous forme d'étiquette extraite du registre. Les domaines sont
-  clairement marqué comme métadonnées descriptives susceptibles de changer, tandis que IH58 est le
+  clairement marqué comme métadonnées descriptives susceptibles de changer, tandis que I105 est le
   adresse stable.
-- **Canonique d'entrée :** Torii et les SDK acceptent IH58 (préféré)/sora (deuxième meilleur)/0x
+- **Canonique d'entrée :** Torii et les SDK acceptent I105 (préféré)/sora (deuxième meilleur)/0x
   adresses plus `alias@domain` (rejected legacy form), `uaid:…` et
-  `opaque:…` formulaires, puis canonisez-les en IH58 pour la sortie. Il n'y a pas
+  `opaque:…` formulaires, puis canonisez-les en I105 pour la sortie. Il n'y a pas
   bascule en mode strict ; les identifiants bruts de téléphone/e-mail doivent être conservés hors grand livre
   via des mappages UAID/opaques.
-- **Prévention des erreurs :** Les portefeuilles analysent les préfixes IH58 et appliquent la discrimination en chaîne
+- **Prévention des erreurs :** Les portefeuilles analysent les préfixes I105 et appliquent la discrimination en chaîne
   attentes. Les incompatibilités de chaîne déclenchent des pannes matérielles avec des diagnostics exploitables.
 - **Bibliothèques de codecs :** Rust officiel, TypeScript/JavaScript, Python et Kotlin
-  les bibliothèques fournissent un encodage/décodage IH58 ainsi qu'un support compressé (`sora`) pour
+  les bibliothèques fournissent un encodage/décodage I105 ainsi qu'un support compressé (`sora`) pour
   éviter les implémentations fragmentées. Les conversions CAIP-10 ne sont pas encore expédiées.
 
 #### Conseils sur l'accessibilité et le partage sécurisé
@@ -628,62 +632,61 @@ leurs billets de change.
 - Les conseils de mise en œuvre pour les surfaces de produits sont suivis en direct
   `docs/portal/docs/reference/address-safety.md`; faire référence à cette liste de contrôle lorsque
   adapter ces exigences au portefeuille ou à l'explorateur UX.
-- **Flux de partage sécurisé :** Les surfaces qui copient ou affichent des adresses utilisent par défaut le formulaire IH58 et exposent une action « partager » adjacente qui présente à la fois la chaîne complète et un code QR dérivé de la même charge utile afin que les utilisateurs puissent vérifier la somme de contrôle visuellement ou par numérisation. Lorsque la troncature est inévitable (par exemple, petits écrans), conservez le début et la fin de la chaîne, ajoutez des points de suspension clairs et gardez l'adresse complète accessible via la copie dans le presse-papiers pour éviter tout écrêtage accidentel.
+- **Flux de partage sécurisé :** Les surfaces qui copient ou affichent des adresses utilisent par défaut le formulaire I105 et exposent une action « partager » adjacente qui présente à la fois la chaîne complète et un code QR dérivé de la même charge utile afin que les utilisateurs puissent vérifier la somme de contrôle visuellement ou par numérisation. Lorsque la troncature est inévitable (par exemple, petits écrans), conservez le début et la fin de la chaîne, ajoutez des points de suspension clairs et gardez l'adresse complète accessible via la copie dans le presse-papiers pour éviter tout écrêtage accidentel.
 - **Garanties IME :** Les entrées d'adresse DOIVENT rejeter les artefacts de composition des claviers de style IME/IME. Appliquez l'entrée ASCII uniquement, présentez un avertissement en ligne lorsque des caractères pleine chasse ou Kana sont détectés et proposez une zone de collage de texte brut qui supprime les marques combinées avant la validation afin que les utilisateurs japonais et chinois puissent désactiver leur IME sans perdre leur progression.
-- **Prise en charge des lecteurs d'écran :** fournissez des étiquettes visuellement masquées (`aria-label`/`aria-describedby`) qui décrivent les principaux chiffres du préfixe Base58 et divisent la charge utile IH58 en groupes de 4 ou 8 caractères, afin que la technologie d'assistance lise les caractères groupés au lieu d'une chaîne d'exécution. Annoncez le succès de la copie/partage via des régions en direct polies et assurez-vous que les aperçus QR incluent un texte alternatif descriptif (« adresse IH58 pour <alias> sur la chaîne 0x02F1 »).
-- **Utilisation compressée pour Sora uniquement :** Étiquetez toujours la vue compressée `sora…` comme « Sora uniquement » et placez-la derrière une confirmation explicite avant de la copier. Les SDK et les portefeuilles doivent refuser d'afficher une sortie compressée lorsque le discriminant de chaîne n'est pas la valeur de Sora Nexus et doivent rediriger les utilisateurs vers IH58 pour les transferts inter-réseaux afin d'éviter un acheminement erroné des fonds.
+- **Prise en charge des lecteurs d'écran :** fournissez des étiquettes visuellement masquées (`aria-label`/`aria-describedby`) qui décrivent les principaux chiffres du préfixe Base58 et divisent la charge utile I105 en groupes de 4 ou 8 caractères, afin que la technologie d'assistance lise les caractères groupés au lieu d'une chaîne d'exécution. Annoncez le succès de la copie/partage via des régions en direct polies et assurez-vous que les aperçus QR incluent un texte alternatif descriptif (« adresse I105 pour <alias> sur la chaîne 0x02F1 »).
+- **Utilisation compressée pour Sora uniquement :** Étiquetez toujours la vue compressée `i105` comme « Sora uniquement » et placez-la derrière une confirmation explicite avant de la copier. Les SDK et les portefeuilles doivent refuser d'afficher une sortie compressée lorsque le discriminant de chaîne n'est pas la valeur de Sora Nexus et doivent rediriger les utilisateurs vers I105 pour les transferts inter-réseaux afin d'éviter un acheminement erroné des fonds.
 
 ## Liste de contrôle de mise en œuvre
 
-- **Enveloppe IH58 :** Le préfixe encode le `chain_discriminant` en utilisant le compact
-  Schéma 6/14 bits de `encode_ih58_prefix()`, le corps est constitué des octets canoniques
+- **Enveloppe I105 :** Le préfixe encode le `chain_discriminant` en utilisant le compact
+  Schéma 6/14 bits de `encode_i105_prefix()`, le corps est constitué des octets canoniques
   (`AccountAddress::canonical_bytes()`), et la somme de contrôle correspond aux deux premiers octets
-  de Blake2b-512 (`b"IH58PRE"` || préfixe || corps). La charge utile complète est Base58-
+  de Blake2b-512 (`b"I105PRE"` || préfixe || corps). La charge utile complète est Base58-
   encodé via `bs58`.
 - **Contrat de registre :** Publication JSON signée (et racine Merkle en option)
-  `{discriminant, ih58_prefix, chain_alias, endpoints}` avec 24h TTL et
+  `{discriminant, i105_prefix, chain_alias, endpoints}` avec 24h TTL et
   touches de rotation.
 - **Politique de domaine :** ASCII `Name` aujourd'hui ; si vous activez i18n, appliquez UTS-46 pour
   normalisation et UTS-39 pour les contrôles confus. Appliquer l'étiquette max (63) et
   longueurs totales (255).
-- **Aide textuelle :** Expédiez les codecs IH58 ↔ compressés (`sora…`) dans Rust,
+- **Aide textuelle :** Expédiez les codecs I105 ↔ compressés (`i105`) dans Rust,
   TypeScript/JavaScript, Python et Kotlin avec vecteurs de test partagés (CAIP-10
   les cartographies restent des travaux futurs).
 - **Outils CLI :** Fournissez un flux de travail déterministe pour l'opérateur via `iroha tools address convert`
-  (voir `crates/iroha_cli/src/address.rs`), qui accepte les littéraux IH58/`sora…`/`0x…` et
-  étiquettes facultatives `<address>@<domain>` (rejected legacy form), par défaut la sortie IH58 en utilisant le préfixe Sora Nexus (`753`),
+  (voir `crates/iroha_cli/src/address.rs`), qui accepte les littéraux I105/`0x…` et
+  étiquettes facultatives `<address>@<domain>` (rejected legacy form), par défaut la sortie I105 en utilisant le préfixe Sora Nexus (`753`),
   et n'émet l'alphabet compressé Sora uniquement que lorsque les opérateurs le demandent explicitement avec
-  `--format compressed` ou le mode résumé JSON. La commande applique les attentes de préfixe sur
+  `--format i105` ou le mode résumé JSON. La commande applique les attentes de préfixe sur
   analyser, enregistre le domaine fourni (`input_domain` en JSON) et l'indicateur `legacy  suffix`
   relit l'encodage converti sous la forme `<address>@<domain>` (rejected legacy form) afin que les différences manifestes restent ergonomiques.
 - **Wallet/explorer UX :** Suivez les [consignes d'affichage de l'adresse](source/sns/address_display_guidelines.md)
-  livré avec ADDR-6 : offre des boutons de double copie, conserve IH58 comme charge utile QR et avertit
-  aux utilisateurs que le formulaire compressé `sora…` est uniquement Sora et sensible aux réécritures IME.
+  livré avec ADDR-6 : offre des boutons de double copie, conserve I105 comme charge utile QR et avertit
+  aux utilisateurs que le formulaire compressé `i105` est uniquement Sora et sensible aux réécritures IME.
 - **Intégration Torii :** Cache Nexus se manifeste en respectant le TTL, émet
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` de manière déterministe, et
-  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
-  compressed accepted) with canonical IH58 output.
+  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
 
 ### Formats de réponse Torii
 
-- `GET /v1/accounts` accepte un paramètre de requête `address_format` facultatif et
+- `GET /v1/accounts` accepte un paramètre de requête `canonical I105 rendering` facultatif et
   `POST /v1/accounts/query` accepte le même champ à l'intérieur de l'enveloppe JSON.
   Les valeurs prises en charge sont :
-  - `ih58` (par défaut) — les réponses émettent des charges utiles IH58 Base58 canoniques (par exemple,
+  - `i105` (par défaut) — les réponses émettent des charges utiles I105 Base58 canoniques (par exemple,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `compressed` — les réponses émettent la vue compressée `sora…` Sora uniquement pendant
+  - `i105_default` — les réponses émettent la vue compressée `i105` Sora uniquement pendant
     garder les paramètres de filtres/chemin canoniques.
 - Les valeurs non valides renvoient `400` (`QueryExecutionFail::Conversion`). Cela permet
   les portefeuilles et les explorateurs pour demander des chaînes compressées pour l'UX Sora uniquement tout en
-  en gardant IH58 comme valeur par défaut interopérable.
+  en gardant I105 comme valeur par défaut interopérable.
 - Listes des détenteurs d'actifs (`GET /v1/assets/{definition_id}/holders`) et leur JSON
-  la contrepartie de l'enveloppe (`POST …/holders/query`) honore également `address_format`.
+  la contrepartie de l'enveloppe (`POST …/holders/query`) honore également `canonical I105 rendering`.
   Le champ `items[*].account_id` émet des littéraux compressés chaque fois que le
-  Le champ paramètre/enveloppe est défini sur `compressed`, reflétant les comptes
+  Le champ paramètre/enveloppe est défini sur `i105_default`, reflétant les comptes
   points de terminaison afin que les explorateurs puissent présenter une sortie cohérente dans tous les répertoires.
 - **Test :** Ajout de tests unitaires pour les allers-retours encodeur/décodeur, mauvaise chaîne
   échecs et recherches manifestes ; ajouter une couverture d'intégration dans Torii et les SDK
-  pour IH58, les flux sont de bout en bout.
+  pour I105, les flux sont de bout en bout.
 
 ## Registre des codes d'erreur
 
@@ -700,24 +703,24 @@ messages, ainsi que des conseils de résolution recommandés.
 | `ERR_KEY_PAYLOAD_TOO_LONG` | La longueur de la charge utile de la clé de signature dépasse la limite prise en charge. | Les contrôleurs à clé unique sont limités aux longueurs `u8` ; utilisez le multisig pour les grandes clés publiques (par exemple, ML‑DSA). |
 | `ERR_INVALID_HEADER_VERSION` | La version de l’en-tête d’adresse est en dehors de la plage prise en charge. | Émettre la version d'en-tête `0` pour les adresses V1 ; mettre à niveau les encodeurs avant d’adopter de nouvelles versions. |
 | `ERR_INVALID_NORM_VERSION` | L'indicateur de version de normalisation n'est pas reconnu. | Utilisez la version de normalisation `1` et évitez de basculer les bits réservés. |
-| `ERR_INVALID_IH58_PREFIX` | Le préfixe réseau IH58 demandé ne peut pas être codé. | Choisissez un préfixe dans la plage inclusive `0..=16383` publiée dans le registre de la chaîne. |
+| `ERR_INVALID_I105_PREFIX` | Le préfixe réseau I105 demandé ne peut pas être codé. | Choisissez un préfixe dans la plage inclusive `0..=16383` publiée dans le registre de la chaîne. |
 | `ERR_CANONICAL_HASH_FAILURE` | Le hachage canonique de la charge utile a échoué. | Réessayez l'opération ; si l'erreur persiste, traitez-la comme un bug interne dans la pile de hachage. |
 
 ### Décodage de format et détection automatique
 
 | Codes | Échec | Correction recommandée |
 |------|---------|------------------------------|
-| `ERR_INVALID_IH58_ENCODING` | La chaîne IH58 contient des caractères en dehors de l'alphabet. | Assurez-vous que l'adresse utilise l'alphabet IH58 publié et n'a pas été tronquée lors du copier/coller. |
+| `ERR_INVALID_I105_ENCODING` | La chaîne I105 contient des caractères en dehors de l'alphabet. | Assurez-vous que l'adresse utilise l'alphabet I105 publié et n'a pas été tronquée lors du copier/coller. |
 | `ERR_INVALID_LENGTH` | La longueur de la charge utile ne correspond pas à la taille canonique attendue pour le sélecteur/contrôleur. | Fournissez la charge utile canonique complète pour le sélecteur de domaine et la disposition du contrôleur sélectionnés. |
-| `ERR_CHECKSUM_MISMATCH` | La validation de la somme de contrôle IH58 (de préférence) ou compressée (`sora`, deuxième meilleur) a échoué. | Régénérez l'adresse à partir d'une source fiable ; cela indique généralement une erreur de copier/coller. |
-| `ERR_INVALID_IH58_PREFIX_ENCODING` | Les octets du préfixe IH58 sont mal formés. | Ré-encoder l'adresse avec un encodeur conforme ; ne modifiez pas manuellement les principaux octets Base58. |
+| `ERR_CHECKSUM_MISMATCH` | La validation de la somme de contrôle I105 (de préférence) ou compressée (`sora`, deuxième meilleur) a échoué. | Régénérez l'adresse à partir d'une source fiable ; cela indique généralement une erreur de copier/coller. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | Les octets du préfixe I105 sont mal formés. | Ré-encoder l'adresse avec un encodeur conforme ; ne modifiez pas manuellement les principaux octets Base58. |
 | `ERR_INVALID_HEX_ADDRESS` | La forme hexadécimale canonique n'a pas pu être décodée. | Fournissez une chaîne hexadécimale de longueur paire avec préfixe `0x` et produite par l'encodeur officiel. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Le formulaire compressé ne commence pas par `sora`. | Préfixez les adresses Sora compressées avec la sentinelle requise avant de les transmettre aux décodeurs. |
 | `ERR_COMPRESSED_TOO_SHORT` | La chaîne compressée ne contient pas suffisamment de chiffres pour la charge utile et la somme de contrôle. | Utilisez la chaîne compressée complète émise par l'encodeur au lieu d'extraits tronqués. |
 | `ERR_INVALID_COMPRESSED_CHAR` | Caractère extérieur à l’alphabet compressé rencontré. | Remplacez le caractère par un glyphe Base‑105 valide issu des tableaux demi-largeur/pleine largeur publiés. |
 | `ERR_INVALID_COMPRESSED_BASE` | L'encodeur a tenté d'utiliser une base non prise en charge. | Déposer un bug contre l'encodeur ; l'alphabet compressé est fixé à la base 105 dans la V1. |
 | `ERR_INVALID_COMPRESSED_DIGIT` | La valeur du chiffre dépasse la taille de l'alphabet compressé. | Assurez-vous que chaque chiffre se trouve dans `0..105)`, en régénérant l'adresse si nécessaire. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | La détection automatique n'a pas pu reconnaître le format d'entrée. | Fournissez des chaînes hexadécimales IH58 (de préférence), compressées (`sora`) ou canoniques `0x` lors de l'appel des analyseurs. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | La détection automatique n'a pas pu reconnaître le format d'entrée. | Fournissez des chaînes hexadécimales I105 (de préférence), compressées (`sora`) ou canoniques `0x` lors de l'appel des analyseurs. |
 
 ### Validation de domaine et de réseau
 
@@ -725,7 +728,7 @@ messages, ainsi que des conseils de résolution recommandés.
 |------|---------|------------------------------|
 | `ERR_DOMAIN_MISMATCH` | Le sélecteur de domaine ne correspond pas au domaine attendu. | Utilisez une adresse émise pour le domaine prévu ou mettez à jour les attentes. |
 | `ERR_INVALID_DOMAIN_LABEL` | Les vérifications de normalisation de l'étiquette de domaine ont échoué. | Canonisez le domaine à l'aide du traitement non transitionnel UTS-46 avant l'encodage. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | Le préfixe réseau IH58 décodé diffère de la valeur configurée. | Basculez vers une adresse de la chaîne cible ou ajustez le discriminant/préfixe attendu. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Le préfixe réseau I105 décodé diffère de la valeur configurée. | Basculez vers une adresse de la chaîne cible ou ajustez le discriminant/préfixe attendu. |
 | `ERR_UNKNOWN_ADDRESS_CLASS` | Les bits de classe d'adresse ne sont pas reconnus. | Mettez à niveau le décodeur vers une version qui comprend la nouvelle classe ou évitez de falsifier les bits d'en-tête. |
 | `ERR_UNKNOWN_DOMAIN_TAG` | La balise de sélection de domaine est inconnue. | Mettez à jour vers une version prenant en charge le nouveau type de sélecteur ou évitez d'utiliser des charges utiles expérimentales sur les nœuds V1. |
 | `ERR_UNEXPECTED_EXTENSION_FLAG` | Le bit d'extension réservé a été activé. | Effacer les bits réservés ; ils restent fermés jusqu'à ce qu'un futur ABI les présente. |
@@ -744,14 +747,14 @@ messages, ainsi que des conseils de résolution recommandés.
 ## Alternatives envisagées
 
 - **Pure Base58Check (style Bitcoin).** Somme de contrôle plus simple mais détection d'erreurs plus faible
-  que la somme de contrôle IH58 dérivée de Blake2b (`encode_ih58` tronque un hachage de 512 bits)
+  que la somme de contrôle I105 dérivée de Blake2b (`encode_i105` tronque un hachage de 512 bits)
   et manque de sémantique de préfixe explicite pour les discriminants 16 bits.
 - **Intégration du nom de la chaîne dans la chaîne du domaine (par exemple, `finance@chain`).** Ruptures
 - **Comptez uniquement sur le routage Nexus sans changer d'adresse.** Les utilisateurs continueraient
   copier/coller des chaînes ambiguës ; nous voulons que l'adresse elle-même porte le contexte.
 - **Enveloppe Bech32m.** Compatible QR et offre un préfixe lisible par l'homme, mais
-  s'écarterait de l'implémentation IH58 d'expédition (`AccountAddress::to_ih58`)
-  et nécessitent de recréer tous les appareils/SDK. La feuille de route actuelle conserve IH58 +
+  s'écarterait de l'implémentation I105 d'expédition (`AccountAddress::to_i105`)
+  et nécessitent de recréer tous les appareils/SDK. La feuille de route actuelle conserve I105 +
   support compressé (`sora`) tout en poursuivant la recherche sur l'avenir
   Couches Bech32m/QR (le mappage CAIP-10 est différé).
 
@@ -765,15 +768,15 @@ messages, ainsi que des conseils de résolution recommandés.
   sécurité du transport (épinglage HTTPS, format de hachage IPFS) pour la distribution Nexus.
 - Déterminer s'il faut prendre en charge les alias/redirections de domaine pour les migrations et comment
   les faire ressortir sans rompre avec le déterminisme.
-- Spécifiez comment les contrats Kotodama/IVM accèdent aux assistants IH58 (`to_address()`,
+- Spécifiez comment les contrats Kotodama/IVM accèdent aux assistants I105 (`to_address()`,
   `parse_address()`) et si le stockage en chaîne doit un jour exposer CAIP-10
-  mappages (aujourd’hui IH58 est canonique).
-- Explorer l'enregistrement des chaînes Iroha dans des registres externes (par exemple, registre IH58,
+  mappages (aujourd’hui I105 est canonique).
+- Explorer l'enregistrement des chaînes Iroha dans des registres externes (par exemple, registre I105,
   Répertoire d’espaces de noms CAIP) pour un alignement plus large de l’écosystème.
 
 ## Prochaines étapes
 
-1. L'encodage IH58 a atterri dans `iroha_data_model` (`AccountAddress::to_ih58`,
+1. L'encodage I105 a atterri dans `iroha_data_model` (`AccountAddress::to_i105`,
    `parse_encoded`); continuez à porter les appareils/tests sur chaque SDK et purgez tout
    Espaces réservés Bech32m.
 2. Étendez le schéma de configuration avec `chain_discriminant` et dérivez-le de manière raisonnable

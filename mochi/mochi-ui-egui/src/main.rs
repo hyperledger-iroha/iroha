@@ -57,7 +57,7 @@ use iroha_data_model::{
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, Name, Numeric},
+    prelude::{AccountId, Name, Numeric, ScopedAccountId},
     role::RoleId,
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -655,7 +655,8 @@ fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMo
 }
 
 fn parse_profile_preset(value: &str) -> Option<ProfilePreset> {
-    match value {
+    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
         "single-peer" | "single_peer" | "singlepeer" => Some(ProfilePreset::SinglePeer),
         "four-peer-bft" | "four_peer_bft" | "fourpeerbft" => Some(ProfilePreset::FourPeerBft),
         _ => None,
@@ -848,10 +849,8 @@ fn print_cli_usage() {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveView {
-    Dashboard,
-    Blocks,
-    Events,
-    Logs,
+    Network,
+    Activity,
     State,
     Composer,
 }
@@ -859,23 +858,44 @@ enum ActiveView {
 impl ActiveView {
     fn label(self) -> &'static str {
         match self {
-            ActiveView::Dashboard => "Dashboard",
-            ActiveView::Blocks => "Blocks",
-            ActiveView::Events => "Events",
-            ActiveView::Logs => "Logs",
+            ActiveView::Network => "Network",
+            ActiveView::Activity => "Activity",
             ActiveView::State => "State",
-            ActiveView::Composer => "Composer",
+            ActiveView::Composer => "Transactions",
         }
     }
 
-    fn all() -> [ActiveView; 6] {
+    fn all() -> [ActiveView; 4] {
         [
-            ActiveView::Dashboard,
-            ActiveView::Blocks,
-            ActiveView::Events,
-            ActiveView::Logs,
+            ActiveView::Network,
+            ActiveView::Activity,
             ActiveView::State,
             ActiveView::Composer,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityView {
+    Logs,
+    Events,
+    Blocks,
+}
+
+impl ActivityView {
+    fn label(self) -> &'static str {
+        match self {
+            ActivityView::Logs => "Logs",
+            ActivityView::Events => "Events",
+            ActivityView::Blocks => "Blocks",
+        }
+    }
+
+    fn all() -> [ActivityView; 3] {
+        [
+            ActivityView::Logs,
+            ActivityView::Events,
+            ActivityView::Blocks,
         ]
     }
 }
@@ -950,23 +970,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::AccountAdmissionPolicy => "Account admission policy",
             ComposerInstructionKind::MultisigPropose => "Multisig proposal",
         }
-    }
-
-    fn all() -> [ComposerInstructionKind; 12] {
-        [
-            ComposerInstructionKind::MintAsset,
-            ComposerInstructionKind::BurnAsset,
-            ComposerInstructionKind::TransferAsset,
-            ComposerInstructionKind::RegisterDomain,
-            ComposerInstructionKind::RegisterAccount,
-            ComposerInstructionKind::RegisterAssetDefinition,
-            ComposerInstructionKind::PublishSpaceDirectoryManifest,
-            ComposerInstructionKind::RegisterPinManifest,
-            ComposerInstructionKind::GrantRole,
-            ComposerInstructionKind::RevokeRole,
-            ComposerInstructionKind::AccountAdmissionPolicy,
-            ComposerInstructionKind::MultisigPropose,
-        ]
     }
 
     fn permission(self) -> InstructionPermission {
@@ -1232,12 +1235,10 @@ impl ComposerTemplate {
                         .first()
                         .expect("development authorities must not be empty")
                 });
-                let domain = signer.account_id().domain().to_string();
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
                     .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "1".to_owned();
-                app.composer_destination_account =
-                    sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
+                app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
             }
             ComposerTemplate::RegisterDomainSideGarden => {
@@ -1247,18 +1248,14 @@ impl ComposerTemplate {
             }
             ComposerTemplate::RegisterAccountForDomain => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
-                let domain = signer
-                    .map(|authority| authority.account_id().domain().to_string())
-                    .unwrap_or_else(|| "wonderland".to_owned());
+                let domain = "wonderland".to_owned();
                 app.composer_account_id =
-                    sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
+                    sample_scoped_account_id(&domain, SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded account registration template.".to_owned());
             }
             ComposerTemplate::RegisterAssetDefinitionLily => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAssetDefinition;
-                let domain = signer
-                    .map(|authority| authority.account_id().domain().to_string())
-                    .unwrap_or_else(|| "wonderland".to_owned());
+                let domain = "wonderland".to_owned();
                 app.composer_asset_definition_id = format!("lily#{domain}");
                 app.composer_asset_definition_mintable = Mintable::Infinitely;
                 app.composer_mintability_tokens = 1;
@@ -1323,9 +1320,7 @@ impl ComposerTemplate {
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = signer
-                    .map(|authority| authority.account_id().domain().to_string())
-                    .unwrap_or_else(|| "wonderland".to_owned());
+                let domain = "wonderland".to_owned();
                 app.composer_admission_domain = domain.clone();
                 app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
                 app.composer_admission_max_per_tx = "3".to_owned();
@@ -1342,9 +1337,7 @@ impl ComposerTemplate {
             }
             ComposerTemplate::AdmissionPolicyExplicitOnly => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = signer
-                    .map(|authority| authority.account_id().domain().to_string())
-                    .unwrap_or_else(|| "wonderland".to_owned());
+                let domain = "wonderland".to_owned();
                 app.composer_admission_domain = domain;
                 app.composer_admission_mode = AccountAdmissionMode::ExplicitOnly;
                 app.composer_admission_max_per_tx.clear();
@@ -1360,21 +1353,14 @@ impl ComposerTemplate {
             }
             ComposerTemplate::MultisigProposeSample => {
                 app.composer_instruction_kind = ComposerInstructionKind::MultisigPropose;
-                let domain = signer
-                    .map(|authority| authority.account_id().domain().to_string())
-                    .unwrap_or_else(|| "wonderland".to_owned());
                 let owner = signer
                     .map(|authority| account_literal(authority.account_id()))
-                    .unwrap_or_else(|| {
-                        sample_account_id_for_domain(&domain, SAMPLE_ALICE_PUBLIC_KEY)
-                    });
+                    .unwrap_or_else(|| sample_account_id(SAMPLE_ALICE_PUBLIC_KEY));
                 app.composer_multisig_account = signers
                     .iter()
                     .find(|candidate| account_literal(candidate.account_id()) != owner)
                     .map(|authority| account_literal(authority.account_id()))
-                    .unwrap_or_else(|| {
-                        sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY)
-                    });
+                    .unwrap_or_else(|| sample_account_id(SAMPLE_OTHER_PUBLIC_KEY));
                 let mut instructions = COMPOSER_MULTISIG_INSTRUCTIONS.trim().to_owned();
                 instructions = instructions.replace(SAMPLE_ALICE_ACCOUNT_ID, &owner);
                 if let Some(other) = signers
@@ -1426,12 +1412,17 @@ fn asset_literal(asset_id: &AssetId) -> String {
     asset_id.to_string()
 }
 
-fn sample_account_id_for_domain(domain: &str, public_key: &str) -> String {
+fn sample_account_id(public_key: &str) -> String {
+    let public_key = public_key.parse().expect("sample public key must parse");
+    AccountId::new(public_key).to_string()
+}
+
+fn sample_scoped_account_id(domain: &str, public_key: &str) -> String {
     let domain_id = domain
         .parse::<DomainId>()
         .unwrap_or_else(|_| "wonderland".parse().expect("valid fallback domain"));
     let public_key = public_key.parse().expect("sample public key must parse");
-    AccountId::new(domain_id, public_key).to_string()
+    ScopedAccountId::new(domain_id, public_key).to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1874,6 +1865,7 @@ struct MochiApp {
     last_info: Option<String>,
     theme_applied: bool,
     active_view: ActiveView,
+    activity_view: ActivityView,
     runtime: Runtime,
     block_stream: Option<ManagedBlockStream>,
     block_receiver: Option<BroadcastReceiver<BlockStreamEvent>>,
@@ -1968,6 +1960,7 @@ struct MochiApp {
     maintenance_restore_input: String,
     lane_reset_selection: Option<u32>,
     settings_dialog: bool,
+    pending_settings_apply: Option<PendingSettingsApply>,
     settings_data_root_input: String,
     settings_torii_port_input: String,
     settings_p2p_port_input: String,
@@ -1989,6 +1982,16 @@ struct MochiApp {
     log_export_dir: Option<PathBuf>,
     settings_state_export_dir_input: String,
     state_export_dir: Option<PathBuf>,
+    auto_block_stream: bool,
+    auto_event_stream: bool,
+    auto_log_stream: bool,
+}
+
+#[derive(Debug)]
+struct PendingSettingsApply {
+    force_start_after_rebuild: bool,
+    close_dialog: bool,
+    success_message: String,
 }
 
 fn prepare_supervisor() -> (
@@ -2058,7 +2061,8 @@ impl MochiApp {
             last_error: None,
             last_info: None,
             theme_applied: false,
-            active_view: ActiveView::Dashboard,
+            active_view: ActiveView::Network,
+            activity_view: ActivityView::Logs,
             runtime,
             block_stream: None,
             block_receiver: None,
@@ -2153,6 +2157,7 @@ impl MochiApp {
             maintenance_restore_input: String::new(),
             lane_reset_selection: None,
             settings_dialog: false,
+            pending_settings_apply: None,
             settings_data_root_input: String::new(),
             settings_torii_port_input: String::new(),
             settings_p2p_port_input: String::new(),
@@ -2174,6 +2179,9 @@ impl MochiApp {
             log_export_dir: None,
             settings_state_export_dir_input: String::new(),
             state_export_dir: None,
+            auto_block_stream: true,
+            auto_event_stream: true,
+            auto_log_stream: true,
         };
         app.sync_raw_editor_from_drafts();
         app.initialize_settings_from_supervisor();
@@ -2701,6 +2709,232 @@ impl MochiApp {
         });
     }
 
+    fn queue_settings_apply(
+        &mut self,
+        force_start_after_rebuild: bool,
+        close_dialog: bool,
+        success_message: impl Into<String>,
+    ) {
+        if force_start_after_rebuild {
+            self.auto_block_stream = true;
+            self.auto_event_stream = true;
+            self.auto_log_stream = true;
+        }
+        self.pending_settings_apply = Some(PendingSettingsApply {
+            force_start_after_rebuild,
+            close_dialog,
+            success_message: success_message.into(),
+        });
+    }
+
+    fn flush_pending_settings_apply(&mut self) {
+        let Some(pending) = self.pending_settings_apply.take() else {
+            return;
+        };
+        match self.apply_settings_changes_with_restart(pending.force_start_after_rebuild) {
+            Ok(()) => {
+                self.last_info = Some(pending.success_message);
+                self.last_error = None;
+                if pending.close_dialog {
+                    self.settings_dialog = false;
+                }
+            }
+            Err(err) => {
+                self.last_info = None;
+                self.last_error = Some(err);
+            }
+        }
+    }
+
+    fn running_peer_aliases(supervisor: &Supervisor) -> Vec<String> {
+        supervisor
+            .peers()
+            .iter()
+            .filter(|peer| matches!(peer.state(), PeerState::Running))
+            .map(|peer| peer.alias().to_owned())
+            .collect()
+    }
+
+    fn peer_is_running(supervisor: &Supervisor, alias: &str) -> bool {
+        supervisor
+            .peers()
+            .iter()
+            .any(|peer| peer.alias() == alias && matches!(peer.state(), PeerState::Running))
+    }
+
+    fn preferred_activity_alias(
+        selection: Option<&String>,
+        active: Option<&String>,
+        running: &[String],
+    ) -> Option<String> {
+        if let Some(alias) = selection
+            && running.iter().any(|candidate| candidate == alias)
+        {
+            return Some(alias.clone());
+        }
+        if let Some(alias) = active
+            && running.iter().any(|candidate| candidate == alias)
+        {
+            return Some(alias.clone());
+        }
+        running.first().cloned()
+    }
+
+    fn selected_quickstart_preset(&self, supervisor: &Supervisor) -> ProfilePreset {
+        parse_profile_preset(self.settings_profile_input.trim())
+            .or(supervisor.profile().preset)
+            .unwrap_or(ProfilePreset::SinglePeer)
+    }
+
+    fn set_quickstart_preset(&mut self, preset: ProfilePreset) {
+        self.settings_profile_input.clear();
+        self.settings_profile_input.push_str(preset.slug());
+    }
+
+    fn start_block_stream_for(
+        &mut self,
+        supervisor: &Supervisor,
+        alias: &str,
+    ) -> Result<(), String> {
+        if let Some(stream) = self.block_stream.take() {
+            stream.abort();
+        }
+        self.block_receiver = None;
+        self.block_stream_peer = None;
+        let handle = self.runtime.handle().clone();
+        let stream = supervisor
+            .managed_block_stream(alias, &handle)
+            .map_err(|err| format!("Failed to start block stream for {alias}: {err}"))?;
+        let receiver = stream.subscribe();
+        self.block_stream_peer = Some(alias.to_owned());
+        self.block_receiver = Some(receiver);
+        let notice = BlockStreamEvent::Text {
+            text: format!("Block stream started for {alias} (auto-reconnect enabled)."),
+        };
+        self.record_stream_event(Some(alias.to_owned()), &notice);
+        Self::push_block_event(&mut self.block_events, Some(alias.to_owned()), notice);
+        self.block_stream = Some(stream);
+        self.last_error = None;
+        self.last_info = Some(format!("Following blocks from {alias}."));
+        Ok(())
+    }
+
+    fn stop_block_stream(&mut self, disable_auto_follow: bool) {
+        if disable_auto_follow {
+            self.auto_block_stream = false;
+        }
+        let alias = self.block_stream_peer.clone();
+        if let Some(stream) = self.block_stream.take() {
+            stream.abort();
+        }
+        self.block_receiver = None;
+        self.block_stream_peer = None;
+        if let Some(alias) = alias {
+            let notice = BlockStreamEvent::Text {
+                text: format!("Block stream stopped for {alias}."),
+            };
+            self.record_stream_event(Some(alias.clone()), &notice);
+            Self::push_block_event(&mut self.block_events, Some(alias), notice);
+        }
+    }
+
+    fn start_event_stream_for(
+        &mut self,
+        supervisor: &Supervisor,
+        alias: &str,
+    ) -> Result<(), String> {
+        if let Some(stream) = self.event_stream.take() {
+            stream.abort();
+        }
+        self.event_receiver = None;
+        self.event_stream_peer = None;
+        let handle = self.runtime.handle().clone();
+        let stream = supervisor
+            .managed_event_stream(alias, &handle)
+            .map_err(|err| format!("Failed to start event stream for {alias}: {err}"))?;
+        let receiver = stream.subscribe();
+        self.event_stream_peer = Some(alias.to_owned());
+        self.event_receiver = Some(receiver);
+        let notice = EventStreamEvent::Text {
+            text: format!("Event stream started for {alias} (auto-reconnect enabled)."),
+        };
+        self.record_event_stream_event(Some(alias.to_owned()), &notice);
+        Self::push_event_event(&mut self.event_events, Some(alias.to_owned()), notice);
+        self.event_stream = Some(stream);
+        self.last_error = None;
+        self.last_info = Some(format!("Following events from {alias}."));
+        Ok(())
+    }
+
+    fn stop_event_stream(&mut self, disable_auto_follow: bool) {
+        if disable_auto_follow {
+            self.auto_event_stream = false;
+        }
+        let alias = self.event_stream_peer.clone();
+        if let Some(stream) = self.event_stream.take() {
+            stream.abort();
+        }
+        self.event_receiver = None;
+        self.event_stream_peer = None;
+        if let Some(alias) = alias {
+            let notice = EventStreamEvent::Text {
+                text: format!("Event stream stopped for {alias}."),
+            };
+            self.record_event_stream_event(Some(alias.clone()), &notice);
+            Self::push_event_event(&mut self.event_events, Some(alias), notice);
+        }
+    }
+
+    fn start_log_stream_for(&mut self, supervisor: &Supervisor, alias: &str) -> Result<(), String> {
+        self.stop_log_stream(false);
+        let Some(stream) = supervisor.log_stream(alias) else {
+            return Err(format!("No log stream available for {alias}"));
+        };
+        let receiver = stream.subscribe();
+        self.log_receiver = Some(receiver);
+        self.log_stream_peer = Some(alias.to_owned());
+        self.log_selected_peer = Some(alias.to_owned());
+        let notice = Self::system_log_event(alias, format!("Log stream started for {alias}."));
+        self.push_log_event(notice);
+        self.last_error = None;
+        self.last_info = Some(format!("Tailing logs from {alias}."));
+        Ok(())
+    }
+
+    fn ensure_auto_activity_streams(&mut self, supervisor: &Supervisor) {
+        let running = Self::running_peer_aliases(supervisor);
+        if self.auto_block_stream
+            && self.block_stream.is_none()
+            && let Some(alias) = Self::preferred_activity_alias(
+                self.selected_peer.as_ref(),
+                self.block_stream_peer.as_ref(),
+                &running,
+            )
+        {
+            let _ = self.start_block_stream_for(supervisor, &alias);
+        }
+        if self.auto_event_stream
+            && self.event_stream.is_none()
+            && let Some(alias) = Self::preferred_activity_alias(
+                self.event_selected_peer.as_ref(),
+                self.event_stream_peer.as_ref(),
+                &running,
+            )
+        {
+            let _ = self.start_event_stream_for(supervisor, &alias);
+        }
+        if self.auto_log_stream
+            && self.log_receiver.is_none()
+            && let Some(alias) = Self::preferred_activity_alias(
+                self.log_selected_peer.as_ref(),
+                self.log_stream_peer.as_ref(),
+                &running,
+            )
+        {
+            let _ = self.start_log_stream_for(supervisor, &alias);
+        }
+    }
+
     fn poll_block_stream_events(&mut self) {
         if let Some(mut receiver) = self.block_receiver.take() {
             let mut keep_receiver = true;
@@ -3089,6 +3323,12 @@ impl MochiApp {
         match update.result {
             Ok(hash) => {
                 let message = format!("Submitted transaction {hash} to {}.", update.peer);
+                self.active_view = ActiveView::Activity;
+                self.activity_view = ActivityView::Events;
+                self.event_selected_peer = Some(update.peer.clone());
+                self.auto_event_stream = true;
+                self.event_filter.reset();
+                self.event_filter.search = hash.clone();
                 self.composer_submit_error = None;
                 self.composer_submit_success = Some(message.clone());
                 self.last_info = Some(message);
@@ -3097,6 +3337,10 @@ impl MochiApp {
             Err(err) => {
                 let label = err.label();
                 let message = format!("Failed to submit transaction to {}: {label}", update.peer);
+                self.active_view = ActiveView::Activity;
+                self.activity_view = ActivityView::Logs;
+                self.log_selected_peer = Some(update.peer.clone());
+                self.auto_log_stream = true;
                 self.composer_submit_error = Some(err);
                 self.composer_submit_success = None;
                 self.last_info = None;
@@ -3599,8 +3843,11 @@ impl MochiApp {
         self.log_events.push(event);
     }
 
-    fn stop_log_stream(&mut self, alias: Option<String>) {
-        if let Some(alias) = alias {
+    fn stop_log_stream(&mut self, disable_auto_follow: bool) {
+        if disable_auto_follow {
+            self.auto_log_stream = false;
+        }
+        if let Some(alias) = self.log_stream_peer.clone() {
             let stopped =
                 Self::system_log_event(&alias, format!("Log stream stopped for {alias}."));
             self.push_log_event(stopped);
@@ -4216,6 +4463,7 @@ impl MochiApp {
         Self::ensure_selection(&mut self.state_selected_peer, &peer_aliases);
         Self::ensure_selection(&mut self.composer_selected_peer, &peer_aliases);
         Self::ensure_signer_selection(&mut self.composer_selected_signer, supervisor.signers());
+        self.ensure_auto_activity_streams(supervisor);
 
         if let Some(error) = &self.last_error {
             ui.colored_label(Color32::from_rgb(200, 64, 64), error);
@@ -4258,12 +4506,10 @@ impl MochiApp {
         ui.add_space(16.0);
 
         match self.active_view {
-            ActiveView::Dashboard => {
-                self.render_dashboard_view(ui, supervisor, &peer_rows, &peer_aliases, &metrics);
+            ActiveView::Network => {
+                self.render_network_view(ui, supervisor, &peer_rows, &peer_aliases, &metrics);
             }
-            ActiveView::Blocks => self.render_blocks_view(ui, supervisor, &peer_aliases),
-            ActiveView::Events => self.render_events_view(ui, supervisor, &peer_aliases),
-            ActiveView::Logs => self.render_logs_view(ui, supervisor, &peer_aliases),
+            ActiveView::Activity => self.render_activity_view(ui, supervisor, &peer_aliases),
             ActiveView::State => self.render_state_view(ui, supervisor, &peer_aliases),
             ActiveView::Composer => self.render_composer_view(ui, supervisor, &peer_aliases),
         }
@@ -4375,7 +4621,7 @@ impl MochiApp {
         self.block_receiver = None;
         self.event_receiver = None;
         if self.log_receiver.is_some() {
-            self.stop_log_stream(self.log_stream_peer.clone());
+            self.stop_log_stream(false);
         }
         self.block_events.clear();
         self.event_events.clear();
@@ -4496,6 +4742,92 @@ impl MochiApp {
         self.sync_state_export_dir_input();
     }
 
+    fn initialize_settings_from_runtime(&mut self, supervisor: Option<&Supervisor>) {
+        let nexus_table = supervisor
+            .and_then(|runtime| runtime.nexus_config_overrides())
+            .or_else(|| {
+                self.bundle_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.config.nexus.as_ref())
+            });
+        let sumeragi_table = supervisor
+            .and_then(|runtime| runtime.sumeragi_config_overrides())
+            .or_else(|| {
+                self.bundle_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.config.sumeragi.as_ref())
+            });
+        let torii_table = supervisor
+            .and_then(|runtime| runtime.torii_config_overrides())
+            .or_else(|| {
+                self.bundle_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.config.torii.as_ref())
+            });
+
+        if let Some(supervisor) = supervisor {
+            let base_root = Self::supervisor_base_data_root(supervisor);
+            self.settings_data_root_input = base_root.display().to_string();
+            if let Some(port) = Self::infer_torii_base_port(supervisor) {
+                self.settings_torii_port_input = port.to_string();
+            } else {
+                self.settings_torii_port_input.clear();
+            }
+            if let Some(port) = Self::infer_p2p_base_port(supervisor) {
+                self.settings_p2p_port_input = port.to_string();
+            } else {
+                self.settings_p2p_port_input.clear();
+            }
+            self.settings_chain_id_input = supervisor.chain_id().to_owned();
+            self.settings_profile_input.clear();
+            self.settings_build_binaries = self.configured_build_binaries();
+            self.settings_readiness_smoke = self.configured_readiness_smoke();
+        } else {
+            self.settings_data_root_input.clear();
+            self.settings_torii_port_input.clear();
+            self.settings_p2p_port_input.clear();
+            self.settings_chain_id_input.clear();
+            self.settings_profile_input.clear();
+            self.settings_build_binaries = self.configured_build_binaries();
+            self.settings_readiness_smoke = self.configured_readiness_smoke();
+        }
+
+        self.settings_nexus_enabled = nexus_table
+            .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
+            .unwrap_or_else(|| nexus_table.is_some());
+        self.settings_nexus_lane_count_input = nexus_table
+            .and_then(|table| table.get("lane_count").and_then(TomlValue::as_integer))
+            .and_then(|value| u32::try_from(value).ok())
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        self.settings_nexus_lane_catalog_input =
+            Self::format_toml_array_input(nexus_table, "lane_catalog");
+        self.settings_nexus_dataspace_catalog_input =
+            Self::format_toml_array_input(nexus_table, "dataspace_catalog");
+
+        self.settings_sumeragi_da_enabled = sumeragi_table
+            .and_then(|table| table.get("da_enabled").and_then(TomlValue::as_bool))
+            .unwrap_or(self.settings_nexus_enabled);
+        self.settings_torii_da_replay_dir_input = torii_table
+            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
+            .and_then(|ingest| {
+                ingest
+                    .get("replay_cache_store_dir")
+                    .and_then(TomlValue::as_str)
+            })
+            .unwrap_or_default()
+            .to_string();
+        self.settings_torii_da_manifest_dir_input = torii_table
+            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
+            .and_then(|ingest| ingest.get("manifest_store_dir").and_then(TomlValue::as_str))
+            .unwrap_or_default()
+            .to_string();
+        self.lane_reset_selection = None;
+
+        self.sync_log_export_dir_input();
+        self.sync_state_export_dir_input();
+    }
+
     fn supervisor_base_data_root(supervisor: &Supervisor) -> PathBuf {
         let mut root = supervisor.paths().root().to_path_buf();
         let slug = supervisor.profile().slug();
@@ -4529,6 +4861,7 @@ impl MochiApp {
         torii_port: Option<u16>,
         p2p_port: Option<u16>,
         chain_id: Option<String>,
+        force_start_after_rebuild: bool,
     ) -> Result<(), SupervisorError> {
         let profile = self
             .supervisor
@@ -4566,7 +4899,9 @@ impl MochiApp {
 
         match builder.build() {
             Ok(mut supervisor) => {
-                if was_running && let Err(err) = supervisor.start_all() {
+                if (was_running || force_start_after_rebuild)
+                    && let Err(err) = supervisor.start_all()
+                {
                     self.last_error = Some(format!("Failed to restart peers after rebuild: {err}"));
                 }
                 self.supervisor = Some(supervisor);
@@ -4587,7 +4922,10 @@ impl MochiApp {
         }
     }
 
-    fn apply_settings_changes(&mut self) -> Result<(), String> {
+    fn apply_settings_changes_with_restart(
+        &mut self,
+        force_start_after_rebuild: bool,
+    ) -> Result<(), String> {
         let data_root_input = self.settings_data_root_input.trim();
         let data_root = if data_root_input.is_empty() {
             None
@@ -4825,8 +5163,14 @@ impl MochiApp {
         }
         self.bundle_config = Some(resolved);
 
-        self.rebuild_supervisor(data_root, torii_port, p2p_port, chain_id)
-            .map_err(|err| err.to_string())?;
+        self.rebuild_supervisor(
+            data_root,
+            torii_port,
+            p2p_port,
+            chain_id,
+            force_start_after_rebuild,
+        )
+        .map_err(|err| err.to_string())?;
         self.log_export_dir = log_export_dir;
         self.sync_log_export_dir_input();
         self.state_export_dir = state_export_dir;
@@ -5492,15 +5836,18 @@ impl MochiApp {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new("Peers").size(11.0).color(palette.text_muted));
+                ui.label(RichText::new("Devnet").size(11.0).color(palette.text_muted));
                 ui.horizontal(|ui| {
                     let start_btn = ui
-                        .add_enabled(!all_running, egui::Button::new("Start all peers"))
-                        .on_hover_text("Start every configured peer in this profile");
+                        .add_enabled(!all_running, egui::Button::new("Start devnet"))
+                        .on_hover_text("Start every configured node in this devnet");
                     if start_btn.clicked() {
                         match supervisor.start_all() {
                             Ok(()) => {
-                                self.last_info = Some("All peers started.".to_owned());
+                                self.auto_block_stream = true;
+                                self.auto_event_stream = true;
+                                self.auto_log_stream = true;
+                                self.last_info = Some("Devnet started.".to_owned());
                                 self.last_error = None;
                                 let aliases = peer_rows.iter().map(|row| row.alias.clone());
                                 self.spawn_readiness_checks(supervisor, aliases);
@@ -5512,12 +5859,12 @@ impl MochiApp {
                         }
                     }
                     let stop_btn = ui
-                        .add_enabled(any_running, egui::Button::new("Stop all peers"))
-                        .on_hover_text("Stop all running peers in this profile");
+                        .add_enabled(any_running, egui::Button::new("Stop devnet"))
+                        .on_hover_text("Stop every running node in this devnet");
                     if stop_btn.clicked() {
                         match supervisor.stop_all() {
                             Ok(()) => {
-                                self.last_info = Some("All peers stopped.".to_owned());
+                                self.last_info = Some("Devnet stopped.".to_owned());
                                 self.last_error = None;
                             }
                             Err(err) => {
@@ -5583,282 +5930,317 @@ impl MochiApp {
                     .on_hover_text("Review supervisor defaults and log routing")
                     .clicked()
                 {
-                    self.initialize_settings_from_supervisor();
+                    self.initialize_settings_from_runtime(Some(supervisor));
                     self.settings_dialog = true;
                 }
             });
         });
     }
 
-    fn render_settings_dialog(&mut self, ctx: &egui::Context) {
+    fn render_settings_dialog(&mut self, ctx: &egui::Context, supervisor: Option<&Supervisor>) {
         if !self.settings_dialog {
             return;
         }
         let mut open = true;
         egui::Window::new("Settings")
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_width(760.0)
+            .default_height(640.0)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("Adjust supervisor configuration for future launches.");
-                ui.add_space(8.0);
-                ui.label("Data root (blank = default temp directory):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_data_root_input)
-                        .hint_text("/path/to/mochi-data"),
-                );
-                ui.add_space(8.0);
-                ui.label("Torii base port (blank = keep current default):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_torii_port_input)
-                        .hint_text("8080"),
-                );
-                ui.add_space(8.0);
-                ui.label("P2P base port (blank = keep current default):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_p2p_port_input).hint_text("1337"),
-                );
-                ui.add_space(8.0);
-                ui.label("Chain ID (blank = use default `mochi-local`):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_chain_id_input)
-                        .hint_text("mochi-local"),
-                );
-                ui.add_space(10.0);
-                if let Some(supervisor) = self.supervisor.as_ref() {
-                    ui.label(format!(
-                        "Current profile: {}",
-                        Self::profile_name(supervisor)
-                    ));
-                } else {
-                    ui.label("Current profile: unavailable");
-                }
-                ui.label(
-                    "Profile override (preset slug or inline TOML table; blank = keep current):",
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_profile_input).hint_text(
-                        "single-peer | four-peer-bft | { peer_count = 3, consensus_mode = \"permissioned\" }",
-                    ),
-                );
-                ui.small(
-                    "Include genesis_profile for NPoS (e.g., { peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }).",
-                );
-                ui.add_space(10.0);
-                egui::CollapsingHeader::new("Nexus lanes and DA")
-                    .default_open(true)
+                ScrollArea::vertical()
+                    .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        ui.checkbox(
-                            &mut self.settings_nexus_enabled,
-                            "Enable Nexus / multi-lane mode",
-                        );
-                        if self.settings_nexus_enabled {
-                            self.settings_sumeragi_da_enabled = true;
+                        ui.label("Adjust how MOCHI prepares and observes the local devnet.");
+                        ui.add_space(8.0);
+                        if let Some(supervisor) = supervisor {
+                            ui.label(format!(
+                                "Current profile: {}",
+                                Self::profile_name(supervisor)
+                            ));
+                        } else {
+                            ui.label("Current profile: unavailable");
                         }
-                        ui.add_space(6.0);
-                        ui.label("Lane count (blank = default 1):");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.settings_nexus_lane_count_input)
-                                .hint_text("3"),
-                        );
-                        ui.add_space(6.0);
-                        ui.label("Lane catalog (TOML using [[lane_catalog]] entries):");
-                        ui.add(
-                            egui::TextEdit::multiline(
-                                &mut self.settings_nexus_lane_catalog_input,
-                            )
-                            .desired_rows(6)
-                            .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\""),
-                        );
-                        ui.add_space(6.0);
-                        ui.label("Dataspace catalog (TOML using [[dataspace_catalog]] entries):");
-                        ui.add(
-                            egui::TextEdit::multiline(
-                                &mut self.settings_nexus_dataspace_catalog_input,
-                            )
-                            .desired_rows(4)
-                            .hint_text("[[dataspace_catalog]]\nalias = \"universal\"\nid = 0"),
-                        );
-                        ui.add_space(6.0);
-                        ui.add_enabled(
-                            !self.settings_nexus_enabled,
-                            egui::Checkbox::new(
-                                &mut self.settings_sumeragi_da_enabled,
-                                "Enable data-availability gating (RBC + availability QC)",
-                            ),
-                        );
-                        if self.settings_nexus_enabled {
-                            ui.small("DA gating is required for Nexus lanes.");
-                        }
-                        ui.add_space(6.0);
-                        ui.label("Torii DA replay cache dir (blank = per-peer default):");
-                        ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.settings_torii_da_replay_dir_input,
-                            )
-                            .hint_text("/path/to/da_replay"),
-                        );
-                        ui.add_space(6.0);
-                        ui.label("Torii DA manifest spool dir (blank = per-peer default):");
-                        ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.settings_torii_da_manifest_dir_input,
-                            )
-                            .hint_text("/path/to/da_manifests"),
-                        );
-                        let lane_count = match Self::parse_lane_count_input(
-                            &self.settings_nexus_lane_count_input,
-                        ) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                ui.colored_label(Color32::from_rgb(200, 160, 64), err);
-                                None
-                            }
-                        };
-                        let lane_catalog = match Self::parse_toml_array_input(
-                            &self.settings_nexus_lane_catalog_input,
-                            "lane_catalog",
-                            "Lane catalog",
-                        ) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                ui.colored_label(Color32::from_rgb(200, 160, 64), err);
-                                None
-                            }
-                        };
-                        if let Some(previews) =
-                            self.lane_path_previews(lane_count, lane_catalog.as_deref())
-                            && !previews.is_empty()
-                        {
-                            ui.add_space(6.0);
-                            ui.label("Lane storage preview (per peer):");
-                            egui::Grid::new("mochi_lane_storage_preview")
-                                .num_columns(3)
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    ui.label("Lane");
-                                    ui.label("Blocks dir");
-                                    ui.label("Merge log");
-                                    ui.end_row();
-                                    for preview in previews {
-                                        ui.label(format!(
-                                            "{} ({})",
-                                            preview.lane_id, preview.alias
-                                        ));
-                                        ui.label(preview.blocks_dir.display().to_string());
-                                        ui.label(preview.merge_log.display().to_string());
-                                        ui.end_row();
-                                    }
-                                });
-                        }
-                        ui.small(
-                            "Rendered peer configs include per-lane blocks/merge-log paths in the header.",
-                        );
-                    });
-                ui.add_space(8.0);
-                ui.checkbox(
-                    &mut self.settings_build_binaries,
-                    "Auto-build missing binaries (cargo build)",
-                );
-                ui.small(
-                    "When enabled, MOCHI may run `cargo build` to build missing `irohad`, \
-                     `kagami`, and `iroha_cli` binaries. Overrides: `--build-binaries`/`--no-build-binaries` \
-                     or `MOCHI_BUILD_BINARIES`.",
-                );
-                ui.add_space(6.0);
-                ui.checkbox(
-                    &mut self.settings_readiness_smoke,
-                    "Gate readiness on a transaction/block smoke",
-                );
-                ui.small(
-                    "When enabled, MOCHI submits a signed transaction and waits for it to appear in the \
-                     block stream before marking a peer ready. Overrides: `--disable-smoke`/`--enable-smoke` \
-                     or `MOCHI_READINESS_SMOKE`.",
-                );
-                ui.add_space(8.0);
-                ui.collapsing("Binary compatibility", |ui| {
-                    let Some(supervisor) = self.supervisor.as_ref() else {
-                        ui.label("Supervisor not prepared.");
-                        return;
-                    };
-                    let Some(report) = supervisor.compatibility() else {
-                        ui.label("Compatibility report unavailable.");
-                        return;
-                    };
-                    ui.label(report.summary_line());
-                    ui.add_space(6.0);
-                    egui::Grid::new("mochi_binary_compat_grid")
-                        .num_columns(2)
-                        .striped(true)
-                        .show(ui, |ui| {
-                            for info in &report.versions {
-                                ui.label(format!("{}:", info.name));
-                                ui.label(format!(
-                                    "{} ({}, {})",
-                                    info.path.display(),
-                                    info.build_line,
-                                    info.source_label()
-                                ));
-                                ui.end_row();
-                                if let Some(version) = info.version.as_ref() {
-                                    ui.label("version:");
-                                    ui.label(version);
-                                    ui.end_row();
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Basic devnet setup").strong());
+                        ui.horizontal_wrapped(|ui| {
+                            let selected_profile = if self.settings_profile_input.trim().is_empty()
+                            {
+                                supervisor
+                                    .and_then(|runtime| runtime.profile().preset)
+                                    .unwrap_or(ProfilePreset::SinglePeer)
+                            } else {
+                                parse_profile_preset(&self.settings_profile_input)
+                                    .unwrap_or(ProfilePreset::SinglePeer)
+                            };
+                            for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                                let selected = selected_profile == preset;
+                                if ui
+                                    .add(Button::selectable(selected, preset.label()))
+                                    .clicked()
+                                {
+                                    self.set_quickstart_preset(preset);
                                 }
                             }
                         });
-                    if let Some(verify) = report.verify.as_ref() {
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.label("kagami verify:");
-                        ui.label(format!("profile: {}", verify.profile));
-                        if let Some(chain_id) = verify.chain_id.as_ref() {
-                            ui.label(format!("reported chain: {chain_id}"));
-                        }
-                        if let Some(fingerprint) = verify.fingerprint.as_ref() {
-                            ui.label(format!("fingerprint: {fingerprint}"));
-                        }
-                    }
-                });
-                ui.add_space(12.0);
-                ui.label("Log visibility:");
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.settings_log_stdout, "stdout");
-                    ui.checkbox(&mut self.settings_log_stderr, "stderr");
-                    ui.checkbox(&mut self.settings_log_system, "system");
-                });
-                ui.add_space(12.0);
-                ui.label("Log export directory (blank = system temporary directory):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_log_export_dir_input)
-                        .hint_text("/tmp/mochi_logs"),
-                );
-                ui.add_space(8.0);
-                ui.label("State export directory (blank = system temporary directory):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.settings_state_export_dir_input)
-                        .hint_text("/tmp/mochi_state"),
-                );
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Apply changes").clicked() {
-                        match self.apply_settings_changes() {
-                            Ok(()) => {
-                                self.last_info = Some(
-                                    "Settings applied. Restarted peers if they were running."
-                                        .to_owned(),
+                        ui.add_space(8.0);
+                        ui.label("Data root");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings_data_root_input)
+                                .hint_text("/path/to/mochi-data"),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Torii base port");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.settings_torii_port_input)
+                                    .hint_text("8080")
+                                    .desired_width(120.0),
+                            );
+                            ui.label("P2P base port");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.settings_p2p_port_input)
+                                    .hint_text("1337")
+                                    .desired_width(120.0),
+                            );
+                            ui.label("Chain ID");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.settings_chain_id_input)
+                                    .hint_text("mochi-local")
+                                    .desired_width(180.0),
+                            );
+                        });
+                        ui.small(
+                            "Use the quickstart card on the Network page for day-to-day start and stop. Settings is for preparing the workspace and advanced debugging behavior.",
+                        );
+                        ui.add_space(10.0);
+                        egui::CollapsingHeader::new("Advanced network profile")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    "Override the preset with a preset slug or inline TOML profile table.",
                                 );
-                                self.last_error = None;
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.settings_profile_input)
+                                        .hint_text(
+                                            "single-peer | four-peer-bft | { peer_count = 3, consensus_mode = \"permissioned\" }",
+                                        ),
+                                );
+                                ui.small(
+                                    "Include genesis_profile for NPoS (for example `{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }`).",
+                                );
+                            });
+                        ui.add_space(8.0);
+                        egui::CollapsingHeader::new("Nexus lanes and DA")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.checkbox(
+                                    &mut self.settings_nexus_enabled,
+                                    "Enable Nexus / multi-lane mode",
+                                );
+                                if self.settings_nexus_enabled {
+                                    self.settings_sumeragi_da_enabled = true;
+                                }
+                                ui.add_space(6.0);
+                                ui.label("Lane count (blank = default 1):");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.settings_nexus_lane_count_input)
+                                        .hint_text("3"),
+                                );
+                                ui.add_space(6.0);
+                                ui.label("Lane catalog (TOML using [[lane_catalog]] entries):");
+                                ui.add(
+                                    egui::TextEdit::multiline(
+                                        &mut self.settings_nexus_lane_catalog_input,
+                                    )
+                                    .desired_rows(6)
+                                    .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\""),
+                                );
+                                ui.add_space(6.0);
+                                ui.label("Dataspace catalog (TOML using [[dataspace_catalog]] entries):");
+                                ui.add(
+                                    egui::TextEdit::multiline(
+                                        &mut self.settings_nexus_dataspace_catalog_input,
+                                    )
+                                    .desired_rows(4)
+                                    .hint_text("[[dataspace_catalog]]\nalias = \"universal\"\nid = 0"),
+                                );
+                                ui.add_space(6.0);
+                                ui.add_enabled(
+                                    !self.settings_nexus_enabled,
+                                    egui::Checkbox::new(
+                                        &mut self.settings_sumeragi_da_enabled,
+                                        "Enable data-availability gating (RBC + availability QC)",
+                                    ),
+                                );
+                                if self.settings_nexus_enabled {
+                                    ui.small("DA gating is required for Nexus lanes.");
+                                }
+                                ui.add_space(6.0);
+                                ui.label("Torii DA replay cache dir (blank = per-peer default):");
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.settings_torii_da_replay_dir_input,
+                                    )
+                                    .hint_text("/path/to/da_replay"),
+                                );
+                                ui.add_space(6.0);
+                                ui.label("Torii DA manifest spool dir (blank = per-peer default):");
+                                ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.settings_torii_da_manifest_dir_input,
+                                    )
+                                    .hint_text("/path/to/da_manifests"),
+                                );
+                                let lane_count = match Self::parse_lane_count_input(
+                                    &self.settings_nexus_lane_count_input,
+                                ) {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        ui.colored_label(Color32::from_rgb(200, 160, 64), err);
+                                        None
+                                    }
+                                };
+                                let lane_catalog = match Self::parse_toml_array_input(
+                                    &self.settings_nexus_lane_catalog_input,
+                                    "lane_catalog",
+                                    "Lane catalog",
+                                ) {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        ui.colored_label(Color32::from_rgb(200, 160, 64), err);
+                                        None
+                                    }
+                                };
+                                if let Some(previews) =
+                                    self.lane_path_previews(lane_count, lane_catalog.as_deref())
+                                    && !previews.is_empty()
+                                {
+                                    ui.add_space(6.0);
+                                    ui.label("Lane storage preview (per peer):");
+                                    egui::Grid::new("mochi_lane_storage_preview")
+                                        .num_columns(3)
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            ui.label("Lane");
+                                            ui.label("Blocks dir");
+                                            ui.label("Merge log");
+                                            ui.end_row();
+                                            for preview in previews {
+                                                ui.label(format!(
+                                                    "{} ({})",
+                                                    preview.lane_id, preview.alias
+                                                ));
+                                                ui.label(preview.blocks_dir.display().to_string());
+                                                ui.label(preview.merge_log.display().to_string());
+                                                ui.end_row();
+                                            }
+                                        });
+                                }
+                            });
+                        ui.add_space(8.0);
+                        egui::CollapsingHeader::new("Tooling and readiness")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.checkbox(
+                                    &mut self.settings_build_binaries,
+                                    "Auto-build missing binaries (cargo build)",
+                                );
+                                ui.small(
+                                    "When enabled, MOCHI may run `cargo build` to build missing `irohad`, `kagami`, and `iroha_cli` binaries.",
+                                );
+                                ui.add_space(6.0);
+                                ui.checkbox(
+                                    &mut self.settings_readiness_smoke,
+                                    "Gate readiness on a transaction/block smoke",
+                                );
+                                ui.small(
+                                    "When enabled, MOCHI submits a signed transaction and waits for it to appear in the block stream before marking a peer ready.",
+                                );
+                            });
+                        ui.add_space(8.0);
+                        ui.collapsing("Binary compatibility", |ui| {
+                            let Some(supervisor) = supervisor else {
+                                ui.label("Supervisor not prepared.");
+                                return;
+                            };
+                            let Some(report) = supervisor.compatibility() else {
+                                ui.label("Compatibility report unavailable.");
+                                return;
+                            };
+                            ui.label(report.summary_line());
+                            ui.add_space(6.0);
+                            egui::Grid::new("mochi_binary_compat_grid")
+                                .num_columns(2)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for info in &report.versions {
+                                        ui.label(format!("{}:", info.name));
+                                        ui.label(format!(
+                                            "{} ({}, {})",
+                                            info.path.display(),
+                                            info.build_line,
+                                            info.source_label()
+                                        ));
+                                        ui.end_row();
+                                        if let Some(version) = info.version.as_ref() {
+                                            ui.label("version:");
+                                            ui.label(version);
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                            if let Some(verify) = report.verify.as_ref() {
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.label("kagami verify:");
+                                ui.label(format!("profile: {}", verify.profile));
+                                if let Some(chain_id) = verify.chain_id.as_ref() {
+                                    ui.label(format!("reported chain: {chain_id}"));
+                                }
+                                if let Some(fingerprint) = verify.fingerprint.as_ref() {
+                                    ui.label(format!("fingerprint: {fingerprint}"));
+                                }
                             }
-                            Err(err) => {
-                                self.last_error = Some(err);
+                        });
+                        ui.add_space(8.0);
+                        egui::CollapsingHeader::new("Logs and exports")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label("Log visibility:");
+                                ui.horizontal(|ui| {
+                                    ui.checkbox(&mut self.settings_log_stdout, "stdout");
+                                    ui.checkbox(&mut self.settings_log_stderr, "stderr");
+                                    ui.checkbox(&mut self.settings_log_system, "system");
+                                });
+                                ui.add_space(8.0);
+                                ui.label("Log export directory (blank = system temporary directory):");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.settings_log_export_dir_input)
+                                        .hint_text("/tmp/mochi_logs"),
+                                );
+                                ui.add_space(8.0);
+                                ui.label("State export directory (blank = system temporary directory):");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.settings_state_export_dir_input)
+                                        .hint_text("/tmp/mochi_state"),
+                                );
+                            });
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Apply changes").clicked() {
+                                self.queue_settings_apply(
+                                    false,
+                                    false,
+                                    "Settings applied. Restarted the devnet if it was already running.",
+                                );
                             }
-                        }
-                    }
-                    if ui.button("Close").clicked() {
-                        self.settings_dialog = false;
-                    }
-                });
+                            if ui.button("Close").clicked() {
+                                self.settings_dialog = false;
+                            }
+                        });
+                    });
             });
         if !open {
             self.settings_dialog = false;
@@ -6173,6 +6555,363 @@ impl MochiApp {
             });
     }
 
+    fn render_network_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        supervisor: &mut Supervisor,
+        peer_rows: &[PeerRow],
+        peer_aliases: &[String],
+        metrics: &DashboardMetrics,
+    ) {
+        ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                self.render_devnet_quickstart(ui, supervisor, metrics);
+                ui.add_space(12.0);
+                self.render_devnet_access_panel(ui, supervisor, peer_rows);
+                ui.add_space(12.0);
+                self.render_dashboard_view(ui, supervisor, peer_rows, peer_aliases, metrics);
+            });
+    }
+
+    fn render_activity_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        supervisor: &mut Supervisor,
+        peer_aliases: &[String],
+    ) {
+        let palette = Self::palette();
+        let running = Self::running_peer_aliases(supervisor);
+        let focus_alias = Self::preferred_activity_alias(
+            self.log_selected_peer.as_ref(),
+            self.log_stream_peer.as_ref(),
+            &running,
+        );
+
+        Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Live activity").strong().size(18.0));
+                ui.label(
+                    "Blocks, events, and logs attach automatically to a running peer so you can debug the devnet without wiring streams by hand.",
+                );
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    for view in ActivityView::all() {
+                        let selected = self.activity_view == view;
+                        let button = Button::selectable(selected, view.label())
+                            .fill(if selected {
+                                palette.accent_soft
+                            } else {
+                                palette.surface
+                            })
+                            .stroke(Stroke::new(
+                                1.0,
+                                if selected {
+                                    palette.accent
+                                } else {
+                                    palette.border
+                                },
+                            ))
+                            .corner_radius(CornerRadius::same(8));
+                        if ui.add(button).clicked() {
+                            self.activity_view = view;
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut self.auto_log_stream, "Auto logs");
+                    ui.checkbox(&mut self.auto_event_stream, "Auto events");
+                    ui.checkbox(&mut self.auto_block_stream, "Auto blocks");
+                    if let Some(alias) = focus_alias {
+                        ui.label(
+                            RichText::new(format!("Active debug peer: {alias}"))
+                                .small()
+                                .color(palette.text_muted),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("Start the devnet to attach live streams.")
+                                .small()
+                                .color(palette.text_muted),
+                        );
+                    }
+                });
+            });
+        ui.add_space(12.0);
+
+        match self.activity_view {
+            ActivityView::Logs => self.render_logs_view(ui, supervisor, peer_aliases),
+            ActivityView::Events => self.render_events_view(ui, supervisor, peer_aliases),
+            ActivityView::Blocks => self.render_blocks_view(ui, supervisor, peer_aliases),
+        }
+    }
+
+    fn render_devnet_quickstart(
+        &mut self,
+        ui: &mut egui::Ui,
+        supervisor: &mut Supervisor,
+        metrics: &DashboardMetrics,
+    ) {
+        let palette = Self::palette();
+        let selected_preset = self.selected_quickstart_preset(supervisor);
+        let running = supervisor.is_any_running();
+        let workspace_label = if self.settings_data_root_input.trim().is_empty() {
+            "system temporary directory".to_owned()
+        } else {
+            self.settings_data_root_input.trim().to_owned()
+        };
+
+        Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin::symmetric(16, 14))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Devnet quickstart").strong().size(18.0));
+                ui.label(
+                    "Run a disposable Iroha network for local app development, inspect live chain activity, and debug transactions in one workspace.",
+                );
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Preset").small().color(palette.text_muted));
+                    for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                        let selected = selected_preset == preset;
+                        let button = Button::selectable(selected, preset.label())
+                            .fill(if selected {
+                                palette.accent_soft
+                            } else {
+                                palette.surface
+                            })
+                            .stroke(Stroke::new(
+                                1.0,
+                                if selected {
+                                    palette.accent
+                                } else {
+                                    palette.border
+                                },
+                            ))
+                            .corner_radius(CornerRadius::same(8));
+                        if ui.add(button).clicked() {
+                            self.set_quickstart_preset(preset);
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                ui.small(match selected_preset {
+                    ProfilePreset::SinglePeer => {
+                        "Single Peer is the fastest local loop for app work, schema changes, and transaction debugging."
+                    }
+                    ProfilePreset::FourPeerBft => {
+                        "Four Peer BFT is closer to a validator network and better for quorum, failover, and consensus-path debugging."
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Workspace");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings_data_root_input)
+                            .hint_text("/path/to/mochi-data")
+                            .desired_width(340.0),
+                    );
+                    ui.label("Chain");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings_chain_id_input)
+                            .hint_text("mochi-local")
+                            .desired_width(200.0),
+                    );
+                    ui.label("Torii");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings_torii_port_input)
+                            .hint_text("8080")
+                            .desired_width(90.0),
+                    );
+                    ui.label("P2P");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings_p2p_port_input)
+                            .hint_text("1337")
+                            .desired_width(90.0),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{} peer(s) • {} running • latest block {} • workspace {}",
+                        selected_preset.peer_count(),
+                        metrics.running_peers,
+                        metrics.latest_height_text(),
+                        workspace_label,
+                    ))
+                    .small()
+                    .color(palette.text_muted),
+                );
+                if !running {
+                    ui.add_space(8.0);
+                    ui.group(|ui| {
+                        ui.label(RichText::new("First run").strong());
+                        ui.small("1. Pick a preset. 2. Confirm the workspace and ports. 3. Start devnet. 4. Open Activity to watch logs, events, and blocks.");
+                    });
+                }
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    let primary_label = if running {
+                        "Restart devnet with this setup"
+                    } else {
+                        "Start devnet"
+                    };
+                    if ui.button(primary_label).clicked() {
+                        self.queue_settings_apply(
+                            true,
+                            false,
+                            if running {
+                                "Devnet restarted with the updated setup."
+                            } else {
+                                "Devnet started."
+                            },
+                        );
+                    }
+                    if ui.button("Apply without starting").clicked() {
+                        self.queue_settings_apply(
+                            false,
+                            false,
+                            "Devnet configuration updated.",
+                        );
+                    }
+                    if ui
+                        .add_enabled(running, egui::Button::new("Stop devnet"))
+                        .clicked()
+                    {
+                        match supervisor.stop_all() {
+                            Ok(()) => {
+                                self.last_info = Some("Devnet stopped.".to_owned());
+                                self.last_error = None;
+                            }
+                            Err(err) => {
+                                self.last_info = None;
+                                self.last_error = Some(format!("Stop failed: {err}"));
+                            }
+                        }
+                    }
+                    if ui.button("Advanced settings").clicked() {
+                        self.initialize_settings_from_runtime(Some(supervisor));
+                        self.settings_dialog = true;
+                    }
+                });
+            });
+    }
+
+    fn render_devnet_access_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        supervisor: &mut Supervisor,
+        peer_rows: &[PeerRow],
+    ) {
+        let palette = Self::palette();
+        let signers = supervisor.signers();
+
+        Frame::new()
+            .fill(palette.panel_alt)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(Margin::symmetric(16, 14))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Connect your app").strong().size(18.0));
+                ui.label(
+                    "Copy endpoints and development identities without digging through peer configs or the signing vault first.",
+                );
+                ui.add_space(10.0);
+
+                ui.label(RichText::new("Endpoints").strong());
+                if peer_rows.is_empty() {
+                    ui.small("No peer endpoints are available yet.");
+                } else {
+                    for row in peer_rows {
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(&row.alias).strong());
+                                ui.small(format!("Torii {}", row.torii));
+                                if ui.button("Copy Torii").clicked() {
+                                    Self::copy_text(ui, row.torii.clone());
+                                    self.last_info =
+                                        Some(format!("Copied Torii endpoint for {}.", row.alias));
+                                    self.last_error = None;
+                                }
+                                if let Some(api) = &row.api_base {
+                                    ui.small(format!("API {api}"));
+                                    if ui.button("Copy API").clicked() {
+                                        Self::copy_text(ui, api.clone());
+                                        self.last_info = Some(format!(
+                                            "Copied API base for {}.",
+                                            row.alias
+                                        ));
+                                        self.last_error = None;
+                                    }
+                                } else if let Some(err) = &row.api_error {
+                                    ui.small(format!("API unavailable: {err}"));
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                    }
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Development identities").strong());
+                    if ui.button("Manage signing vault…").clicked() {
+                        self.open_signer_vault_dialog(supervisor);
+                    }
+                });
+                if signers.is_empty() {
+                    ui.small("No signing authorities are currently available.");
+                } else {
+                    for signer in signers.iter().take(4) {
+                        let entry = SignerEntryState::from_signer(signer);
+                        let permissions = signer
+                            .permissions()
+                            .map(|permission| permission.label())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(entry.label.clone()).strong());
+                                ui.small(entry.account.clone());
+                                if ui.button("Copy account").clicked() {
+                                    Self::copy_text(ui, entry.account.clone());
+                                    self.last_info = Some(format!(
+                                        "Copied account id for {}.",
+                                        entry.label
+                                    ));
+                                    self.last_error = None;
+                                }
+                                if ui.button("Copy private key").clicked() {
+                                    Self::copy_text(ui, entry.private_key.clone());
+                                    self.last_info = Some(format!(
+                                        "Copied private key for {}.",
+                                        entry.label
+                                    ));
+                                    self.last_error = None;
+                                }
+                            });
+                            ui.small(format!("Permissions: {permissions}"));
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if signers.len() > 4 {
+                        ui.small(format!(
+                            "{} more identities are available in the signing vault.",
+                            signers.len() - 4
+                        ));
+                    }
+                }
+            });
+    }
+
     fn render_dashboard_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -6191,18 +6930,31 @@ impl MochiApp {
                 .and_then(|cfg| cfg.config.nexus.as_ref())
         });
         let lane_catalog = lane_catalog_snapshot(nexus_table);
+        let narrow = ui.available_width() < 1_120.0;
+
+        if narrow {
+            ui.heading("Peer overview");
+            ui.add_space(6.0);
+            for row in peer_rows {
+                self.render_peer_card(ui, supervisor, row);
+                ui.add_space(8.0);
+            }
+            ui.add_space(8.0);
+            ui.heading("Telemetry");
+            ui.add_space(6.0);
+            self.render_status_panel(ui, peer_aliases, metrics, &lane_catalog);
+            ui.add_space(12.0);
+            self.render_activity_panel(ui, metrics);
+            return;
+        }
 
         ui.columns(2, |columns| {
             columns[0].heading("Peer overview");
             columns[0].add_space(6.0);
-            ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .show(&mut columns[0], |ui| {
-                    for row in peer_rows {
-                        self.render_peer_card(ui, supervisor, row);
-                        ui.add_space(8.0);
-                    }
-                });
+            for row in peer_rows {
+                self.render_peer_card(&mut columns[0], supervisor, row);
+                columns[0].add_space(8.0);
+            }
 
             columns[1].heading("Telemetry");
             columns[1].add_space(6.0);
@@ -6227,13 +6979,13 @@ impl MochiApp {
                         let start_clicked = ui
                             .add_enabled(
                                 !matches!(row.state, PeerState::Running),
-                                egui::Button::new("Start"),
+                                egui::Button::new("Start node"),
                             )
                             .clicked();
                         let stop_clicked = ui
                             .add_enabled(
                                 matches!(row.state, PeerState::Running),
-                                egui::Button::new("Stop"),
+                                egui::Button::new("Stop node"),
                             )
                             .clicked();
                         if start_clicked {
@@ -6275,8 +7027,10 @@ impl MochiApp {
                 } else if let Some(err) = &row.api_error {
                     ui.small(format!("API error: {err}"));
                 }
-                ui.small(format!("Config: {}", row.config));
-                ui.small(format!("Logs: {}", row.logs));
+                ui.collapsing("Paths", |ui| {
+                    ui.small(format!("Config: {}", row.config));
+                    ui.small(format!("Logs: {}", row.logs));
+                });
 
                 if let Some(snapshot) = self.block_snapshots.get(&row.alias) {
                     let (status_text, status_color) = snapshot.status_label();
@@ -6383,79 +7137,94 @@ impl MochiApp {
             .corner_radius(CornerRadius::same(10))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
-                Plot::new("mochi_queue_plot")
-                    .legend(Legend::default())
-                    .height(180.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.queue_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(8.0);
-                Plot::new("mochi_commit_latency_plot")
-                    .legend(Legend::default())
-                    .height(180.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.commit_latency_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(8.0);
-                Plot::new("mochi_throughput_plot")
-                    .legend(Legend::default())
-                    .height(180.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.throughput_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(8.0);
-                Plot::new("mochi_consensus_queue_plot")
-                    .legend(Legend::default())
-                    .height(180.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.consensus_queue_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(8.0);
-                Plot::new("mochi_view_change_plot")
-                    .legend(Legend::default())
-                    .height(140.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.view_change_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(8.0);
-                Plot::new("mochi_da_reschedule_plot")
-                    .legend(Legend::default())
-                    .height(140.0)
-                    .show(ui, |plot_ui| {
-                        for alias in peer_aliases {
-                            if let Some(points) = self.reschedule_plot_points(alias) {
-                                plot_ui.line(Line::new(alias.clone(), points));
-                            }
-                        }
-                    });
-                ui.add_space(6.0);
                 ui.small(format!(
                     "Average queue: {} • Average commit latency: {} • Throughput: {}",
                     metrics.queue_text(),
                     metrics.latency_text(),
                     metrics.throughput_text()
                 ));
-                ui.add_space(4.0);
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new("Core charts")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Queue depth").strong());
+                        Plot::new("mochi_queue_plot")
+                            .legend(Legend::default())
+                            .height(170.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.queue_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Commit latency").strong());
+                        Plot::new("mochi_commit_latency_plot")
+                            .legend(Legend::default())
+                            .height(170.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.commit_latency_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Approved throughput").strong());
+                        Plot::new("mochi_throughput_plot")
+                            .legend(Legend::default())
+                            .height(170.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.throughput_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                    });
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new("Consensus internals")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Consensus queue").strong());
+                        Plot::new("mochi_consensus_queue_plot")
+                            .legend(Legend::default())
+                            .height(160.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.consensus_queue_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("View changes").strong());
+                        Plot::new("mochi_view_change_plot")
+                            .legend(Legend::default())
+                            .height(130.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.view_change_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("DA reschedules").strong());
+                        Plot::new("mochi_da_reschedule_plot")
+                            .legend(Legend::default())
+                            .height(130.0)
+                            .show(ui, |plot_ui| {
+                                for alias in peer_aliases {
+                                    if let Some(points) = self.reschedule_plot_points(alias) {
+                                        plot_ui.line(Line::new(alias.clone(), points));
+                                    }
+                                }
+                            });
+                    });
+                ui.add_space(8.0);
+                ui.label(RichText::new("Peer status").strong());
                 for alias in peer_aliases {
                     if let Some(snapshot) = self.status_snapshots.get(alias) {
                         let (label, color) = snapshot.status_label();
@@ -6742,7 +7511,7 @@ impl MochiApp {
             .corner_radius(CornerRadius::same(10))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Peer:");
                     ComboBox::from_id_salt("mochi_block_stream_peer_selector")
                         .selected_text(chosen.clone())
@@ -6751,11 +7520,31 @@ impl MochiApp {
                                 ui.selectable_value(&mut chosen, alias.clone(), alias);
                             }
                         });
+                    let running = Self::peer_is_running(supervisor, &chosen);
+                    ui.label(
+                        RichText::new(if running { "Running" } else { "Stopped" })
+                            .small()
+                            .color(if running {
+                                Color32::from_rgb(120, 210, 150)
+                            } else {
+                                Color32::from_rgb(200, 140, 96)
+                            }),
+                    );
                 });
             });
 
-        if self.selected_peer.as_ref() != Some(&chosen) {
+        let selection_changed = self.selected_peer.as_ref() != Some(&chosen);
+        if selection_changed {
             self.selected_peer = Some(chosen.clone());
+        }
+        let chosen_running = Self::peer_is_running(supervisor, &chosen);
+        if selection_changed
+            && self.auto_block_stream
+            && chosen_running
+            && self.block_stream_peer.as_deref() != Some(chosen.as_str())
+            && let Err(err) = self.start_block_stream_for(supervisor, &chosen)
+        {
+            self.last_error = Some(err);
         }
 
         if let Some(snapshot) = self.block_snapshots.get(chosen.as_str()) {
@@ -6794,49 +7583,36 @@ impl MochiApp {
                 });
         }
 
+        if !chosen_running {
+            ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect blocks.");
+        }
+
         if self.block_stream.is_none() {
+            let button_label = if self.auto_block_stream {
+                format!("Reconnect block stream to {chosen}")
+            } else {
+                format!("Connect block stream to {chosen}")
+            };
             if ui
-                .button(format!("Start streaming blocks from {chosen}"))
+                .add_enabled(chosen_running, egui::Button::new(button_label))
                 .clicked()
             {
-                let handle = self.runtime.handle().clone();
-                match supervisor.managed_block_stream(&chosen, &handle) {
-                    Ok(stream) => {
-                        let receiver = stream.subscribe();
-                        self.block_stream_peer = Some(chosen.clone());
-                        self.block_receiver = Some(receiver);
-                        let notice_event = BlockStreamEvent::Text {
-                            text: format!(
-                                "Block stream started for {chosen} (auto-reconnect enabled)."
-                            ),
-                        };
-                        self.record_stream_event(Some(chosen.clone()), &notice_event);
-                        Self::push_block_event(
-                            &mut self.block_events,
-                            Some(chosen.clone()),
-                            notice_event,
-                        );
-                        self.block_stream = Some(stream);
-                        self.last_error = None;
-                        self.last_info = Some(format!("Block stream active for {chosen}."));
-                    }
-                    Err(err) => {
-                        self.last_error =
-                            Some(format!("Failed to start block stream for {chosen}: {err}"));
-                        let error_event = BlockStreamEvent::DecodeError {
-                            error: BlockStreamDecodeError {
-                                stage: BlockDecodeStage::Stream,
-                                raw_len: 0,
-                                message: err.to_string(),
-                            },
-                        };
-                        self.record_stream_event(Some(chosen.clone()), &error_event);
-                        Self::push_block_event(
-                            &mut self.block_events,
-                            Some(chosen.clone()),
-                            error_event,
-                        );
-                    }
+                self.auto_block_stream = true;
+                if let Err(err) = self.start_block_stream_for(supervisor, &chosen) {
+                    self.last_error = Some(err.clone());
+                    let error_event = BlockStreamEvent::DecodeError {
+                        error: BlockStreamDecodeError {
+                            stage: BlockDecodeStage::Stream,
+                            raw_len: 0,
+                            message: err,
+                        },
+                    };
+                    self.record_stream_event(Some(chosen.clone()), &error_event);
+                    Self::push_block_event(
+                        &mut self.block_events,
+                        Some(chosen.clone()),
+                        error_event,
+                    );
                 }
             }
         } else {
@@ -6846,21 +7622,25 @@ impl MochiApp {
                 .unwrap_or_else(|| chosen.clone());
             ui.horizontal(|ui| {
                 ui.label(format!("Streaming blocks from {active_alias}"));
-                if ui.button("Stop stream").clicked() {
-                    if let Some(stream) = self.block_stream.take() {
-                        stream.abort();
+                if self.auto_block_stream {
+                    ui.small("Auto-follow keeps this stream attached to a running debug peer.");
+                }
+                let reconnect_label = if active_alias == chosen {
+                    format!("Reconnect {chosen}")
+                } else {
+                    format!("Switch to {chosen}")
+                };
+                if ui
+                    .add_enabled(chosen_running, egui::Button::new(reconnect_label))
+                    .clicked()
+                {
+                    self.auto_block_stream = true;
+                    if let Err(err) = self.start_block_stream_for(supervisor, &chosen) {
+                        self.last_error = Some(err);
                     }
-                    self.block_receiver = None;
-                    self.block_stream_peer = None;
-                    let stopped_event = BlockStreamEvent::Text {
-                        text: format!("Block stream stopped for {active_alias}."),
-                    };
-                    self.record_stream_event(Some(active_alias.clone()), &stopped_event);
-                    Self::push_block_event(
-                        &mut self.block_events,
-                        Some(active_alias),
-                        stopped_event,
-                    );
+                }
+                if ui.button("Disconnect").clicked() {
+                    self.stop_block_stream(true);
                 }
             });
         }
@@ -6924,11 +7704,31 @@ impl MochiApp {
                                 ui.selectable_value(&mut chosen, alias.clone(), alias);
                             }
                         });
+                    let running = Self::peer_is_running(supervisor, &chosen);
+                    ui.label(
+                        RichText::new(if running { "Running" } else { "Stopped" })
+                            .small()
+                            .color(if running {
+                                Color32::from_rgb(120, 210, 150)
+                            } else {
+                                Color32::from_rgb(200, 140, 96)
+                            }),
+                    );
                 });
             });
 
-        if self.event_selected_peer.as_ref() != Some(&chosen) {
+        let selection_changed = self.event_selected_peer.as_ref() != Some(&chosen);
+        if selection_changed {
             self.event_selected_peer = Some(chosen.clone());
+        }
+        let chosen_running = Self::peer_is_running(supervisor, &chosen);
+        if selection_changed
+            && self.auto_event_stream
+            && chosen_running
+            && self.event_stream_peer.as_deref() != Some(chosen.as_str())
+            && let Err(err) = self.start_event_stream_for(supervisor, &chosen)
+        {
+            self.last_error = Some(err);
         }
 
         if let Some(snapshot) = self.event_snapshots.get(chosen.as_str()) {
@@ -6967,49 +7767,34 @@ impl MochiApp {
                 });
         }
 
+        if !chosen_running {
+            ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect events.");
+        }
+
         if self.event_stream.is_none() {
             if ui
-                .button(format!("Start streaming events from {chosen}"))
+                .add_enabled(
+                    chosen_running,
+                    egui::Button::new(format!("Reconnect event stream to {chosen}")),
+                )
                 .clicked()
             {
-                let handle = self.runtime.handle().clone();
-                match supervisor.managed_event_stream(&chosen, &handle) {
-                    Ok(stream) => {
-                        let receiver = stream.subscribe();
-                        self.event_stream_peer = Some(chosen.clone());
-                        self.event_receiver = Some(receiver);
-                        let notice = EventStreamEvent::Text {
-                            text: format!(
-                                "Event stream started for {chosen} (auto-reconnect enabled)."
-                            ),
-                        };
-                        self.record_event_stream_event(Some(chosen.clone()), &notice);
-                        Self::push_event_event(
-                            &mut self.event_events,
-                            Some(chosen.clone()),
-                            notice,
-                        );
-                        self.event_stream = Some(stream);
-                        self.last_error = None;
-                        self.last_info = Some(format!("Event stream active for {chosen}."));
-                    }
-                    Err(err) => {
-                        self.last_error =
-                            Some(format!("Failed to start event stream for {chosen}: {err}"));
-                        let error_event = EventStreamEvent::DecodeError {
-                            error: EventStreamDecodeError {
-                                stage: EventDecodeStage::Stream,
-                                raw_len: 0,
-                                message: err.to_string(),
-                            },
-                        };
-                        self.record_event_stream_event(Some(chosen.clone()), &error_event);
-                        Self::push_event_event(
-                            &mut self.event_events,
-                            Some(chosen.clone()),
-                            error_event,
-                        );
-                    }
+                self.auto_event_stream = true;
+                if let Err(err) = self.start_event_stream_for(supervisor, &chosen) {
+                    self.last_error = Some(err.clone());
+                    let error_event = EventStreamEvent::DecodeError {
+                        error: EventStreamDecodeError {
+                            stage: EventDecodeStage::Stream,
+                            raw_len: 0,
+                            message: err,
+                        },
+                    };
+                    self.record_event_stream_event(Some(chosen.clone()), &error_event);
+                    Self::push_event_event(
+                        &mut self.event_events,
+                        Some(chosen.clone()),
+                        error_event,
+                    );
                 }
             }
         } else {
@@ -7019,21 +7804,25 @@ impl MochiApp {
                 .unwrap_or_else(|| chosen.clone());
             ui.horizontal(|ui| {
                 ui.label(format!("Streaming events from {active_alias}"));
-                if ui.button("Stop stream").clicked() {
-                    if let Some(stream) = self.event_stream.take() {
-                        stream.abort();
+                if self.auto_event_stream {
+                    ui.small("Auto-follow keeps this stream attached to a running debug peer.");
+                }
+                let reconnect_label = if active_alias == chosen {
+                    format!("Reconnect {chosen}")
+                } else {
+                    format!("Switch to {chosen}")
+                };
+                if ui
+                    .add_enabled(chosen_running, egui::Button::new(reconnect_label))
+                    .clicked()
+                {
+                    self.auto_event_stream = true;
+                    if let Err(err) = self.start_event_stream_for(supervisor, &chosen) {
+                        self.last_error = Some(err);
                     }
-                    self.event_receiver = None;
-                    self.event_stream_peer = None;
-                    let stopped_event = EventStreamEvent::Text {
-                        text: format!("Event stream stopped for {active_alias}."),
-                    };
-                    self.record_event_stream_event(Some(active_alias.clone()), &stopped_event);
-                    Self::push_event_event(
-                        &mut self.event_events,
-                        Some(active_alias),
-                        stopped_event,
-                    );
+                }
+                if ui.button("Disconnect").clicked() {
+                    self.stop_event_stream(true);
                 }
             });
         }
@@ -7379,26 +8168,37 @@ impl MochiApp {
                                 ui.selectable_value(&mut chosen, alias.clone(), alias);
                             }
                         });
+                    let running = Self::peer_is_running(supervisor, &chosen);
+                    ui.label(
+                        RichText::new(if running { "Running" } else { "Stopped" })
+                            .small()
+                            .color(if running {
+                                Color32::from_rgb(120, 210, 150)
+                            } else {
+                                Color32::from_rgb(200, 140, 96)
+                            }),
+                    );
                 });
             });
 
-        if self.log_selected_peer.as_ref() != Some(&chosen) {
+        let selection_changed = self.log_selected_peer.as_ref() != Some(&chosen);
+        if selection_changed {
             self.log_selected_peer = Some(chosen.clone());
+        }
+        let chosen_running = Self::peer_is_running(supervisor, &chosen);
+        if selection_changed
+            && self.auto_log_stream
+            && chosen_running
+            && self.log_stream_peer.as_deref() != Some(chosen.as_str())
+            && let Err(err) = self.start_log_stream_for(supervisor, &chosen)
+        {
+            self.last_error = Some(err);
         }
 
         ui.horizontal(|ui| {
             if ui.button("Clear log buffer").clicked() {
                 self.log_events.clear();
                 self.log_snapshots.clear();
-            }
-            let follow_active = ui
-                .add_enabled(
-                    self.block_stream_peer.is_some(),
-                    egui::Button::new("Follow active peer"),
-                )
-                .clicked();
-            if follow_active {
-                self.log_selected_peer = self.block_stream_peer.clone();
             }
             ui.label("Filter:");
             let response = egui::TextEdit::singleline(&mut self.log_filter).desired_width(200.0);
@@ -7408,29 +8208,47 @@ impl MochiApp {
             }
         });
 
+        if let Some(snapshot) = self.log_snapshots.get(chosen.as_str()) {
+            Frame::new()
+                .fill(Color32::from_rgb(22, 30, 40))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    let connected = self.log_stream_peer.as_deref() == Some(chosen.as_str());
+                    ui.label(format!(
+                        "Connection: {}",
+                        if connected { "active" } else { "inactive" }
+                    ));
+                    if !snapshot.label.is_empty() {
+                        ui.colored_label(
+                            snapshot.color,
+                            format!("Latest line: {}", snapshot.label),
+                        );
+                    }
+                    if let Some(timestamp) = snapshot.timestamp {
+                        ui.small(format!("Last update: {timestamp} ms"));
+                    } else {
+                        ui.small("Logs stay attached while the selected peer is running.");
+                    }
+                });
+        }
+
+        if !chosen_running {
+            ui.small("Selected peer is stopped. Start the devnet or pick a running peer to inspect logs.");
+        }
+
         if self.log_receiver.is_none() {
             if ui
-                .button(format!("Start tailing logs from {chosen}"))
+                .add_enabled(
+                    chosen_running,
+                    egui::Button::new(format!("Reconnect log stream to {chosen}")),
+                )
                 .clicked()
-                && !chosen.is_empty()
             {
-                match supervisor.log_stream(&chosen) {
-                    Some(stream) => {
-                        let receiver = stream.subscribe();
-                        self.log_receiver = Some(receiver);
-                        self.log_stream_peer = Some(chosen.clone());
-                        self.log_selected_peer = Some(chosen.clone());
-                        let notice = Self::system_log_event(
-                            &chosen,
-                            format!("Log stream started for {chosen}."),
-                        );
-                        self.push_log_event(notice);
-                        self.last_error = None;
-                        self.last_info = Some(format!("Log stream active for {chosen}."));
-                    }
-                    None => {
-                        self.last_error = Some(format!("No log stream available for {chosen}"));
-                    }
+                self.auto_log_stream = true;
+                if let Err(err) = self.start_log_stream_for(supervisor, &chosen) {
+                    self.last_error = Some(err);
                 }
             }
         } else {
@@ -7440,32 +8258,25 @@ impl MochiApp {
                 .unwrap_or_else(|| chosen.clone());
             ui.horizontal(|ui| {
                 ui.label(format!("Tailing logs from {active_alias}"));
-                if ui.button("Stop logs").clicked() {
-                    self.stop_log_stream(Some(active_alias.clone()));
+                if self.auto_log_stream {
+                    ui.small("Auto-follow keeps this stream attached to a running debug peer.");
                 }
-                if !chosen.is_empty()
-                    && chosen != active_alias
-                    && ui.button(format!("Switch to {chosen}")).clicked()
+                let reconnect_label = if active_alias == chosen {
+                    format!("Reconnect {chosen}")
+                } else {
+                    format!("Switch to {chosen}")
+                };
+                if ui
+                    .add_enabled(chosen_running, egui::Button::new(reconnect_label))
+                    .clicked()
                 {
-                    self.stop_log_stream(Some(active_alias.clone()));
-                    match supervisor.log_stream(&chosen) {
-                        Some(stream) => {
-                            let receiver = stream.subscribe();
-                            self.log_receiver = Some(receiver);
-                            self.log_stream_peer = Some(chosen.clone());
-                            self.log_selected_peer = Some(chosen.clone());
-                            let notice = Self::system_log_event(
-                                &chosen,
-                                format!("Log stream started for {chosen}."),
-                            );
-                            self.push_log_event(notice);
-                            self.last_error = None;
-                            self.last_info = Some(format!("Log stream active for {chosen}."));
-                        }
-                        None => {
-                            self.last_error = Some(format!("No log stream available for {chosen}"));
-                        }
+                    self.auto_log_stream = true;
+                    if let Err(err) = self.start_log_stream_for(supervisor, &chosen) {
+                        self.last_error = Some(err);
                     }
+                }
+                if ui.button("Disconnect").clicked() {
+                    self.stop_log_stream(true);
                 }
             });
         }
@@ -7596,6 +8407,8 @@ impl MochiApp {
         peer_aliases: &[String],
     ) {
         ui.heading("State explorer");
+        ui.small("Query accounts, assets, domains, and peers from the running devnet without leaving Mochi.");
+        ui.add_space(6.0);
         if peer_aliases.is_empty() {
             ui.label("No peers available.");
             return;
@@ -7852,44 +8665,48 @@ impl MochiApp {
 
             if !snapshot.matching_cached_entries.is_empty() {
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .small_button("Copy filtered JSON")
-                        .on_hover_text("Copy matching entries as a Norito JSON array")
-                        .clicked()
-                    {
-                        export_action = Some(StateExportAction::CopyJson(
-                            snapshot.matching_cached_entries.clone(),
-                        ));
-                    }
-                    if ui
-                        .small_button("Copy filtered Norito")
-                        .on_hover_text("Copy matching entries as Norito-encoded hex")
-                        .clicked()
-                    {
-                        export_action = Some(StateExportAction::CopyNorito(
-                            snapshot.matching_cached_entries.clone(),
-                        ));
-                    }
-                    if ui
-                        .small_button("Save filtered JSON")
-                        .on_hover_text("Write matching entries to a Norito JSON file")
-                        .clicked()
-                    {
-                        export_action = Some(StateExportAction::SaveJson(
-                            snapshot.matching_cached_entries.clone(),
-                        ));
-                    }
-                    if ui
-                        .small_button("Save filtered Norito")
-                        .on_hover_text("Write matching entries as Norito bytes to disk")
-                        .clicked()
-                    {
-                        export_action = Some(StateExportAction::SaveNorito(
-                            snapshot.matching_cached_entries.clone(),
-                        ));
-                    }
-                });
+                egui::CollapsingHeader::new("Export filtered results")
+                    .id_salt("mochi_state_export_actions")
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .small_button("Copy filtered JSON")
+                                .on_hover_text("Copy matching entries as a Norito JSON array")
+                                .clicked()
+                            {
+                                export_action = Some(StateExportAction::CopyJson(
+                                    snapshot.matching_cached_entries.clone(),
+                                ));
+                            }
+                            if ui
+                                .small_button("Copy filtered Norito")
+                                .on_hover_text("Copy matching entries as Norito-encoded hex")
+                                .clicked()
+                            {
+                                export_action = Some(StateExportAction::CopyNorito(
+                                    snapshot.matching_cached_entries.clone(),
+                                ));
+                            }
+                            if ui
+                                .small_button("Save filtered JSON")
+                                .on_hover_text("Write matching entries to a Norito JSON file")
+                                .clicked()
+                            {
+                                export_action = Some(StateExportAction::SaveJson(
+                                    snapshot.matching_cached_entries.clone(),
+                                ));
+                            }
+                            if ui
+                                .small_button("Save filtered Norito")
+                                .on_hover_text("Write matching entries as Norito bytes to disk")
+                                .clicked()
+                            {
+                                export_action = Some(StateExportAction::SaveNorito(
+                                    snapshot.matching_cached_entries.clone(),
+                                ));
+                            }
+                        });
+                    });
             }
 
             ui.add_space(6.0);
@@ -8587,6 +9404,50 @@ impl MochiApp {
             .map_err(|err| format!("{label} must be a number: {err}"))
     }
 
+    fn render_composer_kind_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        kind: ComposerInstructionKind,
+        selected_signer: Option<&SigningAuthority>,
+    ) {
+        let selected = self.composer_instruction_kind == kind;
+        let allowed = selected_signer
+            .map(|signer| signer.allows_permission(kind.permission()))
+            .unwrap_or(true);
+        let button = Button::selectable(selected, kind.label())
+            .fill(if selected {
+                Color32::from_rgb(46, 64, 84)
+            } else {
+                Color32::from_rgb(18, 26, 36)
+            })
+            .stroke(Stroke::new(
+                1.0,
+                if selected {
+                    Color32::from_rgb(110, 160, 220)
+                } else {
+                    Color32::from_rgb(46, 64, 84)
+                },
+            ))
+            .corner_radius(CornerRadius::same(8));
+        let mut response = ui.add_enabled(allowed, button);
+        if !allowed {
+            let hover_text = if let Some(signer) = selected_signer {
+                format!(
+                    "{} lacks permission to {}.",
+                    signer.label(),
+                    kind.permission()
+                )
+            } else {
+                "Select a signing authority to enable actions.".to_owned()
+            };
+            response = response.on_hover_text(hover_text);
+        }
+        if response.clicked() && allowed && !selected {
+            self.composer_instruction_kind = kind;
+            self.composer_error = None;
+        }
+    }
+
     fn parse_min_initial_amounts(
         raw: &str,
     ) -> Result<BTreeMap<AssetDefinitionId, Numeric>, String> {
@@ -8716,7 +9577,25 @@ impl MochiApp {
     }
 
     fn render_composer_build_step(&mut self, ui: &mut egui::Ui, supervisor: &Supervisor) {
-        ui.label(RichText::new("Instruction builder").strong());
+        const COMMON_KINDS: [ComposerInstructionKind; 6] = [
+            ComposerInstructionKind::MintAsset,
+            ComposerInstructionKind::BurnAsset,
+            ComposerInstructionKind::TransferAsset,
+            ComposerInstructionKind::RegisterDomain,
+            ComposerInstructionKind::RegisterAccount,
+            ComposerInstructionKind::RegisterAssetDefinition,
+        ];
+        const ADVANCED_KINDS: [ComposerInstructionKind; 6] = [
+            ComposerInstructionKind::PublishSpaceDirectoryManifest,
+            ComposerInstructionKind::RegisterPinManifest,
+            ComposerInstructionKind::GrantRole,
+            ComposerInstructionKind::RevokeRole,
+            ComposerInstructionKind::AccountAdmissionPolicy,
+            ComposerInstructionKind::MultisigPropose,
+        ];
+
+        ui.label(RichText::new("Transaction builder").strong());
+        ui.small("Pick a common devnet action first. Raw and governance flows stay available, but they no longer dominate the main path.");
         ui.add_space(4.0);
 
         let signers = supervisor.signers();
@@ -8724,37 +9603,30 @@ impl MochiApp {
             .composer_selected_signer
             .and_then(|index| signers.get(index));
 
-        ui.horizontal(|ui| {
-            ui.label("Kind");
-            ComboBox::from_id_salt("mochi_composer_instruction_kind")
-                .selected_text(self.composer_instruction_kind.label())
-                .show_ui(ui, |ui| {
-                    for kind in ComposerInstructionKind::all() {
-                        let selected = self.composer_instruction_kind == kind;
-                        let allowed = selected_signer
-                            .map(|signer| signer.allows_permission(kind.permission()))
-                            .unwrap_or(true);
-                        let mut response =
-                            ui.add_enabled(allowed, Button::new(kind.label()).selected(selected));
-                        if !allowed {
-                            let hover_text = if let Some(signer) = selected_signer {
-                                format!(
-                                    "{} lacks permission to {}.",
-                                    signer.label(),
-                                    kind.permission()
-                                )
-                            } else {
-                                "Select a signing authority to enable actions.".to_owned()
-                            };
-                            response = response.on_hover_text(hover_text);
-                        }
-                        if response.clicked() && allowed && self.composer_instruction_kind != kind {
-                            self.composer_instruction_kind = kind;
-                            self.composer_error = None;
-                        }
+        ui.label(RichText::new("Common local-dev actions").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            for kind in COMMON_KINDS {
+                self.render_composer_kind_button(ui, kind, selected_signer);
+            }
+        });
+        ui.add_space(6.0);
+        egui::CollapsingHeader::new("Advanced and governance actions")
+            .id_salt("mochi_composer_advanced_kinds")
+            .default_open(ADVANCED_KINDS.contains(&self.composer_instruction_kind))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    for kind in ADVANCED_KINDS {
+                        self.render_composer_kind_button(ui, kind, selected_signer);
                     }
                 });
-        });
+            });
+        ui.add_space(4.0);
+        ui.small(format!(
+            "Selected action: {}",
+            self.composer_instruction_kind.label()
+        ));
 
         let templates = ComposerTemplate::options_for(self.composer_instruction_kind);
         if !templates.is_empty() {
@@ -9749,7 +10621,7 @@ impl App for MochiApp {
         self.poll_maintenance_updates(&mut supervisor_opt);
         self.schedule_pending_maintenance(&mut supervisor_opt);
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("MOCHI — Local Iroha Network Supervisor");
+            ui.heading("MOCHI — Local Iroha Devnet");
             if let Some(supervisor) = supervisor_opt.as_mut() {
                 self.render_ready(ui, supervisor);
             } else if matches!(self.maintenance_state, MaintenanceState::Running(_)) {
@@ -9763,7 +10635,7 @@ impl App for MochiApp {
             }
         });
         if self.settings_dialog {
-            self.render_settings_dialog(ctx);
+            self.render_settings_dialog(ctx, supervisor_opt.as_ref());
         }
         if let Some(supervisor) = supervisor_opt.as_mut() {
             self.render_maintenance_dialog(ctx, supervisor);
@@ -9773,6 +10645,7 @@ impl App for MochiApp {
         }
         self.schedule_pending_maintenance(&mut supervisor_opt);
         self.supervisor = supervisor_opt;
+        self.flush_pending_settings_apply();
     }
 
     fn save(&mut self, storage: &mut dyn Storage) {
@@ -11519,14 +12392,14 @@ mod tests {
     #[test]
     fn render_view_tabs_keeps_active_view() {
         let mut app = MochiApp::default();
-        app.active_view = ActiveView::Logs;
+        app.active_view = ActiveView::Activity;
         let ctx = Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             CentralPanel::default().show(ctx, |ui| {
                 app.render_view_tabs(ui);
             });
         });
-        assert_eq!(app.active_view, ActiveView::Logs);
+        assert_eq!(app.active_view, ActiveView::Activity);
     }
 
     #[test]
@@ -13422,6 +14295,11 @@ mod tests {
             Some("Submitted transaction hash123 to alpha.")
         );
         assert!(app.last_error.is_none());
+        assert_eq!(app.active_view, ActiveView::Activity);
+        assert_eq!(app.activity_view, ActivityView::Events);
+        assert_eq!(app.event_selected_peer.as_deref(), Some("alpha"));
+        assert_eq!(app.event_filter.search, "hash123");
+        assert!(app.auto_event_stream);
     }
 
     #[test]
@@ -13446,6 +14324,10 @@ mod tests {
             app.last_error.as_deref(),
             Some("Failed to submit transaction to beta: network error")
         );
+        assert_eq!(app.active_view, ActiveView::Activity);
+        assert_eq!(app.activity_view, ActivityView::Logs);
+        assert_eq!(app.log_selected_peer.as_deref(), Some("beta"));
+        assert!(app.auto_log_stream);
     }
 
     #[test]
@@ -14052,7 +14934,7 @@ mod tests {
         let state_export_dir = temp.path().join("state-export");
         app.settings_state_export_dir_input = state_export_dir.display().to_string();
 
-        app.apply_settings_changes()
+        app.apply_settings_changes_with_restart(false)
             .expect("settings persistence should succeed");
 
         let bundle = app
@@ -14248,7 +15130,11 @@ mod tests {
         assert_eq!(supervisor.chain_id(), "mochi-local");
         assert!(app.last_error.is_none());
         assert!(!app.theme_applied);
-        assert!(matches!(app.active_view, ActiveView::Dashboard));
+        assert!(matches!(app.active_view, ActiveView::Network));
+        assert!(matches!(app.activity_view, ActivityView::Logs));
+        assert!(app.auto_block_stream);
+        assert!(app.auto_event_stream);
+        assert!(app.auto_log_stream);
         assert!(app.block_stream.is_none());
         assert!(app.block_receiver.is_none());
         assert!(app.block_events.is_empty());

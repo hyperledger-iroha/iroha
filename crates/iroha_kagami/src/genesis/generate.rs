@@ -16,10 +16,9 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::{
-    account::CanRegisterAccount, asset_definition::CanRegisterAssetDefinition,
-    domain::CanRegisterDomain, parameter::CanSetParameters,
+    account::CanRegisterAccount, domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
+use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use iroha_version::BuildLine;
@@ -337,7 +336,7 @@ fn resolve_profile_settings(
 fn build_genesis_for_mode(
     mode: Mode,
     builder: GenesisBuilder,
-    genesis_public_key: PublicKey,
+    genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
@@ -541,7 +540,7 @@ impl<T: Write> RunArgs<T> for Args {
         let genesis = build_genesis_for_mode(
             mode,
             builder,
-            genesis_public_key,
+            &genesis_public_key,
             ivm_gas_limit_per_block,
             consensus_mode,
             next_consensus_mode,
@@ -570,7 +569,7 @@ impl<T: Write> RunArgs<T> for Args {
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn generate_default(
     builder: GenesisBuilder,
-    genesis_public_key: PublicKey,
+    genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
@@ -579,9 +578,8 @@ pub fn generate_default(
     profile_vrf_seed: Option<[u8; 32]>,
     da_rbc_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
-    let genesis_account_id = AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_public_key);
-    let mut meta = Metadata::default();
-    meta.insert("key".parse()?, Json::new("value"));
+    let genesis_account_id = AccountId::new(genesis_public_key.clone());
+    let meta = Metadata::default();
     let wonderland_name: Name = "wonderland".parse()?;
     let wonderland_domain = DomainId::new(wonderland_name.clone());
 
@@ -603,10 +601,6 @@ pub fn generate_default(
         44u32,
         AssetId::new("cabbage#garden_of_live_flowers".parse()?, ALICE_ID.clone()),
     );
-    let register_asset_permission = Permission::new(
-        <CanRegisterAssetDefinition as iroha_executor_data_model::permission::Permission>::name(),
-        Json::from_string_unchecked(format!("{{\"domain\":\"{}\"}}", wonderland_domain)),
-    );
     let register_account_permission = Permission::new(
         <CanRegisterAccount as iroha_executor_data_model::permission::Permission>::name(),
         Json::from_string_unchecked(format!("{{\"domain\":\"{}\"}}", wonderland_domain)),
@@ -615,8 +609,6 @@ pub fn generate_default(
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
     let grant_permission_to_register_domains =
         Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
-    let grant_permission_to_register_assets =
-        Grant::account_permission(register_asset_permission, ALICE_ID.clone());
     let grant_permission_to_register_accounts =
         Grant::account_permission(register_account_permission, ALICE_ID.clone());
     let transfer_rose_ownership = Transfer::asset_definition(
@@ -672,7 +664,6 @@ pub fn generate_default(
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
         .append_instruction(grant_permission_to_register_domains)
-        .append_instruction(grant_permission_to_register_assets)
         .append_instruction(grant_permission_to_register_accounts);
 
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
@@ -695,7 +686,7 @@ mod da_tests {
         );
         let manifest = generate_synthetic(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
@@ -733,7 +724,7 @@ mod da_tests {
             GenesisBuilder::new_without_executor(ChainId::from("mode-cutover"), PathBuf::from("."));
         let manifest = generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             Some(SumeragiConsensusMode::Npos),
@@ -765,7 +756,7 @@ mod da_tests {
         let seed = [9u8; 32];
         let manifest = generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
@@ -794,7 +785,7 @@ mod da_tests {
         let seed = [5u8; 32];
         let manifest = generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
@@ -1170,7 +1161,7 @@ mod helper_tests {
         let manifest = build_genesis_for_mode(
             Mode::Default,
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
             None,
@@ -1193,7 +1184,7 @@ mod helper_tests {
                 asset_definitions_per_domain: 0,
             },
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
             None,
@@ -1217,7 +1208,7 @@ mod helper_tests {
             GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
         let manifest = generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
@@ -1322,7 +1313,7 @@ mod helper_tests {
 #[allow(clippy::too_many_arguments)]
 fn generate_synthetic(
     builder: GenesisBuilder,
-    genesis_public_key: PublicKey,
+    genesis_public_key: &PublicKey,
     ivm_gas_limit_per_block: Option<u64>,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
@@ -1364,8 +1355,9 @@ fn generate_synthetic(
 
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
-            builder =
-                builder.append_instruction(Register::account(Account::new(account_id.clone())));
+            builder = builder.append_instruction(Register::account(Account::new(
+                account_id.to_account_id(domain_id.clone()),
+            )));
 
             for asset_definition in 0..asset_definitions_per_domain {
                 let mint = Mint::asset_numeric(

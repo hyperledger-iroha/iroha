@@ -222,16 +222,18 @@ async fn da_commitments_reject_when_nexus_disabled() {
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let domain_id: DomainId = "nexus".parse().expect("domain id");
     let validator_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::BlsNormal);
-    let validator_id = AccountId::new(domain_id.clone(), validator_keypair.public_key().clone());
-    let validator = Account::new(validator_id.clone()).build(&validator_id);
+    let validator_id = AccountId::new(validator_keypair.public_key().clone());
+    let validator =
+        Account::new(validator_id.to_account_id(domain_id.clone())).build(&validator_id);
 
     let delegator_keypair = KeyPair::from_seed(vec![0x02; 32], Algorithm::Ed25519);
-    let delegator_id = AccountId::new(domain_id.clone(), delegator_keypair.public_key().clone());
-    let delegator = Account::new(delegator_id.clone()).build(&delegator_id);
+    let delegator_id = AccountId::new(delegator_keypair.public_key().clone());
+    let delegator =
+        Account::new(delegator_id.to_account_id(domain_id.clone())).build(&delegator_id);
 
     let escrow_keypair = KeyPair::from_seed(vec![0x04; 32], Algorithm::Ed25519);
-    let escrow_id = AccountId::new(domain_id.clone(), escrow_keypair.public_key().clone());
-    let escrow = Account::new(escrow_id.clone()).build(&escrow_id);
+    let escrow_id = AccountId::new(escrow_keypair.public_key().clone());
+    let escrow = Account::new(escrow_id.to_account_id(domain_id.clone())).build(&escrow_id);
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
     let asset_definition_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition");

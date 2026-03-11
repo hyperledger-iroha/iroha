@@ -2403,10 +2403,10 @@ mod tests {
     }
 
     fn oracle(name: &str, domain: &str) -> OracleId {
-        let domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::from_str(domain).expect("domain id");
         let seed = format!("{name}:{domain}");
         let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
-        AccountId::new(domain_id, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn observation_value(mantissa: i128, scale: u32) -> ObservationValue {

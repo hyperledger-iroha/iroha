@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (キャッシュ可能)۔ |
 | `/v1/sns/registrations/{selector}` |入手 | -- | موجودہ `NameRecordV1` + موثر حالت (アクティブ、グレース وغیرہ) واپس کرتا ہے۔ |
 
-**セレクター エンコーディング:** `{selector}` パス セグメント IH58 圧縮 (`sora`) 標準 16 進数 ADDR-5 の値。 Torii `NameSelectorV1` 正規化する
+**セレクター エンコーディング:** `{selector}` パス セグメント I105 圧縮 (`sora`) 標準 16 進数 ADDR-5 の値。 Torii `NameSelectorV1` 正規化する
 
 **エラー モデル:** エンドポイント Norito JSON `code`、`message`、`details` واپس کرتے ہیں۔コードは `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing` です。
 
@@ -163,7 +163,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -223,7 +223,7 @@ Torii 証明 ہوئے چیک کرتا ہے:
 
 1. クライアント `/v1/sns/policies/{suffix_id}` クエリの価格設定、猶予期間の設定、層の確認
 2. クライアント `RegisterNameRequestV1` 番号:
-   - `selector` IH58 の 2 番目に優れた圧縮 (`sora`) ラベルの派生ラベル
+   - `selector` I105 の 2 番目に優れた圧縮 (`sora`) ラベルの派生ラベル
    - `term_years` پالیسی حدود میں۔
    - `payment` 財務/スチュワード スプリッター転送、参照してください。
 3. Torii を検証します:

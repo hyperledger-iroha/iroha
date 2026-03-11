@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 |领域|价值|
 |--------|--------|
 |协议标识符| `<repo-yyMMdd-XX>` |
-|托管账户 ID | `<ih58...>` |
+|托管账户 ID | `<i105...>` |
 |准备时间/日期 | `<custodian ops lead>` |
 |已确认桌面联系人 | `<desk lead + counterparty>` |
 |证据目录| ``artifacts/finance/repo/<slug>/`` |

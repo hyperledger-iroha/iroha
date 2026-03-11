@@ -157,8 +157,8 @@ mod tests {
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-chain".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
-        let authority = AccountId::new(domain, keypair.public_key().clone());
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
         tx.hash_as_entrypoint()
     }

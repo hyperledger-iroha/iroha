@@ -64,7 +64,7 @@ hər bir qəyyumun imzalı təsdiqi və hash daxil edilməlidir
 
 | Qəyyum | Fayl | SHA-256 | Qeydlər |
 |----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Qəyyumluq pəncərəsi, marşrutlaşdırma hesabı və qazma kontaktını əhatə edən imzalanmış SLA. |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Qəyyumluq pəncərəsi, marşrutlaşdırma hesabı və qazma kontaktını əhatə edən imzalanmış SLA. |
 
 > Təsdiqi digər sübutların yanında saxlayın (`artifacts/finance/repo/<slug>/`)
 > beləliklə, `scripts/repo_evidence_manifest.py` faylı eyni ağacda qeyd edir

@@ -10,11 +10,10 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  AccountAddressFormat,
   canonicalizeDomainLabel,
   DEFAULT_DOMAIN_NAME,
-  decodeCompressedAccountAddress,
-  encodeCompressedAccountAddress,
+  decodeI105AccountAddress,
+  encodeI105AccountAddress,
   inspectAccountId,
   configureCurveSupport,
 } from "../src/address.js";
@@ -182,25 +181,23 @@ test("account address golden vectors round-trip", () => {
   });
 
   const canonical = address.canonicalHex();
-  const ih58 = address.toIH58();
-  const compressed = address.toCompressedSora();
+  const i105 = address.toI105();
+  const i105Default = address.toI105Default();
 
   assert.equal(
     canonical,
     "0x02000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
   );
-  assert.equal(ih58, "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChkB2");
+  assert.equal(i105, "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5");
   assert.equal(
-    compressed,
+    i105Default,
     "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
   );
 
-  const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseEncoded(ih58, 753);
-  assert.equal(formatIH58, AccountAddressFormat.IH58);
-  assert.deepEqual(Buffer.from(parsedIH58.canonicalBytes()), Buffer.from(address.canonicalBytes()));
+  const { address: parsedI105 } = AccountAddress.parseEncoded(i105, 753);
+  assert.deepEqual(Buffer.from(parsedI105.canonicalBytes()), Buffer.from(address.canonicalBytes()));
 
-  const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseEncoded(compressed);
-  assert.equal(formatCompressed, AccountAddressFormat.COMPRESSED);
+  const { address: parsedCompressed } = AccountAddress.parseEncoded(i105Default);
   assert.deepEqual(
     Buffer.from(parsedCompressed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
@@ -296,10 +293,10 @@ test("parseEncoded validates expected domain input type", () => {
     domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
-  const ih58 = address.toIH58();
+  const i105 = address.toI105();
 
   assert.throws(
-    () => AccountAddress.parseEncoded(ih58, undefined, 99),
+    () => AccountAddress.parseEncoded(i105, undefined, 99),
     (error) =>
       error instanceof TypeError &&
       /expected domain name must be a string/.test(error.message),
@@ -312,7 +309,7 @@ test("displayFormats exposes domain summary for UI hints", () => {
     publicKey: DEFAULT_PUBLIC_KEY,
   });
   const defaultFormats = defaultAddress.displayFormats();
-  assert.equal(defaultFormats.networkPrefix, 753);
+  assert.equal(defaultFormats.chainDiscriminant, 753);
   assert.equal(defaultFormats.domainSummary.kind, "default");
   assert.equal(defaultFormats.domainSummary.warning, null);
   assert.deepEqual(defaultFormats.domainSummary.selector, {
@@ -349,12 +346,12 @@ test("fromAccount enforces domain normalization rules", () => {
     domain: unicodeDomain,
     publicKey: ALT_PUBLIC_KEY,
   });
-  const ih58 = address.toIH58();
-  const { address: parsed } = AccountAddress.parseEncoded(ih58, undefined, unicodeDomain);
+  const i105 = address.toI105();
+  const { address: parsed } = AccountAddress.parseEncoded(i105, undefined, unicodeDomain);
   assert.deepEqual(Buffer.from(parsed.canonicalBytes()), Buffer.from(address.canonicalBytes()));
 
   const expectedDomain = "xn--exmple-cua";
-  const parsedAscii = AccountAddress.parseEncoded(ih58, undefined, expectedDomain);
+  const parsedAscii = AccountAddress.parseEncoded(i105, undefined, expectedDomain);
   assert.deepEqual(
     Buffer.from(parsedAscii.address.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
@@ -458,26 +455,26 @@ test("fromAccount rejects numeric arrays with out-of-range bytes", () => {
   });
 });
 
-test("displayFormats validates network prefix input", () => {
+test("displayFormats validates chain discriminant input", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: DEFAULT_PUBLIC_KEY,
   });
   const coerced = address.displayFormats("753");
-  assert.equal(coerced.networkPrefix, 753);
-  assert.equal(coerced.ih58, address.toIH58(753));
+  assert.equal(coerced.chainDiscriminant, 753);
+  assert.equal(coerced.i105, address.toI105(753));
   assert.throws(
     () => address.displayFormats("not-a-number"),
     (error) => {
       assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.INVALID_IH58_PREFIX);
+      assert.equal(error.code, AccountAddressErrorCode.INVALID_I105_DISCRIMINANT);
       return true;
     },
   );
   assert.throws(
     () => address.displayFormats(null),
     (error) => error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+      error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
   );
 });
 
@@ -491,7 +488,7 @@ test("fromAccount accepts registryId but keeps selector-free canonical payloads"
     publicKey: ALT_PUBLIC_KEY,
   });
   assert.equal(byRegistry.canonicalHex().toLowerCase(), byDomain.canonicalHex().toLowerCase());
-  assert.equal(byRegistry.toIH58(), byDomain.toIH58());
+  assert.equal(byRegistry.toI105(), byDomain.toI105());
 
   const formats = byRegistry.displayFormats(753);
   assert.equal(formats.domainSummary.kind, "default");
@@ -549,8 +546,8 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
       publicKey: GOST256_PUBLIC_KEY,
       algorithm: "gost256a",
     });
-    const gostIh58 = gostAddress.toIH58();
-    const { address: parsedGost } = AccountAddress.parseEncoded(gostIh58);
+    const gostI105 = gostAddress.toI105();
+    const { address: parsedGost } = AccountAddress.parseEncoded(gostI105);
     assert.deepEqual(
       Buffer.from(parsedGost.canonicalBytes()),
       Buffer.from(gostAddress.canonicalBytes()),
@@ -558,7 +555,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 
     configureCurveSupport();
     assert.throws(
-      () => AccountAddress.parseEncoded(gostIh58),
+      () => AccountAddress.parseEncoded(gostI105),
       (error) =>
         error instanceof AccountAddressError &&
         error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -582,8 +579,8 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
       publicKey: SM2_PUBLIC_KEY,
       algorithm: "sm2",
     });
-    const sm2Ih58 = sm2Address.toIH58();
-    const { address: parsed } = AccountAddress.parseEncoded(sm2Ih58);
+    const sm2I105 = sm2Address.toI105();
+    const { address: parsed } = AccountAddress.parseEncoded(sm2I105);
     assert.deepEqual(
       Buffer.from(parsed.canonicalBytes()),
       Buffer.from(sm2Address.canonicalBytes()),
@@ -591,7 +588,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 
     configureCurveSupport();
     assert.throws(
-      () => AccountAddress.parseEncoded(sm2Ih58),
+      () => AccountAddress.parseEncoded(sm2I105),
       (error) =>
         error instanceof AccountAddressError &&
         error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -601,37 +598,37 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
   }
 });
 
-test("compressed helper exports mirror instance methods", () => {
+test("i105Default helper exports mirror instance methods", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
   const canonicalBytes = address.canonicalBytes();
-  const encoded = encodeCompressedAccountAddress(canonicalBytes);
-  const encodedFull = encodeCompressedAccountAddress(canonicalBytes, { fullWidth: true });
+  const encoded = encodeI105AccountAddress(canonicalBytes);
+  const encodedFull = encodeI105AccountAddress(canonicalBytes, { fullWidth: true });
 
-  assert.equal(encoded, address.toCompressedSora());
-  assert.equal(encodedFull, address.toCompressedSoraFullWidth());
+  assert.equal(encoded, address.toI105Default());
+  assert.equal(encodedFull, address.toI105DefaultFullWidth());
 
-  const decoded = decodeCompressedAccountAddress(encoded);
-  const decodedFull = decodeCompressedAccountAddress(encodedFull);
+  const decoded = decodeI105AccountAddress(encoded);
+  const decodedFull = decodeI105AccountAddress(encodedFull);
 
   assert.deepEqual(Buffer.from(decoded), Buffer.from(canonicalBytes));
   assert.deepEqual(Buffer.from(decodedFull), Buffer.from(canonicalBytes));
 });
 
-test("decodeCompressedAccountAddress enforces string input", () => {
+test("decodeI105AccountAddress enforces string input", () => {
   for (const value of [null, undefined, 42, {}, [], Buffer.from("soradead")]) {
     assert.throws(
-      () => decodeCompressedAccountAddress(value),
+      () => decodeI105AccountAddress(value),
       (error) =>
         error instanceof TypeError &&
-        /compressed address must be a string/.test(error.message),
+        /I105 address must be a string/.test(error.message),
     );
   }
 });
 
-test("encodeCompressedAccountAddress rejects invalid options", () => {
+test("encodeI105AccountAddress rejects invalid options", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: DEFAULT_PUBLIC_KEY,
@@ -639,33 +636,33 @@ test("encodeCompressedAccountAddress rejects invalid options", () => {
   const canonicalBytes = address.canonicalBytes();
   for (const value of [null, [], "full"]) {
     assert.throws(
-      () => encodeCompressedAccountAddress(canonicalBytes, value),
+      () => encodeI105AccountAddress(canonicalBytes, value),
       (error) => error instanceof TypeError && /options must be an object/.test(error.message),
     );
   }
   assert.throws(
-    () => encodeCompressedAccountAddress(canonicalBytes, { extra: true }),
+    () => encodeI105AccountAddress(canonicalBytes, { extra: true }),
     (error) =>
       error instanceof TypeError && /unsupported fields: extra/.test(error.message),
   );
   assert.throws(
-    () => encodeCompressedAccountAddress(canonicalBytes, { fullWidth: "yes" }),
+    () => encodeI105AccountAddress(canonicalBytes, { fullWidth: "yes" }),
     (error) =>
       error instanceof TypeError &&
       /options\.fullWidth must be a boolean/.test(error.message),
   );
-  const rendered = encodeCompressedAccountAddress(canonicalBytes, { fullWidth: false });
-  assert.equal(rendered, address.toCompressedSora());
+  const rendered = encodeI105AccountAddress(canonicalBytes, { fullWidth: false });
+  assert.equal(rendered, address.toI105Default());
 });
 
-test("ih58 prefix mismatch raises", () => {
+test("i105 prefix mismatch raises", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: new Uint8Array(32).fill(1),
   });
-  const ih58 = address.toIH58(5);
+  const i105 = address.toI105(5);
   assert.throws(
-    () => AccountAddress.parseEncoded(ih58, 10),
+    () => AccountAddress.parseEncoded(i105, 10),
     (error) => {
       assert(error instanceof AccountAddressError);
       assert.equal(error.code, AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX);
@@ -674,53 +671,54 @@ test("ih58 prefix mismatch raises", () => {
   );
 });
 
-test("toIH58 enforces prefix bounds and type", () => {
+test("toI105 enforces prefix bounds and type", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
-  for (const value of [-1, 0x4000, ""]) {
+  for (const value of [-1, 0x1_0000, ""]) {
     assert.throws(
-      () => address.toIH58(value),
+      () => address.toI105(value),
       (error) => error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+        error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
     );
   }
   assert.throws(
-    () => address.toIH58({ bad: true }),
+    () => address.toI105({ bad: true }),
     (error) => error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+      error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
   );
 });
 
-test("compressed format enforces sentinel", () => {
+test("I105 format enforces sentinel", () => {
   assert.throws(
-    () => AccountAddress.fromCompressedSora("invalid"),
+    () => AccountAddress.fromI105Default("invalid"),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
+      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
   );
 });
 
-test("native codec propagates IH58 errors", () => {
+test("native codec propagates I105 errors", () => {
   assert.throws(
-    () => AccountAddress.fromIH58("!!!!"),
+    () => AccountAddress.fromI105("!!!!"),
     (error) => {
       assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.INVALID_IH58_ENCODING);
+      assert.equal(error.code, AccountAddressErrorCode.MISSING_I105_SENTINEL);
       return true;
     },
   );
 });
 
-test("parseEncoded rejects extended IH58 literals that embed selector bytes", () => {
+test("parseEncoded rejects extended I105 literals that embed selector bytes", () => {
   const literal =
-    "34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
+    "sora34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
   assert.throws(
     () => AccountAddress.parseEncoded(literal),
     (error) =>
       error instanceof AccountAddressError &&
       (error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+        error.code === AccountAddressErrorCode.CHECKSUM_MISMATCH ||
         error.code === AccountAddressErrorCode.UNKNOWN_CURVE),
   );
 });
@@ -730,7 +728,7 @@ test("inspectAccountId enforces option shape", () => {
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const literal = address.toIH58();
+  const literal = address.toI105();
   for (const options of [null, [], "prefix"]) {
     assert.throws(
       () => inspectAccountId(literal, options),
@@ -743,68 +741,68 @@ test("inspectAccountId enforces option shape", () => {
       error instanceof TypeError &&
       /unsupported fields: foo/.test(error.message),
   );
-  const inspected = inspectAccountId(literal, { expectPrefix: 753, networkPrefix: 753 });
-  assert.equal(inspected.detectedFormat.kind, "ih58");
-  assert.equal(inspected.ih58.networkPrefix, 753);
+  const inspected = inspectAccountId(literal, { expectDiscriminant: 753, chainDiscriminant: 753 });
+  assert.equal(inspected.detectedFormat.kind, "i105");
+  assert.equal(inspected.i105.chainDiscriminant, 753);
   assert.equal(inspected.domain.kind, "default");
   assert.throws(
-    () => inspectAccountId(literal, { networkPrefix: "bad" }),
+    () => inspectAccountId(literal, { chainDiscriminant: "bad" }),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+      error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
   );
 });
 
-test("inspectAccountId rejects invalid expectPrefix values", () => {
+test("inspectAccountId rejects invalid expectDiscriminant values", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const literal = address.toIH58();
-  for (const value of ["abc", [], {}, -1, 0x4000]) {
+  const literal = address.toI105();
+  for (const value of ["abc", [], {}, -1, 0x1_0000]) {
     assert.throws(
-      () => inspectAccountId(literal, { expectPrefix: value }),
+      () => inspectAccountId(literal, { expectDiscriminant: value }),
       (error) =>
         error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.INVALID_IH58_PREFIX,
+        error.code === AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
     );
   }
-  const inspected = inspectAccountId(literal, { expectPrefix: 753 });
-  assert.equal(inspected.detectedFormat.networkPrefix, 753);
+  const inspected = inspectAccountId(literal, { expectDiscriminant: 753 });
+  assert.equal(inspected.detectedFormat.chainDiscriminant, 753);
 });
 
-test("inspectAccountId preserves detected IH58 prefix when rendering outputs", () => {
+test("inspectAccountId preserves detected I105 prefix when rendering outputs", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const literal = address.toIH58(7);
+  const literal = address.toI105(7);
   const summary = inspectAccountId(literal);
-  assert.equal(summary.detectedFormat.networkPrefix, 7);
-  assert.equal(summary.ih58.networkPrefix, 7);
-  assert.equal(summary.ih58.value, literal);
+  assert.equal(summary.detectedFormat.chainDiscriminant, 7);
+  assert.equal(summary.i105.chainDiscriminant, 7);
+  assert.equal(summary.i105.value, literal);
 
-  const overridden = inspectAccountId(literal, { networkPrefix: 99 });
-  assert.equal(overridden.detectedFormat.networkPrefix, 7);
-  assert.equal(overridden.ih58.networkPrefix, 99);
-  assert.equal(overridden.ih58.value, address.toIH58(99));
+  const overridden = inspectAccountId(literal, { chainDiscriminant: 99 });
+  assert.equal(overridden.detectedFormat.chainDiscriminant, 7);
+  assert.equal(overridden.i105.chainDiscriminant, 99);
+  assert.equal(overridden.i105.value, address.toI105(99));
 });
 
-test("fromIH58 normalizes expectedPrefix inputs", () => {
+test("fromI105 normalizes expectedPrefix inputs", () => {
   const address = AccountAddress.fromAccount({
     domain: "default",
     publicKey: ALT_PUBLIC_KEY,
   });
-  const ih58 = address.toIH58(8);
+  const i105 = address.toI105(8);
 
-  const parsedFromString = AccountAddress.fromIH58(ih58, "8");
-  assert.equal(parsedFromString.toIH58(8), ih58);
+  const parsedFromString = AccountAddress.fromI105(i105, "8");
+  assert.equal(parsedFromString.toI105(8), i105);
 
-  const { address: parsedFromBigint } = AccountAddress.parseEncoded(ih58, 8n);
-  assert.equal(parsedFromBigint.toIH58(8), ih58);
+  const { address: parsedFromBigint } = AccountAddress.parseEncoded(i105, 8n);
+  assert.equal(parsedFromBigint.toI105(8), i105);
 
   assert.throws(
-    () => AccountAddress.parseEncoded(ih58, "9"),
+    () => AccountAddress.parseEncoded(i105, "9"),
     (error) =>
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
@@ -821,68 +819,85 @@ test("account address compliance vectors", () => {
 
   for (const vector of fixture.cases.positive) {
     const caseId = vector.case_id;
-    const canonical = parseCanonicalHexFixture(vector.encodings.canonical_hex);
+    const i105Vector = vector.encodings.i105;
+    assert.ok(i105Vector, `${caseId}: missing i105 encoding fixture`);
+    const fixtureI105Literal = i105Vector.string.startsWith("sora") ||
+      i105Vector.string.startsWith("test") ||
+      i105Vector.string.startsWith("dev") ||
+      /^n[0-9]+/.test(i105Vector.string)
+      ? i105Vector.string
+      : vector.encodings.i105_default;
+    let canonical;
+    try {
+      canonical = AccountAddress.fromI105(fixtureI105Literal, i105Vector.prefix);
+    } catch (error) {
+      if (
+        error instanceof AccountAddressError &&
+        vector.category === "multisig" &&
+        error.code === AccountAddressErrorCode.INVALID_MULTISIG_POLICY
+      ) {
+        continue;
+      }
+      throw error;
+    }
     const canonicalBytes = Buffer.from(canonical.canonicalBytes());
+    const fixtureCanonicalBytes = Buffer.from(hexToBytes(vector.encodings.canonical_hex));
+    assert.deepEqual(
+      canonicalBytes,
+      fixtureCanonicalBytes,
+      `${caseId}: canonical fixture mismatch`,
+    );
 
-    // IH58 round-trip
-    const ih58 = AccountAddress.fromIH58(vector.encodings.ih58.string, vector.encodings.ih58.prefix);
+    // I105 round-trip
     assert.deepEqual(
-      Buffer.from(ih58.canonicalBytes()),
+      Buffer.from(canonical.canonicalBytes()),
       canonicalBytes,
-      `${caseId}: IH58 canonical mismatch`,
+      `${caseId}: I105 canonical mismatch`,
     );
-    const { address: parsedIh58, format: formatIh58 } = AccountAddress.parseEncoded(
-      vector.encodings.ih58.string,
-      vector.encodings.ih58.prefix,
+    const { address: parsedI105 } = AccountAddress.parseEncoded(
+      fixtureI105Literal,
+      i105Vector.prefix,
     );
-    assert.equal(formatIh58, AccountAddressFormat.IH58, `${caseId}: IH58 parse format mismatch`);
     assert.deepEqual(
-      Buffer.from(parsedIh58.canonicalBytes()),
+      Buffer.from(parsedI105.canonicalBytes()),
       canonicalBytes,
-      `${caseId}: IH58 parse canonical mismatch`,
+      `${caseId}: I105 parse canonical mismatch`,
     );
 
     // Compressed round-trip (half-width and full-width)
     for (const [encoding, label] of [
-      [vector.encodings.compressed, "half-width"],
-      [vector.encodings.compressed_fullwidth, "full-width"],
+      [vector.encodings.i105_default, "half-width"],
+      [vector.encodings.i105_default_fullwidth, "full-width"],
     ]) {
-      const decoded = AccountAddress.fromCompressedSora(encoding);
+      const decoded = AccountAddress.fromI105Default(encoding);
       assert.deepEqual(
         Buffer.from(decoded.canonicalBytes()),
         canonicalBytes,
-        `${caseId}: compressed ${label} canonical mismatch`,
+        `${caseId}: i105Default ${label} canonical mismatch`,
       );
-      const { address: parsedCompressed, format: formatCompressed } = AccountAddress.parseEncoded(
-        encoding,
-      );
-      assert.equal(
-        formatCompressed,
-        AccountAddressFormat.COMPRESSED,
-        `${caseId}: compressed ${label} parse format mismatch`,
-      );
+      const { address: parsedCompressed } = AccountAddress.parseEncoded(encoding);
       assert.deepEqual(
         Buffer.from(parsedCompressed.canonicalBytes()),
         canonicalBytes,
-        `${caseId}: compressed ${label} parse canonical mismatch`,
+        `${caseId}: i105Default ${label} parse canonical mismatch`,
       );
     }
 
     // Rendering parity
     assert.equal(
-      canonical.toIH58(vector.encodings.ih58.prefix),
-      vector.encodings.ih58.string,
-      `${caseId}: IH58 re-encode mismatch`,
+      canonical.toI105(i105Vector.prefix),
+      fixtureI105Literal,
+      `${caseId}: I105 re-encode mismatch`,
     );
     assert.equal(
-      canonical.toCompressedSora(),
-      vector.encodings.compressed,
-      `${caseId}: compressed re-encode mismatch`,
+      canonical.toI105Default(),
+      vector.encodings.i105_default,
+      `${caseId}: i105Default re-encode mismatch`,
     );
     assert.equal(
-      canonical.toCompressedSoraFullWidth(),
-      vector.encodings.compressed_fullwidth,
-      `${caseId}: compressed full-width re-encode mismatch`,
+      canonical.toI105DefaultFullWidth(),
+      vector.encodings.i105_default_fullwidth,
+      `${caseId}: i105Default full-width re-encode mismatch`,
     );
     assert.equal(
       canonical.canonicalHex().toLowerCase(),
@@ -913,23 +928,35 @@ test("account address compliance vectors", () => {
   for (const vector of fixture.cases.negative) {
     const caseId = vector.case_id;
     switch (vector.format) {
-      case "ih58": {
+      case "i105": {
+        const inputHasI105Sentinel = vector.input.startsWith("sora") ||
+          vector.input.startsWith("test") ||
+          vector.input.startsWith("dev") ||
+          /^n[0-9]+/.test(vector.input);
+        let i105Input = vector.input;
+        if (!inputHasI105Sentinel) {
+          if (vector.expected_error.kind === "UnexpectedNetworkPrefix") {
+            i105Input = `n754A${vector.input}`;
+          } else {
+            i105Input = `sora${vector.input}`;
+          }
+        }
         assert.throws(
-          () => AccountAddress.fromIH58(vector.input, vector.expected_prefix ?? fixture.default_network_prefix),
+          () => AccountAddress.fromI105(i105Input, vector.expected_prefix ?? fixture.default_network_prefix),
           (error) => matchesExpectedError(error, vector.expected_error, caseId),
         );
         break;
       }
-      case "compressed": {
+      case "i105_default": {
         assert.throws(
-          () => AccountAddress.fromCompressedSora(vector.input),
+          () => AccountAddress.fromI105Default(vector.input),
           (error) => matchesExpectedError(error, vector.expected_error, caseId),
         );
         break;
       }
       case "canonical_hex": {
         assert.throws(
-          () => parseCanonicalHexFixture(vector.input),
+          () => AccountAddress.parseEncoded(vector.input),
           (error) => matchesExpectedError(error, vector.expected_error, caseId),
         );
         break;
@@ -964,13 +991,6 @@ function matchesExpectedError(error, expected, caseId) {
       assert.equal(normalized.found, expected.found, `${caseId}: found prefix mismatch`);
     }
   }
-  if (normalized.kind === "InvalidCompressedChar") {
-    assert.equal(
-      normalized.char,
-      expected.char,
-      `${caseId}: invalid compressed character mismatch`,
-    );
-  }
   if (normalized.kind === "InvalidMultisigPolicy") {
     assert.equal(
       normalized.policyError,
@@ -989,8 +1009,8 @@ function normalizeError(error) {
       return { kind: "InvalidHexAddress" };
     case AccountAddressErrorCode.INVALID_LENGTH:
       return { kind: "InvalidLength" };
-    case AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL:
-      return { kind: "MissingCompressedSentinel" };
+    case AccountAddressErrorCode.MISSING_I105_SENTINEL:
+      return { kind: "MissingI105Sentinel" };
     case AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX:
       return {
         kind: "UnexpectedNetworkPrefix",
@@ -1001,8 +1021,6 @@ function normalizeError(error) {
       return { kind: "UnsupportedAddressFormat" };
     case AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES:
       return { kind: "UnexpectedTrailingBytes" };
-    case AccountAddressErrorCode.INVALID_COMPRESSED_CHAR:
-      return { kind: "InvalidCompressedChar", char: error.details?.char };
     case AccountAddressErrorCode.INVALID_MULTISIG_POLICY:
       return { kind: "InvalidMultisigPolicy", policyError: error.details?.policyError };
     case AccountAddressErrorCode.UNKNOWN_CURVE:

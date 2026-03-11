@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "窓": { "下": 12345, "上": 12400 },
-      "権限": "ih58…?",
+      "権限": "i105…?",
       "秘密キー": "...?"
     }
   - ファイル (JSON):
@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 
 API (デプロイ)
 - POST `/v1/contracts/deploy`
-  - 説明: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - 説明: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 説明: `code_hash` セキュリティ IVM و`abi_hash` セキュリティ `abi_version` セキュリティ`RegisterSmartContractCode` (マニフェスト) و`RegisterSmartContractBytes` (`.to` كاملة) نيابة عن `authority`。
   - 説明: { "ok": true、"code_hash_hex": "..."、"abi_hash_hex": "..." }
   - 連絡先:
     - GET `/v1/contracts/code/{code_hash}` -> マニフェストを取得します
     - GET `/v1/contracts/code-bytes/{code_hash}` -> يعيد `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - 説明: { "authority": "ih58..."、"private_key": "..."、"namespace": "apps"、"contract_id": "calc.v1"、"code_b64": "..." }
+  - 説明: { "authority": "i105..."、"private_key": "..."、"namespace": "apps"、"contract_id": "calc.v1"、"code_b64": "..." }
   - 表示: `(namespace, contract_id)` および `ActivateContractInstance` 。
   - 説明: { "ok": true、"namespace": "apps"、"contract_id": "calc.v1"、"code_hash_hex": "..."、"abi_hash_hex": "..." }
 
@@ -61,11 +61,11 @@ API (デプロイ)
   - HTTP `400` 16 進数。 Torii Norito `ValidationFail::QueryFailed::Conversion` デコーダ。
 - POST `/v1/aliases/resolve`
   - 名前: { "エイリアス": "GB82 WEST 1234 5698 7654 32" }
-  - 名前: { "エイリアス": "GB82WEST12345698765432", "アカウント ID": "ih58...", "インデックス": 0, "ソース": "iso_bridge" }
+  - 名前: { "エイリアス": "GB82WEST12345698765432", "アカウント ID": "i105...", "インデックス": 0, "ソース": "iso_bridge" }
   - ISO ブリッジ (`[iso_bridge.account_aliases]` في `iroha_config`)。 يقوم Torii بتطبيع الاسماء عبر ازالة الفراغات وتحويلها الى احرف كبيرة قبل البحث。 يعيد 404 عندما يكون الاسم غير موجود و503 عندما يكون ランタイム الخاص بـ ISO ブリッジ معطلا。
 - POST `/v1/aliases/resolve_index`
   - 説明: { "インデックス": 0 }
-  - 説明: { "インデックス": 0、"エイリアス": "GB82WEST12345698765432"、"アカウントID": "ih58..."、"ソース": "iso_bridge" }
+  - 説明: { "インデックス": 0、"エイリアス": "GB82WEST12345698765432"、"アカウントID": "i105..."、"ソース": "iso_bridge" }
   - ملاحظات: مؤشرات الاسماء تعين بشكل حتمي حسب ترتيب التكوين (0 ベース)。オフラインで認証を行うことができます。حد حجم الكود
 - 名前: `max_contract_code_bytes` (JSON u64)
   - يتحكم في الحد الاقصى المسموح (بالبايت) لتخزين كود العقود على السلسلة。
@@ -73,7 +73,7 @@ API (デプロイ)
   - يمكن للمشغلين التعديل عبر `SetParameter(Custom)` مع `id = "max_contract_code_bytes"` وحمولة رقمية.
 
 - POST `/v1/gov/ballots/zk`
-  - 説明: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - 説明: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 重要:
     - عندما تتضمن المدخلات العامة للدائرة `owner` و`amount` و`duration_blocks`، وتتحقق البرهان من VKロックを解除してください。`election_id` と `owner` をロックしてください。評価 (`unknown`)金額/有効期限 فقط。単調: 金額 وexpiry تزداد فقط (تطبق العقدة max(amount, prev.amount) وmax(expiry, prev.expiry))。
@@ -81,12 +81,12 @@ API (デプロイ)
     - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` قبل ادراج `SubmitBallot`;ラッチがかかっています。
 
 - POST `/v1/gov/ballots/plain`
-  - 説明: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - 説明: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 重要: 投票数 - 投票数、有効期限、金額。 يجب ان يساوي `owner` سلطة المعاملة。 `conviction_step_blocks` です。
 
 - POST `/v1/gov/finalize`
-  - 説明: { "referendum_id": "r1"、"proposal_id": "...64hex"、"authority": "ih58...?"、"private_key": "...?" }
+  - 説明: { "referendum_id": "r1"、"proposal_id": "...64hex"、"authority": "i105...?"、"private_key": "...?" }
   - 説明: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - バージョン (バージョン): تنفيذ اقتراحdeploy معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة 制定されました。マニフェスト `code_hash` `abi_hash` を確認してください。
   - 重要:
@@ -95,7 +95,7 @@ API (デプロイ)
     - 投票率 承認+拒否 فقط؛投票率を棄権する。
 
 - POST `/v1/gov/enact`
-  - 説明: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "ih58...?"、 "private_key": "...?" }
+  - 説明: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "i105...?"、 "private_key": "...?" }
   - 説明: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - メッセージ: يقدم Torii الموقعة عندما تتوفر `authority`/`private_key`; هيكلا لتوقيع العملاء وارساله。プリ画像 اختيارية وحاليا معلوماتية。
 
@@ -195,15 +195,15 @@ RBAC
     - يوجد اقتراح حوكمة は、`(namespace, contract_id, code_hash, abi_hash)` مشتق بنفس ハッシュ提案 ID を制定しました。
   - يخرج تقرير JSON يحتوي `results[]` لكل عقد (issues ملخصات マニフェスト/コード/提案) بالاضافة الى ملخص سطر واحد الا ذا تم تعطيله (`--no-summary`)。
   - 名前空間を展開し、展開します。
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - JSON メタデータの展開、名前空間のデプロイ、`gov_manifest_approvers` の名前空間の展開マニフェストの定足数を満たしています。
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن `owner` و`amount` و`duration_blocks`。
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن `owner` و`amount` و`duration_blocks`。
   - 正規アカウント ID を検証し、32 バイトの nullifier ヒントを正規化し、ヒントを `public_inputs_json` (追加のオーバーライド用に `--public <path>`) にマージします。
   - 無効化子は、証明コミットメント (パブリック入力) に `domain_tag`、`chain_id`、および `election_id` を加えたものから導出されます。 `--nullifier` は、提供されたときに証明に対して検証されます。
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع ヒント المفككة (`owner`、`amount`、`duration_blocks`、`direction`)。
   - CLI の評価 تعليقات على `tx_instructions[]` مع `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق Norito を参照してください。
   - ロックのヒント、`LockCreated`/`LockExtended`、ZK の投票用紙のロックのヒントああ、それは。
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - エイリアス `--lock-amount`/`--lock-duration-blocks` は、フラグと ZK を示します。
   - 指紋認証 `vote --mode zk` 指紋認証 投票用紙 (`owner`, `amount`、`duration_blocks`、`direction`) を参照してください。
 
@@ -224,21 +224,21 @@ RBAC
 - POST `/v1/gov/ballots/zk-v1`
   - バージョン (DTO バージョン v1):
     {
-      "権限": "ih58...",
+      "権限": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "秘密キー": "...?",
       "election_id": "ref-1",
       "バックエンド": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "オーナー": "ih58…?",
+      "オーナー": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (機能: `zk-ballot`)
   - JSON `BallotProof` 、 `CastZkBallot` 。
   - 説明:
     {
-      "権限": "ih58...",
+      "権限": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "秘密キー": "...?",
       "election_id": "ref-1",

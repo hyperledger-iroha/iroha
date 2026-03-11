@@ -19,58 +19,56 @@ final class AccountAddressFixtureTests: XCTestCase {
     // MARK: - Helpers
 
     private func assertPositive(_ vector: AccountAddressPositiveCase) throws {
-        let address = try AccountAddress.fromIH58(vector.encodings.ih58.string,
-                                                  expectedPrefix: vector.encodings.ih58.prefix)
+        let address = try AccountAddress.fromI105(vector.encodings.i105.string,
+                                                  expectedPrefix: vector.encodings.i105.prefix)
         XCTAssertEqual(
             try address.canonicalHex().lowercased(),
             vector.encodings.canonicalHex.lowercased(),
             "\(vector.caseId): canonical hex mismatch"
         )
 
-        let ih58 = try address.toIH58(networkPrefix: vector.encodings.ih58.prefix)
-        XCTAssertEqual(ih58, vector.encodings.ih58.string, "\(vector.caseId): IH58 mismatch")
+        let i105 = try address.toI105(networkPrefix: vector.encodings.i105.prefix)
+        XCTAssertEqual(i105, vector.encodings.i105.string, "\(vector.caseId): i105 mismatch")
 
-        let compressed = try address.toCompressedSora()
+        let i105Default = try address.toI105Default()
         XCTAssertEqual(
-            try AccountAddress.fromCompressedSora(compressed).canonicalHex(),
+            try AccountAddress.fromI105Default(i105Default).canonicalHex(),
             vector.encodings.canonicalHex.lowercased().hasPrefix("0x") ? vector.encodings.canonicalHex : "0x\(vector.encodings.canonicalHex)",
-            "\(vector.caseId): compressed canonical mismatch"
+            "\(vector.caseId): i105-default canonical mismatch"
         )
-        XCTAssertEqual(compressed, vector.encodings.compressed, "\(vector.caseId): compressed mismatch")
+        XCTAssertEqual(i105Default, vector.encodings.i105Default, "\(vector.caseId): i105-default mismatch")
 
-        let compressedFull = try address.toCompressedSoraFullWidth()
-        if let expectedFull = vector.encodings.compressedFullwidth {
-            let decodedExpected = try AccountAddress.fromCompressedSora(expectedFull)
+        let i105DefaultFull = try address.toI105DefaultFullWidth()
+        if let expectedFull = vector.encodings.i105DefaultFullwidth {
+            let decodedExpected = try AccountAddress.fromI105Default(expectedFull)
             XCTAssertEqual(
                 try decodedExpected.canonicalHex().lowercased(),
                 try address.canonicalHex().lowercased(),
-                "\(vector.caseId): compressed full-width canonical mismatch"
+                "\(vector.caseId): i105-default full-width canonical mismatch"
             )
             XCTAssertEqual(
-                compressedFull.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? compressedFull,
+                i105DefaultFull.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? i105DefaultFull,
                 expectedFull.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? expectedFull,
-                "\(vector.caseId): compressed full-width mismatch"
+                "\(vector.caseId): i105-default full-width mismatch"
             )
         } else {
-            XCTAssertEqual(compressedFull, compressed, "\(vector.caseId): compressed fallback mismatch")
+            XCTAssertEqual(i105DefaultFull, i105Default, "\(vector.caseId): i105-default fallback mismatch")
         }
 
         // Parse entry points should lead back to the same canonical bytes.
-        let parsedIH58 = try AccountAddress.parseEncoded(vector.encodings.ih58.string,
-                                                     expectedPrefix: vector.encodings.ih58.prefix)
-        XCTAssertEqual(parsedIH58.1, .ih58, "\(vector.caseId): IH58 parse format mismatch")
+        let parsedI105 = try AccountAddress.parseEncoded(vector.encodings.i105.string,
+                                                     expectedPrefix: vector.encodings.i105.prefix)
         XCTAssertEqual(
-            try parsedIH58.0.canonicalHex(),
+            try parsedI105.canonicalHex(),
             try address.canonicalHex(),
-            "\(vector.caseId): IH58 parse canonical mismatch"
+            "\(vector.caseId): i105 parse canonical mismatch"
         )
 
-        let parsedCompressed = try AccountAddress.parseEncoded(vector.encodings.compressed)
-        XCTAssertEqual(parsedCompressed.1, .compressed, "\(vector.caseId): compressed parse format mismatch")
+        let parsedI105Default = try AccountAddress.parseEncoded(vector.encodings.i105Default)
         XCTAssertEqual(
-            try parsedCompressed.0.canonicalHex(),
+            try parsedI105Default.canonicalHex(),
             try address.canonicalHex(),
-            "\(vector.caseId): compressed parse canonical mismatch"
+            "\(vector.caseId): i105-default parse canonical mismatch"
         )
 
         XCTAssertThrowsError(try AccountAddress.parseEncoded(vector.encodings.canonicalHex)) { error in
@@ -172,7 +170,7 @@ private struct AccountAddressNegativeCase: Decodable {
                 return AccountAddressError.checksumMismatch.code
             case "UnexpectedNetworkPrefix":
                 return AccountAddressError.unexpectedNetworkPrefix(expected: expected ?? 0, found: found ?? 0).code
-            case "MissingCompressedSentinel":
+            case "MissingI105Sentinel":
                 return AccountAddressError.missingCompressedSentinel.code
             case "InvalidHexAddress":
                 return AccountAddressError.invalidHexAddress.code
@@ -243,15 +241,30 @@ private struct AccountAddressPositiveCase: Decodable {
     }
 
     struct Encodings: Decodable {
-        struct Ih58: Decodable {
+        struct I105: Decodable {
             let prefix: UInt16
             let string: String
         }
 
         let canonicalHex: String
-        let compressed: String
-        let compressedFullwidth: String?
-        let ih58: Ih58
+        let i105Default: String
+        let i105DefaultFullwidth: String?
+        let i105: I105
+
+        private enum CodingKeys: String, CodingKey {
+            case canonicalHex
+            case i105Default
+            case i105DefaultFullwidth
+            case i105
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            canonicalHex = try container.decode(String.self, forKey: .canonicalHex)
+            i105Default = try container.decode(String.self, forKey: .i105Default)
+            i105DefaultFullwidth = try container.decodeIfPresent(String.self, forKey: .i105DefaultFullwidth)
+            i105 = try container.decode(I105.self, forKey: .i105)
+        }
     }
 
     let caseId: String

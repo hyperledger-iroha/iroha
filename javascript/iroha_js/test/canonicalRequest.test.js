@@ -29,7 +29,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
   const accountId = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey,
-  }).toIH58();
+  }).toI105();
   const body = Buffer.from('{"foo":1}');
   const path = `/v1/accounts/${accountId}/assets`;
   const message = canonicalRequestMessage({

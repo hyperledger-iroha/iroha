@@ -396,25 +396,22 @@ time samples alongside the Connect evidence.
 
 Roadmap item **ADDR-6b** calls for parity across SDKs when surfacing the new
 `/v1/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
-`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred IH58 or
-second-best compressed (`sora`) literal plus the ready-to-embed SVG payload:
+`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred I105 or
+canonical I105 literal plus the ready-to-embed SVG payload:
 
 ```python
 from iroha_python import create_torii_client
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.get_explorer_account_qr_typed(
-    "ih58...",
-    address_format="compressed",  # omit to use preferred IH58 output; compressed (`sora`) is second-best for Sora-only UX
+    "i105...",
 )
 
 print("Literal:", snapshot.literal)
 print("QR SVG:", snapshot.svg[:80], "…")
 ```
 
-The helper accepts the same address-format aliases (`ih58`, `compressed`,
-`ih-b32`, `sora`) captured in `docs/source/sns/address_display_guidelines.md` and
-normalises the payload regardless of the field casing selected by Torii. Use the
+The helper accepts canonical I105 literals only and normalizes payload casing selected by Torii. Use the
 typed helper when generating wallet/explorer share buttons so the resulting QR
 carries the canonical account id, network prefix, and error-correction metadata
 expected by ADDR-6 dashboards.

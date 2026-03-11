@@ -75,7 +75,7 @@ N1（公開發布）之前面向運營商的參考。
 |章程 + KPI 附錄 | `docs/source/sns/governance_addenda/` | CLI 投票引用的版本控制的簽署章程、KPI 契約和治理決策。 |
 |註冊表架構| [`registry-schema.md`](./registry-schema.md) |規範 Norito 結構（`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`）。 |
 |註冊商合同 | [`registrar-api.md`](./registrar-api.md) | REST/gRPC 負載、`sns_registrar_status_total` 指標和治理掛鉤期望。 |
-|地址用戶體驗指南 | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical IH58（首選）+ 壓縮（`sora`，第二好）錢包/瀏覽器鏡像的渲染。 |
+|地址用戶體驗指南 | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical I105（首選）+ 壓縮（`sora`，第二好）錢包/瀏覽器鏡像的渲染。 |
 | SoraDNS / GAR 文檔 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |確定性主機派生、透明尾部工作流程和警報規則。 |
 |監管備忘錄| `docs/source/sns/regulatory/` |司法管轄區接收說明（例如，EU DSA）、管理員確認、模板附件。 |
 |鑽井日誌| `ops/drill-log.md` |階段退出前需要記錄混亂情況和 IR 排練。 |
@@ -118,7 +118,7 @@ N1（公開發布）之前面向運營商的參考。
    解析器透明度尾部確認傳播的新 GAR/區域狀態
    （參見第 4.5 節）。
 6. **客戶披露：** 更新面向客戶的賬本（錢包/資源管理器）
-   通過[`address-display-guidelines.md`](./address-display-guidelines.md)中的共享夾具，確保IH58和
+   通過[`address-display-guidelines.md`](./address-display-guidelines.md)中的共享夾具，確保I105和
    壓縮效果圖與文案/QR 指南相符。
 
 ### 4.3 續訂、計費和財務對賬- **續訂工作流程：** 註冊商強制執行 30 天寬限期 + 60 天贖回期
@@ -147,11 +147,11 @@ N1（公開發布）之前面向運營商的參考。
 |相|業主|行動與證據|服務水平協議 |
 |--------|--------|--------------------|-----|
 |軟凍結請求 |管家/支持|將票據 `SNS-DF-<id>` 歸檔，其中包含付款證明、爭議保證金參考和受影響的選擇器。 |攝入後≤4小時。 |
-|監護人票|監護板| `sns governance freeze --selector <IH58> --reason <text> --until <ts>` 生成簽名的 `GuardianFreezeTicketV1`。將票證 JSON 存儲在 `artifacts/sns/guardian/<id>.json` 下。 | ≤30min ACK，≤2h 執行。 |
+|監護人票|監護板| `sns governance freeze --selector <I105> --reason <text> --until <ts>` 生成簽名的 `GuardianFreezeTicketV1`。將票證 JSON 存儲在 `artifacts/sns/guardian/<id>.json` 下。 | ≤30min ACK，≤2h 執行。 |
 |理事會批准|治理委員會|批准或拒絕凍結，將決定鏈接記錄到監護人票證和爭議債券摘要。 |下次理事會會議或異步投票。 |
 |仲裁小組|合規+管家|召集 7 名陪審員小組（根據路線圖），並通過 `sns governance dispute ballot` 提交哈希選票。將匿名投票收據附加到事件數據包中。 |保證金存入後≤7 天作出判決。 |
 |上訴 |監護人+理事會|上訴使保證金加倍並重複陪審員程序；記錄 Norito 清單 `DisputeAppealV1` 和參考主票證。 | ≤10天。 |
-|解凍和修復|註冊商 + 解析器操作 |執行 `sns governance unfreeze --selector <IH58> --ticket <id>`，更新註冊器狀態並傳播 GAR/解析器差異。 |判決後立即。 |
+|解凍和修復|註冊商 + 解析器操作 |執行 `sns governance unfreeze --selector <I105> --ticket <id>`，更新註冊器狀態並傳播 GAR/解析器差異。 |判決後立即。 |
 
 緊急大砲（監護人觸發的凍結≤72小時）遵循相同的流程，但
 要求理事會進行追溯審查並提供透明度說明

@@ -126,7 +126,7 @@ public final class MultisigSpec {
   }
 
   private static String normalizeAccountId(final String accountId) {
-    return AccountIdLiteral.extractIh58Address(accountId);
+    return AccountIdLiteral.extractI105Address(accountId);
   }
 
   private static long safeExpiry(final long nowMs, final long ttlMs) {

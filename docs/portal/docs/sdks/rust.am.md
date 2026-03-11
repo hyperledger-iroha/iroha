@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 ላዩን፡ እሱ የቀኖናዊ መለያ መታወቂያን፣ ቀጥተኛውን ከ. ጋር ያካትታል
 የተጠየቀው ቅርጸት፣ የአውታረ መረብ ቅድመ ቅጥያ/ስህተት ማስተካከያ ዲበ ውሂብ፣ የQR ልኬቶች፣ እና
 የኪስ ቦርሳ/አሳሾች በቀጥታ ሊከተቱት የሚችሉት የውስጠ-መስመር SVG ጭነት። ተወው
-`ExplorerAccountQrOptions` ወደ ተመራጭ IH58 ውፅዓት ወይም ስብስብ ነባሪ
-ሁለተኛውን ምርጡን ለማውጣት `address_format: Some(AddressFormat::Compressed)`
-በADDR-6b ጥቅም ላይ የዋለው `sora…` ልዩነት።
+`ExplorerAccountQrOptions` ወደ ተመራጭ I105 ውፅዓት ወይም ስብስብ ነባሪ
+ሁለተኛውን ምርጡን ለማውጣት canonical I105 output
+በADDR-6b ጥቅም ላይ የዋለው `i105` ልዩነት።
 
 ## 7. ለክስተቶች ይመዝገቡ
 

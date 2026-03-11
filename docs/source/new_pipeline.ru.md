@@ -377,7 +377,7 @@ Content-Type: application/json
 POST /governance/referenda/{id}/vote
 Content-Type: application/json
 
-{ "voter": "ih58...", "conviction": 2, "choice": "Aye" }
+{ "voter": "i105...", "conviction": 2, "choice": "Aye" }
 ```
 
 - Query enactments (shows execution windows)
@@ -1104,12 +1104,12 @@ BridgeEventFilter {
   event_set: BridgeEventSet::Emitted,
 }
 ```
-- Basic example (CLI): `iroha bridge emit-receipt --lane "btc→iroha" --direction mint --source_tx 0x11.. --amount 1000 --asset_id wBTC#btc --recipient ih58... --proof_hash 0x33..`
+- Basic example (CLI): `iroha bridge emit-receipt --lane "btc→iroha" --direction mint --source_tx 0x11.. --amount 1000 --asset_id wBTC#btc --recipient i105... --proof_hash 0x33..`
 
 {
   "src_chain": "iroha-mainnet",
   "dst_chain": "evm-eth",
-  "payload": { "Mint": { "asset": "wBTC#btc", "to": "ih58...", "amount": "100000" } },
+  "payload": { "Mint": { "asset": "wBTC#btc", "to": "i105...", "amount": "100000" } },
   "inclusion_path": "0x...",
   "header_hash": "0x..."
 }

@@ -43,13 +43,14 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
 
     // World: two accounts + one asset def
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
-    let acc_c = Account::new(carol_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_c = Account::new(carol_id.clone().to_account_id(domain_id)).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b, acc_c], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

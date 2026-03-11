@@ -1413,7 +1413,6 @@ impl IVMHost for CoreHost {
                     syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
                         let acct = ScopedAccountId::parse_encoded(raw)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_err(|_| VMError::DecodeError)?;
                         let body = to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -2037,11 +2036,10 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Produce a TLV with a fixed ScopedAccountId and return its INPUT pointer in x10.
-                // Parsing expects canonical IH58 controller format.
+                // Parsing expects canonical I105 controller format.
                 const ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-                let account = ScopedAccountId::parse_encoded(ACCOUNT)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| VMError::NoritoInvalid)?;
+                let account =
+                    ScopedAccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
                 let payload = to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());

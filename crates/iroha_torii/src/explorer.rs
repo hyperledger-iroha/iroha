@@ -44,7 +44,7 @@ use qrcode::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
-    address_format::AddressFormatPreference,
+    account_literal,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
 
@@ -55,6 +55,7 @@ const ACCOUNT_QR_ERROR_CORRECTION_LABEL: &str = "M";
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExplorerAggregates {
     account_counters: BTreeMap<AccountId, AccountCounters>,
+    account_domains: BTreeMap<AccountId, BTreeSet<DomainId>>,
     domain_counters: BTreeMap<DomainId, DomainCounters>,
     definition_instances: BTreeMap<AssetDefinitionId, u32>,
     definition_holders: BTreeMap<AssetDefinitionId, BTreeSet<AccountId>>,
@@ -79,14 +80,14 @@ impl ExplorerAggregates {
         let mut agg = Self::default();
 
         for account in world.accounts_iter() {
-            let entry = agg
-                .domain_counters
-                .entry(account.id().domain().clone())
-                .or_default();
-            entry.accounts = entry.accounts.saturating_add(1);
-            agg.account_counters
-                .entry(account.id().clone())
-                .or_default();
+            let account_id = account.id().clone();
+            agg.account_counters.entry(account_id.clone()).or_default();
+            let account_domains = agg.account_domains.entry(account_id).or_default();
+            for domain_id in world.domains_for_subject(account.id()) {
+                account_domains.insert(domain_id.clone());
+                let entry = agg.domain_counters.entry(domain_id).or_default();
+                entry.accounts = entry.accounts.saturating_add(1);
+            }
         }
 
         for domain in world.domains_iter() {
@@ -147,6 +148,12 @@ impl ExplorerAggregates {
         self.definition_instances.get(id).copied().unwrap_or(0)
     }
 
+    pub(crate) fn account_linked_to_domain(&self, account: &AccountId, domain: &DomainId) -> bool {
+        self.account_domains
+            .get(account)
+            .is_some_and(|domains| domains.contains(domain))
+    }
+
     pub(crate) fn account_holds_definition(
         &self,
         definition: &AssetDefinitionId,
@@ -164,14 +171,6 @@ pub(crate) struct ExplorerPaginationQuery {
     pub page: u64,
     #[norito(default = "default_per_page")]
     pub per_page: u64,
-    #[norito(default)]
-    pub address_format: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, JsonSerialize, JsonDeserialize)]
-pub(crate) struct ExplorerAddressFormatQuery {
-    #[norito(default)]
-    pub address_format: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -182,29 +181,11 @@ pub(crate) struct ExplorerPaginationMeta {
     pub total_items: u64,
 }
 
-impl ExplorerPaginationQuery {
-    #[cfg(feature = "app_api")]
-    pub fn address_format_pref(
-        &self,
-    ) -> crate::Result<crate::address_format::AddressFormatPreference> {
-        crate::address_format::AddressFormatPreference::from_param(self.address_format.as_deref())
-    }
-}
-
-impl ExplorerAddressFormatQuery {
-    #[cfg(feature = "app_api")]
-    pub fn address_format_pref(
-        &self,
-    ) -> crate::Result<crate::address_format::AddressFormatPreference> {
-        crate::address_format::AddressFormatPreference::from_param(self.address_format.as_deref())
-    }
-}
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountDto {
     pub id: String,
-    pub ih58_address: String,
-    pub compressed_address: String,
+    pub i105_address: String,
+    pub i105_default_address: String,
     pub network_prefix: u16,
     pub metadata: Value,
     pub owned_domains: u32,
@@ -219,11 +200,11 @@ impl ExplorerAccountDto {
             AccountAddress::from_account_id(entry.id()).expect("account ids are always valid");
         Self {
             id: entry.id().to_string(),
-            ih58_address: address
-                .to_ih58(network_prefix)
+            i105_address: address
+                .to_i105_for_discriminant(network_prefix)
                 .unwrap_or_else(|_| entry.id().to_string()),
-            compressed_address: address
-                .to_compressed_sora()
+            i105_default_address: address
+                .to_i105_fullwidth()
                 .unwrap_or_else(|_| entry.id().to_string()),
             network_prefix,
             metadata: metadata_to_json(entry.value().metadata()),
@@ -244,7 +225,6 @@ pub(crate) struct ExplorerAccountsPage {
 pub(crate) struct ExplorerAccountQrDto {
     pub canonical_id: String,
     pub literal: String,
-    pub address_format: &'static str,
     pub network_prefix: u16,
     pub error_correction: &'static str,
     pub modules: u32,
@@ -253,17 +233,13 @@ pub(crate) struct ExplorerAccountQrDto {
 }
 
 impl ExplorerAccountQrDto {
-    pub(crate) fn build(
-        account_id: &AccountId,
-        preference: AddressFormatPreference,
-    ) -> Result<Self, QrError> {
+    pub(crate) fn build(account_id: &AccountId) -> Result<Self, QrError> {
         let network_prefix = iroha_data_model::account::address::chain_discriminant();
-        let literal = preference.display_literal(account_id);
+        let literal = account_id.to_string();
         let (svg, qr_version) = render_account_qr_svg(&literal)?;
         Ok(Self {
             canonical_id: account_id.to_string(),
             literal,
-            address_format: preference.metric_label(),
             network_prefix,
             error_correction: ACCOUNT_QR_ERROR_CORRECTION_LABEL,
             modules: ACCOUNT_QR_DIMENSION_PX,
@@ -840,10 +816,9 @@ pub(crate) fn instruction_dto_with_kind(
     instruction: &InstructionBox,
     kind: ExplorerInstructionKind,
     index: u32,
-    address_format: AddressFormatPreference,
 ) -> ExplorerInstructionDto {
     ExplorerInstructionDto {
-        authority: address_format.display_literal(tx.authority()),
+        authority: account_literal::display_literal(tx.authority()),
         created_at: duration_to_rfc3339(tx.creation_time()),
         kind: instruction_display_kind(instruction, kind),
         r#box: instruction_box_dto(instruction, kind),
@@ -1150,10 +1125,9 @@ pub(crate) fn transaction_summary_dto(
     tx: &SignedTransaction,
     block_height: u64,
     result: &TransactionResult,
-    address_format: AddressFormatPreference,
 ) -> ExplorerTransactionDto {
     ExplorerTransactionDto {
-        authority: address_format.display_literal(tx.authority()),
+        authority: account_literal::display_literal(tx.authority()),
         hash: tx.hash_as_entrypoint().to_string(),
         block: block_height,
         created_at: duration_to_rfc3339(tx.creation_time()),
@@ -1166,10 +1140,9 @@ pub(crate) fn transaction_detail_dto(
     tx: &SignedTransaction,
     block_height: u64,
     result: &TransactionResult,
-    address_format: AddressFormatPreference,
 ) -> ExplorerTransactionDetailDto {
     ExplorerTransactionDetailDto {
-        authority: address_format.display_literal(tx.authority()),
+        authority: account_literal::display_literal(tx.authority()),
         hash: tx.hash_as_entrypoint().to_string(),
         block: block_height,
         created_at: duration_to_rfc3339(tx.creation_time()),
@@ -1258,7 +1231,7 @@ where
     let mut items = Vec::new();
     for entry in accounts {
         if let Some(domain) = domain_filter {
-            if entry.id().domain() != domain {
+            if !aggregates.account_linked_to_domain(entry.id(), domain) {
                 continue;
             }
         }
@@ -1444,28 +1417,6 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn address_format_query_preference_defaults() {
-        let query = ExplorerAddressFormatQuery::default();
-        assert_eq!(
-            query.address_format_pref().expect("preference"),
-            AddressFormatPreference::Ih58
-        );
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn address_format_query_preference_parses_param() {
-        let query = ExplorerAddressFormatQuery {
-            address_format: Some("compressed".to_string()),
-        };
-        assert_eq!(
-            query.address_format_pref().expect("preference"),
-            AddressFormatPreference::Compressed
-        );
-    }
-
     #[test]
     fn paginate_truncates_correctly() {
         let items = vec![1, 2, 3, 4, 5];
@@ -1650,7 +1601,7 @@ mod tests {
             .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
             .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
-        let dto = transaction_summary_dto(&tx, 5, &result, AddressFormatPreference::Ih58);
+        let dto = transaction_summary_dto(&tx, 5, &result);
         assert_eq!(dto.block, 5);
         assert_eq!(dto.authority, ALICE_ID.to_string());
         assert_eq!(dto.status, "Committed");
@@ -1674,7 +1625,7 @@ mod tests {
         let tx = builder.sign(ALICE_KEYPAIR.private_key());
         let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
         let result = TransactionResult(Err(rejection));
-        let dto = transaction_detail_dto(&tx, 12, &result, AddressFormatPreference::Ih58);
+        let dto = transaction_detail_dto(&tx, 12, &result);
         assert_eq!(dto.block, 12);
         assert_eq!(dto.status, "Rejected");
         assert_eq!(dto.authority, ALICE_ID.to_string());
@@ -1725,7 +1676,7 @@ mod tests {
             }),
         ));
         let result = TransactionResult(Err(rejection));
-        let dto = transaction_detail_dto(&tx, 21, &result, AddressFormatPreference::Ih58);
+        let dto = transaction_detail_dto(&tx, 21, &result);
 
         let message = dto
             .rejection_reason
@@ -1782,7 +1733,12 @@ mod tests {
         ));
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
-        let domain_filter = alice_id.domain().clone();
+        let domain_filter: DomainId = "wonderland".parse().expect("domain id");
+        aggregates
+            .account_domains
+            .entry(alice_id.clone())
+            .or_default()
+            .insert(domain_filter.clone());
         let accounts = vec![
             Ref::new(&alice_id, &alice_details),
             Ref::new(&bob_id, &bob_details),
@@ -1979,15 +1935,7 @@ mod tests {
             .with_instructions(core::iter::once(instruction.clone()))
             .sign(ALICE_KEYPAIR.private_key());
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
-        let dto = instruction_dto_with_kind(
-            &tx,
-            7,
-            &result,
-            &instruction,
-            kind,
-            0,
-            AddressFormatPreference::Ih58,
-        );
+        let dto = instruction_dto_with_kind(&tx, 7, &result, &instruction, kind, 0);
         assert_eq!(dto.kind, "AddSignatory");
     }
 
@@ -2070,7 +2018,6 @@ mod tests {
             &instruction,
             ExplorerInstructionKind::Register,
             7,
-            AddressFormatPreference::Ih58,
         );
         assert_eq!(dto.index, 7);
     }

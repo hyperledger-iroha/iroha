@@ -775,10 +775,8 @@ pub mod domain {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_domain_owner(domain_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
@@ -855,9 +853,6 @@ pub mod domain {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
             AnyPermission::CanRegisterAccount(permission) => &permission.domain == domain_id,
-            AnyPermission::CanRegisterAssetDefinition(permission) => {
-                &permission.domain == domain_id
-            }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
@@ -878,35 +873,25 @@ pub mod domain {
             }
             AnyPermission::CanMintAsset(permission) => {
                 permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
             }
             AnyPermission::CanBurnAsset(permission) => {
                 permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
             }
             AnyPermission::CanTransferAsset(permission) => {
                 permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
             }
-            AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor.domain() == domain_id,
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanModifyNftMetadata(permission) => permission.nft.domain() == domain_id,
-            AnyPermission::CanUnregisterAccount(permission) => {
-                permission.account.domain() == domain_id
-            }
-            AnyPermission::CanModifyAccountMetadata(permission) => {
-                permission.account.domain() == domain_id
-            }
-            AnyPermission::CanRegisterTrigger(permission) => {
-                permission.authority.domain() == domain_id
-            }
-            AnyPermission::CanUnregisterTrigger(_)
+            AnyPermission::CanUseFeeSponsor(_)
+            | AnyPermission::CanUnregisterAccount(_)
+            | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanRegisterTrigger(_)
+            | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
@@ -949,7 +934,7 @@ pub mod account {
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        let domain_id = isi.object().id().domain();
+        let domain_id = isi.object().domain();
 
         match crate::permission::domain::is_domain_owner(
             domain_id,
@@ -984,10 +969,7 @@ pub mod account {
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis()
-            || match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-                Err(err) => deny!(executor, err),
-                Ok(is_account_owner) => is_account_owner,
-            }
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
             || {
                 let can_unregister_user_account = CanUnregisterAccount {
                     account: account_id.clone(),
@@ -1018,10 +1000,8 @@ pub mod account {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(account_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         let can_set_key_value_in_user_account_token = CanModifyAccountMetadata {
             account: account_id.clone(),
@@ -1048,10 +1028,8 @@ pub mod account {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(account_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         let can_remove_key_value_in_user_account_token = CanModifyAccountMetadata {
             account: account_id.clone(),
@@ -1097,7 +1075,6 @@ pub mod account {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
@@ -1134,7 +1111,7 @@ pub mod account {
 /// Permission-checked visitors for asset definition instructions.
 pub mod asset_definition {
     use iroha_executor_data_model::permission::asset_definition::{
-        CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition, CanUnregisterAssetDefinition,
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
     };
     use iroha_smart_contract::data_model::asset::AssetDefinitionId;
 
@@ -1143,36 +1120,12 @@ pub mod asset_definition {
         account::is_account_owner, asset_definition::is_asset_definition_owner, revoke_permissions,
     };
 
-    /// Registers an asset definition when the caller controls the domain or holds the registration token.
+    /// Registers an asset definition.
     pub fn visit_register_asset_definition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<AssetDefinition>,
     ) {
-        let domain_id = isi.object().id().domain();
-
-        match crate::permission::domain::is_domain_owner(
-            domain_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-
-        let can_register_asset_definition_in_domain_token = CanRegisterAssetDefinition {
-            domain: domain_id.clone(),
-        };
-        if can_register_asset_definition_in_domain_token
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(
-            executor,
-            "Can't register asset definition in a domain owned by another account"
-        );
+        execute!(executor, isi);
     }
 
     /// Unregisters an asset definition after confirming ownership or revoke permission.
@@ -1210,7 +1163,7 @@ pub mod asset_definition {
         }
         deny!(
             executor,
-            "Can't unregister asset definition in a domain owned by another account"
+            "Can't unregister asset definition owned by another account"
         );
     }
 
@@ -1220,24 +1173,12 @@ pub mod asset_definition {
         isi: &Transfer<Account, AssetDefinitionId, Account>,
     ) {
         let source_id = isi.source();
-        let asset_definition_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        match is_asset_definition_owner(
-            asset_definition_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
 
         deny!(
@@ -1364,7 +1305,6 @@ pub mod asset_definition {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
             | AnyPermission::CanTransferNft(_)
@@ -1466,10 +1406,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1516,10 +1454,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1559,10 +1495,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1601,10 +1535,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1677,7 +1609,7 @@ pub mod asset {
                 let domain: DomainId = "test_domain".parse().expect("valid domain");
                 let seed_byte = height.to_le_bytes()[0];
                 let keypair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
-                let account = AccountId::new(domain.clone(), keypair.public_key().clone());
+                let account = AccountId::new(keypair.public_key().clone());
                 let asset_definition = AssetDefinitionId::new(
                     domain.clone(),
                     "sample_asset".parse::<Name>().expect("valid name"),
@@ -1765,10 +1697,7 @@ pub mod asset {
         fn set_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
             let intruder_key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-            let intruder = AccountId::new(
-                asset.account().domain().clone(),
-                intruder_key.public_key().clone(),
-            );
+            let intruder = AccountId::new(intruder_key.public_key().clone());
             executor.context_mut().authority = intruder;
             let instruction = SetAssetKeyValue::new(
                 asset.clone(),
@@ -1852,10 +1781,9 @@ pub mod asset {
         #[test]
         fn visit_instruction_dispatches_repo_instruction_box() {
             let (mut executor, _) = StubExecutor::new(1);
-            let domain = executor.context().authority.domain().clone();
+            let domain: DomainId = "wonderland".parse().expect("valid domain");
             let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
-            let counterparty =
-                AccountId::new(domain.clone(), counterparty_keypair.public_key().clone());
+            let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
             let cash_def =
                 AssetDefinitionId::new(domain.clone(), "cash".parse::<Name>().expect("valid name"));
             let collateral_def =
@@ -1903,10 +1831,7 @@ pub mod asset {
         fn remove_asset_key_value_non_owner_denied() {
             let (mut executor, asset) = StubExecutor::new(2);
             let intruder_key = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
-            let intruder = AccountId::new(
-                asset.account().domain().clone(),
-                intruder_key.public_key().clone(),
-            );
+            let intruder = AccountId::new(intruder_key.public_key().clone());
             executor.context_mut().authority = intruder;
             let instruction =
                 RemoveAssetKeyValue::new(asset.clone(), "tag".parse().expect("valid name"));
@@ -2029,10 +1954,8 @@ pub mod nft {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_nft_weak_owner(nft_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
@@ -2201,35 +2124,20 @@ pub mod role {
             const DELIMITER: char = '/';
             const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
 
-            fn multisig_account_from(role: &RoleId) -> Option<AccountId> {
+            fn multisig_home_domain_from(role: &RoleId) -> Option<DomainId> {
                 role.name()
                     .as_ref()
-                    .strip_prefix(MULTISIG_SIGNATORY)?
-                    .rsplit_once(DELIMITER)
-                    .and_then(|(init, last)| {
-                        let domain = init.trim_matches(DELIMITER).parse().ok()?;
-                        let parsed = AccountId::parse_encoded(last).ok()?.into_account_id();
-                        if let Some(signatory) = parsed.try_signatory() {
-                            return Some(AccountId::new(domain, signatory.clone()));
-                        }
-                        parsed
-                            .controller()
-                            .multisig_policy()
-                            .cloned()
-                            .map(|policy| AccountId::new_multisig(domain, policy))
-                    })
+                    .strip_prefix(&format!("{MULTISIG_SIGNATORY}{DELIMITER}"))?
+                    .split_once(DELIMITER)
+                    .and_then(|(domain, _)| domain.parse().ok())
             }
 
             if role.id().name().as_ref().starts_with(MULTISIG_SIGNATORY) {
-                let Some(multisig_account) = multisig_account_from(role.id()) else {
+                let Some(home_domain) = multisig_home_domain_from(role.id()) else {
                     deny!(executor, "violates multisig role name format")
                 };
-                if is_domain_owner(
-                    multisig_account.domain(),
-                    &executor.context().authority,
-                    executor.host(),
-                )
-                .unwrap_or_default()
+                if is_domain_owner(&home_domain, &executor.context().authority, executor.host())
+                    .unwrap_or_default()
                 {
                     deny!(
                         executor,
@@ -2336,11 +2244,9 @@ pub mod trigger {
     use iroha_smart_contract::data_model::trigger::Trigger;
 
     use super::*;
-    use crate::permission::{
-        domain::is_domain_owner, revoke_permissions, trigger::is_trigger_owner,
-    };
+    use crate::permission::{revoke_permissions, trigger::is_trigger_owner};
 
-    /// Registers a trigger when the caller is genesis, the domain owner, or holds the grant token.
+    /// Registers a trigger when the caller is genesis, the trigger authority, or holds the grant token.
     pub fn visit_register_trigger<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Trigger>,
@@ -2348,25 +2254,13 @@ pub mod trigger {
         let trigger = isi.object();
         let is_genesis = executor.context().curr_block.is_genesis();
 
-        if is_genesis
-            || {
-                match is_domain_owner(
-                    trigger.action().authority().domain(),
-                    &executor.context().authority,
-                    executor.host(),
-                ) {
-                    Err(err) => deny!(executor, err),
-                    Ok(is_domain_owner) => is_domain_owner,
-                }
-            }
-            || {
-                let can_register_user_trigger_token = CanRegisterTrigger {
-                    authority: isi.object().action().authority().clone(),
-                };
-                can_register_user_trigger_token
-                    .is_owned_by(&executor.context().authority, executor.host())
-            }
-        {
+        if is_genesis || trigger.action().authority() == &executor.context().authority || {
+            let can_register_user_trigger_token = CanRegisterTrigger {
+                authority: isi.object().action().authority().clone(),
+            };
+            can_register_user_trigger_token
+                .is_owned_by(&executor.context().authority, executor.host())
+        } {
             // Execute via core `Execute` implementation to ensure all invariants
             // and state mutations happen atomically after permission gating.
             execute!(executor, isi);
@@ -2570,7 +2464,6 @@ pub mod trigger {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
@@ -2636,9 +2529,9 @@ pub mod trigger {
             domain::DomainId,
         };
 
-        fn sample_account_id(seed: u8, domain_id: &DomainId) -> AccountId {
+        fn sample_account_id(seed: u8, _domain_id: &DomainId) -> AccountId {
             let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-            AccountId::new(domain_id.clone(), keypair.public_key().clone())
+            AccountId::new(keypair.public_key().clone())
         }
 
         fn sora_permissions() -> Vec<AnyPermission> {
@@ -2746,8 +2639,8 @@ pub mod trigger {
             }));
 
             assert!(
-                domain::is_permission_domain_associated(&permission, &domain_id),
-                "fee sponsor permission should bind to sponsor domain"
+                !domain::is_permission_domain_associated(&permission, &domain_id),
+                "fee sponsor permission should not bind to domains"
             );
             assert!(
                 !domain::is_permission_domain_associated(&permission, &other_domain),
@@ -2784,7 +2677,6 @@ mod sorafs_permission_tests {
     use iroha_data_model::{
         account::AccountId,
         block::BlockHeader,
-        domain::DomainId,
         isi::sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
             RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
@@ -2824,11 +2716,10 @@ mod sorafs_permission_tests {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 
     fn account_id_from_public_key_hex(hex_literal: &str) -> AccountId {
-        let domain: DomainId = "wonderland".parse().expect("test domain should parse");
         let public_key: PublicKey = hex_literal
             .parse()
             .expect("test public key literal should parse");
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn authority_account_id() -> AccountId {

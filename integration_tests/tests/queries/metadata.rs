@@ -8,7 +8,7 @@ use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -22,6 +22,7 @@ fn find_accounts_with_asset() {
             return Ok(());
         };
         let test_client = network.client();
+        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
 
         let key = Name::from_str("key").unwrap();
         let another_key = Name::from_str("another_key").unwrap();
@@ -46,17 +47,24 @@ fn find_accounts_with_asset() {
             test_client
                 .submit_blocking(Grant::account_permission(
                     CanRegisterAccount {
-                        domain: BOB_ID.domain().clone(),
+                        domain: wonderland_domain.clone(),
                     },
                     ALICE_ID.clone(),
                 ))
                 .expect("Failed to grant account registration permission to Alice");
             test_client
-                .submit_blocking(Register::account(Account::new(BOB_ID.clone())))
+                .submit_blocking(Register::account(Account::new(
+                    BOB_ID.to_account_id(wonderland_domain.clone()),
+                )))
                 .expect("Failed to register Bob account");
         }
+        let bob_client = network
+            .peers()
+            .first()
+            .expect("network has at least one peer")
+            .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
 
-        test_client
+        bob_client
             .submit_blocking(SetKeyValue::account(
                 BOB_ID.clone(),
                 key.clone(),
@@ -69,7 +77,7 @@ fn find_accounts_with_asset() {
                 ),
             ))
             .unwrap();
-        test_client
+        bob_client
             .submit_blocking(SetKeyValue::account(
                 BOB_ID.clone(),
                 another_key.clone(),

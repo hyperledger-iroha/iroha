@@ -67,7 +67,6 @@ public extension ToriiClient {
     func accountTransferHistoryPublisher(accountId: String,
                                          page: UInt64? = nil,
                                          perPage: UInt64? = nil,
-                                         addressFormat: AccountAddressFormat? = nil,
                                          assetDefinitionId: String? = nil,
                                          assetId: String? = nil,
                                          lastEventId: String? = nil,
@@ -77,7 +76,6 @@ public extension ToriiClient {
         makeStreamPublisher({ self.streamAccountTransferHistory(accountId: accountId,
                                                                page: page,
                                                                perPage: perPage,
-                                                               addressFormat: addressFormat,
                                                                assetDefinitionId: assetDefinitionId,
                                                                assetId: assetId,
                                                                lastEventId: lastEventId,
@@ -88,7 +86,6 @@ public extension ToriiClient {
 
     /// Emit historical transfer summaries for a transaction and then keep streaming live updates.
     func transactionTransferSummariesPublisher(hashHex: String,
-                                               addressFormat: AccountAddressFormat? = nil,
                                                matchingAccount accountId: String? = nil,
                                                assetDefinitionId: String? = nil,
                                                assetId: String? = nil,
@@ -99,7 +96,6 @@ public extension ToriiClient {
                                                scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiExplorerTransferSummary, ToriiClientError> {
         makeStreamPublisher({
             self.streamTransactionTransferSummaries(hashHex: hashHex,
-                                                     addressFormat: addressFormat,
                                                      matchingAccount: accountId,
                                                      assetDefinitionId: assetDefinitionId,
                                                      assetId: assetId,

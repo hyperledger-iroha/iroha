@@ -3339,7 +3339,8 @@ impl GenesisMaterial {
     }
 
     fn account_in_domain(&self, domain: &DomainId) -> AccountId {
-        AccountId::new(domain.clone(), self.key_pair.public_key().clone())
+        let _ = domain;
+        AccountId::new(self.key_pair.public_key().clone())
     }
 }
 
@@ -4572,9 +4573,10 @@ JSON
         assert_eq!(plan.transactions.len(), 3);
 
         let expected_domain: DomainId = SMOKE_ACCOUNT_DOMAIN.parse().expect("parse domain id");
+        let expected_authority = supervisor.genesis.account_in_domain(&expected_domain);
         let mut nonces = HashSet::new();
         for (idx, tx) in plan.transactions.iter().enumerate() {
-            assert_eq!(tx.authority().domain, expected_domain);
+            assert_eq!(tx.authority(), &expected_authority);
             let nonce = tx.nonce().expect("nonce present");
             let nonce_value = u32::from(nonce);
             assert!(nonces.insert(nonce_value), "nonce should be unique");

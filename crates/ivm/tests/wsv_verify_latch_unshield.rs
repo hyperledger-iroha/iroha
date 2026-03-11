@@ -40,13 +40,14 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn sample_account() -> AccountId {
+fn sample_account() -> ScopedAccountId {
+    let domain: DomainId = "wonderland".parse().expect("domain");
     AccountId::new(
-        "wonderland".parse().expect("domain id"),
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .expect("public key"),
     )
+    .to_account_id(domain)
 }
 
 fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
@@ -76,7 +77,8 @@ fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
 #[test]
 fn wsv_verify_latch_allows_unshield_then_resets() {
     // Prepare caller and asset
-    let caller: AccountId = sample_account();
+    let caller = sample_account();
+    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
     let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
 
     // Seed WSV with caller account and permissions; register asset and enable ZK policy
@@ -107,7 +109,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     assert!(wsv.has_permission(&caller, &PermissionToken::Unshield(asset.clone())));
     wsv.grant_permission(
         &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&caller)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
     );
 
     // Host with ZK (Halo2 IPA) enabled and sufficient max_k
@@ -120,12 +122,9 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
         verifier_max_batch: 8,
         ..ZkHalo2Config::default()
     };
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
-        HashMap::new(),
-    )
-    .with_zk_halo2_config(cfg);
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new())
+            .with_zk_halo2_config(cfg);
 
     // VM
     let mut vm = IVM::new(1_000_000);
@@ -149,7 +148,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
                 "payload",
                 json_object([
                     ("asset", json_value(&asset.to_string())),
-                    ("to", json_value(&caller)),
+                    ("to", json_value(&caller_id)),
                     ("public_amount", json_value(&1u64)),
                     ("inputs", inputs_json.clone()),
                     ("proof", proof_json.clone()),
@@ -204,7 +203,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
         (
             "payload",
             json_object([
-                ("account_id", json_value(&caller)),
+                ("account_id", json_value(&caller_id)),
                 ("asset_id", json_value(&asset.to_string())),
             ]),
         ),
@@ -231,7 +230,8 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
 
 #[test]
 fn unshield_rejects_mismatched_verifying_key() {
-    let caller: AccountId = sample_account();
+    let caller = sample_account();
+    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
     let asset: AssetDefinitionId = "iris#wonderland".parse().unwrap();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
@@ -257,11 +257,8 @@ fn unshield_rejects_mismatched_verifying_key() {
         },
     ));
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
 
     // Successful verify latch
@@ -288,7 +285,7 @@ fn unshield_rejects_mismatched_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller)),
+                ("to", json_value(&caller_id)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&proof).unwrap()),
@@ -310,7 +307,8 @@ fn unshield_rejects_mismatched_verifying_key() {
 
 #[test]
 fn unshield_accepts_and_checks_inline_verifying_key() {
-    let caller: AccountId = sample_account();
+    let caller = sample_account();
+    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
     let asset: AssetDefinitionId = "daisy#wonderland".parse().unwrap();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
@@ -337,13 +335,10 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
     wsv.grant_permission(
         &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&caller)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
 
     let verify_env = build_open_verify_envelope_bytes(8);
@@ -369,7 +364,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller)),
+                ("to", json_value(&caller_id)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&good_attachment).unwrap()),
@@ -417,7 +412,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             "payload",
             json_object([
                 ("asset", json_value(&asset.to_string())),
-                ("to", json_value(&caller)),
+                ("to", json_value(&caller_id)),
                 ("public_amount", json_value(&1u64)),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&bad_attachment).unwrap()),

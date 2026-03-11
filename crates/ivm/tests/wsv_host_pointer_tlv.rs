@@ -47,7 +47,12 @@ fn make_transfer_batch_tlv(
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
-            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset.clone(), amount.clone())
+            TransferAssetBatchEntry::new(
+                ivm::mock_wsv::AccountId::from(from),
+                ivm::mock_wsv::AccountId::from(to),
+                asset.clone(),
+                amount.clone(),
+            )
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);
@@ -79,7 +84,7 @@ fn balance_syscall_with_tlv_pointers() {
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        ivm::mock_wsv::AccountId::from(&bob.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -104,13 +109,10 @@ fn balance_syscall_with_tlv_pointers() {
     let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(
         &bob,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&alice)),
+        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&alice)),
     );
-    let host = WsvHost::new_with_subject(
-        wsv2,
-        ivm::mock_wsv::AccountSubjectId::from(&bob),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv2, ivm::mock_wsv::AccountId::from(&bob), HashMap::new());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance tlv syscall failed");
@@ -142,7 +144,7 @@ fn transfer_syscall_with_tlv_pointers() {
     ]);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        ivm::mock_wsv::AccountId::from(&bob.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -182,11 +184,8 @@ fn transfer_syscall_with_tlv_pointers() {
         ((bob.clone(), asset.clone()), num(0)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new_with_subject(
-        wsv2,
-        ivm::mock_wsv::AccountSubjectId::from(&bob),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv2, ivm::mock_wsv::AccountId::from(&bob), HashMap::new());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
@@ -204,7 +203,7 @@ fn mint_syscall_with_tlv_pointers() {
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        ivm::mock_wsv::AccountId::from(&bob.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -231,11 +230,8 @@ fn mint_syscall_with_tlv_pointers() {
 
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
-    let host = WsvHost::new_with_subject(
-        wsv2,
-        ivm::mock_wsv::AccountSubjectId::from(&bob),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv2, ivm::mock_wsv::AccountId::from(&bob), HashMap::new());
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint tlv syscall failed");
@@ -265,14 +261,14 @@ fn transfer_batch_syscalls_buffer_entries() {
     ]);
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let mut account_map = HashMap::new();
-    account_map.insert(1, ivm::mock_wsv::AccountSubjectId::from(&alice));
-    account_map.insert(2, ivm::mock_wsv::AccountSubjectId::from(&bob));
-    account_map.insert(3, ivm::mock_wsv::AccountSubjectId::from(&carol));
+    account_map.insert(1, ivm::mock_wsv::AccountId::from(&alice));
+    account_map.insert(2, ivm::mock_wsv::AccountId::from(&bob));
+    account_map.insert(3, ivm::mock_wsv::AccountId::from(&carol));
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
     let mut host = WsvHost::new_with_subject_map(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob),
+        ivm::mock_wsv::AccountId::from(&bob),
         account_map,
         asset_map,
     );
@@ -344,7 +340,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
     wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob.clone()),
+        ivm::mock_wsv::AccountId::from(&bob.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

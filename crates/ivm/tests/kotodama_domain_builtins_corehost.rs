@@ -31,7 +31,7 @@ fn kotodama_unregister_domain() {
     assert!(wsv.register_domain(&alice, dom));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(100_000);
@@ -62,7 +62,7 @@ fn kotodama_transfer_domain() {
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(100_000);

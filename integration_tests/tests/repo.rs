@@ -427,10 +427,13 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
 
     let outsider_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
     let outsider_domain: DomainId = "wonderland".parse()?;
-    let outsider_id = AccountId::new(outsider_domain, outsider_keypair.public_key().clone());
+    let outsider_id = AccountId::new(outsider_keypair.public_key().clone());
 
     let setup_instructions: Vec<InstructionBox> = vec![
-        Register::account(Account::new(outsider_id.clone())).into(),
+        Register::account(Account::new(
+            outsider_id.to_account_id(outsider_domain.clone()),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
         Mint::asset_numeric(
@@ -543,12 +546,15 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let metadata = Metadata::default();
     let custodian_keypair = KeyPair::random();
     let custodian_domain: DomainId = "wonderland".parse()?;
-    let custodian_id = AccountId::new(custodian_domain, custodian_keypair.public_key().clone());
+    let custodian_id = AccountId::new(custodian_keypair.public_key().clone());
     let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
     let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
 
     let setup_instructions: Vec<InstructionBox> = vec![
-        Register::account(Account::new(custodian_id.clone())).into(),
+        Register::account(Account::new(
+            custodian_id.to_account_id(custodian_domain.clone()),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
         Mint::asset_numeric(

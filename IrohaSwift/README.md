@@ -93,7 +93,7 @@ let transfer = TransferRequest(
     authority: accountId,
     assetDefinitionId: "jpy#xst",
     quantity: "1.23",
-    destination: "<destination_account_ih58>",
+    destination: "<destination_account_i105>",
     description: "demo",
     ttlMs: 60_000
 )
@@ -152,7 +152,7 @@ let plan: ToriiSubscriptionPlan = [
 ]
 
 let planRequest = ToriiSubscriptionPlanCreateRequest(
-    authority: "<provider_account_ih58>",
+    authority: "<provider_account_i105>",
     privateKey: "provider-private-key-hex",
     planId: "aws_compute#commerce",
     plan: plan
@@ -160,7 +160,7 @@ let planRequest = ToriiSubscriptionPlanCreateRequest(
 try await torii.createSubscriptionPlan(planRequest)
 
 let subscriptionRequest = ToriiSubscriptionCreateRequest(
-    authority: "<subscriber_account_ih58>",
+    authority: "<subscriber_account_i105>",
     privateKey: "subscriber-private-key-hex",
     subscriptionId: "sub-001",
     planId: "aws_compute#commerce"
@@ -168,7 +168,7 @@ let subscriptionRequest = ToriiSubscriptionCreateRequest(
 try await torii.createSubscription(subscriptionRequest)
 
 let usageRequest = ToriiSubscriptionUsageRequest(
-    authority: "<provider_account_ih58>",
+    authority: "<provider_account_i105>",
     privateKey: "provider-private-key-hex",
     unitKey: "compute_ms",
     delta: "3600000"
@@ -176,7 +176,7 @@ let usageRequest = ToriiSubscriptionUsageRequest(
 try await torii.recordSubscriptionUsage(subscriptionId: "sub-001", requestBody: usageRequest)
 
 let actionRequest = ToriiSubscriptionActionRequest(
-    authority: "<provider_account_ih58>",
+    authority: "<provider_account_i105>",
     privateKey: "provider-private-key-hex"
 )
 try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: actionRequest)
@@ -188,11 +188,11 @@ App-facing Torii endpoints accept optional `X-Iroha-Account` /
 `X-Iroha-Signature` headers. Use `ToriiCanonicalRequest` to build them:
 
 ```swift
-let url = URL(string: "https://torii.example/v1/accounts/<account_ih58>/assets?limit=5")!
+let url = URL(string: "https://torii.example/v1/accounts/<account_i105>/assets?limit=5")!
 let headers = try ToriiCanonicalRequest.buildHeaders(
     method: "get",
     url: url,
-    accountId: "<account_ih58>",
+    accountId: "<account_i105>",
     privateKey: Data(repeating: 7, count: 32)
 )
 var request = URLRequest(url: url)
@@ -201,7 +201,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only encoded account IDs (IH58 preferred, compressed `sora…` accepted). `@domain` suffixes and other legacy literals are rejected.
+> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical I105 account IDs. `@domain` suffixes and other legacy literals are rejected.
 
 ### Explorer instruction history
 
@@ -215,7 +215,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
                                                  kind: "Transfer",
                                                  assetId: "norito:<hex-encoded-asset-id>")
     let transfers = try await torii.getExplorerTransfers(params: params,
-                                                         matchingAccount: "<account_ih58>")
+                                                         matchingAccount: "<account_i105>")
     for record in transfers {
         switch record.details {
         case .asset(let asset):
@@ -241,7 +241,7 @@ If you prefer a flattened, UI-ready shape, ask for transfer summaries:
 if #available(iOS 15.0, macOS 12.0, *) {
     let summaries = try await torii.getExplorerTransferSummaries(
         params: ToriiExplorerInstructionsParams(page: 1, perPage: 50, kind: "Transfer"),
-        matchingAccount: "<account_ih58>"
+        matchingAccount: "<account_i105>"
     )
     for summary in summaries {
         print(summary.direction, summary.amount, summary.assetDefinitionId)
@@ -268,7 +268,7 @@ For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let history = try await torii.getTransactionHistory(accountId: "<account_ih58>",
+    let history = try await torii.getTransactionHistory(accountId: "<account_i105>",
                                                         page: 1,
                                                         perPage: 50)
     for item in history {
@@ -286,7 +286,7 @@ To stream multiple pages, use `iterateAccountTransferHistory`:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    for try await item in torii.iterateAccountTransferHistory(accountId: "<account_ih58>",
+    for try await item in torii.iterateAccountTransferHistory(accountId: "<account_i105>",
                                                               perPage: 25) {
         print(item.direction, item.amount, item.assetDefinitionId)
     }
@@ -340,8 +340,7 @@ Combine users can call `accountTransferHistoryPublisher` for the same flow.
 ```swift
 let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0, count: 32))
 print(try address.canonicalHex())
-print(try address.toIH58(networkPrefix: 753))
-print(try address.toCompressedSora())
+print(try address.toI105(networkPrefix: 753))
 ```
 
 Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
@@ -748,7 +747,7 @@ let request = try ShieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
     assetDefinitionId: "rose#wonderland",
-    fromAccountId: "<account_ih58>",
+    fromAccountId: "<account_i105>",
     amount: "42",
     noteCommitment: noteCommitmentBytes, // 32 bytes
     payload: payload,
@@ -777,7 +776,7 @@ let request = try UnshieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
     assetDefinitionId: "rose#wonderland",
-    toAccountId: "<recipient_account_ih58>",
+    toAccountId: "<recipient_account_i105>",
     publicAmount: "50",
     inputs: [Data(repeating: 0x10, count: 32)],
     proof: proof,
@@ -801,9 +800,9 @@ exporting the exact JSON layout Torii expects:
 let specBuilder = MultisigSpecBuilder()
     .setQuorum(3)
     .setTransactionTtl(milliseconds: 86_400_000) // 1 day
-    .addSignatory(accountId: "<account_ih58>", weight: 2)
-    .addSignatory(accountId: "<signatory_b_ih58>", weight: 1)
-    .addSignatory(accountId: "<signatory_c_ih58>", weight: 1)
+    .addSignatory(accountId: "<account_i105>", weight: 2)
+    .addSignatory(accountId: "<signatory_b_i105>", weight: 1)
+    .addSignatory(accountId: "<signatory_c_i105>", weight: 1)
 
 let specPayload = try specBuilder.build()
 let specJSON = try specBuilder.encodeJSON(prettyPrinted: true)
@@ -825,8 +824,8 @@ Submit the registration via the new Norito-backed transaction builders:
 ```swift
 let request = MultisigRegisterRequest(
     chainId: "sora-mainnet",
-    authority: "<authority_account_ih58>",
-    accountId: "<multisig_account_ih58>",
+    authority: "<authority_account_i105>",
+    accountId: "<multisig_account_i105>",
     spec: specPayload,
     ttlMs: 120_000
 )
@@ -882,7 +881,7 @@ Register, update, and list verifying keys via the Torii helpers:
 if #available(iOS 15, macOS 12, *) {
     let vkBytes = Data(repeating: 0xAA, count: 32)
     var request = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_ih58>",
+        authority: "<account_i105>",
         privateKey: "ed25519:...",
         backend: "halo2/ipa",
         name: "payments_v1",
@@ -974,7 +973,7 @@ if #available(iOS 15, macOS 12, *) {
     guard let vkBytes = Data(base64Encoded: "AQID") else { return }
 
     var register = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_ih58>",
+        authority: "<account_i105>",
         privateKey: "ed0120...",
         backend: "halo2/ipa",
         name: "vk_main",

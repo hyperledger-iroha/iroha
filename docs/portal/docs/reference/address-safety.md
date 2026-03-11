@@ -11,7 +11,7 @@ formats without compromising safety or accessibility.
 
 ## Safe sharing flows
 
-- Default every copy/share action to the IH58 address. Display the resolved
+- Default every copy/share action to the I105 address. Display the resolved
   domain as supporting context so the checksummed string stays front and centre.
 - Offer a “Share” affordance that bundles the full plain-text address and a QR
   code derived from the same payload. Let users inspect both before committing.
@@ -20,7 +20,7 @@ formats without compromising safety or accessibility.
   the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
   string without truncation.
 - Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact IH58 string that was copied. Where telemetry is available, count copy
+  exact I105 string that was copied. Where telemetry is available, count copy
   attempts versus share actions so UX regressions surface quickly.
 
 ## IME & input safeguards
@@ -44,21 +44,17 @@ formats without compromising safety or accessibility.
 - Announce successful copy/share events via a polite live region update. Include
   the destination (clipboard, share sheet, QR) so the user knows the action
   completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
+- Supply descriptive `alt` text for QR previews (e.g., “I105 address for
   `<account>` on chain `0x1234`”). Provide a “Copy address as text”
   fallback adjacent to the QR canvas for low-vision users.
 
-## Sora-only compressed addresses
+## Single-format policy
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
-  IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- Keep canonical I105 as the only user-facing account literal format for copy,
+  share, and QR surfaces.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track I105 copy/share usage and validation failures only.
 
 ## Quality gates
 
@@ -67,5 +63,5 @@ formats without compromising safety or accessibility.
   appear.
 - Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
   (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
+- Surface these checks in release checklists alongside the I105 parity tests
   so regressions remain blocked until corrected.

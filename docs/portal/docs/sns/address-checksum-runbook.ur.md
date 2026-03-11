@@ -10,7 +10,7 @@ translation_last_reviewed: 2025-11-18
 id: address-checksum-runbook
 title: اکاؤنٹ ایڈریس چیک سم انسیڈنٹ رن بک
 sidebar_label: چیک سم انسیڈنٹس
-description: IH58/کمپریسڈ چیک سم فیلیرز (ADDR-7) کے لیے آپریشنل ردِعمل۔
+description: I105/کمپریسڈ چیک سم فیلیرز (ADDR-7) کے لیے آپریشنل ردِعمل۔
 ---
 
 <div dir="rtl">

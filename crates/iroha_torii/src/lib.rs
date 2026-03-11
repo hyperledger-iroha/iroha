@@ -293,7 +293,7 @@ pub use utils::{
     extractors::{JsonOnly, NoritoJson, NoritoJsonWithBytes, NoritoQuery},
 };
 #[cfg(feature = "app_api")]
-mod address_format;
+mod account_literal;
 mod app_auth;
 mod block;
 #[cfg(feature = "connect")]
@@ -4086,7 +4086,7 @@ fn parse_account_id_for_endpoint(
         &app.telemetry,
         endpoint,
     )
-    .map(|(account_id, _)| account_id)
+    .map(|(account_id, _)| account_id.into())
 }
 
 #[cfg(feature = "app_api")]
@@ -4638,7 +4638,6 @@ async fn handler_explorer_account_qr(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(account_raw): AxPath<String>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
@@ -4646,14 +4645,8 @@ async fn handler_explorer_account_qr(
     }
     let account_id =
         parse_account_id_for_endpoint(&app, &account_raw, CONTEXT_EXPLORER_ACCOUNT_QR)?;
-    let address_format = query.address_format_pref()?;
-    routing::handle_v1_explorer_account_qr(
-        app.state.clone(),
-        account_id,
-        app.telemetry.clone(),
-        address_format,
-    )
-    .await
+    routing::handle_v1_explorer_account_qr(app.state.clone(), account_id, app.telemetry.clone())
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4780,18 +4773,15 @@ async fn handler_explorer_transaction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(hash): AxPath<String>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/transactions/{hash}").await?;
     }
-    let address_format = query.address_format_pref()?;
     crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
-        address_format,
     )
     .await
 }
@@ -4802,7 +4792,6 @@ async fn handler_explorer_instruction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath((hash, index)): AxPath<(String, u64)>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
@@ -4814,13 +4803,11 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    let address_format = query.address_format_pref()?;
     crate::routing::handle_v1_explorer_instruction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
         index,
-        address_format,
     )
     .await
 }
@@ -15948,7 +15935,7 @@ impl Torii {
             preauth_gate: self.preauth_gate.clone(),
             queue: self.queue.clone(),
             pipeline_status_cache: self.pipeline_status_cache.clone(),
-            mcp: self.mcp,
+            mcp: self.mcp.clone(),
             mcp_rate_limiter: self.mcp_rate_limiter.clone(),
             mcp_tools: mcp_tools.clone(),
             mcp_dispatch_router: std::sync::RwLock::new(None),
@@ -16429,7 +16416,7 @@ async fn handler_mcp_capabilities(
 ) -> (StatusCode, JsonBody<norito::json::Value>) {
     (
         StatusCode::OK,
-        JsonBody(mcp::capabilities_payload(app.mcp_tools.len())),
+        JsonBody(mcp::capabilities_payload_for_state(&app)),
     )
 }
 
@@ -17035,19 +17022,19 @@ mod gateway_denylist_loader_tests {
     }
 
     fn sample_account_literals() -> (String, String, String) {
-        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let _domain: DomainId = "wonderland".parse().expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key parses");
-        let account = AccountId::new(domain, public_key);
+        let account = AccountId::new(public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account_id");
         let canonical = address.canonical_hex().expect("canonical hex");
-        let ih58 = address
-            .to_ih58(chain_discriminant())
-            .expect("ih58 encoding");
-        let compressed = address.to_compressed_sora().expect("compressed encoding");
-        (canonical, ih58, compressed)
+        let i105 = address
+            .to_i105_for_discriminant(chain_discriminant())
+            .expect("i105 encoding");
+        let non_canonical_i105 = address.to_i105().expect("i105 encoding");
+        (canonical, i105, non_canonical_i105)
     }
 
     fn base_account_entry() -> GatewayDenylistFileEntry {
@@ -17073,9 +17060,9 @@ mod gateway_denylist_loader_tests {
 
     #[test]
     fn account_id_entries_normalise_to_canonical_hex() {
-        let (sample_canonical, sample_ih58, _) = sample_account_literals();
+        let (sample_canonical, sample_i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(sample_ih58);
+        entry.account_id = Some(sample_i105);
         entry.account_alias = Some("routing@sora".to_string());
         entry.jurisdiction = Some("US".to_string());
         entry.reason = Some("test".to_string());
@@ -17111,9 +17098,9 @@ mod gateway_denylist_loader_tests {
 
     #[test]
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
-        let (_, ih58, _) = sample_account_literals();
+        let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{ih58}@wonderland"));
+        entry.account_id = Some(format!("{i105}@wonderland"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -17159,14 +17146,14 @@ mod gateway_denylist_loader_tests {
     }
 
     #[test]
-    fn account_id_entries_accept_ih58_literals() {
-        let (canonical, ih58, _) = sample_account_literals();
+    fn account_id_entries_accept_i105_literals() {
+        let (canonical, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(ih58);
+        entry.account_id = Some(i105);
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("ih58 entry");
+        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("i105 entry");
 
         match kind {
             sorafs::gateway::DenylistKind::AccountId(ref value) => assert_eq!(value, &canonical),
@@ -17175,19 +17162,16 @@ mod gateway_denylist_loader_tests {
     }
 
     #[test]
-    fn account_id_entries_accept_compressed_literals() {
-        let (canonical, _, compressed) = sample_account_literals();
+    fn account_id_entries_reject_non_canonical_i105_literals() {
+        let (_, _, non_canonical_i105) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(compressed);
+        entry.account_id = Some(non_canonical_i105);
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("compressed entry");
-
-        match kind {
-            sorafs::gateway::DenylistKind::AccountId(ref value) => assert_eq!(value, &canonical),
-            other => panic!("unexpected denylist kind: {other:?}"),
-        }
+        let err = build_account_id_denylist_entry(&entry, &policy)
+            .expect_err("non-canonical I105 account_id must be rejected");
+        assert!(err.contains("invalid account_id"));
     }
 }
 
@@ -18196,10 +18180,7 @@ pub(crate) mod tests_runtime_handlers {
         }
 
         let keypair = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            keypair.public_key().clone(),
-        );
+        let authority = AccountId::new(keypair.public_key().clone());
         let chain = (*app.chain_id).clone();
         let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
@@ -18792,10 +18773,7 @@ pub(crate) mod tests_runtime_handlers {
     ) -> (SignedBlock, HashOf<TransactionEntrypoint>) {
         let keypair = KeyPair::random();
         let chain: ChainId = "block-header-tests".parse().expect("chain id");
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            keypair.public_key().clone(),
-        );
+        let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
         let header = BlockHeader::new(
@@ -18960,10 +18938,7 @@ pub(crate) mod tests_runtime_handlers {
     async fn pipeline_status_handler_returns_queued() {
         let app = mk_app_state_for_tests();
         let keypair = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            keypair.public_key().clone(),
-        );
+        let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
             .with_instructions([Log {
                 level: Level::INFO,
@@ -20342,15 +20317,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let prog = minimal_ivm_program(1);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
-        let kp = iroha_crypto::KeyPair::random();
-        let authority: iroha_data_model::account::AccountId =
-            iroha_data_model::account::AccountId::of(
-                "wonderland".parse().unwrap(),
-                kp.public_key().clone(),
-            );
-        let dto = crate::routing::DeployContractDto {
-            authority,
-            private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
+        let creds = crate::test_utils::random_authority();
+        let dto = DeployContractDto {
+            authority: creds.account,
+            private_key: clone_private_key(&creds.private_key),
             code_b64,
         };
         let resp = super::handler_post_contract_deploy(State(app), headers, NoritoJson(dto))
@@ -20386,15 +20356,10 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        let kp = iroha_crypto::KeyPair::random();
-        let authority: iroha_data_model::account::AccountId =
-            iroha_data_model::account::AccountId::of(
-                "wonderland".parse().unwrap(),
-                kp.public_key().clone(),
-            );
-        let dto = crate::routing::ActivateInstanceDto {
-            authority,
-            private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
+        let creds = crate::test_utils::random_authority();
+        let dto = ActivateInstanceDto {
+            authority: creds.account,
+            private_key: clone_private_key(&creds.private_key),
             namespace: "ns.demo".to_string(),
             contract_id: "demo.contract".to_string(),
             code_hash: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -20505,8 +20470,7 @@ pub(crate) mod tests_runtime_handlers {
     fn accept_transaction_signature_failure_sets_code_and_header() {
         let kp = iroha_crypto::KeyPair::random();
         let chain: ChainId = "chain".parse().unwrap();
-        let authority: AccountId =
-            AccountId::of("wonderland".parse().unwrap(), kp.public_key().clone());
+        let authority = AccountId::of(kp.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(kp.private_key());
 
         let fail = iroha_core::tx::SignatureVerificationFail::new(
@@ -21159,10 +21123,7 @@ mod tests {
     }
 
     fn sample_ivm_prove_authority() -> AccountId {
-        AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        )
+        AccountId::new(KeyPair::random().public_key().clone())
     }
 
     fn sample_ivm_prove_metadata() -> iroha_data_model::metadata::Metadata {
@@ -21274,11 +21235,8 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_account_from_iso_bridge() {
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
-        let alias = "GB82 WEST 1234 5698 7654 32";
+        let alias = "GB82WEST12345698765432";
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let iso_cfg = sample_iso_bridge_config(alias, &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
 
@@ -21315,10 +21273,7 @@ mod tests {
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id = AccountId::new(
-            "sora".parse().expect("domain"),
-            worker_key.public_key().clone(),
-        );
+        let worker_id = AccountId::new(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
@@ -21361,10 +21316,7 @@ mod tests {
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id = AccountId::new(
-            "sora".parse().expect("domain"),
-            worker_key.public_key().clone(),
-        );
+        let worker_id = AccountId::of(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
 
         let failed_at = report.submitted_at_unix + 20;
@@ -21411,10 +21363,7 @@ mod tests {
             .expect("enqueue report");
 
         let worker_key = KeyPair::random();
-        let worker_id = AccountId::new(
-            "sora".parse().expect("domain"),
-            worker_key.public_key().clone(),
-        );
+        let worker_id = AccountId::of(worker_key.public_key().clone());
         let worker_id_literal = worker_id.to_string();
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
 
@@ -21454,10 +21403,7 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let account_id = AccountId::of(KeyPair::random().public_key().clone());
         let iso_cfg = sample_iso_bridge_config("GB82WEST12345698765432", &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
 
@@ -22414,13 +22360,10 @@ mod tests {
 
     #[tokio::test]
     async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
-        let kp = KeyPair::random();
-        let authority = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            kp.public_key().clone(),
-        );
-        let domain = Domain::new("wonderland".parse().expect("domain")).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().expect("domain");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
         let world = World::with_assets([domain], [account], [], [], []);
         let mut app = mk_app_state_for_tests_with_world(world);
         {
@@ -22946,12 +22889,8 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_alias_record() {
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
-        let alias = "GB82 WEST 1234 5698 7654 32";
-        let iso_cfg = sample_iso_bridge_config(alias, &account_id);
+        let account_id = AccountId::of(KeyPair::random().public_key().clone());
+        let iso_cfg = sample_iso_bridge_config("GB82WEST12345698765432", &account_id);
         let app = mk_app_state_for_tests_with_iso_bridge(Some(iso_cfg));
 
         let response = handler_alias_resolve_index(
@@ -22978,10 +22917,7 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_non_account_target_returns_not_implemented() {
         let mut app = mk_app_state_for_tests();
-        let owner = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
         let alias_name = Name::from_str("CUSTOM").expect("valid alias name");
 
         let service = {
@@ -23359,7 +23295,6 @@ mod peer_telemetry_tests {
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 fn gateway_denylist_policy_from_config(
     config: &iroha_config::parameters::actual::SorafsGatewayDenylist,

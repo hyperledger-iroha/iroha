@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -223,7 +223,7 @@ for (const entry of allowances) {
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -233,7 +233,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -275,7 +275,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 `/v1/explorer/accounts/{account_id}/qr` נקודות קצה כך שמרכזי המחוונים יכולים להפעיל מחדש את
 אותן צילומי מצב שמניעים את הפורטל. `getExplorerMetrics()` מנרמל את
 עומס ומחזיר `null` כאשר המסלול מושבת. חבר אותו עם
-`getExplorerAccountQr()` בכל פעם שתזדקק ל-IH58 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
+`getExplorerAccountQr()` בכל פעם שתזדקק ל-I105 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
 SVG עבור כפתורי שיתוף.
 
 ```ts
@@ -290,9 +290,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -300,8 +298,8 @@ console.log(
 );
 ```
 
-מעבר `addressFormat: "compressed"` משקף את ברירת המחדל של Explorer דחוסה
-בוררים; השמט את העקיפה עבור פלט IH58 המועדף או בקש `ih58_qr`
+מעבר `I105` משקף את ברירת המחדל של Explorer דחוסה
+בוררים; השמט את העקיפה עבור פלט I105 המועדף או בקש `i105_qr`
 כאשר אתה צריך את הגרסה בטוחה ל-QR. הליטרלי הדחוס הוא השני הטוב ביותר
 אפשרות לסורה בלבד עבור UX. המסייע תמיד מחזיר את המזהה הקנוני,
 המילולי שנבחר, והמטא נתונים (קידומת רשת, גרסת QR/מודולים, שגיאה
@@ -515,8 +513,8 @@ for await (const event of torii.streamEvents({
 הפוך אותם לקנוניז לפני הגשת בקשות:- `getUaidPortfolio(uaid, { assetId })` צובר יתרות לכל מרחב נתונים,
   קיבוץ החזקות נכסים לפי מזהי חשבון קנוני; העבר את `assetId` כדי לסנן את
   תיק עד למקרה של נכס בודד.
-- `getUaidBindings(uaid, { addressFormat })` מונה כל חשבון מרחב נתונים ↔
-  מחייב (`addressFormat: "compressed"` מחזירה את ה-`sora…` המילולי).
+- `getUaidBindings(uaid)` מונה כל חשבון מרחב נתונים ↔
+  מחייב (`I105` מחזירה את ה-`i105` המילולי).
 - `getUaidManifests(uaid, { dataspaceId })` מחזיר כל מניפסט יכולת,
   מצב מחזור החיים, וחשבונות קשורים לביקורת.
 
@@ -536,7 +534,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -561,7 +559,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -571,7 +569,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -113,7 +113,7 @@ barcha tengdoshlar tomonidan ishlatiladigan kanonik imzo to'plami.
 
 `iroha_data_model` kassasi barcha daftar ob'ektlari, ko'rsatmalar, so'rovlar va hodisalarni belgilaydi. Diqqatga sazovor joylar:
 
-- **Domenlar, hisoblar va aktivlar** kanonik IH58 hisob identifikatorlaridan foydalanadi (afzal); `name@domain` marshrut sifatida qolmoqda
+- **Domenlar, hisoblar va aktivlar** kanonik I105 hisob identifikatorlaridan foydalanadi (afzal); `name@domain` marshrut sifatida qolmoqda
   aniq berilganda taxallus. Metadata deterministik (`Metadata` xaritasi). Raqamli aktivlar belgilangan nuqtani qo'llab-quvvatlaydi
   operatsiyalar; NFTlar o'zboshimchalik bilan tuzilgan metama'lumotlarni olib yuradi.
 - **Rollar va ruxsatlar** Norito sanab o'tilgan tokenlardan foydalanadi, ular bevosita ijrochi tekshiruvlariga mos keladi.

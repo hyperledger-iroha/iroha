@@ -241,7 +241,7 @@ Las transiciones de estado DEBEN emitir el correspondiente `RegistryEventKind` p
 Los gateways se suscriben a `RegistryEventV1` y sincronizan a DNS/SoraFS mediante:
 
 1. Obtener el ultimo `NameRecordV1` referenciado por la secuencia de eventos.
-2. Regenerar templates de resolver (direcciones IH58 preferidas + compressed (`sora`) como segunda opcion, text records).
+2. Regenerar templates de resolver (direcciones I105 preferidas + I105 como segunda opcion, text records).
 3. Pinnear datos de zona actualizados via el flujo SoraDNS descrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:
@@ -261,7 +261,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58...",
+    owner: "i105...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -288,7 +288,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58...",
+    steward: "i105...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -301,10 +301,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58...",
+    fund_splitter_account: "i105...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

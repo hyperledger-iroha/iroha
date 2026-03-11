@@ -54,7 +54,7 @@ translation_last_reviewed: 2026-02-07
 | الميثاق + ملاحق KPI | `docs/source/sns/governance_addenda/` | مواثيق موقعة مع وحدة تحكم بالنسخ، ومواثيق KPI، وقرارات الإحالة إلى بتصويتات CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | تراكيب Norito المرجعية (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد البائع | [`registrar-api.md`](./registrar-api.md) | حمولات REST/gRPC، معايير `sns_registrar_status_total`، وتوقعات تورنر. |
-| دليل UX للأناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض IH58 (المفضلة) والضغوطات (الخيار الثاني) المرجعية التي تحافظ عليها المحافظات/المستكشفات. |
+| دليل UX للأناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض I105 (المفضلة) والضغوطات (الخيار الثاني) المرجعية التي تحافظ عليها المحافظات/المستكشفات. |
 | وثائق SoraDNS/GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)، [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | اشتقاق أصلات الحتمي، سير عمل خياط للشاشة، وقواعد التنبيه. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | أفكار مستقبلية للخصومات (مثل EU DSA)، قرارات ستيوارد، ملاحق قوالب. |
 | تدريبات السجل | `ops/drill-log.md` | سجل لتجارب الفوضى وIR المطلوبة قبل الخروج من المراحل. |
@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-02-07
    بدون الخاصية بالمحلل لتتسبب في حالة GAR/zone الجديدة (انظر 4.5).
 6. **انضمام العميل:** حدث دفتر المستخدِم (wallet/explorer) عبر التركيبات المشتركة في
    [`address-display-guidelines.md`](./address-display-guidelines.md)، مع ضمان ان
-   عروض IH58 والضغوط تتطابق مع توجيهات النصوص/QR.
+   عروض I105 والضغوط تتطابق مع توجيهات النصوص/QR.
 
 ### 4.3 الفساد والفوترة وتسويق الخزينة- **سيرة العمل التفصيلية:** يفترض أن مستخدم نافذة سماح 30 يوم + نافذة مستردة 60 يوم
   المحددة في `SuffixPolicyV1`. وبعد مرور 60 يومًا، حدث جراحة جراحية جزئية
@@ -115,11 +115,11 @@ translation_last_reviewed: 2026-02-07
 ### 4.4 التجميد والنزاعات والاستئناف| المرحلة | المالك | الاجراء والدليل | جيش تحرير السودان |
 |---------|--------|-----------------|-----|
 | طلب تجميد ناعم | ستيوارد / الدعم | تقدمة تذكرة `SNS-DF-<id>` مع اثبات الدفع، سند مرجعي متنازع، والمحدد/المحددات المتاثرة. | <=4 h من الاستلام. |
-| تذكرة ولي الأمر | مجلس الوصي | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` ينتج `GuardianFreezeTicketV1`. خزن JSON التذكرة تحت `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة تنفيذ. |
+| تذكرة ولي الأمر | مجلس الوصي | `sns governance freeze --selector <I105> --reason <text> --until <ts>` ينتج `GuardianFreezeTicketV1`. خزن JSON التذكرة تحت `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة تنفيذ. |
 | تصديق المجلس | مجلس ال تور | يوافق او يرفض التجميدات، ويعتمد على رابطة لتذكر ولي الأمر وبصمة رابطة معترضة. | جلسة المجلس التالية او تصويت غير متزامن. |
 | لجنة اتجاه | جميع + ستيوارد | فقرة لجنة لجنة من 7 محلفين (حسب خريطة الطريق) مع بطاقات تصويت مجزأة عبر `sns governance dispute ballot`. ارفق ايصالات التصويت المجهولة بأزمة الحادث. | الحكم <=7 ايام بعد ايداع السند. |
 | هل | الوصي + المجلس | يضاعف السندات ويعيد العمل المحلفين; سجل مانيفست Norito `DisputeAppealV1` واربط بالتذكرة الاصلية. | <=10 أيام. |
-| فك التجميد والمعالجة | الموزع + محلل العمليات | تنفيذ `sns governance unfreeze --selector <IH58> --ticket <id>`، حدث حالة المستثمر، ومرر فروقات GAR/resolver. | مباشرة بعد الحكم. |
+| فك التجميد والمعالجة | الموزع + محلل العمليات | تنفيذ `sns governance unfreeze --selector <I105> --ticket <id>`، حدث حالة المستثمر، ومرر فروقات GAR/resolver. | مباشرة بعد الحكم. |
 
 قوانين جديدة (تجميدات أطلقها ولي الأمر <=72 ساعة) إزالة جديدة إضافية تتطلب
 مراجعة مجلس بأثر مرجعي وملاحظة شفافة تحت `docs/source/sns/regulatory/`.

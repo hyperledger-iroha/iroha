@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64 سداسيًا"،
       "abi_version": "1"،
       "نافذة": { "سفلي": 12345، "علوي": 12400}،
-      "السلطة": "ih58...؟",
+      "السلطة": "i105...؟",
       "مفتاح_خاص": "...؟"
     }
   - الاستجابة (JSON):
@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 
 واجهة برمجة تطبيقات العقود (النشر)
 - المشاركة `/v1/contracts/deploy`
-  - الطلب: { "authority": "ih58..."، "private_key": "..."، "code_b64": "..." }
+  - الطلب: { "authority": "i105..."، "private_key": "..."، "code_b64": "..." }
   - السلوك: انتقل إلى `code_hash` من خلال برامج IVM و`abi_hash` من خلال `abi_version`، ثم قم بالتصحيح `RegisterSmartContractCode` (البيان) و`RegisterSmartContractBytes` (البيانات الكاملة `.to`) من `authority`.
   - الرد: { "ok": صحيح، "code_hash_hex": "..."، "abi_hash_hex": "..." }
   - ذات صلة:
     - احصل على `/v1/contracts/code/{code_hash}` -> بيان الضمان المصرح به
     - احصل على `/v1/contracts/code-bytes/{code_hash}` -> أدخل `{ code_b64 }`
 - المشاركة `/v1/contracts/instance`
-  - الطلب: { "authority": "ih58..."، "private_key": "..."، "مساحة الاسم": "apps"، "contract_id": "calc.v1"، "code_b64": "..." }
+  - الطلب: { "authority": "i105..."، "private_key": "..."، "مساحة الاسم": "apps"، "contract_id": "calc.v1"، "code_b64": "..." }
   - السلوك: قم باستخدام الرمز الثانوي المفضل وقم بتنشيط رسم الخرائط `(namespace, contract_id)` من خلال `ActivateContractInstance`.
   - الاستجابة: { "ok": true، "namespace": "apps"، "contract_id": "calc.v1"، "code_hash_hex": "..."، "abi_hash_hex": "..." }
 
@@ -61,11 +61,11 @@ translation_last_reviewed: 2026-02-07
   - الأخطاء: HTTP `400` في حالة عدم وجود مفتاح سداسي عشري. يتم إرسال Torii إلى Norito مغلف `ValidationFail::QueryFailed::Conversion` مع وحدة فك التشفير الخاصة به.
 - المشاركة `/v1/aliases/resolve`
   - الطلب: { "الاسم المستعار": "GB82 WEST 1234 5698 7654 32" }
-  - الاستجابة: { "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "ih58..."، "index": 0، "source": "iso_bridge" }
+  - الاستجابة: { "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "i105..."، "index": 0، "source": "iso_bridge" }
   - ملاحظات: تحتاج إلى التدريج المرحلي لجسر ISO (`[iso_bridge.account_aliases]` в `iroha_config`). يقوم Torii بتطبيع الاسم المستعار وإجراء الاختبارات والدخول إلى السجل النهائي. قم بالموافقة على 404 في الاسم المستعار و 503 عند إلغاء وقت تشغيل جسر ISO.
 - المشاركة `/v1/aliases/resolve_index`
   - الطلب: { "الفهرس": 0 }
-  - الاستجابة: { "الفهرس": 0، "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "ih58..."، "source": "iso_bridge" }
+  - الاستجابة: { "الفهرس": 0، "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "i105..."، "source": "iso_bridge" }
   -ملاحظات: فهرس الاسم المستعار يُسمى محددًا حسب التكوينات (المستندة إلى 0). يمكن للعملاء الرد على الأسئلة دون الاتصال بالإنترنت من أجل تعزيز مسار التدقيق من خلال الاسم المستعار للمصادقة.
 
 الحد الأقصى لحجم الرمز
@@ -75,7 +75,7 @@ translation_last_reviewed: 2026-02-07
   - يمكن للمشغلين الإزالة من خلال `SetParameter(Custom)` مع `id = "max_contract_code_bytes"` والحمولة الصافية.
 
 - المشاركة `/v1/gov/ballots/zk`
-  - الطلب: { "authority": "ih58..."، "private_key": "...؟"، "chain_id": "..."، "election_id": "e1"، "proof_b64": "..."، "public": {...} }
+  - الطلب: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "election_id": "e1"، "proof_b64": "..."، "public": {...} }
   - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - ملاحظات:
     - عندما تتضمن مخططات المياه العامة `owner` و`amount` و`duration_blocks`، ويتم التحقق من الإثبات باستخدام VK القوي، لا قم بإنشاء أو توفير قفل الإدارة لـ `election_id` باستخدام هذا العنصر `owner`. ضبط سكريتو (`unknown`); يتم تحديد المبلغ/انتهاء الصلاحية فقط. المبالغ المكررة رتيبة: المبلغ وانتهاء الصلاحية لا يزيدان عن حدهما (نقطة أولية max(amount, prev.amount) و max(expiry, prev.expiry)).
@@ -83,12 +83,12 @@ translation_last_reviewed: 2026-02-07
     - يجب توصيل العقد `ZK_VOTE_VERIFY_BALLOT` إلى البريد `SubmitBallot`; يفرض المضيفون مزلاجًا فريدًا.
 
 - المشاركة `/v1/gov/ballots/plain`
-  - الطلب: { "authority": "ih58..."، "private_key": "...؟"، "chain_id": "..."، "referendum_id": "r1"، "owner": "ih58..."، "amount": "1000"، "duration_blocks": 6000، "direction": "Aye|Nay|امتناع" }
+  - الطلب: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "referendum_id": "r1"، "owner": "i105..."، "amount": "1000"، "duration_blocks": 6000، "direction": "Aye|Nay|امتناع" }
   - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - ملاحظات: إعادة التصويت فقط على التوسيع - لا يمكن لبطاقة الاقتراع الجديدة تقليل المبلغ أو انتهاء صلاحية القفل الحالي. `owner` مطلوب الالتزام بمعاملات السلطة. الحد الأدنى من الإنفاق - `conviction_step_blocks`.
 
 - المشاركة `/v1/gov/finalize`
-  - الطلب: { "referendum_id": "r1"، "proposal_id": "...64hex"، "authority": "ih58...؟"، "private_key": "...؟" }
+  - الطلب: { "referendum_id": "r1"، "proposal_id": "...64hex"، "authority": "i105...؟"، "private_key": "...؟" }
   - الاستجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...FinalizeReferendum"، "payload_hex": "..." }] }
   - التأثير على السلسلة (السقالة الحالية): تفعيل اقتراح النشر بشكل فعال الحد الأدنى `ContractManifest`، الوصول إلى `code_hash`، مع `abi_hash` و помечает الاقتراح كيف تم تفعيله. إذا كان البيان متاحًا لـ `code_hash` مع `abi_hash` آخر، فسيتم إلغاء تفعيل التشريع.
   - ملاحظات:
@@ -97,7 +97,7 @@ translation_last_reviewed: 2026-02-07
     - تستخدم نسبة الإقبال على التصويت فقط الموافقة+الرفض؛ الامتناع عن التصويت لا يؤثر على الإقبال.
 
 - المشاركة `/v1/gov/enact`
-  - الطلب: { "proposal_id": "...64hex"، "preimage_hash": "...64hex؟"، "window": { "lower": 0، "upper": 0}؟، "authority": "ih58...؟"، "private_key": "...؟" }
+  - الطلب: { "proposal_id": "...64hex"، "preimage_hash": "...64hex؟"، "window": { "lower": 0، "upper": 0}؟، "authority": "i105...؟"، "private_key": "...؟" }
   - الاستجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...EnactReferendum"، "payload_hex": "..." }] }
   - ملاحظات: يقوم Torii بإجراء معاملة مباشرة عند كتابة `authority`/`private_key`؛ إنها في كثير من الأحيان هيكل عظمي لتقديم الدعم للعملاء والتعامل معهم. Preimage اختيارية ولها طابع المعلومات الخاص بها.
 
@@ -199,15 +199,15 @@ RBAC
     - قم بإعداد اقتراح الإدارة الذي تم تفعيله لـ `(namespace, contract_id, code_hash, abi_hash)`، واشتقاق العناصر مثل تجزئة معرف الاقتراح لاستخدامها.
   - قم بإرجاع JSON إلى `results[]` من خلال العقد (القضايا وملخصات البيان/الكود/الاقتراح) والملخص الفردي، إذا لم يكن مناسبًا (`--no-summary`).
   - مفيد لتدقيق مساحات الأسماء المحمية أو التحقق من سير عمل النشر الذي تسيطر عليه الإدارة.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - قم باستخدام بيانات تعريف هيكل JSON للنشر في مساحات الأسماء المحمية، بما في ذلك `gov_manifest_approvers` الاختياري لبيان النصاب القانوني الصحيح.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` - تلميحات القفل المخصصة لـ `min_bond_amount > 0`، وأي تلميحات أخرى تتضمن `owner` و`amount` و `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` - تلميحات القفل المخصصة لـ `min_bond_amount > 0`، وأي تلميحات أخرى تتضمن `owner` و`amount` و `duration_blocks`.
   - التحقق من صحة معرفات الحساب الأساسية، والتحقق من تلميحات الإبطال ذات 32 بايت، ودمج التلميحات في `public_inputs_json` (مع `--public <path>` للتجاوزات الإضافية).
   - يُشتق المبطل من التزام الإثبات (الإدخال العام) بالإضافة إلى `domain_tag` و`chain_id` و`election_id`؛ تم التحقق من صحة `--nullifier` مقابل الدليل عند تقديمه.
   - ملخص موحد لتنسيق تحديد `fingerprint=<hex>` من التشفير `CastZkBallot` مع تلميحات فك التشفير (`owner`، `amount`، `duration_blocks`، `direction` عند الانتهاء).
   - يجيب CLI على التعليق `tx_instructions[]` على `payload_fingerprint_hex` ومعامل فك التشفير، بحيث يمكن للأدوات النهائية التحقق من الهيكل العظمي بدون رجعة تحقيق فك التشفير Norito.
   - تتيح تلميحات القفل المسبقة حذف `LockCreated`/`LockExtended` لبطاقات اقتراع ZK، عندما يتم تمييز المخطط أو تمييزه.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - الاسم المستعار `--lock-amount`/`--lock-duration-blocks` يرسل أعلام ZK للتكافؤ في النصوص البرمجية.
   - ملخص يخرج `vote --mode zk`، بما في ذلك تعليمات تشفير بصمة الإصبع وبطاقة الاقتراع (`owner`، `amount`، `duration_blocks`, `direction`)، يتم التحقق من صحة ما قبل الهيكل العظمي.
 
@@ -228,21 +228,21 @@ RBAC
 - المشاركة `/v1/gov/ballots/zk-v1`
   - الطلب (DTO بنمط v1):
     {
-      "السلطة": "ih58..."،
+      "السلطة": "i105..."،
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...؟",
       "election_id": "ref-1",
       "الواجهة الخلفية": "halo2/ipa"،
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex؟",
-      "مالك": "ih58...؟",
+      "مالك": "i105...؟",
       "nullifier": "blake2b32:...64hex؟"
     }
   - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }- المشاركة `/v1/gov/ballots/zk-v1/ballot-proof` (الميزة: `zk-ballot`)
   - استخدم `BallotProof` JSON واستخدم الهيكل العظمي `CastZkBallot`.
   - الطلب:
     {
-      "السلطة": "ih58..."،
+      "السلطة": "i105..."،
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...؟",
       "election_id": "ref-1",

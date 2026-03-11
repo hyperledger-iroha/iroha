@@ -535,7 +535,6 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
         offline::OfflineAllowanceCommitment,
     };
     use iroha_primitives::numeric::Numeric;
@@ -551,9 +550,8 @@ mod tests {
     }
 
     fn sample_account() -> AccountId {
-        let domain: DomainId = "wonderland".parse().unwrap();
         let key_pair = KeyPair::random();
-        AccountId::new(domain, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_asset() -> AssetId {

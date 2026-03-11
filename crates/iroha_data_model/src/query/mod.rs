@@ -76,7 +76,6 @@ mod signature_tests {
     #[test]
     fn query_signature_decode_from_slice_roundtrip() {
         let authority = AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
@@ -850,6 +849,10 @@ mod model {
         FindExecutorDataModel(FindExecutorDataModel),
         /// Fetch current global parameters.
         FindParameters(FindParameters),
+        /// Fetch linked domains for an account subject.
+        FindDomainsByAccountId(account::prelude::FindDomainsByAccountId),
+        /// Fetch linked account ids for a domain.
+        FindAccountIdsByDomainId(domain::prelude::FindAccountIdsByDomainId),
         /// Fetch a proof record by its identifier.
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
@@ -894,6 +897,10 @@ mod model {
         ExecutorDataModel(crate::executor::ExecutorDataModel),
         /// Parameter set payload.
         Parameters(Parameters),
+        /// Linked domain identifier list.
+        DomainIds(Vec<DomainId>),
+        /// Linked account identifier list.
+        AccountIds(Vec<AccountId>),
         /// Proof record payload.
         ProofRecord(crate::proof::ProofRecord),
         /// Smart contract manifest payload.
@@ -2124,12 +2131,8 @@ mod candidate {
             }
         }
 
-        static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
-            AccountId::new(
-                "wonderland".parse().expect("domain id"),
-                ALICE_KEYPAIR.public_key().clone(),
-            )
-        });
+        static ALICE_ID: LazyLock<AccountId> =
+            LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
         static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
             KeyPair::new(
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -2237,12 +2240,8 @@ mod json_roundtrip_tests {
         },
     };
 
-    static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
-        AccountId::new(
-            "wonderland".parse().expect("domain id"),
-            ALICE_KEYPAIR.public_key().clone(),
-        )
-    });
+    static ALICE_ID: LazyLock<AccountId> =
+        LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
     static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
         KeyPair::new(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -2419,6 +2418,8 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
+    account::prelude::FindDomainsByAccountId => Vec<crate::domain::DomainId>,
+    domain::prelude::FindAccountIdsByDomainId => Vec<crate::account::AccountId>,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindActiveAbiVersions => crate::query::runtime::ActiveAbiVersions,
@@ -2701,6 +2702,17 @@ pub mod account {
                 /// `Id` of the definition of the asset which should be stored in founded accounts.
                 pub asset_definition: AssetDefinitionId,
             }
+
+            /// [`FindDomainsByAccountId`] query lists domains linked to the account subject.
+            #[derive(Display)]
+            #[display("Find domains linked to account `{id}`")]
+            #[repr(transparent)]
+            // SAFETY: `FindDomainsByAccountId` has no trap representation in `AccountId`
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindDomainsByAccountId {
+                /// Domainless account identifier whose linked domain memberships should be resolved.
+                pub id: crate::account::AccountId,
+            }
         }
 
     impl FindAccountsWithAsset {
@@ -2710,9 +2722,18 @@ pub mod account {
         }
     }
 
+    impl FindDomainsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &crate::account::AccountId {
+            &self.id
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindAccountIds, FindAccounts, FindAccountsWithAsset};
+        pub use super::{
+            FindAccountIds, FindAccounts, FindAccountsWithAsset, FindDomainsByAccountId,
+        };
     }
 }
 
@@ -3000,6 +3021,7 @@ pub mod domain {
 
     use std::{format, string::String, vec::Vec};
 
+    use crate::domain::DomainId;
     use derive_more::Display;
 
     queries! {
@@ -3008,11 +3030,29 @@ pub mod domain {
         #[display("Find all domains")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindDomains;
+
+        /// [`FindAccountIdsByDomainId`] query lists account identifiers linked to a domain.
+        #[derive(Display)]
+        #[display("Find account ids linked to domain `{id}`")]
+        #[repr(transparent)]
+        // SAFETY: `FindAccountIdsByDomainId` has no trap representation in `DomainId`
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindAccountIdsByDomainId {
+            /// Domain identifier whose linked accounts should be resolved.
+            pub id: DomainId,
+        }
+    }
+
+    impl FindAccountIdsByDomainId {
+        /// Return the queried domain identifier.
+        pub fn domain_id(&self) -> &DomainId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::FindDomains;
+        pub use super::{FindAccountIdsByDomainId, FindDomains};
     }
 }
 

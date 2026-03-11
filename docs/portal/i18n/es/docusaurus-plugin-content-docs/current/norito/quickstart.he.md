@@ -96,7 +96,7 @@ El runner imprime el log `info("Hello from Kotodama")` y ejecuta el syscall `SET
 
 Con el nodo aun corriendo, envia el bytecode compilado a Torii usando el CLI. La identidad de desarrollo por defecto se deriva de la clave publica en `defaults/client.toml`, por lo que el ID de cuenta es
 ```
-ih58...
+i105...
 ```
 
 Usa el archivo de configuracion para suministrar la URL de Torii, el chain ID y la clave de firma:
@@ -116,7 +116,7 @@ Usa el mismo perfil del CLI para obtener el account detail que escribio el contr
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

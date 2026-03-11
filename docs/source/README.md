@@ -17,6 +17,7 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 - ZK App API (attachments, prover, vote tally): `zk_app_api.md`
 - Torii ZK attachments/prover runbook: `zk/prover_runbook.md`
 - Torii ZK App API operator guide (attachments/prover; crate doc): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof lifecycle (registry, verification, telemetry): `zk/lifecycle.md`
 - Torii Operator Aids (endpoints for visibility): `references/operator_aids.md`
 - Nexus default-lane quickstart: `quickstart/default_lane.md`

@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` CLI `iroha`、次のとおりです。
   - `audit.json` -- структурированный вывод `iroha tools address audit --format json`。
-  - `normalized.txt` -- преобразованные IH58 (предпочтительно) / 圧縮 (`sora`) (второй выбор) リテラル каждого ローカル ドメイン セレクター。
+  - `normalized.txt` -- преобразованные I105 (предпочтительно) / 圧縮 (`sora`) (второй выбор) リテラル каждого ローカル ドメイン セレクター。
 - ダッシュボードの取り込みを完了する (`dashboards/grafana/address_ingest.json`)
   および Alertmanager (`dashboards/alerts/address_ingest_rules.yml`)、ローカル 8 のカットオーバー /
   ローカル-12。 Local-8 と Local-12 および алертами の接続
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## Использование
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 説明:
 
-- `--format compressed (`sora`)` は `sora...` と IH58 を接続します。
+- `--format I105` は `sora...` と I105 を接続します。
 - `domainless output (default)` для вывода 裸のリテラル。
 - `--audit-only` чтобы пропустить заг конвертации.
 - `--allow-errors` は、CLI にアクセスできます。

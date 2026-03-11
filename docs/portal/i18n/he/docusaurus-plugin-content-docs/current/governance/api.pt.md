@@ -32,21 +32,21 @@ Visao Geral
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "ih58...?",
+      "authority": "i105...?",
       "private_key": "...?"
     }
   - תשובה (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validacao: os nos canonizam `abi_hash` para o `abi_version` fornecido e rejeitam divergencias. Para `abi_version = "v1"`, o valor esperado e `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API de contratos (פריסה)
 - POST `/v1/contracts/deploy`
-  - Requisicao: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Requisicao: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - רכיב: calcula `code_hash` a partir do corpo do programa IVM e `abi_hash` a partir do header `abi_version`, depois submete Prometheus (emanfesto) `RegisterSmartContractBytes` (בתים `.to` השלמות) עם שם `authority`.
   - תגובה: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Relacionado:
     - קבל את `/v1/contracts/code/{code_hash}` -> רטורנה או מניפסט ארמזנאדו
     - קבל `/v1/contracts/code-bytes/{code_hash}` -> retorna `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - Requisicao: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Requisicao: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - רכיב: deploya o bytecode fornecido e ativa imediatamente o mapeamento `(namespace, contract_id)` דרך `ActivateContractInstance`.
   - תגובה: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -59,11 +59,11 @@ Servico de alias
   - שגיאות: HTTP `400` עם קלט hex misformado. Torii retorna um envelope Norito `ValidationFail::QueryFailed::Conversion` com a mensagem de erro do מפענח.
 - POST `/v1/aliases/resolve`
   - Requisicao: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - הערות: בקש או זמן ריצה גשר ISO (`[iso_bridge.account_aliases]` em `iroha_config`). Torii נורמליזה כינויים removendo espacos e convertendo para maiusculas antes do lookup. Retorna 404 quando או alias esta ausente e 503 quando o runtime ISO bridge esta disabilitado.
 - POST `/v1/aliases/resolve_index`
   - Requisicao: { "אינדקס": 0 }
-  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notas: indices de alias sao atribuidos de forma deterministica pela ordem de configuracao (מבוסס 0). שירותים של לקוחות מטמון לא מקוונים לבניית אולמות אודיטוריה אירועי כינוי.
 
 Limite de tamanho de codigo
@@ -71,7 +71,7 @@ Limite de tamanho de codigo
   - Controla o tamanho maximo permitido (em bytes) para armazenamento de codigo de contrato on-chain.
   - ברירת מחדל: 16 MiB. אוסלו את `RegisterSmartContractBytes` quando o tamanho da imagem `.to` excede o limite com um erro de violacao de invariante.
   - Operadores podem ajustar דרך `SetParameter(Custom)` com `id = "max_contract_code_bytes"` e um מטען מטען numerico.- POST `/v1/gov/ballots/zk`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Requisicao: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - תגובה: { "בסדר": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות:
     - Quando OS כניסות publicos do circuito incluem `owner`, `amount` e `duration_blocks`, e a prova verifica contra a VK configurada, o no cria ou estende um lock de governanca para Icom 1020X `owner`. A direcao permanece oculta (`unknown`); כמות/תפוגה של apenas sao atualizados. הצבעות מחדש סאו מונוטוניות: כמות e expiry apenas aumentam (o no aplica max(amount, prev.amount) e max(expiry, prev.expiry)).
@@ -79,19 +79,19 @@ Limite de tamanho de codigo
     - A execucao do contrato deve chamar `ZK_VOTE_VERIFY_BALLOT` antes de enfileirar `SubmitBallot`; מארח impoem um latch de uma unica vez.
 
 - POST `/v1/gov/ballots/plain`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "yetain|Nay"}: "Abs
+  - Requisicao: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "yetain|Nay"}: "Abs
   - תגובה: { "בסדר": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות: הצבעות מחדש sao de extensao apenas - אום נובו הצבעה נאו pode reduzir סכום או תפוגה לעשות נעול קיימות. O `owner` deve igualar a Authority da transacao. Duracao minima e `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Requisicao: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58...?", "private_key": "...?" }
+  - Requisicao: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efeito על-שרשרת (פיגום): פרסם אומה proposta deploy aprovada insere um `ContractManifest` minimo com chave `code_hash` com o `abi_hash` esperado e marca a proposta como. Se um manifesto ja existir para o `code_hash` com `abi_hash` diferente, o enactment e rejeitado.
   - הערות:
     - Para eleicoes ZK, os caminhos do contrato devem chamar `ZK_VOTE_VERIFY_TALLY` antes de executar `FinalizeElection`; os hosts impoem um latch de uso unico. `FinalizeReferendum` Rejeita referendos ZK ate que o tally da eleicao esteja finalizado.
     - O auto-fechamento em `h_end` emite אושר/נדחה apenas para referendos רגיל; Referendos ZK permanecem סגור אכלתי que um tally finalizado seja enviado e `FinalizeReferendum` seja executado.
     - כמו checagens de turnout usam apenas לאשר+לדחות; נמנע נאו קונטה פארה או שיעור הצבעה.- POST `/v1/gov/enact`
-  - Requisicao: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "...?" }
+  - Requisicao: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - הערות: Torii submete a transacao assinada quando `authority`/`private_key` sao fornecidos; caso contrario retorna um esqueleto para clientes assinarem e submeterem. תדמית מוקדמת ואופציונלי ומידע אינפורמטיבי.
 
@@ -191,15 +191,15 @@ RBAC
     - Existe uma proposta de governanca נחקק para `(namespace, contract_id, code_hash, abi_hash)` derivada pelo mesmo hashing de offer-id que o no usa.
   - Emite um relatorio JSON com `results[]` por contrato (בעיות, קורות חיים של מניפסט/קוד/הצעה) mais um resumo de uma linha a menos que supprimido (`--no-summary`).
   - השתמש במרחבי השמות המוגנים או בדוק את הפריסה של מערכות שליטה.
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Emite או JSON esqueleto של מטא נתונים בארה"ב או פריסות תת-מטרים במרחבי שמות, כולל אופציות `gov_manifest_approvers` לסיפוק חוקי מניפסט.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזים לנעילה são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, Prometheus I00000191900.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזים לנעילה são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, Prometheus I00000191900.
   - מאמת מזהי חשבונות קנוניים, מבצע קנוניזציה של רמזים לביטול של 32 בתים וממזג את הרמזים לתוך `public_inputs_json` (עם `--public <path>` לעקיפות נוספות).
   - המבטל נגזר מהתחייבות ההוכחה (קלט ציבורי) בתוספת `domain_tag`, `chain_id` ו-`election_id`; `--nullifier` מאומת כנגד ההוכחה כאשר היא מסופקת.
   - O resumo de uma linha agora exibe `fingerprint=<hex>` deterministico derivado do `CastZkBallot` codificado junto com hints decodificados (`owner`, `amount`, I000000208X, I000X `direction` quando fornecidos).
   - כתשובה של CLI anotam `tx_instructions[]` com `payload_fingerprint_hex` mais campos decodificados para que ferramentas downstream verifiquem o esqueleto sem reimplementar decodificacao Norito.
   - Fornecer hints de lock permite que o no emita eventos `LockCreated`/`LockExtended` para ballots ZK assim que o circuito expuser os mesmos valores.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - כינויים של OS `--lock-amount`/`--lock-duration-blocks` espelham os nomes de flags ZK para paridade de script.
   - A saida de resumo espelha `vote --mode zk` ao incluir o טביעת אצבע da instrucao codificada e campos de ballot legiveis (`owner`, `amount`, Prometheus, I0000002220X, I00000102220X, confirmacao rapida antes de assinar o esqueleto.Listagem de instancias
 - קבל את `/v1/gov/instances/{ns}` - רשימה של מופעים נגדיים עבור מרחב שמות.
@@ -218,14 +218,14 @@ Varredura de unlocks (Operador/Auditoria)
 - POST `/v1/gov/ballots/zk-v1`
   - Requisicao (DTO estilo v1):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "ih58...?",
+      "owner": "i105...?",
       "nullifier": "blake2b32:...64hex?"
     }
   - תגובה: { "בסדר": true, "accepted": true, "tx_instructions": [{...}] }
@@ -234,7 +234,7 @@ Varredura de unlocks (Operador/Auditoria)
   - עמודה על JSON `BallotProof` כתובה וחזרה על esqueleto `CastZkBallot`.
   - Requisicao:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

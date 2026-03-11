@@ -20,6 +20,7 @@ təlimatlar və dərsliklər inkişaf edir.
 - **Norito kodek icmalı** – `reference/norito-codec.md` birbaşa səlahiyyətli ilə əlaqələndirir
   Portal cədvəli doldurularkən `norito.md` spesifikasiyası.
 - **Torii OpenAPI** – `/reference/torii-openapi` istifadə edərək ən son Torii REST spesifikasiyasını təqdim edir
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   Redok. `npm run sync-openapi -- --version=current --latest` ilə spesifikasiyanı bərpa edin (əlavə edin
   Snapşotu əlavə tarixi versiyalara köçürmək üçün `--mirror=<label>`).
 - **Konfiqurasiya cədvəlləri** – Tam parametrlər kataloqu saxlanılır

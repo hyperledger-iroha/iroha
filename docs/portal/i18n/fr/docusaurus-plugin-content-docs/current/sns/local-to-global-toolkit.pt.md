@@ -16,7 +16,7 @@ Cette page correspond à `docs/source/sns/local_to_global_toolkit.md` du mono-re
 
 - `scripts/address_local_toolkit.sh` encapsule la CLI `iroha` pour produire :
   - `audit.json` -- dit estruturada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- littéraire IH58 (préféré) / compressé (`sora`) (seconde meilleure option) converti pour chaque sélecteur de domaine local.
+  - `normalized.txt` -- littéraire I105 (préféré) / compressé (`sora`) (seconde meilleure option) converti pour chaque sélecteur de domaine local.
 - Combiner le script avec le tableau de bord d'ingest de enderecos (`dashboards/grafana/address_ingest.json`)
   et comme base d'Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) pour vérifier que le basculement Local-8 /
   Local-12 et sécurité. Observez les paineis de colisao Local-8 e Local-12 et les alertes
@@ -28,12 +28,12 @@ Cette page correspond à `docs/source/sns/local_to_global_toolkit.md` du mono-re
 ## Utilisation
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Opcoes :
 
-- `--format compressed (`sora`)` pour `sora...` à la place de IH58.
+- `--format I105` pour `sora...` à la place de I105.
 - `domainless output (default)` pour émettre des lettres sans domicile.
 - `--audit-only` pour l'étape de conversation.
 - `--allow-errors` pour continuer la réparation lorsque des lignes malformées apparaissent (même avec le comportement de la CLI).Le script écrit les chemins des artistes jusqu'à l'exécution finale. Anexe os dois arquivos ao

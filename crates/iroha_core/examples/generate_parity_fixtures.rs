@@ -57,12 +57,13 @@ fn run_block_and_events(
     // Build a fresh world with default sandbox-like setup (rose#wonderland).
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("rose#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_b = Account::new(bob_id.to_account_id(domain_id)).build(&alice_id);
     // Seed initial balances: Alice 60, Bob 10
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());

@@ -672,8 +672,9 @@ mod tests {
         account_id: &AccountId,
         uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
     ) -> std::sync::Arc<iroha_core::state::State> {
-        let domain = Domain::new(account_id.domain().clone()).build(account_id);
-        let account = Account::new(account_id.clone())
+        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+        let domain = Domain::new(domain_id.clone()).build(account_id);
+        let account = Account::new(account_id.to_account_id(domain_id))
             .with_uaid(uaid)
             .build(account_id);
         std::sync::Arc::new(iroha_core::state::State::new_for_testing(
@@ -887,10 +888,7 @@ mod tests {
     #[test]
     fn role_gate_requires_signed_headers() {
         let key_pair = KeyPair::random();
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            key_pair.public_key().clone(),
-        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
         manifest.auth =
@@ -907,10 +905,7 @@ mod tests {
     #[test]
     fn role_gate_rejects_missing_role() {
         let key_pair = KeyPair::random();
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            key_pair.public_key().clone(),
-        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
         manifest.auth =
@@ -927,10 +922,7 @@ mod tests {
     #[test]
     fn sponsor_accepts_matching_uaid() {
         let key_pair = KeyPair::random();
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            key_pair.public_key().clone(),
-        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"));
         let state = minimal_state_with_account(&account_id, Some(uaid));
         let mut manifest = sample_manifest();
@@ -945,10 +937,7 @@ mod tests {
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
         let key_pair = KeyPair::random();
-        let account_id = AccountId::new(
-            "wonderland".parse().expect("domain"),
-            key_pair.public_key().clone(),
-        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(
             &account_id,
             Some(iroha_data_model::nexus::UniversalAccountId::from_hash(

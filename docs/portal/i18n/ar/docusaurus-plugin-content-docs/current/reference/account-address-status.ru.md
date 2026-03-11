@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 الوصف: معالجة المياه ADDR-2 لاعبا أساسيا ومزامنة الأوامر SDK.
 ---
 
-تشتمل الحزمة الكنسي ADDR-2 (`fixtures/account/address_vectors.json`) على التركيبات IH58 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيع المتعدد والسالب. يتم تشغيل كل من SDK + Torii على أودين وهو JSON، وذلك للتمكن من الحصول على برنامج ترميز صغير للوصول إلى السوق. يعرض هذا الجزء ملخص الحالة الداخلية (`docs/source/account_address_status.md` في المستودع الرئيسي)، بحيث يمكن فتح بوابة الكتب يتم نسخ سير العمل دون الحاجة إلى الريبو الأحادي.
+تشتمل الحزمة الكنسي ADDR-2 (`fixtures/account/address_vectors.json`) على التركيبات I105 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيع المتعدد والسالب. يتم تشغيل كل من SDK + Torii على أودين وهو JSON، وذلك للتمكن من الحصول على برنامج ترميز صغير للوصول إلى السوق. يعرض هذا الجزء ملخص الحالة الداخلية (`docs/source/account_address_status.md` في المستودع الرئيسي)، بحيث يمكن فتح بوابة الكتب يتم نسخ سير العمل دون الحاجة إلى الريبو الأحادي.
 
 ## إعادة الإنشاء أو التحقق من الحزمة
 
@@ -43,7 +43,7 @@ cargo xtask address-vectors --verify
 | Torii (الخادم) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | جافا سكريبت SDK | `javascript/iroha_js/test/address.test.js` |
 | سويفت SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |يتم استخدام الحزام الكنسي ذهابًا وإيابًا + IH58 + الترميز الكهربي والتحقق من كود أوسيبوك في النمط Norito المصاحب للتركيبات للكلمات السلبية.
+| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |يتم استخدام الحزام الكنسي ذهابًا وإيابًا + I105 + الترميز الكهربي والتحقق من كود أوسيبوك في النمط Norito المصاحب للتركيبات للكلمات السلبية.
 
 ## الأتمتة الجديدة؟
 

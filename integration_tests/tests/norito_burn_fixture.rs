@@ -8,12 +8,14 @@ use iroha_data_model::prelude::{
 };
 use norito::codec::{Decode, Encode};
 
-const FIXTURE_ACCOUNT_ID: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+const FIXTURE_PUBLIC_KEY: &str =
+    "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 
 fn fixture_asset_id() -> AssetId {
-    let account = AccountId::parse_encoded(FIXTURE_ACCOUNT_ID)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("valid fixture account id");
+    let public_key: iroha_data_model::PublicKey = FIXTURE_PUBLIC_KEY
+        .parse()
+        .expect("valid fixture public key");
+    let account = AccountId::new(public_key);
     let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid asset definition");
     AssetId::new(definition, account)
 }

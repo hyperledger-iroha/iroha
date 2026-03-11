@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
   - `audit.json` -- `iroha tools address audit --format json` کا salida estructurada۔
-  - `normalized.txt` -- ہر Selector de dominio local کے لیے IH58 (ترجیحی) / literales comprimidos (`sora`, segundo mejor) ۔
+  - `normalized.txt` -- ہر Selector de dominio local کے لیے I105 (ترجیحی) / literales comprimidos (`sora`, segundo mejor) ۔
 - Panel de ingesta de direcciones de اس اسکرپٹ کو (`dashboards/grafana/address_ingest.json`)
   اور Reglas de Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
   Corte Local-8 / Local-12 کی حفاظت ثابت ہو۔ Local-8 اور Local-12 paneles de colisión اور
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## استعمال
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Artículos:
 
-- `--format compressed` IH58 کے بجائے `sora...` salida کے لیے۔
+- `--format i105` I105 کے بجائے `sora...` salida کے لیے۔
 - `domainless output (default)` تاکہ literales desnudos نکلیں۔
 - Paso de conversión `--audit-only` چھوڑنے کے لیے۔
 - `--allow-errors` Elimina filas con formato incorrecto پر بھی escaneo جاری رہے (comportamiento CLI جیسا)۔

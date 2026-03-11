@@ -90,12 +90,12 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default account domain label applied when configuration omits an override.
+    /// Default domain label used when configuration omits the AccountAddress selector override.
     pub fn default_account_domain_label() -> String {
         iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned()
     }
 
-    /// Default chain discriminant / IH58 network prefix (Sora Nexus global).
+    /// Default chain discriminant / I105 network prefix (Sora Nexus global).
     pub const CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     /// Chain discriminant applied when configuration omits an override.
@@ -455,29 +455,29 @@ pub mod oracle {
     use super::*;
 
     fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
-        let domain_id = DomainId::from_str(domain).expect("default oracle domain");
+        let _domain_id = DomainId::from_str(domain).expect("default oracle domain");
         let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
-        AccountId::new(domain_id, keypair.public_key().clone())
-    }
-
-    /// Number of feed events retained per feed.
-    pub const fn history_depth() -> NonZeroUsize {
-        nonzero!(64_usize)
-    }
-
-    /// Default asset used for oracle rewards and penalties.
-    pub fn reward_asset() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("default oracle reward asset id")
-    }
-
-    /// Account that funds oracle rewards.
-    pub fn reward_pool() -> AccountId {
-        deterministic_account(b"oracle-reward-pool", "sora")
+        AccountId::new(keypair.public_key().clone())
     }
 
     /// Fixed reward amount for an inlier observation.
     pub fn reward_amount() -> Numeric {
         Numeric::from_str("1").expect("default oracle reward amount")
+    }
+
+    /// Maximum retained feed-history entries per oracle feed.
+    pub const fn history_depth() -> NonZeroUsize {
+        nonzero!(2_048usize)
+    }
+
+    /// Asset credited to providers when observations are accepted.
+    pub fn reward_asset() -> AssetDefinitionId {
+        AssetDefinitionId::from_str("xor#sora").expect("default oracle reward asset id")
+    }
+
+    /// Account debited to fund oracle provider rewards.
+    pub fn reward_pool() -> AccountId {
+        deterministic_account(b"oracle-reward-pool", "sora")
     }
 
     /// Asset debited when slashing oracle providers.
@@ -1743,8 +1743,24 @@ pub mod torii {
         pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
         /// Maximum number of tools returned per `tools/list` response page.
         pub const MAX_TOOLS_PER_LIST: usize = 500;
+        /// Retention window for asynchronous MCP jobs.
+        pub const ASYNC_JOB_TTL_SECS: u64 = 300;
+        /// Maximum number of asynchronous MCP jobs retained in memory.
+        pub const ASYNC_JOB_MAX_ENTRIES: usize = 2_000;
+        /// Default MCP tool profile (`read_only`, `writer`, `operator`).
+        pub const PROFILE: &str = "read_only";
         /// Expose operator-only routes in the MCP registry.
         pub const EXPOSE_OPERATOR_ROUTES: bool = false;
+        /// Extra allow-list prefixes for MCP tool names (empty => profile-only).
+        #[must_use]
+        pub fn allow_tool_prefixes() -> Vec<String> {
+            Vec::new()
+        }
+        /// Extra deny-list prefixes for MCP tool names.
+        #[must_use]
+        pub fn deny_tool_prefixes() -> Vec<String> {
+            Vec::new()
+        }
         /// Optional steady-state MCP request budget (requests/minute). None disables.
         pub const RATE_PER_MINUTE: Option<u32> = Some(240);
         /// Optional MCP request burst budget.
@@ -2224,8 +2240,7 @@ pub mod pipeline {
     /// BLS-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
     /// Default gas-collection technical account identifier (encoded-only literal).
-    pub const GAS_TECH_ACCOUNT_ID: &str =
-        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs";
+    pub const GAS_TECH_ACCOUNT_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
@@ -2515,6 +2530,8 @@ pub mod sumeragi {
     pub const VALIDATION_WORK_QUEUE_CAP: usize = 0;
     /// Validation worker result-queue capacity (shared, 0 = auto).
     pub const VALIDATION_RESULT_QUEUE_CAP: usize = 0;
+    /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
+    pub const VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR: u32 = 2;
     /// QC verify worker threads (0 = auto).
     pub const QC_VERIFY_WORKER_THREADS: usize = 0;
     /// QC verify work queue capacity per worker (0 = auto).
@@ -2818,14 +2835,14 @@ pub mod governance {
             .parse()
             .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
-        AccountId::new(domain, public_key)
+        let _ = domain;
+        AccountId::new(public_key)
     }
 
     fn account_literal_from_account_id(account_id: &AccountId) -> String {
-        // Use compressed form to keep the default stable across chain-discriminant overrides.
+        // Configuration parsing accepts canonical I105 account literals.
         account_id
-            .to_account_address()
-            .and_then(|address| address.to_compressed_sora())
+            .canonical_i105()
             .expect("default governance account literal")
     }
 

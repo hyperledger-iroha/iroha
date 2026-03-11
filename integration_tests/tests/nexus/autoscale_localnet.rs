@@ -1049,7 +1049,7 @@ fn is_not_found_lane_validator_error(message: &str) -> bool {
 }
 
 fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneValidatorSnapshot> {
-    match client.get_public_lane_validators(LaneId::new(lane_id), None) {
+    match client.get_public_lane_validators(LaneId::new(lane_id)) {
         Ok(payload) => decode_lane_validator_snapshot(&payload, lane_id),
         Err(err) => {
             let message = err.to_string();

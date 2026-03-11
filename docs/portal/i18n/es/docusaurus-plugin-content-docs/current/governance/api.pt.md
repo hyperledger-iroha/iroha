@@ -29,21 +29,21 @@ Puntos finales
       "abi_hash": "blake2b32:..." | "...64hexadecimales",
       "abi_version": "1",
       "ventana": { "inferior": 12345, "superior": 12400 },
-      "autoridad": "ih58…?",
+      "autoridad": "i105…?",
       "clave_privada": "...?"
     }
   - Respuesta (JSON):
     { "ok": verdadero, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validacao: os nos canonizam `abi_hash` para o `abi_version` fornecido e rejeitam divergencias. Para `abi_version = "v1"`, el valor esperado e `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API de contratos (implementar)
 - PUBLICACIÓN `/v1/contracts/deploy`
-  - Requisicao: { "autoridad": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Requisicao: { "autoridad": "i105...", "private_key": "...", "code_b64": "..." }
   - Comportamiento: calcula `code_hash` a partir del cuerpo del programa IVM e `abi_hash` a partir del encabezado `abi_version`, luego submete `RegisterSmartContractCode` (manifiesto) e `RegisterSmartContractBytes` (bytes `.to` completos) en el nombre de `authority`.
   - Respuesta: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Relacionado:
     - GET `/v1/contracts/code/{code_hash}` -> retorna o manifesto armazenado
     - OBTENER `/v1/contracts/code-bytes/{code_hash}` -> retorna `{ code_b64 }`
 - PUBLICACIÓN `/v1/contracts/instance`
-  - Requisicao: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Requisicao: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportamiento: implementar o bytecode fornecido y activar inmediatamente o mapeamento `(namespace, contract_id)` vía `ActivateContractInstance`.
   - Respuesta: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Servicio de alias
 - PUBLICACIÓN `/v1/aliases/voprf/evaluate`
@@ -54,34 +54,34 @@ Puntos finales
   - Errores: HTTP `400` en entrada hexadecimal malformada. Torii retorna un sobre Norito `ValidationFail::QueryFailed::Conversion` con un mensaje de error en el decodificador.
 - PUBLICACIÓN `/v1/aliases/resolve`
   - Requisicao: { "alias": "GB82 OESTE 1234 5698 7654 32" }
-  - Respuesta: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Respuesta: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notas: Solicitud de preparación del puente ISO en tiempo de ejecución (`[iso_bridge.account_aliases]` y `iroha_config`). Torii normaliza alias eliminando espacios y convirtiéndolos para mayúsculas antes de realizar la búsqueda. Retorna 404 cuando el alias está ausente y 503 cuando el puente ISO de tiempo de ejecución está desactivado.
 - PUBLICACIÓN `/v1/aliases/resolve_index`
   - Requisición: { "index": 0 }
-  - Respuesta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }- Notas: índices de alias sao atribuidos de forma determinística pela ordem de configuracao (basados ​​en 0). Los clientes pueden cachear respuestas fuera de línea para construir trilhas de auditoria de eventos de atestacao de alias.
+  - Respuesta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }- Notas: índices de alias sao atribuidos de forma determinística pela ordem de configuracao (basados ​​en 0). Los clientes pueden cachear respuestas fuera de línea para construir trilhas de auditoria de eventos de atestacao de alias.
 
 Limite de tamaño de código
 - Parámetro personalizado: `max_contract_code_bytes` (JSON u64)
   - Controla el tamaño máximo permitido (en bytes) para armazenamento de código de contrato on-chain.
   - Predeterminado: 16 MiB. Os nos rejeitam `RegisterSmartContractBytes` quando o tamanho da imagem `.to` excede o limite com um error de violacao de invariante.
   - Los operadores pueden ajustarse mediante `SetParameter(Custom)` con `id = "max_contract_code_bytes"` y una carga útil numérica.- PUBLICACIÓN `/v1/gov/ballots/zk`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Requisicao: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Respuesta: { "ok": verdadero, "aceptado": verdadero, "tx_instructions": [{...}] }
   - Notas:
     - Cuando las entradas públicas del circuito incluyen `owner`, `amount` e `duration_blocks`, se verifica contra una VK configurada, o no se crea o se mantiene un bloqueo de gobierno para `election_id` como esse `owner`. A direcao permanece oculta (`unknown`); apenas importe/vencimiento sao atualizados. Nuevas votaciones son monótonas: cantidad y vencimiento apenas aumentan (o no aplica max(cantidad, cantidad anterior) y max(expiración, vencimiento anterior)).
     - Re-votes ZK que tentem reduzir cantidad o vencimiento sao rejeitados no servidor com diagnosticos `BallotRejected`.
     - A execucao do contrato deve chamar `ZK_VOTE_VERIFY_BALLOT` antes de enfileirar `SubmitBallot`; anfitriones impoem um latch de uma única vez.- PUBLICACIÓN `/v1/gov/ballots/plain`
-  - Requisicao: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Sí|No|Abstenerse" }
+  - Requisicao: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Sí|No|Abstenerse" }
   - Respuesta: { "ok": verdadero, "aceptado": verdadero, "tx_instructions": [{...}] }
   - Notas: re-votos sao de extensao apenas - um novo ballot nao pode reduzir cantidad o vencimiento do bloqueo existente. O `owner` deve igualar una autoridad da transacao. Duracao minima e `conviction_step_blocks`.- PUBLICACIÓN `/v1/gov/finalize`
-  - Requisicao: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Requisicao: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Respuesta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efeito on-chain (scaffold atual): promulgar una propuesta de implementación aprobada insere um `ContractManifest` minimo com chave `code_hash` com o `abi_hash` esperado e marca a propuesta como Enacted. Se um manifesto ja existir para o `code_hash` com `abi_hash` diferente, o enactment e rejeitado.
   - Notas:
     - Para eleicoes ZK, os caminhos do contrato devem chamar `ZK_VOTE_VERIFY_TALLY` antes de ejecutar `FinalizeElection`; Los hosts imponen un pestillo de uso único. `FinalizeReferendum` rejeita referendos ZK ate que o tally da eleicao esteja finalizado.
     - El auto-fechamento em `h_end` emite Aprobado/Rechazado sólo para referendos Plain; referendos ZK permanece cerrado ate que um tally finalizado seja enviado e `FinalizeReferendum` seja ejecutado.
     - Como checagens de participación usam apenas aprobar+rechazar; abstenerse nao conta para o participación.- PUBLICACIÓN `/v1/gov/enact`
-  - Requisitos: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Requisitos: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Respuesta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas: Torii submete a transacao assinada quando `authority`/`private_key` sao fornecidos; caso contrario retorna um esqueleto para clientes assinarem e submeterem. A preimagen e opcional e hoy informativo.
 
@@ -174,14 +174,14 @@ Ganchos de actualización del tiempo de ejecución
     - Existe una propuesta de gobierno promulgada para `(namespace, contract_id, code_hash, abi_hash)` derivada pelo mesmo hash de propuesta-id que o no usa.
   - Emite un relato JSON con `results[]` por contrato (issues, resumos de manifest/code/proposal) mais um resumo de uma linha a menos que suprimido (`--no-summary`).
   - Util para auditar espacios de nombres protegidos o verificar flujos de implementación controlados por el gobierno.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Emite el esqueleto JSON de metadatos usados en implementaciones submétricas en espacios de nombres protegidos, incluido `gov_manifest_approvers` opcional para satisfacer las reglas del quórum del manifiesto.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`: las sugerencias de bloqueo se activan cuando `min_bond_amount > 0`, y cualquier conjunto de sugerencias fornecido debe incluir `owner`, `amount` e `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`: las sugerencias de bloqueo se activan cuando `min_bond_amount > 0`, y cualquier conjunto de sugerencias fornecido debe incluir `owner`, `amount` e `duration_blocks`.
   - Valida los identificadores de cuentas canónicas, canonicaliza las sugerencias de anulación de 32 bytes y combina las sugerencias en `public_inputs_json` (con `--public <path>` para anulaciones adicionales).- El anulador se deriva del compromiso de prueba (entrada pública) más `domain_tag`, `chain_id` e `election_id`; `--nullifier` se valida con la prueba cuando se suministra.
   - El resumen de una línea ahora expuesta `fingerprint=<hex>` determinístico derivado de `CastZkBallot` codificado junto con sugerencias decodificadas (`owner`, `amount`, `duration_blocks`, `direction` cuando fornecidos).
   - Como respuestas de CLI anotam `tx_instructions[]` con `payload_fingerprint_hex` más campos decodificados para que ferramentas downstream verifiquem o esqueleto sem reimplementar decodificacao Norito.
   - Fornecer Hints de Lock permite que o no emita eventos `LockCreated`/`LockExtended` para boletas ZK asim que o circuito expuser os mesmos valores.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Los alias `--lock-amount`/`--lock-duration-blocks` asignan los nombres de banderas ZK para paridad de script.
   - A saida de resumo espelha `vote --mode zk` ao incluir o dactilar da instrucción codificada e campos de votación legiveis (`owner`, `amount`, `duration_blocks`, `direction`), ofreciendo confirmacao rapida antes de assinar o esqueleto.Listado de instancias
 - GET `/v1/gov/instances/{ns}` - lista de instancias de contrato activas para un espacio de nombres.
@@ -198,21 +198,21 @@ Ganchos de actualización del tiempo de ejecución
 - PUBLICACIÓN `/v1/gov/ballots/zk-v1`
   - Requisición (DTO estilo v1):
     {
-      "autoridad": "ih58...",
+      "autoridad": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "clave_privada": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "sobre_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "propietario": "ih58…?",
+      "propietario": "i105…?",
       "nulificador": "blake2b32:...64hex?"
     }
   - Respuesta: { "ok": verdadero, "aceptado": verdadero, "tx_instructions": [{...}] }- PUBLICACIÓN `/v1/gov/ballots/zk-v1/ballot-proof` (característica: `zk-ballot`)
   - Aceita un JSON `BallotProof` directo y retorna un esqueleto `CastZkBallot`.
   - Requisición:
     {
-      "autoridad": "ih58...",
+      "autoridad": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "clave_privada": "...?",
       "election_id": "ref-1",

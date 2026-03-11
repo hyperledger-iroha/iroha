@@ -297,7 +297,6 @@ mod tests {
     #[test]
     fn predicate_roundtrip_canonicalises_order() {
         let bob_id = crate::account::AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
                 .expect("public key"),

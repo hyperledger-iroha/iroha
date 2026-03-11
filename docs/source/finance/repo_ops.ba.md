@@ -811,7 +811,7 @@ artifacts/finance/repo/<agreement-id>/governance/
     └── 2026-05-12T09-00Z.log
 ``` эҙләү, тип вәкәләттәр
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) йәки
-   `iroha_python` ярҙамсыһы `ih58...` өсөн XOR баланстарын экспортлау өсөн ярҙамсы,
+   `iroha_python` ярҙамсыһы `i105...` өсөн XOR баланстарын экспортлау өсөн ярҙамсы,
    `crates/iroha_cli/src/main.rs:3821`X, һәм һәр өҫтәл иҫәбенә ҡатнашҡан тикшерелгән. Һаҡлыҡҡа һалырға
    JSON буйынса 1990 й.
    `python/iroha_python/iroha_python_rs/src/lib.rs:2216` X һәм git теркәү

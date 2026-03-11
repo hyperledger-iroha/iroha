@@ -94,7 +94,7 @@ the roadmap milestone.
     "relays": [
       {
         "relay_id": "c4c2…ff2e",
-        "beneficiary": "ih58...",
+        "beneficiary": "i105...",
         "bond_path": "/var/lib/incentives/bonds/relay-c4c2ff2e.to"
       }
     ]

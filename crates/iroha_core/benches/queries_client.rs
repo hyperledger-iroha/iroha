@@ -26,8 +26,8 @@ impl MockExec {
         let mut v = Vec::with_capacity(total);
         for _ in 0..total {
             let kp = KeyPair::random();
-            let acc_id = AccountId::new(domain.clone(), kp.public_key().clone());
-            let acc = Account::new(acc_id.clone()).build(&acc_id);
+            let acc_id = AccountId::new(kp.public_key().clone());
+            let acc = Account::new(acc_id.to_account_id(domain.clone())).build(&acc_id);
             v.push(acc);
         }
         Self { data: v, page }

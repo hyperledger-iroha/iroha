@@ -366,7 +366,7 @@ final class OfflineWalletTopUpTests: XCTestCase {
 
     private func makeCertificate() throws -> OfflineWalletCertificate {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let controller = try AccountId.makeIH58(publicKey: publicKey)
+        let controller = try AccountId.makeI105(publicKey: publicKey)
         let assetId = try makeNoritoAssetId(name: "rose", domain: "wonderland", accountId: controller)
         let allowance = OfflineAllowanceCommitment(assetId: assetId,
                                                    amount: "42",

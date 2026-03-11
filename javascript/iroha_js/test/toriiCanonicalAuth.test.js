@@ -24,7 +24,7 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
   const accountId = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey,
-  }).toIH58();
+  }).toI105();
 
   await client.listAccountAssets(accountId, {
     canonicalAuth: { accountId, privateKey },
@@ -63,7 +63,7 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   const accountId = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey,
-  }).toIH58();
+  }).toI105();
 
   await client.listAccountAssets(accountId, {
     canonicalAuth: { accountId, privateKey: Array.from(privateKey) },
@@ -95,7 +95,7 @@ test("ToriiClient canonical auth rejects non-byte private key arrays", async () 
   const accountId = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey,
-  }).toIH58();
+  }).toI105();
 
   await assert.rejects(
     () =>

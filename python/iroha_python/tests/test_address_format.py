@@ -7,11 +7,7 @@ import pytest
 import requests
 from requests.structures import CaseInsensitiveDict
 
-from iroha_python import (
-    ToriiClient,
-    account_query_envelope,
-    asset_holders_query_envelope,
-)
+from iroha_python import ToriiClient, account_query_envelope, asset_holders_query_envelope
 
 
 class StubResponse(requests.Response):
@@ -71,67 +67,60 @@ def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
     return client, session
 
 
-def test_account_query_envelope_includes_address_format() -> None:
-    payload = account_query_envelope(address_format="compressed")
-    assert payload["address_format"] == "compressed"
+def test_account_query_envelope_omits_canonical_i105() -> None:
+    payload = account_query_envelope()
+    assert "canonical_i105" not in payload
 
 
-def test_asset_holders_envelope_includes_address_format() -> None:
-    payload = asset_holders_query_envelope(address_format="ih58")
-    assert payload["address_format"] == "ih58"
+def test_asset_holders_envelope_omits_canonical_i105() -> None:
+    payload = asset_holders_query_envelope()
+    assert "canonical_i105" not in payload
 
 
-def test_list_accounts_sends_address_format_param() -> None:
+def test_list_accounts_omits_canonical_i105_param() -> None:
     client, session = _client_with_session()
 
-    client.list_accounts(address_format="compressed")
+    client.list_accounts()
 
     params = session.calls[0]["params"]
-    assert params["address_format"] == "compressed"
+    assert "canonical_i105" not in params
 
 
-def test_list_accounts_rejects_alias() -> None:
-    client, session = _client_with_session()
-
-    with pytest.raises(ValueError):
-        client.list_accounts(address_format="IH-b32")
-
-
-def test_list_accounts_rejects_invalid_address_format() -> None:
+def test_list_accounts_rejects_removed_canonical_i105_arg() -> None:
     client, _ = _client_with_session()
 
-    with pytest.raises(ValueError):
-        client.list_accounts(address_format="base64")
+    with pytest.raises(TypeError):
+        client.list_accounts(canonical_i105="i105")
 
 
-def test_query_accounts_includes_address_format() -> None:
+def test_query_accounts_omits_canonical_i105() -> None:
     client, session = _client_with_session()
 
-    client.query_accounts(address_format="compressed")
+    client.query_accounts()
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body["address_format"] == "compressed"
+    assert "canonical_i105" not in body
 
 
-def test_list_asset_holders_sends_address_format() -> None:
+def test_list_asset_holders_omits_canonical_i105() -> None:
     client, session = _client_with_session()
 
-    client.list_asset_holders("xor#wonderland", address_format="compressed")
+    client.list_asset_holders("xor#wonderland")
 
-    assert session.calls[0]["params"]["address_format"] == "compressed"
+    assert "canonical_i105" not in session.calls[0]["params"]
 
 
-def test_query_asset_holders_includes_address_format() -> None:
+def test_query_asset_holders_omits_canonical_i105() -> None:
     client, session = _client_with_session()
 
-    client.query_asset_holders("xor#wonderland", address_format="compressed")
+    client.query_asset_holders("xor#wonderland")
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body["address_format"] == "compressed"
+    assert "canonical_i105" not in body
 
 
-def test_query_asset_holders_rejects_alias() -> None:
+def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:
     client, _ = _client_with_session()
 
-    with pytest.raises(ValueError):
-        client.query_asset_holders("xor#wonderland", address_format="sora")
+    with pytest.raises(TypeError):
+        client.query_asset_holders("xor#wonderland", canonical_i105="i105")

@@ -294,13 +294,11 @@ public final class OfflineToriiClientTests {
         OfflineListParams.builder()
             .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]}")
             .limit(10L)
-            .addressFormat("canonical")
             .build();
     final OfflineQueryEnvelope envelope = OfflineQueryEnvelope.fromListParams(params);
     final String json = new String(envelope.toJsonBytes(), StandardCharsets.UTF_8);
     assert json.contains("\"limit\":10") : "limit missing";
     assert json.contains("controller_id") : "filter not parsed";
-    assert json.contains("canonical") : "address format missing";
   }
 
   private static void builderRejectsInvalidVerdictFilters() {

@@ -29,10 +29,7 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn manifest_pointer_roundtrip() {
-    let account_id = AccountId::new(
-        "wonderland".parse().expect("domain id"),
-        KeyPair::random().public_key().clone(),
-    );
+    let account_id = AccountId::new(KeyPair::random().public_key().clone());
     let manifest = ContractManifest {
         code_hash: Some(Hash::new(b"code-bytes")),
         abi_hash: Some(Hash::new(b"abi-policy")),
@@ -66,7 +63,7 @@ fn nft_syscall_pointers_roundtrip() {
     let keypair = KeyPair::random();
     let (public_key, _) = keypair.into_parts();
     let domain: DomainId = "wonderland".parse().expect("domain id");
-    let account_id = AccountId::new(domain.clone(), public_key);
+    let account_id = AccountId::new(public_key);
 
     let nft_name: Name = "collectible".parse().expect("valid name");
     let nft_id = NftId::of(domain, nft_name);

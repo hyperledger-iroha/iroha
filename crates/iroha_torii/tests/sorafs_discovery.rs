@@ -1290,10 +1290,7 @@ where
         retention_epoch: manifest_policy.retention_epoch,
     };
     let key_pair = KeyPair::random();
-    let authority = dm::AccountId::of(
-        "nexus".parse().expect("valid domain"),
-        key_pair.public_key().clone(),
-    );
+    let authority = dm::AccountId::new(key_pair.public_key().clone());
     let mut request = RegisterPinManifestDto {
         authority,
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
@@ -1487,7 +1484,7 @@ fn ensure_authority_registered(
     if account_exists && has_register && has_approve {
         return;
     }
-    let domain_id = authority.account.domain().clone();
+    let domain_id: dm::DomainId = "wonderland".parse().expect("domain id");
     drop(view);
 
     let prev_hash = harness
@@ -1515,7 +1512,7 @@ fn ensure_authority_registered(
                 .expect("register domain for test authority");
         }
 
-        let new_account = dm::Account::new(authority.account.clone());
+        let new_account = dm::Account::new(authority.account.clone().to_account_id(domain_id));
         let register_account = dm::Register::account(new_account);
         register_account
             .execute(&authority.account, &mut tx)

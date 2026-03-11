@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-01
 | שדה | ערך |
 |------|------|
 | מזהה הסכם | `<repo-yyMMdd-XX>` |
-| מזהה חשבון נאמן | `<ih58...>` |
+| מזהה חשבון נאמן | `<i105...>` |
 | הוכן על ידי / תאריך | `<custodian ops lead>` |
 | אנשי קשר desk שאושרו | `<desk lead + counterparty>` |
 | תיקיית ראיות | ``artifacts/finance/repo/<slug>/`` |

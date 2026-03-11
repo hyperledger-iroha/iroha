@@ -67,7 +67,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -207,7 +207,7 @@ fn create_role_with_permissions_key_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

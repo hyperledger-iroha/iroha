@@ -180,7 +180,7 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::portfolio"));
         let account = iroha_test_samples::ALICE_ID.clone();
-        let domain_id = account.domain().clone();
+        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
         let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
 
         seed_world(
@@ -213,7 +213,7 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::split"));
         let account = iroha_test_samples::ALICE_ID.clone();
-        let domain_id = account.domain().clone();
+        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
         let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
 
         let second_dataspace = DataSpaceId::new(11);

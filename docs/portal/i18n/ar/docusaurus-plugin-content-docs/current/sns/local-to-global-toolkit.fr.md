@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` يغلف CLI `iroha` لإنتاج:
   - `audit.json` - هيكل طلعة `iroha tools address audit --format json`.
-  - `normalized.txt` - literaux IH58 (تفضيل) / مضغوط (`sora`) (الاختيار الثاني) يتم تحويله لكل تحديد المجال المحلي.
+  - `normalized.txt` - literaux I105 (تفضيل) / مضغوط (`sora`) (الاختيار الثاني) يتم تحويله لكل تحديد المجال المحلي.
 - ربط البرنامج النصي بلوحة معلومات إدخال العناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) للتأكد من قطع Local-8 /
   Local-12 بتوقيت شرق الولايات المتحدة. مراقبة لوحات الاصطدام Local-8 و Local-12 والتنبيهات
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## الاستخدام
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 الخيارات:
 
-- `--format compressed (`sora`)` للطلعة `sora...` بدلاً من IH58.
+- `--format I105` للطلعة `sora...` بدلاً من I105.
 - `domainless output (default)` من أجل محو أحرفنا.
 - `--audit-only` لتجاهل شريط التحويل.
 - `--allow-errors` لمواصلة المسح عندما تظهر الخطوط غير النموذجية (تتوافق مع سلوك CLI).يكتب النص سلاسل المصنوعات اليدوية في نهاية التنفيذ. Joignez les deux fichiers a

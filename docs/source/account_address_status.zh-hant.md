@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. 概述
 
-- 夾具：`fixtures/account/address_vectors.json`（IH58（首選）+壓縮（`sora`，第二好）+多重簽名正/負案例）。
+- 夾具：`fixtures/account/address_vectors.json`（I105（首選）+壓縮（`sora`，第二好）+多重簽名正/負案例）。
 - 範圍：確定性 V1 有效負載，涵蓋隱式默認、Local-12、全局註冊表和具有完整錯誤分類的多重簽名控制器。
 - 分發：在 Rust 數據模型、Torii、JS/TS、Swift 和 Android SDK 之間共享；如果任何消費者偏離，CI就會失敗。
 - 事實來源：生成器位於 `crates/iroha_data_model/src/account/address/compliance_vectors.rs` 中，並通過 `cargo xtask address-vectors` 公開。
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 |表面|執法|筆記|
 |--------|-------------|--------|
-| Rust 數據模型 | `crates/iroha_data_model/tests/account_address_vectors.rs` |解析 JSON，重建規範有效負載，並檢查 IH58（首選）/壓縮（`sora`，第二好）/規範轉換 + 結構化錯誤。 |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` |驗證服務器端編解碼器，以便 Torii 確定性地拒絕格式錯誤的 IH58（首選）/壓縮（`sora`，第二好的）有效負載。 |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` |鏡像 V1 燈具（IH58 首選/壓縮 (`sora`) 第二佳/全角）並為每個負面情況斷言 Norito 樣式錯誤代碼。 |
-|斯威夫特 SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |練習 Apple 平台上的 IH58（首選）/壓縮（`sora`，第二佳）解碼、多重簽名有效負載和錯誤顯示。 |
+| Rust 數據模型 | `crates/iroha_data_model/tests/account_address_vectors.rs` |解析 JSON，重建規範有效負載，並檢查 I105（首選）/壓縮（`sora`，第二好）/規範轉換 + 結構化錯誤。 |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` |驗證服務器端編解碼器，以便 Torii 確定性地拒絕格式錯誤的 I105（首選）/壓縮（`sora`，第二好的）有效負載。 |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` |鏡像 V1 燈具（I105 首選/壓縮 (`sora`) 第二佳/全角）並為每個負面情況斷言 Norito 樣式錯誤代碼。 |
+|斯威夫特 SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |練習 Apple 平台上的 I105（首選）/壓縮（`sora`，第二佳）解碼、多重簽名有效負載和錯誤顯示。 |
 |安卓SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |確保 Kotlin/Java 綁定與規範固定裝置保持一致。 |
 
 ### 4. 監控和傑出工作- 狀態報告：此文檔與 `status.md` 和路線圖鏈接，因此每週審查可以驗證燈具的運行狀況。

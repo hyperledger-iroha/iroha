@@ -29,21 +29,21 @@ Points de terminaison
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "fenêtre": { "inférieur": 12345, "supérieur": 12400 },
-      "autorité": "ih58…?",
+      "autorité": "i105…?",
       "private_key": "...?"
     }
   - Réponse (JSON) :
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validation : los nodos canonizan `abi_hash` para el `abi_version` provisto and rechazan desajustes. Pour `abi_version = "v1"`, la valeur attendue est `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API de contrats (déployer)
 - POSTE `/v1/contracts/deploy`
-  - Sollicitude : { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Sollicitude : { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Comportamiento: calcule `code_hash` du corps du programme IVM et `abi_hash` de l'en-tête `abi_version`, puis envoie `RegisterSmartContractCode` (manifeste) et `RegisterSmartContractBytes` (octets `.to` complets) en numéro de `authority`.
   - Réponse : { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - En relation :
     - GET `/v1/contracts/code/{code_hash}` -> créer le manifeste enregistré
     - GET `/v1/contracts/code-bytes/{code_hash}` -> développer `{ code_b64 }`
 - POSTE `/v1/contracts/instance`
-  - Demande : { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Demande : { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportement : supprimez la réserve du bytecode et activez immédiatement le mapeo `(namespace, contract_id)` via `ActivateContractInstance`.
   - Réponse : { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Service d'alias
 - POSTE `/v1/aliases/voprf/evaluate`
@@ -54,34 +54,34 @@ Points de terminaison
   - Erreurs : HTTP `400` et entrée hexadécimale mal formée. Torii développe une enveloppe Norito `ValidationFail::QueryFailed::Conversion` avec le message d'erreur du décodeur.
 - POSTE `/v1/aliases/resolve`
   - Sollicitude : { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Réponse : { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Réponse : { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Remarques : nécessite le pontage ISO d'exécution (`[iso_bridge.account_aliases]` et `iroha_config`). Torii normalise l'alias en éliminant les espaces et en passant aux mayusculas avant la recherche. Devuelve 404 lorsque l'alias n'existe pas et 503 lorsque le pont ISO d'exécution est désactivé.
 - POSTE `/v1/aliases/resolve_index`
   - Sollicitation : { "index": 0 }
-  - Réponse : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }- Remarques : les indices d'alias sont attribués à un formulaire déterminé lors de l'ordre de configuration (basé sur 0). Les clients peuvent mettre en cache leurs réponses hors ligne pour créer des traces d'audience d'événements d'attestation d'alias.
+  - Réponse : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }- Remarques : les indices d'alias sont attribués à un formulaire déterminé lors de l'ordre de configuration (basé sur 0). Les clients peuvent mettre en cache leurs réponses hors ligne pour créer des traces d'audience d'événements d'attestation d'alias.
 
 Tope de tamano de codigo
 - Paramètres personnalisés : `max_contract_code_bytes` (JSON u64)
   - Contrôlez le maximum autorisé (en octets) pour sauvegarder le code de contrat en chaîne.
   - Par défaut : 16 Mio. Les nœuds rechazan `RegisterSmartContractBytes` lorsque l'image `.to` dépasse le haut avec une erreur de violation invariante.
   - Les opérateurs peuvent ajuster l'envoi de `SetParameter(Custom)` avec `id = "max_contract_code_bytes"` et une charge utile numérique.- POSTE `/v1/gov/ballots/zk`
-  - Sollicitation : { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Sollicitation : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - Remarques :
     - Lorsque les entrées publiques du circuit incluent `owner`, `amount` et `duration_blocks`, et la vérification de la configuration VK, le nœud crée ou étend un blocage de sécurité pour `election_id` avec cela `owner`. La direction permanente occulte (`unknown`); il suffit d'actualiser le montant/l'expiration. Les modifications sont monotones : montant et expiration seulement aumentan (le noeud appliqué max(amount, prev.amount) et max(expiry, prev.expiry)).
     - Les revotaciones ZK qui visent à réduire le montant ou l'expiration sont rechazan del lado del servidor con diagnosticos `BallotRejected`.
     - L'exécution du contrat doit être appelée `ZK_VOTE_VERIFY_BALLOT` avant d'encolar `SubmitBallot` ; Les hôtes imposent un loquet d'un seul coup.- POSTE `/v1/gov/ballots/plain`
-  - Sollicitude : { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
+  - Sollicitude : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
   - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - Notas: les revotaciones son de solo extension - un nouveau bulletin de vote ne peut pas réduire le montant ou l'expiration du blocage existant. Le `owner` doit être identique à l'autorité de la transaction. La durée minimale est `conviction_step_blocks`.- POSTE `/v1/gov/finalize`
-  - Sollicitation : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Sollicitation : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Réponse : { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Effet en chaîne (et réel) : promulguer une proposition de déploiement approuvée en insérant un `ContractManifest` minimum avec la clé `code_hash` avec le `abi_hash` attendu et marquer la proposition comme promulguée. S'il existe un manifeste pour le `code_hash` avec un `abi_hash` distinct, la promulgation est demandée.
   - Remarques :
     - Pour les élections ZK, les itinéraires du contrat doivent être appelés `ZK_VOTE_VERIFY_TALLY` avant d'exécuter `FinalizeElection` ; Les hôtes imposent un loquet d'un seul coup. `FinalizeReferendum` rechaza referendos ZK jusqu'à ce que le décompte de l'élection soit finalisé.
     - Le cierre automatique en `h_end` émet seulement Approuvé/Rejeté pour les références Plain ; les référendums ZK permanents Fermés jusqu'à ce qu'ils envoient un décompte finalisé et qu'ils soient éjectés `FinalizeReferendum`.
     - Les validations de participation utilisent uniquement l'approbation et le rejet ; s'abstenir sans compte pour le taux de participation.- POSTE `/v1/gov/enact`
-  - Demande : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Demande : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Réponse : { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas : Torii envoyer la transaction ferme lorsque vous proposez `authority`/`private_key` ; de lo contrario, développez un squelette pour que les clients se raffermissent et envien. La préimage est facultative et actuellement informative.
 
@@ -174,14 +174,14 @@ Hooks de mise à niveau du runtime
     - Il existe une proposition de gouvernement promulguée pour `(namespace, contract_id, code_hash, abi_hash)` dérivée du même hachage de l'identifiant de proposition qui utilise le nœud.
   - Émettre un rapport JSON avec `results[]` pour le contrat (problèmes, résumés de manifeste/code/proposition) mais un résumé d'une ligne de salve qui est supérieure (`--no-summary`).
   - Utilisé pour auditer les espaces de noms protégés ou vérifier les flux de déploiement contrôlés par l'administration.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Émettez le modèle JSON de métadonnées utilisé pour envoyer des déploiements aux espaces de noms protégés, y compris les options `gov_manifest_approvers` pour satisfaire aux règles de quorum du manifeste.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — les indices de verrouillage sont obligatoires lorsque `min_bond_amount > 0`, et tout ensemble d'indices fournis doivent inclure `owner`, `amount` et `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — les indices de verrouillage sont obligatoires lorsque `min_bond_amount > 0`, et tout ensemble d'indices fournis doivent inclure `owner`, `amount` et `duration_blocks`.
   - Valide les identifiants de compte canoniques, canonise les indices d'annulation de 32 octets et fusionne les indices dans `public_inputs_json` (avec `--public <path>` pour des remplacements supplémentaires).- L'annulateur est dérivé de l'engagement de preuve (entrée publique) plus `domain_tag`, `chain_id` et `election_id` ; `--nullifier` est validé par rapport à l'épreuve à la livraison.
   - Le résumé d'une ligne maintenant expose un déterministe `fingerprint=<hex>` dérivé du `CastZkBallot` codifié avec des indices décodifiés (`owner`, `amount`, `duration_blocks`, `direction` lorsqu'il est fourni).
   - Les réponses CLI indiquent `tx_instructions[]` avec `payload_fingerprint_hex` mais les champs sont décodifiés pour que les outils en aval vérifient le squelette sans réimplémenter le décodage Norito.
   - Prouvez les conseils de blocage permettant que le nœud émette des événements `LockCreated`/`LockExtended` pour les bulletins de vote ZK une fois que le circuit expose les mêmes valeurs.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Les alias `--lock-amount`/`--lock-duration-blocks` reflètent les nombres de drapeaux de ZK pour la parité dans les scripts.
   - La sortie de résumé de réflexion `vote --mode zk` inclut l'empreinte digitale de l'instruction codifiée et des champs de vote lisibles (`owner`, `amount`, `duration_blocks`, `direction`), en offrant une confirmation rapide avant le fermez le squelette.Liste des instances
 - GET `/v1/gov/instances/{ns}` - liste des instances de contrat activées pour un espace de noms.
@@ -198,21 +198,21 @@ Hooks de mise à niveau du runtime
 - POSTE `/v1/gov/ballots/zk-v1`
   - Sollicitude (style DTO v1) :
     {
-      "autorité": "ih58...",
+      "autorité": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "enveloppe_b64": "AAECAwQ=",
       "root_hint": "0x...64hex ?",
-      "propriétaire": "ih58…?",
+      "propriétaire": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
   - Acceptez un direct JSON `BallotProof` et développez un squelette `CastZkBallot`.
   - Sollicitation :
     {
-      "autorité": "ih58...",
+      "autorité": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

@@ -450,6 +450,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
 
     run_or_skip(stringify!(mint_nft_for_every_user_every_1_sec), || async {
         let alice_id = ALICE_ID.clone();
+        let wonderland_domain: DomainId = "wonderland".parse()?;
 
         let accounts: Vec<AccountId> = vec![
             alice_id.clone(),
@@ -463,7 +464,11 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .iter()
             .skip(1)
             .cloned()
-            .map(|account_id| Register::account(Account::new(account_id)))
+            .map(|account_id| {
+                Register::account(Account::new(
+                    account_id.to_account_id(wonderland_domain.clone()),
+                ))
+            })
             .collect::<Vec<_>>();
         let mut target_height = network
             .peers()
@@ -488,6 +493,25 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .ensure_blocks_with(|height| height.total >= target_height)
             .await?;
         println!("registered additional accounts for time trigger");
+
+        let mut baseline_counts = Vec::with_capacity(accounts.len());
+        for account_id in &accounts {
+            let account_id_clone = account_id.clone();
+            let count: u64 = spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.query(FindNfts::new()).execute_all().map(|nfts| {
+                        nfts.into_iter()
+                            .filter(|nft| nft.owned_by() == &account_id_clone)
+                            .count()
+                    })
+                }
+            })
+            .await??
+            .try_into()
+            .expect("`usize` should always fit in `u64`");
+            baseline_counts.push(count);
+        }
 
         let offset = trigger_period.saturating_mul(2);
         let start_time = curr_time() + offset;
@@ -533,11 +557,8 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         );
         timeout(network.sync_timeout(), async {
             loop {
-                let mut counts = Vec::with_capacity(accounts.len());
-                for account_id in &accounts {
-                    let start_pattern = "nft_number_";
-                    let end_pattern =
-                        format!("_for_{}${}", account_id.signatory(), account_id.domain());
+                let mut minted_counts = Vec::with_capacity(accounts.len());
+                for (idx, account_id) in accounts.iter().enumerate() {
                     let account_id_clone = account_id.clone();
                     let count: u64 = spawn_blocking({
                         let client = test_client.clone();
@@ -545,10 +566,6 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                             client.query(FindNfts::new()).execute_all().map(|nfts| {
                                 nfts.into_iter()
                                     .filter(|nft| nft.owned_by() == &account_id_clone)
-                                    .filter(|nft| {
-                                        let s = nft.id().to_string();
-                                        s.starts_with(start_pattern) && s.ends_with(&end_pattern)
-                                    })
                                     .count()
                             })
                         }
@@ -556,9 +573,10 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                     .await??
                     .try_into()
                     .expect("`usize` should always fit in `u64`");
-                    counts.push(count);
+                    let baseline = baseline_counts.get(idx).copied().unwrap_or(0);
+                    minted_counts.push(count.saturating_sub(baseline));
                 }
-                if counts_meet_expected(&counts, expected_count) {
+                if counts_meet_expected(&minted_counts, expected_count) {
                     break Ok::<(), eyre::Report>(());
                 }
                 sleep(poll_delay).await;

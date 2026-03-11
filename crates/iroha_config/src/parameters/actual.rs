@@ -620,9 +620,9 @@ pub struct Common {
     pub peer: Peer,
     /// Trusted peers including self.
     pub trusted_peers: WithOrigin<TrustedPeers>,
-    /// Default implicit domain label applied to account addresses.
+    /// Default domain label used only when encoding/compressing `AccountAddress` selectors.
     pub default_account_domain_label: WithOrigin<String>,
-    /// IH58 chain discriminant / network prefix applied when encoding addresses.
+    /// I105 chain discriminant / network prefix applied when encoding addresses.
     pub chain_discriminant: WithOrigin<u16>,
 }
 
@@ -3802,6 +3802,8 @@ pub struct SumeragiWorker {
     pub validation_work_queue_cap: usize,
     /// Validation result queue capacity (shared).
     pub validation_result_queue_cap: usize,
+    /// Divisor used to derive queue-full inline-validation cutover from fast-timeout.
+    pub validation_queue_full_inline_cutover_divisor: u32,
     /// QC verify worker threads.
     pub qc_verify_worker_threads: usize,
     /// QC verify work queue capacity per worker.
@@ -4660,7 +4662,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (IH58 or sora compressed literal).
+    /// Optional fee policy: receiver account id (canonical I105 literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -5079,8 +5081,42 @@ pub struct ToriiTransport {
     pub norito_rpc: NoritoRpcTransport,
 }
 
+/// Native MCP tool profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToriiMcpProfile {
+    /// Read-only profile for AI agents (status/query/list/get style tools).
+    #[default]
+    ReadOnly,
+    /// Writer profile (includes non-operator mutating tools).
+    Writer,
+    /// Operator profile (includes operator-only routes when exposed).
+    Operator,
+}
+
+impl ToriiMcpProfile {
+    /// Parse a user-provided profile label.
+    pub fn parse(label: &str) -> Option<Self> {
+        match label.trim().to_ascii_lowercase().as_str() {
+            "read_only" | "readonly" | "read-only" => Some(Self::ReadOnly),
+            "writer" | "write" => Some(Self::Writer),
+            "operator" | "ops" => Some(Self::Operator),
+            _ => None,
+        }
+    }
+
+    /// Canonical label for configuration dumps.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Writer => "writer",
+            Self::Operator => "operator",
+        }
+    }
+}
+
 /// Native MCP configuration exposed by Torii.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ToriiMcp {
     /// Master enable switch for `/v1/mcp`.
     pub enabled: bool,
@@ -5088,12 +5124,22 @@ pub struct ToriiMcp {
     pub max_request_bytes: usize,
     /// Maximum number of tools emitted in one `tools/list` response page.
     pub max_tools_per_list: usize,
+    /// MCP tool profile.
+    pub profile: ToriiMcpProfile,
     /// Expose operator-only routes in the MCP tool registry.
     pub expose_operator_routes: bool,
+    /// Additional allow-list prefixes for tool names (empty => profile-only).
+    pub allow_tool_prefixes: Vec<String>,
+    /// Additional deny-list prefixes for tool names.
+    pub deny_tool_prefixes: Vec<String>,
     /// Optional steady-state MCP request budget (requests per minute).
     pub rate_per_minute: Option<NonZeroU32>,
     /// Optional MCP burst budget.
     pub burst: Option<NonZeroU32>,
+    /// Retention window in seconds for asynchronous MCP jobs.
+    pub async_job_ttl_secs: u64,
+    /// Maximum asynchronous MCP jobs retained in memory.
+    pub async_job_max_entries: usize,
 }
 
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
@@ -5169,9 +5215,15 @@ impl Default for ToriiMcp {
             enabled: defaults::torii::mcp::ENABLED,
             max_request_bytes: defaults::torii::mcp::MAX_REQUEST_BYTES,
             max_tools_per_list: defaults::torii::mcp::MAX_TOOLS_PER_LIST,
+            profile: ToriiMcpProfile::parse(defaults::torii::mcp::PROFILE)
+                .expect("default MCP profile label is valid"),
             expose_operator_routes: defaults::torii::mcp::EXPOSE_OPERATOR_ROUTES,
+            allow_tool_prefixes: defaults::torii::mcp::allow_tool_prefixes(),
+            deny_tool_prefixes: defaults::torii::mcp::deny_tool_prefixes(),
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE.and_then(NonZeroU32::new),
             burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
+            async_job_ttl_secs: defaults::torii::mcp::ASYNC_JOB_TTL_SECS,
+            async_job_max_entries: defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES,
         }
     }
 }
@@ -5182,7 +5234,15 @@ impl From<user::ToriiMcp> for ToriiMcp {
             enabled: value.enabled,
             max_request_bytes: value.max_request_bytes.max(1),
             max_tools_per_list: value.max_tools_per_list.max(1),
+            profile: ToriiMcpProfile::parse(&value.profile).unwrap_or_else(|| {
+                panic!(
+                    "invalid torii.mcp.profile value `{}`. Expected read_only|writer|operator",
+                    value.profile
+                )
+            }),
             expose_operator_routes: value.expose_operator_routes,
+            allow_tool_prefixes: value.allow_tool_prefixes,
+            deny_tool_prefixes: value.deny_tool_prefixes,
             rate_per_minute: value
                 .rate_per_minute
                 .or(defaults::torii::mcp::RATE_PER_MINUTE)
@@ -5191,6 +5251,8 @@ impl From<user::ToriiMcp> for ToriiMcp {
                 .burst
                 .or(defaults::torii::mcp::BURST)
                 .and_then(NonZeroU32::new),
+            async_job_ttl_secs: value.async_job_ttl_secs.max(1),
+            async_job_max_entries: value.async_job_max_entries.max(1),
         }
     }
 }
@@ -6277,7 +6339,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (IH58 or sora compressed literal).
+    /// Account identifier (canonical I105 literal).
     pub account_id: String,
 }
 

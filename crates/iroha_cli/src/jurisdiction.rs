@@ -236,8 +236,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             let key_pair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let account_id =
-                AccountId::new("wonderland".parse().unwrap(), key_pair.public_key().clone());
+            let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = iroha::config::Config {
                 chain: ChainId::from_str("00000000-0000-0000-0000-000000000000")
                     .expect("valid chain id"),

@@ -8,15 +8,15 @@ Usage: scripts/address_local_toolkit.sh --input PATH [options]
 Automates the Local → Global address migration workflow described in
 docs/source/sns/local_to_global_toolkit.md. The script wraps the iroha CLI to
 emit a JSON audit report and (optionally) a converted address list that replaces
-Local-domain selectors with canonical IH58 (preferred) or compressed (`sora`, second-best) strings.
+Local-domain selectors with canonical I105 strings.
 
 Required arguments:
-  --input PATH          Newline-separated addresses (IH58 (preferred)/sora (second-best)/canonical hex).
+  --input PATH          Newline-separated addresses (I105/`sora...`/canonical hex).
 
 Options:
   --output-dir PATH     Directory for generated artefacts (default: artifacts/address_toolkit).
-  --network-prefix NUM  IH58 network prefix for Sora (default: 42).
-  --format FORMAT       Conversion format: ih58 or compressed (default: ih58).
+  --network-prefix NUM  I105 chain discriminant for Sora Nexus (default: 753).
+  --format FORMAT       Conversion format: i105 (default: i105).
   --audit-only          Emit the JSON audit report without running the converter.
   --iroha-cli PATH      Override the iroha CLI binary (default: iroha).
   --allow-errors        Continue when audit/normalize hits parse errors (default: false).
@@ -26,8 +26,8 @@ EOF
 
 IROHA_CLI_BIN=${IROHA_CLI_BIN:-iroha}
 OUTPUT_DIR="artifacts/address_toolkit"
-NETWORK_PREFIX=42
-FORMAT="ih58"
+NETWORK_PREFIX=753
+FORMAT="i105"
 AUDIT_ONLY=0
 ALLOW_ERRORS=0
 INPUT_PATH=""
@@ -80,8 +80,8 @@ if [[ -z "$INPUT_PATH" ]]; then
     exit 1
 fi
 
-if [[ "$FORMAT" != "ih58" && "$FORMAT" != "compressed" ]]; then
-    echo "error: --format must be 'ih58' or 'compressed'" >&2
+if [[ "$FORMAT" != "i105" ]]; then
+    echo "error: --format must be 'i105'" >&2
     exit 1
 fi
 
@@ -91,7 +91,7 @@ CONVERT_PATH="$OUTPUT_DIR/normalized.txt"
 
 echo "[address-local-toolkit] writing audit report to $AUDIT_PATH"
 AUDIT_CMD=(
-    "$IROHA_CLI_BIN" address audit
+    "$IROHA_CLI_BIN" tools address audit
     --input "$INPUT_PATH"
     --network-prefix "$NETWORK_PREFIX"
     --format json
@@ -109,7 +109,7 @@ fi
 
 echo "[address-local-toolkit] generating normalized output at $CONVERT_PATH"
 NORMALIZE_CMD=(
-    "$IROHA_CLI_BIN" address normalize
+    "$IROHA_CLI_BIN" tools address normalize
     --input "$INPUT_PATH"
     --network-prefix "$NETWORK_PREFIX"
     --format "$FORMAT"

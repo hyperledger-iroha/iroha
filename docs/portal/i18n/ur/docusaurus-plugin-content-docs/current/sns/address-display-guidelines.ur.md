@@ -19,8 +19,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 Android کی ریٹیل والٹ مثال
 `examples/android/retail-wallet` میں مطلوبہ UX پیٹرن دکھایا گیا ہے:
 
-- **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: IH58 (ترجیحی) اور صرف Sora والا
-  کمپریسڈ فارم (`sora...`، second‑best). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
+- **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: I105 (ترجیحی) اور صرف Sora والا
+  کمپریسڈ فارم (`sora...`، second‑best). I105 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
   payload بناتا ہے۔ کمپریسڈ فارم میں inline وارننگ لازمی ہے کیونکہ یہ صرف
   Sora-aware ایپس میں کام کرتا ہے۔ Android مثال دونوں Material بٹنز اور ٹول ٹپس
   کو `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` میں
@@ -34,7 +34,7 @@ Android کی ریٹیل والٹ مثال
   ہو تو ایک caption دکھائیں جو آپریٹرز کو یاد دلائے کہ suffix درکار نہیں۔
   ایکسپلوررز کو بھی canonical ڈومین لیبل ہائی لائٹ کرنا چاہیے جب selector
   digest encode کرے۔
-- **IH58 QR payloads۔** QR کوڈز کو IH58 string encode کرنا چاہیے۔ اگر QR
+- **I105 QR payloads۔** QR کوڈز کو I105 string encode کرنا چاہیے۔ اگر QR
   generation ناکام ہو تو خالی تصویر کے بجائے واضح error دکھائیں۔
 - **کلپ بورڈ پیغام۔** کمپریسڈ فارم کاپی کرنے کے بعد toast یا snackbar دکھائیں
   جو صارفین کو یاد دلائے کہ یہ صرف Sora ہے اور IME سے خراب ہو سکتا ہے۔
@@ -57,7 +57,7 @@ ADDR-6 roadmap acceptance معیار پورا کرتا ہے۔
 
 ## SDK helpers
 
-ہر SDK ایک سہولت helper فراہم کرتا ہے جو IH58 اور کمپریسڈ فارم کے ساتھ وارننگ
+ہر SDK ایک سہولت helper فراہم کرتا ہے جو I105 اور کمپریسڈ فارم کے ساتھ وارننگ
 string دیتا ہے تاکہ UI لیئرز مستقل رہیں:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -82,7 +82,7 @@ helper `domainSummary` میں `selector` payload (`tag`, `digest_hex`, `registry
 
 ایکسپلوررز کو والٹ کی telemetry اور accessibility کے کام کو mirror کرنا چاہیے:
 
-- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`sora`)|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
+- کاپی بٹنز پر `data-copy-mode="i105|I105|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
   میٹرک `torii_address_format_total` کے ساتھ usage counters نکال سکیں۔ اوپر والا
   ڈیمو کمپوننٹ `{mode,timestamp}` کے ساتھ `iroha:address-copy` ایونٹ بھیجتا ہے؛
   اسے اپنے analytics/telemetry pipeline (مثلاً Segment یا NORITO-backed collector)
@@ -92,7 +92,7 @@ helper `domainSummary` میں `selector` payload (`tag`, `digest_hex`, `registry
   ریٹائرمنٹ ریویوز `address_ingest` Grafana بورڈ سے براہ راست 30 دن کا ثبوت
   `domain_kind="local12"` برآمد کر سکیں۔
 - ہر کنٹرول کے لئے الگ `aria-label`/`aria-describedby` ہنٹس دیں جو بتائیں کہ
-  literal شیئر کرنے کے لئے محفوظ ہے (IH58) یا صرف Sora (کمپریسڈ)۔ ضمنی ڈومین
+  literal شیئر کرنے کے لئے محفوظ ہے (I105) یا صرف Sora (کمپریسڈ)۔ ضمنی ڈومین
   caption کو description میں شامل کریں تاکہ assistive technology وہی سیاق دکھائے
   جو بصری طور پر نظر آتا ہے۔
 - ایک live region (مثلاً `<output aria-live="polite">...</output>`) رکھیں جو کاپی
@@ -106,7 +106,7 @@ selectors کے غیر فعال ہونے سے پہلے Torii ingestion اور cli
 ## Local -> Global migration toolkit
 
 Local selectors کی audit اور conversion خودکار ہو۔ helper JSON audit رپورٹ اور
-IH58/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز readiness tickets کے ساتھ منسلک
+I105/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز readiness tickets کے ساتھ منسلک
 کرتے ہیں، جبکہ متعلقہ runbook Grafana dashboards اور Alertmanager قواعد کو لنک
 کرتا ہے جو strict-mode cutover کو gate کرتے ہیں۔
 
@@ -160,12 +160,12 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
 
 آپریٹرز کو ADDR-5 میں درج CLI workflow فالو کرنا چاہیے:
 
-1. `iroha tools address inspect` اب IH58، کمپریسڈ، اور canonical hex payloads کے ساتھ
+1. `iroha tools address inspect` اب I105، کمپریسڈ، اور canonical hex payloads کے ساتھ
    structured JSON summary دیتا ہے۔ summary میں `kind`/`warning` والے `domain`
    آبجیکٹ بھی ہوتے ہیں اور `input_domain` کے ذریعے دیے گئے ڈومین کو بھی echo
    کرتا ہے۔ جب `kind` `local12` ہو تو CLI stderr پر وارننگ دیتا ہے اور JSON
    summary وہی رہنمائی دہراتا ہے تاکہ CI pipelines اور SDKs اسے surface کر سکیں۔
-   جب بھی آپ convert شدہ encoding کو `<ih58>@<domain>` کی صورت میں replay کرنا
+   جب بھی آپ convert شدہ encoding کو `<i105>@<domain>` کی صورت میں replay کرنا
    چاہیں تو `legacy  suffix` دیں۔
 2. SDKs اسی وارننگ/summary کو JavaScript helper کے ذریعے دکھا سکتے ہیں:
 
@@ -176,13 +176,13 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed (`sora`));
+   console.log(summary.i105.value, summary.I105);
    ```
-  helper literal سے detect کیا گیا IH58 prefix محفوظ رکھتا ہے جب تک آپ
+  helper literal سے detect کیا گیا I105 prefix محفوظ رکھتا ہے جب تک آپ
   `networkPrefix` واضح طور پر فراہم نہ کریں؛ اس لئے non-default networks کے
   summaries خاموشی سے default prefix کے ساتھ دوبارہ render نہیں ہوتے۔
 
-3. canonical payload کو `ih58.value` یا `compressed (`sora`)` فیلڈز سے reuse کر کے تبدیل
+3. canonical payload کو `i105.value` یا `I105` فیلڈز سے reuse کر کے تبدیل
    کریں (یا `--format` کے ذریعے دوسری encoding مانگیں)۔ یہ strings پہلے سے
    بیرونی شیئرنگ کے لئے محفوظ ہیں۔
 4. manifests، registries اور customer-facing docs کو canonical فارم سے اپ ڈیٹ
@@ -192,14 +192,14 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    `iroha tools address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
    newline-separated literals پڑھتی ہے ( `#` سے شروع ہونے والے comments نظرانداز
    ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
-   اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`sora`) (`sora`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
+   اندراج کے لئے canonical/I105 (ترجیحی)/I105 (`sora`) summaries کے ساتھ JSON رپورٹ بناتی
    rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
    CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` سے آٹومیشن گیٹ کریں۔
 6. اگر newline-to-newline rewrite چاہیے تو
   Local-selector remediation spreadsheets کے لئے
   استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو canonical encodings،
   warnings اور parse failures کو ایک پاس میں نمایاں کرے۔ helper ڈیفالٹ طور پر
-  non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (IH58 ترجیحی/compressed (`sora`) second‑best/hex/JSON)
+  non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (I105 ترجیحی/I105 second‑best/hex/JSON)
   میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   کے ساتھ جوڑیں تاکہ خراب literals والے dumps پر بھی scan جاری رہے۔
 7. CI/lint automation `ci/check_address_normalize.sh` چلا سکتی ہے، جو

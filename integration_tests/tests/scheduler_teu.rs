@@ -41,10 +41,9 @@ use tokio::sync::broadcast;
 
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
-fn build_world(authority: &AccountId) -> World {
-    let domain_id: DomainId = authority.domain().clone();
+fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
-    let account = Account::new(authority.clone()).build(authority);
+    let account = Account::new(authority.to_account_id(domain_id.clone())).build(authority);
     let asset_definition_id: AssetDefinitionId = format!("xor#{domain_id}").parse().unwrap();
     let asset_definition =
         AssetDefinition::new(asset_definition_id, NumericSpec::default()).build(authority);
@@ -82,7 +81,8 @@ fn build_transaction(
 fn queue_teu_backlog_matches_metering() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (account_id, keypair) = gen_account_in("wonderland");
-    let world = build_world(&account_id);
+    let wonderland_domain: DomainId = "wonderland".parse().unwrap();
+    let world = build_world(&account_id, &wonderland_domain);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
 
@@ -112,7 +112,7 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let time_source = TimeSource::new_system();
 
     let asset_definition_id: AssetDefinitionId =
-        format!("xor#{}", account_id.domain()).parse().unwrap();
+        format!("xor#{wonderland_domain}").parse().unwrap();
     let asset_id = AssetId::of(asset_definition_id, account_id.clone());
 
     let mint = Mint::asset_numeric(10_u32, asset_id.clone());
@@ -197,12 +197,16 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (lane0_account, lane0_keypair) = gen_account_in("nexus");
     let (lane1_account, lane1_keypair) = gen_account_in("nexus_alt");
+    let lane0_domain_id: DomainId = "nexus".parse().unwrap();
+    let lane1_domain_id: DomainId = "nexus_alt".parse().unwrap();
 
     // Assemble world with both authorities registered.
-    let domain0: Domain = Domain::new(lane0_account.domain().clone()).build(&lane0_account);
-    let domain1: Domain = Domain::new(lane1_account.domain().clone()).build(&lane1_account);
-    let account0 = Account::new(lane0_account.clone()).build(&lane0_account);
-    let account1 = Account::new(lane1_account.clone()).build(&lane1_account);
+    let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
+    let domain1: Domain = Domain::new(lane1_domain_id.clone()).build(&lane1_account);
+    let account0 =
+        Account::new(lane0_account.to_account_id(lane0_domain_id.clone())).build(&lane0_account);
+    let account1 =
+        Account::new(lane1_account.to_account_id(lane1_domain_id.clone())).build(&lane1_account);
     let world = World::with(
         [domain0, domain1],
         [account0, account1],
@@ -432,12 +436,15 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (fallback_account, fallback_keypair) = gen_account_in("fallback");
     let (routed_account, routed_keypair) = gen_account_in("routed");
+    let fallback_domain_id: DomainId = "fallback".parse().unwrap();
+    let routed_domain_id: DomainId = "routed".parse().unwrap();
 
-    let domain_fallback: Domain =
-        Domain::new(fallback_account.domain().clone()).build(&fallback_account);
-    let domain_routed: Domain = Domain::new(routed_account.domain().clone()).build(&routed_account);
-    let account_fallback = Account::new(fallback_account.clone()).build(&fallback_account);
-    let account_routed = Account::new(routed_account.clone()).build(&routed_account);
+    let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
+    let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);
+    let account_fallback = Account::new(fallback_account.to_account_id(fallback_domain_id.clone()))
+        .build(&fallback_account);
+    let account_routed =
+        Account::new(routed_account.to_account_id(routed_domain_id.clone())).build(&routed_account);
     let world = World::with(
         [domain_fallback, domain_routed],
         [account_fallback, account_routed],

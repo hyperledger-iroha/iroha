@@ -51,19 +51,15 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 byte[] key = new byte[32];
 AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 System.out.println(address.canonicalHex());
-System.out.println(address.toIH58(753));
-System.out.println(address.toCompressedSora());
+System.out.println(address.toI105(753));
 
 AccountAddress.DisplayFormats formats = address.displayFormats();
-System.out.println(formats.ih58);
-System.out.println(formats.compressed);
-System.out.println(formats.compressedWarning);
+System.out.println(formats.i105);
 ```
 
-Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
-network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
-Account-id parsers accept encoded address identifiers (IH58 preferred, `sora` compressed accepted)
-and reject legacy plain-name literals.
+Use `displayFormats()` whenever UI layers need to render or copy addresses so network-prefix rendering
+stays aligned across platforms.
+Account-id parsers accept canonical I105-encoded identifiers and reject legacy plain-name literals.
 
 ## Multisig specs and TTL preview
 
@@ -75,8 +71,8 @@ MultisigSpec spec =
     MultisigSpec.builder()
         .setQuorum(3)
         .setTransactionTtlMs(86_400_000L)
-        .addSignatory("<account_ih58>", 2)
-        .addSignatory("<backup_ih58>", 1)
+        .addSignatory("<account_i105>", 2)
+        .addSignatory("<backup_i105>", 1)
         .build();
 
 MultisigProposalTtlPreview preview = spec.enforceProposalTtl(90_000L, System.currentTimeMillis());
@@ -128,7 +124,7 @@ plan.put("period", "month");
 SubscriptionPlanCreateResponse planResponse =
     client.createSubscriptionPlan(
             SubscriptionPlanCreateRequest.builder()
-                .authority("<authority_ih58>@commerce")
+                .authority("<authority_i105>@commerce")
                 .privateKey("<hex>")
                 .planId("aws_compute#commerce")
                 .plan(plan)
@@ -138,7 +134,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("<account_ih58>")
+                .authority("<account_i105>")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -148,7 +144,7 @@ SubscriptionCreateResponse subscriptionResponse =
 client.recordSubscriptionUsage(
         "sub-001$subscriptions",
         SubscriptionUsageRequest.builder()
-            .authority("<authority_ih58>@commerce")
+            .authority("<authority_i105>@commerce")
             .privateKey("<hex>")
             .unitKey("compute_ms")
             .delta("3600000")
@@ -248,7 +244,7 @@ The `:samples-android` app defaults to the in-repo `:android` project but can
 consume a published Maven repo by setting `irohaAndroidUsePublished=true`
 (or `ANDROID_SAMPLE_USE_PUBLISHED=1`) and pointing `irohaAndroidRepoDir` at
 `artifacts/android/maven/<version>` from `ci/publish_android_sdk.sh`.
-`MainActivity` renders an IH58 address from the AAR, and `SampleAddressTest`
+`MainActivity` renders an I105 address from the AAR, and `SampleAddressTest`
 keeps the wiring green for the published-vs-project toggle.
 
 ## Build & Test
@@ -718,9 +714,9 @@ building ad-hoc HTTP requests:
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 
-URI uri = URI.create("https://torii.example/v1/accounts/<account_ih58>/assets?limit=10");
+URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_ih58>", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
 Signatures cover the canonical method/path/query/body layout, matching the Rust
@@ -1014,7 +1010,7 @@ from any `HttpClientTransport`:
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_ih58>\"]}")
+    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_i105>\"]}")
     .build();
 
 transport.offlineToriiClient().listAllowances(params)
@@ -1025,7 +1021,7 @@ transport.offlineToriiClient().listAllowances(params)
     });
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_ih58>\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_i105>\"]}")
     .setLimit(25L)
     .build();
 

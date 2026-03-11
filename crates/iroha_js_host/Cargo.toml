@@ -32,6 +32,7 @@ sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+bs58 = "0.5.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

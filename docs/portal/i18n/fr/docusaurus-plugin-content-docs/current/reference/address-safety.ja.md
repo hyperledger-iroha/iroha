@@ -26,10 +26,10 @@ Cette page capture le livrable de documentation ADDR-6c. Appliquez ces contraint
 
 ## Flux de partage surs
 
-- Par defaut, toute action de copie/partage doit utiliser l'adresse IH58. Affichez le domaine resolu comme contexte d'appui afin que la chaine avec checksum reste au centre.
+- Par defaut, toute action de copie/partage doit utiliser l'adresse I105. Affichez le domaine resolu comme contexte d'appui afin que la chaine avec checksum reste au centre.
 - Proposez une action "Partager" qui regroupe l'adresse en texte brut et un QR derive du meme payload. Permettez aux utilisateurs d'inspecter les deux avant de confirmer.
 - Lorsque l'espace impose la troncature (cartes minuscules, notifications), conservez le prefixe lisible, affichez des ellipses et gardez les 4-6 derniers caracteres pour que l'ancre de checksum survive. Offrez un geste/raccourci clavier pour copier la chaine complete sans troncature.
-- Empechez la desynchronisation du presse-papiers en emettant un toast de confirmation qui previsualise la chaine IH58 exacte copiee. La ou la telemetrie existe, comptez les tentatives de copie vs les actions de partage afin de detecter rapidement les regressions UX.
+- Empechez la desynchronisation du presse-papiers en emettant un toast de confirmation qui previsualise la chaine I105 exacte copiee. La ou la telemetrie existe, comptez les tentatives de copie vs les actions de partage afin de detecter rapidement les regressions UX.
 
 ## IME et protections d'entree
 
@@ -41,17 +41,17 @@ Cette page capture le livrable de documentation ADDR-6c. Appliquez ces contraint
 
 - Annotez chaque bloc d'adresse avec `aria-label` ou `aria-describedby` qui epelle le prefixe lisible et segmente le payload en groupes de 4-8 caracteres ("ih dash b three two ..."). Cela evite que les lecteurs d'ecran produisent un flux inintelligible de caracteres.
 - Annoncez les actions de copie/partage reussies via une mise a jour de live region en mode polite. Incluez la destination (presse-papiers, partage, QR) pour que l'utilisateur sache que l'action s'est terminee sans deplacer le focus.
-- Fournissez un texte `alt` descriptif pour les apercus QR (par ex., "Adresse IH58 pour `<account>` sur la chaine `0x1234`"). Offrez un fallback "Copier l'adresse en texte" a cote du canvas QR pour les utilisateurs malvoyants.
+- Fournissez un texte `alt` descriptif pour les apercus QR (par ex., "Adresse I105 pour `<account>` sur la chaine `0x1234`"). Offrez un fallback "Copier l'adresse en texte" a cote du canvas QR pour les utilisateurs malvoyants.
 
 ## Adresses compressees Sora-only
 
 - Gating: cachez la chaine compressee `sora...` derriere une confirmation explicite. La confirmation doit reiterer que le format ne fonctionne que sur les chaines Sora Nexus.
-- Etiquetage: chaque occurrence doit inclure un badge visible "Sora-only" et un tooltip expliquant pourquoi les autres reseaux exigent la forme IH58.
-- Guardrails: si le discriminant de chaine active n'est pas l'allocation Nexus, refusez de generer l'adresse compressee et redirigez vers IH58.
+- Etiquetage: chaque occurrence doit inclure un badge visible "Sora-only" et un tooltip expliquant pourquoi les autres reseaux exigent la forme I105.
+- Guardrails: si le discriminant de chaine active n'est pas l'allocation Nexus, refusez de generer l'adresse compressee et redirigez vers I105.
 - Telemetrie: enregistrez la frequence de demande et de copie de la forme compressee afin que le playbook d'incident detecte les pics de partage accidentel.
 
 ## Quality gates
 
 - Etendez les tests UI automatises (ou les suites a11y de storybook) pour verifier que les composants d'adresse exposent les metadonnees ARIA requises et que les messages de rejet IME apparaissent.
 - Incluez des scenarios de QA manuels pour l'entree IME (kana, pinyin), un passage lecteur d'ecran (VoiceOver/NVDA) et la copie de QR en themes a fort contraste avant release.
-- Faites remonter ces verifications dans les checklists de release aux cotes des tests de parite IH58 afin que les regressions restent bloquees jusqu'a correction.
+- Faites remonter ces verifications dans les checklists de release aux cotes des tests de parite I105 afin que les regressions restent bloquees jusqu'a correction.

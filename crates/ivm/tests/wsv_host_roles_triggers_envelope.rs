@@ -46,9 +46,7 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
 fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
     let value = norito::json::to_value(&account).expect("serialize account");
     let literal = value.as_str().expect("account literal");
-    ScopedAccountId::parse_encoded(literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("canonical account id must parse")
+    ScopedAccountId::parse_encoded(literal).expect("canonical account id must parse")
 }
 
 fn run_env_result(vm: &mut IVM, env: norito::json::Value) -> Result<(), VMError> {
@@ -90,7 +88,7 @@ fn envelope_roles_permissions_triggers() {
     wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -139,7 +137,7 @@ fn envelope_roles_permissions_triggers() {
     );
     assert!(host.wsv.has_permission(
         &alice,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountSubjectId::from(&alice,)),
+        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&alice,)),
     ));
 
     // 2) Grant + revoke a direct permission
@@ -249,11 +247,8 @@ fn envelope_missing_payload_is_rejected() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -270,11 +265,8 @@ fn envelope_payload_must_be_object() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice),
-        HashMap::new(),
-    );
+    let host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -296,7 +288,7 @@ fn envelope_admin_alias_rejects_without_manage_permissions() {
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

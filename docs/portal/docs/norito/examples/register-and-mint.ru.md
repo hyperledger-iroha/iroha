@@ -20,9 +20,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
+- Убедитесь, что аккаунт назначения (например `i105...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account i105...`, чтобы подтвердить успешный выпуск.
 
 ## Связанные руководства SDK
 
@@ -44,7 +44,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

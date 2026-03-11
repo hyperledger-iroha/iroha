@@ -57,7 +57,7 @@ fn add_signatory_syscall_updates_account() {
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(256);
@@ -93,7 +93,7 @@ fn remove_signatory_syscall_updates_account() {
     assert!(wsv.add_signatory(&alice, &alice, signatory_key.to_string()));
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(256);
@@ -127,7 +127,7 @@ fn set_account_quorum_syscall_updates_account() {
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(256);
@@ -162,7 +162,7 @@ fn set_account_detail_with_permissions() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(256);
@@ -187,7 +187,7 @@ fn set_account_detail_with_permissions() {
         let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
         host.wsv.grant_permission(
             &alice,
-            PermissionToken::SetAccountDetail(ivm::mock_wsv::AccountSubjectId::from(&bob)),
+            PermissionToken::SetAccountDetail(ivm::mock_wsv::AccountId::from(&bob)),
         );
     }
 

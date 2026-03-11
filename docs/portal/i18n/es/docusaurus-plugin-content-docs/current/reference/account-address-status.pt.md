@@ -14,7 +14,7 @@ título: Conformidad de enderecos de conta
 descripción: Resumen del flujo del dispositivo ADDR-2 y como equipos de SDK ficam sincronizadas.
 ---
 
-El paquete canónico ADDR-2 (`fixtures/account/address_vectors.json`) accesorios de captura IH58 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativo. Cada superficie de SDK + Torii utiliza un mismo JSON para detectar cualquier deriva de códec antes de cargar la producción. Esta página espelha o brief interno de status (`docs/source/account_address_status.md` no repositorio raiz) para que los lectores del portal consulten o fluxo sem vasculhar o mono-repo.
+El paquete canónico ADDR-2 (`fixtures/account/address_vectors.json`) accesorios de captura I105 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativo. Cada superficie de SDK + Torii utiliza un mismo JSON para detectar cualquier deriva de códec antes de cargar la producción. Esta página espelha o brief interno de status (`docs/source/account_address_status.md` no repositorio raiz) para que los lectores del portal consulten o fluxo sem vasculhar o mono-repo.
 
 ## Regenerar o verificar el pacote
 
@@ -43,7 +43,7 @@ siempre que el dispositivo, el generador o los documentos se muden para alertar 
 | Torii (servidor) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK de JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Cada arnés faz round-trip de bytes canónicos + IH58 + codificaciones comprimidos y verifica se os códigos de error no estilo Norito batem com o accesorio para casos negativos.
+| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Cada arnés faz round-trip de bytes canónicos + I105 + codificaciones comprimidos y verifica se os códigos de error no estilo Norito batem com o accesorio para casos negativos.
 
 ## ¿Precisa de automacao?
 

@@ -33,7 +33,7 @@ charges utiles автоматически, записывая структури
 |---------|-------------|--------------|
 | `label` | Oui | Méthode applicable (cas mixte; instrument normalisé selon la norme v1 et UTS-46). |
 | `suffix_id` | Oui | Le suffixe d'identification de l'identifiant (désposé ou `0x` hex). |
-| `owner` | Oui | Entrez AccountId (littéral IH58 ; indice @domain facultatif) pour l'enregistrement. |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Le chien `1..=255`. |
 | `payment_asset_id` | Oui | Règlement actif (par exemple `xor#sora`). |
 | `payment_gross` / `payment_net` | Oui | Sans cela, les éditions précédentes sont actives. |
@@ -72,9 +72,9 @@ Dans le cas du script, il y a un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ Dans le cas du script, il y a un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -231,7 +231,7 @@ Le filtre `release` permet aux auditeurs d'accéder au programme CSV.
 - **Analyse des métadonnées/gouvernance :** analyse JSON en ligne ; ссылки на файлы
   разрешаются относительно CSV. Les métadonnées ne sont pas autorisées à être validées.
 - **Contrôleurs :** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки contrôleurs (par exemple `ih58...;ih58...`) при делегировании не-propriétaire.
+  явные списки contrôleurs (par exemple `i105...;i105...`) при делегировании не-propriétaire.
 
 Les appareils sont liés au contexte des nombres de coups (par exemple
 `error: row 12 term_years must be between 1 and 255`). Le script correspond au code `1`

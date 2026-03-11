@@ -39,12 +39,12 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     // Prepare domain, accounts, and metadata.
     let domain_id: DomainId = "kaigi".parse().expect("domain id");
     let owner_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let owner_id = AccountId::new(domain_id.clone(), owner_kp.public_key().clone());
-    let owner = Account::new(owner_id.clone()).build(&owner_id);
+    let owner_id = AccountId::new(owner_kp.public_key().clone());
+    let owner = Account::new(owner_id.to_account_id(domain_id.clone())).build(&owner_id);
 
     let relay_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let relay_id = AccountId::new(domain_id.clone(), relay_kp.public_key().clone());
-    let relay = Account::new(relay_id.clone()).build(&owner_id);
+    let relay_id = AccountId::new(relay_kp.public_key().clone());
+    let relay = Account::new(relay_id.to_account_id(domain_id.clone())).build(&owner_id);
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
@@ -143,15 +143,6 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     (torii.api_router_for_tests(), relay_id, owner_id)
 }
 
-fn compressed_literal(account: &AccountId) -> String {
-    let address = account
-        .to_account_address()
-        .expect("account address encoding");
-    address
-        .to_compressed_sora()
-        .expect("compressed literal encoding")
-}
-
 #[tokio::test]
 async fn kaigi_endpoints_report_metadata() {
     let (app, relay_account, _owner_account) = build_app();
@@ -220,17 +211,16 @@ async fn kaigi_endpoints_report_metadata() {
 }
 
 #[tokio::test]
-async fn kaigi_endpoints_support_compressed_address_format() {
+async fn kaigi_endpoints_emit_i105_literals() {
     let (app, relay_account, owner_account) = build_app();
     let relay_literal = relay_account.to_string();
-    let relay_compressed = compressed_literal(&relay_account);
-    let owner_compressed = compressed_literal(&owner_account);
+    let owner_literal = owner_account.to_string();
 
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays?address_format=compressed")
+                .uri("/v1/kaigi/relays")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -241,10 +231,10 @@ async fn kaigi_endpoints_support_compressed_address_format() {
     let summary: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert_eq!(
         summary["items"][0]["relay_id"].as_str(),
-        Some(relay_compressed.as_str())
+        Some(relay_literal.as_str())
     );
 
-    let detail_path = format!("/v1/kaigi/relays/{relay_literal}?address_format=compressed");
+    let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = app
         .clone()
         .oneshot(
@@ -260,12 +250,9 @@ async fn kaigi_endpoints_support_compressed_address_format() {
     let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
     assert_eq!(
         detail["relay"]["relay_id"].as_str(),
-        Some(relay_compressed.as_str())
+        Some(relay_literal.as_str())
     );
-    assert_eq!(
-        detail["reported_by"].as_str(),
-        Some(owner_compressed.as_str())
-    );
+    assert_eq!(detail["reported_by"].as_str(), Some(owner_literal.as_str()));
 }
 
 #[tokio::test]
@@ -322,14 +309,14 @@ async fn kaigi_endpoints_honor_json_accept_header() {
 }
 
 #[tokio::test]
-async fn kaigi_sse_accepts_compressed_relay_filter() {
+async fn kaigi_sse_accepts_i105_relay_filter() {
     let (app, relay_account, _owner_account) = build_app();
-    let relay_compressed = compressed_literal(&relay_account);
+    let relay_literal = relay_account.to_string();
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/kaigi/relays/events?relay={relay_compressed}"))
+                .uri(format!("/v1/kaigi/relays/events?relay={relay_literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )

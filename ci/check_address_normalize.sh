@@ -40,14 +40,16 @@ for group in data.get("cases", {}).values():
         if selector.get("kind") != "local12":
             continue
         encodings = case.get("encodings") or {}
-        ih58_value = encodings.get("ih58")
-        if isinstance(ih58_value, dict):
-            ih58_value = ih58_value.get("string")
-        if not ih58_value:
+        i105_value = encodings.get("i105")
+        if isinstance(i105_value, dict):
+            i105_value = i105_value.get("string")
+        if not i105_value:
+            i105_value = encodings.get("compressed")
+        if not i105_value:
             raise SystemExit(
-                f"local12 case {case.get('case_id')} missing ih58 encoding"
+                f"local12 case {case.get('case_id')} missing i105/compressed encoding"
             )
-        entries.append(ih58_value)
+        entries.append(i105_value)
 
 payload = ""
 if entries:
@@ -67,7 +69,7 @@ cargo run -p iroha_cli -- \
   --input "${RAW_PATH}" \
   --output "${NORMALIZED_PATH}" \
   --network-prefix 753 \
-  --format ih58 >/dev/null
+  --format i105 >/dev/null
 
 echo "[addr-normalize] auditing normalized output..."
 cargo run -p iroha_cli -- \

@@ -78,9 +78,9 @@ final class DemoConnectViewModelTests: XCTestCase {
       XCTFail("Expected address preview to be generated")
       return
     }
-    XCTAssertFalse(preview.ih58.isEmpty)
-    XCTAssertTrue(preview.compressed.hasPrefix("sora"))
-    XCTAssertTrue(preview.compressedWarning.lowercased().contains("compressed"))
+    XCTAssertFalse(preview.i105.isEmpty)
+    XCTAssertTrue(preview.i105Default.hasPrefix("sora"))
+    XCTAssertTrue(preview.i105Warning.lowercased().contains("i105"))
 #else
     throw XCTSkip("IrohaSwift framework is unavailable on this platform")
 #endif

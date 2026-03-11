@@ -49,7 +49,7 @@ $ scripts/offline_topup/run.sh \
 }
 ```
 
-Controller IDs must use encoded account IDs (IH58 preferred, `sora…` compressed accepted), and
+Controller IDs must use canonical I105 account IDs, and
 asset IDs must use encoded `norito:<hex>`. The `allowance_asset` account must match the controller (the
 allowance is funded from the controller account, not an operator pool). Spend keys accept either
 the multihash literal or the `algo:hex` helper format used elsewhere in the spec. Each allowance

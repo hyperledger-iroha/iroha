@@ -74,7 +74,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | Чартер + KPI приложения | `docs/source/sns/governance_addenda/` | Подписанные чартеры с контролем версий, KPI covenants и решения управления, на которые ссылаются CLI-голоса. |
 | Схема реестра | [`registry-schema.md`](./registry-schema.md) | Канонические структуры Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Контракт registrar | [`registrar-api.md`](./registrar-api.md) | REST/gRPC payloads, метрики `sns_registrar_status_total` и ожидания governance hook. |
-| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения IH58 (предпочтительно) и сжатые (второй выбор), используемые кошельками/эксплорерами. |
+| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения I105 (предпочтительно) и сжатые (второй выбор), используемые кошельками/эксплорерами. |
 | Документы SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Детерминированное вычисление host, поток работы transparency tailer и правила алертов. |
 | Регуляторные мемо | `docs/source/sns/regulatory/` | Заметки приема по юрисдикциям (например, EU DSA), acknowledgements steward, шаблонные приложения. |
 | Drill log | `ops/drill-log.md` | Записи хаос- и IR-репетиций перед выходом из фаз. |
@@ -118,7 +118,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    состояния GAR/zone (см. 4.5).
 6. **Клиентское раскрытие:** Обновите клиентский ledger (wallet/explorer) через
    общие fixtures в [`address-display-guidelines.md`](./address-display-guidelines.md),
-   убедившись, что IH58 и сжатые отображения совпадают с copy/QR гайдами.
+   убедившись, что I105 и сжатые отображения совпадают с copy/QR гайдами.
 
 ### 4.3 Продления, биллинг и сверка казначейства
 
@@ -149,11 +149,11 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | Фаза | Владелец | Действие и доказательства | SLA |
 |------|----------|----------------------------|-----|
 | Запрос soft freeze | Steward / поддержка | Создать тикет `SNS-DF-<id>` с доказательствами платежа, ссылкой на bond спора и затронутыми селекторами. | <=4 h от поступления. |
-| Guardian тикет | Guardian board | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` создает `GuardianFreezeTicketV1`. Сохранить JSON в `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
+| Guardian тикет | Guardian board | `sns governance freeze --selector <I105> --reason <text> --until <ts>` создает `GuardianFreezeTicketV1`. Сохранить JSON в `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
 | Ратификация совета | Governance council | Утвердить или отклонить заморозки, задокументировать решение со ссылкой на guardian тикет и digest bond спора. | Следующее заседание совета или асинхронное голосование. |
 | Арбитражная панель | Комплаенс + steward | Созвать панель из 7 присяжных (согласно roadmap) с хешированными бюллетенями через `sns governance dispute ballot`. Приложить анонимные квитанции голосов к пакету инцидента. | Вердикт <=7 дней после внесения bond. |
 | Апелляция | Guardian + совет | Апелляции удваивают bond и повторяют процесс присяжных; записать манифест Norito `DisputeAppealV1` и сослаться на первичный тикет. | <=10 дней. |
-| Разморозка и ремедиация | Registrar + resolver ops | Выполнить `sns governance unfreeze --selector <IH58> --ticket <id>`, обновить статус registrar и распространить diff GAR/resolver. | Сразу после вердикта. |
+| Разморозка и ремедиация | Registrar + resolver ops | Выполнить `sns governance unfreeze --selector <I105> --ticket <id>`, обновить статус registrar и распространить diff GAR/resolver. | Сразу после вердикта. |
 
 Экстренные каноны (заморозки, инициированные guardian <=72 h) следуют тому же
 потоку, но требуют ретроспективного обзора совета и заметки о прозрачности в

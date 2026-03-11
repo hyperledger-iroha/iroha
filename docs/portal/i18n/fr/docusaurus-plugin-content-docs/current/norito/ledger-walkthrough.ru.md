@@ -29,8 +29,8 @@ Pour toutes les instructions, indiquez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` p
 Cartes d'identité. Dans le bundle proposé, il y a un compte contenant un extrait de la démo :
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Подтвердите значения, выведя первые аккаунты:

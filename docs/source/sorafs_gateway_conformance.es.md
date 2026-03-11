@@ -156,7 +156,7 @@ determinista y multiplataforma; no depende de tooling ad hoc.
 
 Puedes generar el bundle de reporte/atestación localmente con `cargo xtask sorafs-gateway-attest`.
 El comando acepta `--signing-key <path>` (private key en hex),
-`--signer-account <ih58...>` (AccountId codificado sin dominio; sufijo `@domain` rechazado), y `--gateway <url>` más `--out <dir>` opcional.
+`--signer-account <i105...>` (AccountId codificado sin dominio; sufijo `@domain` rechazado), y `--gateway <url>` más `--out <dir>` opcional.
 Los artefactos se guardan por defecto en `artifacts/sorafs_gateway_attest/`.
 
 Al mantener el hook de firma dentro del binario del harness, los runs nightly de CI pueden

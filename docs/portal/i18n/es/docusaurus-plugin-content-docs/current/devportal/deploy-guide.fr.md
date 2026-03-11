@@ -149,7 +149,7 @@ sorafs_cli manifest submit \
   --manifest "$OUT"/portal.manifest.to \
   --chunk-plan "$OUT"/portal.plan.json \
   --torii-url "$TORII_URL" \
-  --authority ih58... \
+  --authority i105... \
   --private-key "$IROHA_PRIVATE_KEY" \
   --submitted-epoch 20260101 \
   --alias-namespace docs \

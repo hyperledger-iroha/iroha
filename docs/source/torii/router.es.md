@@ -73,3 +73,4 @@ Projects embedding Torii should migrate any direct `Router` manipulations to
 ## Further Reading
 
 - `docs/source/torii/app_api_parity_audit.md` — parity matrix covering the `app_api` and `connect` route groups, their DTOs, and existing test coverage.
+- `crates/iroha_torii/docs/mcp_api.md` — canonical Torii MCP JSON-RPC contract (`/v1/mcp`) for agent/tool integrations.

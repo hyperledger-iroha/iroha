@@ -14,9 +14,8 @@ use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
@@ -118,8 +117,14 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
+    let reg_from = RegisterBox::from(Register::account(NewAccount::new_in_domain(
+        from.clone(),
+        domain_id.clone(),
+    )));
+    let reg_to = RegisterBox::from(Register::account(NewAccount::new_in_domain(
+        to.clone(),
+        domain_id.clone(),
+    )));
     let new_asset_def = AssetDefinition::numeric(asset_def.clone());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(

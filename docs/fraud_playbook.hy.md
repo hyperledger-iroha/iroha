@@ -85,7 +85,7 @@ Norito տեսակներ, որոնք իրականացվել են `crates/iroha_da
 
 - **Ռիսկերի ընդունում** – `POST /v1/fraud/query` ընդունում է `RiskQuery` սխեման.
   - `query_id` (`[u8; 32]`, վեցանկյուն կոդավորված)
-  - `subject` (`AccountId`, կանոնական IH58 բառացի; կամընտիր `@<domain>` ակնարկ կամ այլանուն)
+  - `subject` (`AccountId`, կանոնական I105 բառացի; կամընտիր `@<domain>` ակնարկ կամ այլանուն)
   - `operation` (պիտակավորված թվով, որը համապատասխանում է `RiskOperation`; JSON `type`
     տարբերակիչն արտացոլում է թվային տարբերակը)
   - `related_asset` (`AssetId`, կամընտիր)

@@ -5,8 +5,8 @@ import XCTest
 private func canonicalOwnerLiteral() throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
     let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-    let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return ih58
+    let i105 = try address.toI105(networkPrefix: 0x02F1)
+    return i105
 }
 
 private func noncanonicalOwnerLiteral() throws -> String {
@@ -21,8 +21,8 @@ private func canonicalAuthorityLiteral(from signingKey: SigningKey,
                                        domain: String = AccountAddress.defaultDomainName) throws -> String {
     let publicKey = try signingKey.publicKey()
     let address = try AccountAddress.fromAccount(publicKey: publicKey)
-    let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return ih58
+    let i105 = try address.toI105(networkPrefix: 0x02F1)
+    return i105
 }
 
 final class TransactionEncoderValidationTests: XCTestCase {
@@ -49,8 +49,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
     func testSetMetadataRejectsEncodedAuthorityWithDomainSuffix() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        let ih58 = try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
-        let authority = "\(ih58)@wonderland"
+        let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+        let authority = "\(i105)@wonderland"
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",
                                          authority: authority,

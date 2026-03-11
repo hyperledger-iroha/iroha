@@ -7,9 +7,8 @@ use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 #[test]

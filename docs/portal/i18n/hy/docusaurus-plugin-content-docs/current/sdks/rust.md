@@ -142,15 +142,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -163,9 +162,9 @@ fn download_qr() -> eyre::Result<()> {
 մակերես. այն ներառում է կանոնական հաշվի id-ն, բառացի թարգմանվածը
 պահանջվող ձևաչափը, ցանցի նախածանցը/սխալների ուղղման մետատվյալները, QR չափերը և
 ներկառուցված SVG ծանրաբեռնվածությունը, որը դրամապանակները/հետախույզները կարող են ուղղակիորեն տեղադրել: Բաց թողնել
-`ExplorerAccountQrOptions`-ը լռելյայն է նախընտրելի IH58 ելքի կամ սահմանման համար
-`address_format: Some(AddressFormat::Compressed)`՝ երկրորդ լավագույնը ստանալու համար
-`sora…` տարբերակ, որն օգտագործվում է ADDR-6b-ի կողմից:
+`ExplorerAccountQrOptions`-ը լռելյայն է նախընտրելի I105 ելքի կամ սահմանման համար
+canonical I105 output՝ երկրորդ լավագույնը ստանալու համար
+`i105` տարբերակ, որն օգտագործվում է ADDR-6b-ի կողմից:
 
 ## 7. Բաժանորդագրվեք միջոցառումներին
 

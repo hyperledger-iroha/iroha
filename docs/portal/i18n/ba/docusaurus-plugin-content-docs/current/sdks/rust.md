@@ -142,15 +142,14 @@ I18NI0000000030X, уны I18NI0000000031X аша ебәрергә, һәм ите
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -163,9 +162,9 @@ I18NI000000032Х көҙгө I18NI0000000333X JSON
 ер өҫтө: ул канонлы иҫәп id инә, туранан-тура күрһәтелгән менән
 форматында, селтәр префикс/хата-коррекция метамағлүмәттәре, QR үлсәмдәре һәм
 рәтле SVG файҙалы йөк, тип янсыҡтар/тикшерелгән туранан-тура встраиваемый ала. Ҡотолоу
-I18NI000000034X өҫтөнлөк IH58 сығыш йәки комплект өсөн ғәҙәттәгесә ғәҙәттәгесә
+I18NI000000034X өҫтөнлөк I105 сығыш йәки комплект өсөн ғәҙәттәгесә ғәҙәттәгесә
 I18NI0000000035X икенсе иң яҡшыһын алыу өсөн
-ADDR-6б ҡулланған `sora…` варианты.
+ADDR-6б ҡулланған `i105` варианты.
 
 ## 7. Ваҡиғаларға яҙылығыҙ
 

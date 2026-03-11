@@ -18,8 +18,7 @@ fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
 fn kotodama_bytecode_fault_injection_smoke() {
     let chain: ChainId = "fi-smoke-chain".parse().unwrap();
     let keypair = iroha_crypto::KeyPair::random();
-    let domain: DomainId = "wonderland".parse().unwrap();
-    let account_id = AccountId::new(domain, keypair.public_key().clone());
+    let account_id = AccountId::new(keypair.public_key().clone());
 
     let mut tx = TransactionBuilder::new(chain, account_id)
         .with_bytecode(IvmBytecode::from_compiled(vec![0xAA, 0xBB, 0xCC]))

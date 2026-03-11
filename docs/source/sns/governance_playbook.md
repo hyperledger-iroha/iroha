@@ -56,7 +56,7 @@ dashboards, and escalation paths.
 | Charter + KPI addenda | `docs/source/sns/governance_addenda/` | Version-controlled signed charters, KPI covenants, and governance decisions referenced by CLI votes. |
 | Registry schema | [`registry_schema.md`](./registry_schema.md) | Canonical Norito structures (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Registrar contract | [`registrar_api.md`](./registrar_api.md) | REST/gRPC payloads, `sns_registrar_status_total` metrics, and governance hook expectations. |
-| Address UX guide | [`address_display_guidelines.md`](./address_display_guidelines.md) | Canonical IH58 (preferred) + compressed (`sora`, second-best) renderings mirrored by wallets/explorers. |
+| Address UX guide | [`address_display_guidelines.md`](./address_display_guidelines.md) | Canonical I105 renderings mirrored by wallets/explorers. |
 | Address security review | [`address_security_review.md`](./address_security_review.md) | Collision math, Local-8 telemetry references, checksum guidance, and manifest immutability evidence required for ADDR-7. |
 | SoraDNS / GAR docs | [`../soradns/deterministic_hosts.md`](../soradns/deterministic_hosts.md), [`../reports/soradns_transparency.md`](../reports/soradns_transparency.md) | Deterministic host derivation, transparency tailer workflow, and alert rules. |
 | Regulatory memos | `docs/source/sns/regulatory/` | Jurisdictional intake notes (e.g., EU DSA), steward acknowledgements, template annexes. |
@@ -100,8 +100,8 @@ so auditors can reconstruct the decision trail within 24 hours.
    the resolver transparency tailer to confirm the new GAR/zone state propagated
    (see §4.5).
 6. **Customer disclosure:** Update the customer-facing ledger (wallet/explorer)
-   via the shared fixtures in `address_display_guidelines.md`, ensuring IH58 and
-   compressed renderings match copy/QR guidance.
+   via the shared fixtures in `address_display_guidelines.md`, ensuring I105 and
+   i105-default renderings match copy/QR guidance.
 
 ### 4.3 Renewals, Billing & Treasury Reconciliation
 
@@ -141,11 +141,11 @@ so auditors can reconstruct the decision trail within 24 hours.
 | Phase | Owner | Action & Evidence | SLA |
 |-------|-------|-------------------|-----|
 | Soft freeze request | Steward / support | File ticket `SNS-DF-<id>` with payment proofs, dispute bond reference, and affected selector(s). | ≤4 h from intake. |
-| Guardian ticket | Guardian board | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
+| Guardian ticket | Guardian board | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
 | Council ratification | Governance council | Approve or reject freezes, document decision link to guardian ticket and dispute bond digest. | Next council session or asynchronous vote. |
 | Arbitration panel | Compliance + steward | Convene 7-juror panel (per roadmap) with hashed ballots submitted via `sns governance dispute ballot`. Attach anonymised vote receipts to incident packet. | Verdict ≤7 days after bond deposit. |
 | Appeal | Guardian + council | Appeals double the bond and repeat the juror process; record Norito manifest `DisputeAppealV1` and reference primary ticket. | ≤10 days. |
-| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <IH58> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
+| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <I105> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
 
 Emergency canons (guardian-triggered freezes ≤72 h) follow the same flow but
 require retroactive council review and a transparency note under

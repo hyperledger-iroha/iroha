@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON нь `"perms"` эсвэл `"permissions"` түлхүүрүүдийн аль нэгийг хүлээн авдаг бөгөөд тус бүр нь зөвшөөрлийн нэрийн цуваа юм.
     - Жишээ нь:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - Хуурамч хэлбэрээр дэмжигдсэн зөвшөөрлийн нэрийн угтварууд:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

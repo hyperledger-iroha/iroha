@@ -22,8 +22,8 @@ translator: machine-google-reviewed
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) 和
 配套工具。它提供：
 
-- 一個校驗和、面向人的 **Iroha Base58 地址 (IH58)** 由
-  `AccountAddress::to_ih58` 將鏈判別式綁定到帳戶
+- 一個校驗和、面向人的 **Iroha Base58 地址 (I105)** 由
+  `AccountAddress::to_i105` 將鏈判別式綁定到帳戶
   控制器並提供確定性的互操作友好的文本形式。
 - 隱式默認域和本地摘要的域選擇器，帶有
   為未來 Nexus 支持的路由保留全局註冊表選擇器標記（
@@ -48,7 +48,7 @@ translator: machine-google-reviewed
 
 ## 目標
 
-- 描述數據模型中實現的 IH58 Base58 信封以及
+- 描述數據模型中實現的 I105 Base58 信封以及
   `AccountId` 和 `AccountAddress` 遵循規範解析/別名規則。
 - 將配置的鏈判別式直接編碼到每個地址中並
   定義其治理/註冊流程。
@@ -72,9 +72,9 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical IH58 literal (no `@domain` suffix)
+Display: canonical I105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Encoded account identifiers only: I105.
 - Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -132,29 +132,29 @@ pub struct Common {
 ### 2. 規範地址編解碼器
 
 Rust 數據模型公開了單個規範的有效負載表示
-(`AccountAddress`) 可以以多種面向人的格式發出。 IH58 是
+(`AccountAddress`) 可以以多種面向人的格式發出。 I105 是
 用於共享和規範輸出的首選帳戶格式；壓縮的
 `sora` 形式是第二好的、僅限 Sora 的 UX 選項，其中假名字母
 增加價值。規範十六進制仍然是一種調試輔助工具。
 
-- **IH58 (Iroha Base58)** – 嵌入鏈條的 Base58 信封
+- **I105 (Iroha Base58)** – 嵌入鏈條的 Base58 信封
   判別性的。解碼器在將有效負載提升到之前驗證前綴
   規範形式。
 - **Sora 壓縮視圖** – 由 **105 個符號**構建的僅限 Sora 的字母表
   58字後追加半角イロハ詩（包括ヰ、ヱ）
-  IH58 套裝。字符串以哨兵 `sora` 開頭，嵌入 Bech32m 派生的
+  I105 套裝。字符串以哨兵 `sora` 開頭，嵌入 Bech32m 派生的
   校驗和，並省略網絡前綴（Sora Nexus 由哨兵暗示）。
 
   ```
-  IH58  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
   Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
   ```
 - **規範十六進制** – 規範字節的易於調試的 `0x…` 編碼
   信封。
 
-`AccountAddress::parse_encoded` 自動檢測 IH58（首選）、壓縮（`sora`，第二好）或規範十六進制
+`AccountAddress::parse_encoded` 自動檢測 I105（首選）、壓縮（`sora`，第二好）或規範十六進制
 （僅限 `0x...`；裸十六進制被拒絕）輸入並返回解碼的有效負載和檢測到的負載
-`AccountAddressFormat`。 Torii 現在調用 `parse_encoded` 作為 ISO 20022 補充
+`AccountAddress`。 Torii 現在調用 `parse_encoded` 作為 ISO 20022 補充
 尋址並存儲規範的十六進制形式，因此元數據保持確定性
 無論原始表示如何。
 
@@ -184,15 +184,19 @@ Rust 編碼器為單鍵控制器寫入 `0x02`（版本 0、類別 0、
 標準 v1，擴展標誌已清除）和多重簽名控制器的 `0x0A`（版本 0，
 1 類，規範 v1，擴展標誌已清除）。
 
-#### 2.2 Legacy selector compatibility (decode-only)
+#### 2.2 Domainless payload semantics
 
-Newly encoded canonical payloads do not include a domain-selector segment. For
-backward compatibility, decoders still accept pre-cutover payloads where a
-selector segment appears between header and controller as a tagged union:
+Canonical payload bytes are domainless: the wire layout is `header · controller`
+with no selector segment, no implicit default-domain reconstruction, and no
+public decode fallback for legacy scoped-account literals.
+
+Explicit domain context is modeled separately as `ScopedAccountId { account,
+domain }` or separate API fields; it is not encoded into `AccountId` payload
+bytes.
 
 | Tag | Meaning | Payload | Notes |
 |-----|---------|---------|-------|
-| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()` (legacy decode only). |
+| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
 | `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
 | `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
@@ -293,15 +297,15 @@ tag-specific payload, then move on to the controller bytes.
 - 二進制控制器有效負載 (`ControllerPayload::Multisig`) 編碼
   `version:u8`、`threshold:u16`、`member_count:u8`，然後是每個成員的
   `(curve_id, weight:u16, key_len:u16, key_bytes)`。這正是
-  `AccountAddress::canonical_bytes()` 寫入 IH58（首選）/sora（第二佳）有效負載。
+  `AccountAddress::canonical_bytes()` 寫入 I105（首選）/sora（第二佳）有效負載。
 - 散列 (`MultisigPolicy::digest_blake2b256()`) 使用 Blake2b-256 和
   `iroha-ms-policy` 個性化字符串，以便治理清單可以綁定到
-  與 IH58 中嵌入的控制器字節匹配的確定性策略 ID。
+  與 I105 中嵌入的控制器字節匹配的確定性策略 ID。
 - 燈具覆蓋範圍位於 `fixtures/account/address_vectors.json`（案例
-  `addr-multisig-*`）。錢包和 SDK 應斷言規範的 IH58 字符串
+  `addr-multisig-*`）。錢包和 SDK 應斷言規範的 I105 字符串
   下面確認它們的編碼器與 Rust 實現匹配。
 
-|案例編號 |門檻/會員 | IH58 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |筆記|
+|案例編號 |門檻/會員 | I105 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |筆記|
 |--------|---------------------------------|--------------------------------|----------------------------------------|--------|
 | `addr-multisig-council-threshold3` | `≥3` 重量，成員 `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` |理事會域治理法定人數。 |
 | `addr-multisig-wonderland-threshold2` | `≥2`，成員 `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` |雙簽名仙境示例（權重 1 + 2）。 |
@@ -314,10 +318,10 @@ tag-specific payload, then move on to the controller bytes.
 - 未知的選擇器/控制器標籤引發 `UnknownDomainTag` 或 `UnknownControllerTag`。
 - 過大或畸形的密鑰材料會引發 `KeyPayloadTooLong` 或 `InvalidPublicKey`。
 - 超過 255 個成員的多重簽名控制器籌集了 `MultisigMemberOverflow`。
-- IME/NFKC 轉換：半角 Sora 假名可以標準化為其全角形式，而不會破壞解碼，但 ASCII `sora` 哨兵和 IH58 數字/字母必須保持 ASCII。全角或大小寫折疊標記表面為 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效負載引發 `ERR_INVALID_COMPRESSED_CHAR`，校驗和不匹配冒泡為 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的屬性測試涵蓋了這些路徑，因此 SDK 和錢包可以依賴確定性故障。
-- 當 IH58（首選）/sora（第二佳）輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `address@domain` (rejected legacy form) 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
+- IME/NFKC 轉換：半角 Sora 假名可以標準化為其全角形式，而不會破壞解碼，但 ASCII `sora` 哨兵和 I105 數字/字母必須保持 ASCII。全角或大小寫折疊標記表面為 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效負載引發 `ERR_INVALID_COMPRESSED_CHAR`，校驗和不匹配冒泡為 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的屬性測試涵蓋了這些路徑，因此 SDK 和錢包可以依賴確定性故障。
+- 當 I105（首選）/sora（第二佳）輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `address@domain` (rejected legacy form) 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
 - 本地選擇器有效負載短於 12 字節表面 `ERR_LOCAL8_DEPRECATED`，保留傳統 Local-8 摘要的硬切換。
-- Domainless IH58 (preferred)/sora (second-best) literals bind directly to the configured default domain label for canonical selector-free payloads. Legacy selector-bearing literals without an explicit `@<domain>` suffix may still fail with `ERR_DOMAIN_SELECTOR_UNRESOLVED` when domain reconstruction is impossible.
+- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 規範二元向量
 
@@ -326,7 +330,7 @@ tag-specific payload, then move on to the controller bytes.
   細分：`0x02` 標頭、`0x00` 選擇器（隱式默認值）、`0x00` 控制器標籤、`0x01` 曲線 id (Ed25519)、`0x20` 密鑰長度，後跟 32 字節密鑰負載。
 - **本地域摘要（`treasury`，種子字節 `0x01`）**  
   規範十六進制：`0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`。  
-  細分：`0x02` 標頭、選擇器標籤 `0x01` 加上摘要 `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`，後跟單密鑰有效負載（`0x00` 標籤、`0x01` 曲線 id、`0x20` 長度、32 字節 Ed25519鍵）。單元測試 (`account::address::tests::parse_encoded_accepts_all_formats`) 通過 `AccountAddress::parse_encoded` 斷言下面的 V1 向量，保證工具可以依賴十六進制、IH58（首選）和壓縮（`sora`，第二佳）形式的規範有效負載。使用 `cargo run -p iroha_data_model --example address_vectors` 重新生成擴展夾具組。
+  細分：`0x02` 標頭、選擇器標籤 `0x01` 加上摘要 `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`，後跟單密鑰有效負載（`0x00` 標籤、`0x01` 曲線 id、`0x20` 長度、32 字節 Ed25519鍵）。單元測試 (`account::address::tests::parse_encoded_accepts_all_formats`) 通過 `AccountAddress::parse_encoded` 斷言下面的 V1 向量，保證工具可以依賴十六進制、I105（首選）和壓縮（`sora`，第二佳）形式的規範有效負載。使用 `cargo run -p iroha_data_model --example address_vectors` 重新生成擴展夾具組。
 
 |域名 |種子字節 |規範六角 |壓縮 (`sora`) |
 |------------------------|----------|--------------------------------------------------------------------------------------------------------|------------|
@@ -349,19 +353,19 @@ tag-specific payload, then move on to the controller bytes.
 
 Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 （`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`）。的
-因此，`AccountAddress::to_ih58` 和 `to_compressed_sora` 助手會發出
+因此，`AccountAddress::to_i105` 和 `to_i105` 助手會發出
 每個規範有效負載的一致文本形式。精選賽程來自
 `fixtures/account/address_vectors.json`（通過生成
 `cargo xtask address-vectors`）如下所示以供快速參考：
 
-|帳戶/選擇器 | IH58 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |
+|帳戶/選擇器 | I105 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |
 |--------------------------------|--------------------------------|-------------------------|
 | `default` 域（隱式選擇器，種子 `0x00`）| `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE`（提供顯式路由提示時可選 `@default` 後綴）|
 | `treasury`（本地摘要選擇器，種子 `0x01`）| `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 |全局註冊表指針（`registry_id = 0x0000_002A`，相當於 `treasury`）| `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 這些字符串與 CLI (`iroha tools address convert`)、Torii 發出的字符串匹配
-響應 (`address_format=ih58|compressed`) 和 SDK 幫助程序，因此 UX 複製/粘貼
+響應 (`canonical I105 literal rendering`) 和 SDK 幫助程序，因此 UX 複製/粘貼
 流量可以逐字依賴它們。僅當您需要顯式路由提示時才附加 `<address>@<domain>` (rejected legacy form)；後綴不是規範輸出的一部分。
 
 #### 2.6 用於互操作性的文本別名（計劃）
@@ -369,57 +373,57 @@ Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 - **鏈別名樣式：** `ih:<chain-alias>:<alias@domain>` 用於日誌和人類
   條目。錢包必須解析前綴，驗證嵌入的鏈，並阻止
   不匹配。
-- **CAIP-10 形式：** `iroha:<caip-2-id>:<ih58-addr>` 與鏈無關
+- **CAIP-10 形式：** `iroha:<caip-2-id>:<i105-addr>` 與鏈無關
   集成。此映射在發貨中**尚未實現**
   工具鏈。
 - **機器助手：** 發布 Rust、TypeScript/JavaScript、Python 的編解碼器
-  和 Kotlin 涵蓋 IH58 和壓縮格式（`AccountAddress::to_ih58`，
+  和 Kotlin 涵蓋 I105 和壓縮格式（`AccountAddress::to_i105`，
   `AccountAddress::parse_encoded` 及其 SDK 等效項）。 CAIP-10 助手是
   未來的工作。
 
-#### 2.7 確定性 IH58 別名
+#### 2.7 確定性 I105 別名
 
-- **前綴映射：** 重新使用 `chain_discriminant` 作為 IH58 網絡前綴。
-  `encode_ih58_prefix()`（參見 `crates/iroha_data_model/src/account/address.rs`）
+- **前綴映射：** 重新使用 `chain_discriminant` 作為 I105 網絡前綴。
+  `encode_i105_prefix()`（參見 `crates/iroha_data_model/src/account/address.rs`）
   為值 `<64` 發出 6 位前綴（單字節）和 14 位兩字節
   更大網絡的形式。權威作業在
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
   SDK 必須保持匹配的 JSON 註冊表同步以避免衝突。
-- **帳戶材料：** IH58 編碼由以下構建的規範有效負載
+- **帳戶材料：** I105 編碼由以下構建的規範有效負載
   `AccountAddress::canonical_bytes()`—標頭字節、域選擇器和
-  控制器有效負載。沒有額外的哈希步驟； IH58 嵌入
+  控制器有效負載。沒有額外的哈希步驟； I105 嵌入
   Rust 生成的二進制控制器有效負載（單密鑰或多簽名）
   編碼器，而不是用於多重簽名策略摘要的 CTAP2 映射。
-- **編碼：** `encode_ih58()` 將前綴字節與規範連接起來
+- **編碼：** `encode_i105()` 將前綴字節與規範連接起來
   有效負載並附加從 Blake2b-512 派生的 16 位校驗和，其中固定
-  前綴 `IH58PRE` (`b"IH58PRE" || prefix || payload`)。結果通過 `bs58` 進行 Base58 編碼。
+  前綴 `I105PRE` (`b"I105PRE" || prefix || payload`)。結果通過 `bs58` 進行 Base58 編碼。
   CLI/SDK 幫助程序公開相同的過程，並且 `AccountAddress::parse_encoded`
-  通過 `decode_ih58` 反轉它。
+  通過 `decode_i105` 反轉它。
 
 #### 2.8 規範文本測試向量
 
-`fixtures/account/address_vectors.json` 包含完整的 IH58（首選）和壓縮的（`sora`，第二好的）
+`fixtures/account/address_vectors.json` 包含完整的 I105（首選）和壓縮的（`sora`，第二好的）
 每個規範有效負載的文字。亮點：
 
 - **`addr-single-default-ed25519`（Sora Nexus，前綴 `0x02F1`）。 **  
-  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`，壓縮 (`sora`)
+  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`，壓縮 (`sora`)
   `sora2QG…U4N5E5`。 Torii 從 `AccountId` 發出這些確切的字符串
-  `Display` 實現（規範 IH58）和 `AccountAddress::to_compressed_sora`。
+  `Display` 實現（規範 I105）和 `AccountAddress::to_i105`。
 - **`addr-global-registry-002a`（註冊表選擇器→財務）。 **  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`，壓縮 (`sora`)
+  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`，壓縮 (`sora`)
   `sorakX…CM6AEP`。證明註冊表選擇器仍然解碼為
   與相應的本地摘要相同的規範有效負載。
-- **失敗案例（`ih58-prefix-mismatch`）。 **  
-  在節點上解析使用前綴 `NETWORK_PREFIX + 1` 編碼的 IH58 文字
+- **失敗案例（`i105-prefix-mismatch`）。 **  
+  在節點上解析使用前綴 `NETWORK_PREFIX + 1` 編碼的 I105 文字
   期望默認前綴產生
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  在嘗試域路由之前。 `ih58-checksum-mismatch` 夾具
+  在嘗試域路由之前。 `i105-checksum-mismatch` 夾具
   對 Blake2b 校驗和進行篡改檢測。
 
 #### 2.9 合規裝置
 
 ADDR-2 提供了一個可重玩的夾具包，涵蓋正面和負面
-跨規範十六進制、IH58（首選）、壓縮（`sora`、半角/全角）、隱式的場景
+跨規範十六進制、I105（首選）、壓縮（`sora`、半角/全角）、隱式的場景
 默認選擇器、全局註冊表別名和多重簽名控制器。的
 規範的 JSON 存在於 `fixtures/account/address_vectors.json` 中，並且可以
 重新生成：
@@ -556,12 +560,12 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
 
 |類型 |目的|必填字段 |
 |------|---------|-----------------|
-| `global_domain` |聲明域已全局註冊，並且應映射到鏈判別式和 IH58 前綴。 | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
+| `global_domain` |聲明域已全局註冊，並且應映射到鏈判別式和 I105 前綴。 | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
 | `tombstone` |永久停用別名/選擇器。擦除 Local-8 摘要或刪除域時需要。 | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 `global_domain` 條目可以選擇包含 `manifest_url` 或 `sorafs_cid`
 將錢包指向簽名的鏈元數據，但規范元組仍然存在
-`{domain, chain, discriminant/ih58_prefix}`。 `tombstone` 記錄**必須**引用
+`{domain, chain, discriminant/i105_prefix}`。 `tombstone` 記錄**必須**引用
 已退休的選擇器和授權的票證/治理工件
 進行更改，以便可以離線重建審計跟踪。
 
@@ -585,14 +589,14 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
    `iroha tools address convert <address> --format json --expect-prefix 753`
    （或通過消耗 `fixtures/account/address_vectors.json`
    `scripts/account_fixture_helper.py`) 捕獲准確的 `digest_hex`。
-   CLI 接受 IH58、`sora…` 和規範 `0x…` 文字；追加
+   CLI 接受 I105、`i105` 和規範 `0x…` 文字；追加
    `@<domain>` 僅當您需要保留清單標籤時。
    JSON 摘要通過 `input_domain` 字段顯示該域，並且
    `legacy  suffix` 將轉換後的編碼重播為 `<address>@<domain>` (rejected legacy form)
    清單差異（此後綴是元數據，而不是規範帳戶 ID）。
    對於面向換行的導出使用
    `iroha tools address normalize --input <file> legacy-selector input mode` 批量轉換本地
-   選擇器轉換成規範的 IH58（首選）、壓縮的（`sora`，第二好的）、十六進製或 JSON 形式，同時跳過
+   選擇器轉換成規範的 I105（首選）、壓縮的（`sora`，第二好的）、十六進製或 JSON 形式，同時跳過
    非本地行。當審計員需要電子表格友好的證據時，運行
    `iroha tools address audit --input <file> --format csv` 發出 CSV 摘要
    (`input,status,format,domain_kind,…`) 突出顯示本地選擇器，
@@ -602,7 +606,7 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
    在請求籤名之前使用 `cargo xtask address-vectors` 的清單。
 4. **驗證並發布。 ** 遵循運行手冊清單（哈希值、Sigstore、
    序列單調性），然後將包鏡像到 SoraFS。現在 Torii
-   捆綁包落地後立即規範化 IH58（首選）/sora（第二佳）文字。
+   捆綁包落地後立即規範化 I105（首選）/sora（第二佳）文字。
 5. **監控和回滾。 ** 將 Local-8 和 Local-12 碰撞面板保持在
    30天歸零；如果出現回歸，請重新發布之前的清單
    僅在受影響的非生產環境中，直到遙測穩定為止。
@@ -614,80 +618,79 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
 
 ### 5.錢包和API人體工程學
 
-- **顯示默認值：** 錢包顯示 IH58 地址（短，校驗和）
+- **顯示默認值：** 錢包顯示 I105 地址（短，校驗和）
   加上從註冊表中獲取的解析域作為標籤。域名是
-  明確標記為可能更改的描述性元數據，而 IH58 是
+  明確標記為可能更改的描述性元數據，而 I105 是
   穩定的地址。
-- **輸入規範化：** Torii 和 SDK 接受 IH58（首選）/sora（次佳）/0x
+- **輸入規範化：** Torii 和 SDK 接受 I105（首選）/sora（次佳）/0x
   地址加上 `alias@domain` (rejected legacy form)、`uaid:…` 和
-  `opaque:…` 形式，然後規範化為 IH58 進行輸出。沒有
+  `opaque:…` 形式，然後規範化為 I105 進行輸出。沒有
   嚴格模式切換；原始電話/電子郵件標識符必須保留在賬本之外
   通過 UAID/不透明映射。
-- **錯誤預防：** 錢包解析 IH58 前綴並強制鏈判別
+- **錯誤預防：** 錢包解析 I105 前綴並強制鏈判別
   期望。鏈不匹配會通過可操作的診斷觸發硬故障。
 - **編解碼器庫：** 官方 Rust、TypeScript/JavaScript、Python 和 Kotlin
-  庫提供 IH58 編碼/解碼以及壓縮 (`sora`) 支持
+  庫提供 I105 編碼/解碼以及壓縮 (`sora`) 支持
   避免碎片化的實施。 CAIP-10 轉換尚未發貨。
 
 #### 輔助功能和安全共享指南- 實時跟踪產品表面的實施指南
   `docs/portal/docs/reference/address-safety.md`；參考該清單時
   使這些要求適應錢包或瀏覽器用戶體驗。
-- **安全共享流程：** 複製或顯示地址的表面默認為 IH58 形式，並公開相鄰的“共享”操作，該操作顯示完整的字符串和從同一負載派生的 QR 碼，以便用戶可以通過視覺或掃描來驗證校驗和。當截斷不可避免時（例如，小屏幕），請保留字符串的開頭和結尾，添加清晰的省略號，並保持可通過複製到剪貼板訪問完整地址，以防止意外剪輯。
+- **安全共享流程：** 複製或顯示地址的表面默認為 I105 形式，並公開相鄰的“共享”操作，該操作顯示完整的字符串和從同一負載派生的 QR 碼，以便用戶可以通過視覺或掃描來驗證校驗和。當截斷不可避免時（例如，小屏幕），請保留字符串的開頭和結尾，添加清晰的省略號，並保持可通過複製到剪貼板訪問完整地址，以防止意外剪輯。
 - **IME 保護措施：** 地址輸入必須拒絕來自 IME/IME 風格鍵盤的組合偽影。強制僅輸入 ASCII，在檢測到全角或假名字符時顯示內聯警告，並提供純文本粘貼區域，在驗證之前剝離組合標記，以便日語和中文用戶可以禁用其 IME，而不會丟失進度。
-- **屏幕閱讀器支持：** 提供可視化隱藏標籤 (`aria-label`/`aria-describedby`)，用於描述前導 Base58 前綴數字並將 IH58 有效負載分為 4 或 8 個字符組，因此輔助技術讀取分組字符而不是連續字符串。通過禮貌的實時區域宣布複製/共享成功，並確保二維碼預覽包含描述性替代文本（“鏈 0x02F1 上 <alias> 的 IH58 地址”）。
-- **僅 Sora 壓縮使用：** 始終將 `sora…` 壓縮視圖標記為“僅 Sora”，並在復制之前將其置於顯式確認後面。當鏈判別式不是 Sora Nexus 值時，SDK 和錢包必須拒絕顯示壓縮輸出，並應引導用戶返回 IH58 進行網絡間轉賬，以避免資金錯誤路由。
+- **屏幕閱讀器支持：** 提供可視化隱藏標籤 (`aria-label`/`aria-describedby`)，用於描述前導 Base58 前綴數字並將 I105 有效負載分為 4 或 8 個字符組，因此輔助技術讀取分組字符而不是連續字符串。通過禮貌的實時區域宣布複製/共享成功，並確保二維碼預覽包含描述性替代文本（“鏈 0x02F1 上 <alias> 的 I105 地址”）。
+- **僅 Sora 壓縮使用：** 始終將 `i105` 壓縮視圖標記為“僅 Sora”，並在復制之前將其置於顯式確認後面。當鏈判別式不是 Sora Nexus 值時，SDK 和錢包必須拒絕顯示壓縮輸出，並應引導用戶返回 I105 進行網絡間轉賬，以避免資金錯誤路由。
 
 ## 實施清單
 
-- **IH58 信封：** 前綴使用緊湊型編碼 `chain_discriminant`
-  來自 `encode_ih58_prefix()` 的 6 位/14 位方案，主體是規範字節
+- **I105 信封：** 前綴使用緊湊型編碼 `chain_discriminant`
+  來自 `encode_i105_prefix()` 的 6 位/14 位方案，主體是規範字節
   (`AccountAddress::canonical_bytes()`)，校驗和是前兩個字節
-  Blake2b-512（`b"IH58PRE"` || 前綴 || 主體）。完整的有效負載是Base58-
+  Blake2b-512（`b"I105PRE"` || 前綴 || 主體）。完整的有效負載是Base58-
   通過 `bs58` 編碼。
 - **註冊合約：** 簽名 JSON（和可選的 Merkle 根）發布
-  `{discriminant, ih58_prefix, chain_alias, endpoints}` 帶 24 小時 TTL 和
+  `{discriminant, i105_prefix, chain_alias, endpoints}` 帶 24 小時 TTL 和
   旋轉鍵。
 - **域名政策：** ASCII `Name` 今天；如果啟用 i18n，請申請 UTS-46
   標準化和 UTS-39 用於易混淆的檢查。強制執行最大標籤 (63) 和
   總長度 (255)。
-- **文本助手：** 在 Rust 中提供 IH58 ↔ 壓縮 (`sora…`) 編解碼器，
+- **文本助手：** 在 Rust 中提供 I105 ↔ 壓縮 (`i105`) 編解碼器，
   具有共享測試向量的 TypeScript/JavaScript、Python 和 Kotlin (CAIP-10
   映射仍然是未來的工作）。
 - **CLI 工具：** 通過 `iroha tools address convert` 提供確定性操作員工作流程
-  （參見 `crates/iroha_cli/src/address.rs`），它接受 IH58/`sora…`/`0x…` 文字和
-  可選的 `<address>@<domain>` (rejected legacy form) 標籤，默認為使用 Sora Nexus 前綴 (`753`) 的 IH58 輸出，
+  （參見 `crates/iroha_cli/src/address.rs`），它接受 I105/`0x…` 文字和
+  可選的 `<address>@<domain>` (rejected legacy form) 標籤，默認為使用 Sora Nexus 前綴 (`753`) 的 I105 輸出，
   並且僅在操作員明確請求時才發出僅 Sora 的壓縮字母表
-  `--format compressed` 或 JSON 摘要模式。該命令強制執行前綴期望
+  `--format i105` 或 JSON 摘要模式。該命令強制執行前綴期望
   解析，記錄提供的域（JSON 中的 `input_domain`）和 `legacy  suffix` 標誌
   將轉換後的編碼重播為 `<address>@<domain>` (rejected legacy form)，因此明顯的差異仍然符合人體工程學。
 - **錢包/瀏覽器用戶體驗：**遵循[地址顯示準則](source/sns/address_display_guidelines.md)
-  附帶 ADDR-6 — 提供雙複製按鈕，將 IH58 保留為 QR 有效負載，並發出警告
-  用戶認為壓縮的 `sora…` 形式僅適用於 Sora，並且容易受到 IME 重寫。
+  附帶 ADDR-6 — 提供雙複製按鈕，將 I105 保留為 QR 有效負載，並發出警告
+  用戶認為壓縮的 `i105` 形式僅適用於 Sora，並且容易受到 IME 重寫。
 - **Torii 集成：** 緩存 Nexus 體現尊重 TTL，發出
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` 確定性地，並且
-  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
-  compressed accepted) with canonical IH58 output.
+  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
 
 ### Torii 響應格式
 
-- `GET /v1/accounts` 接受可選的 `address_format` 查詢參數並且
+- `GET /v1/accounts` 接受可選的 `canonical I105 rendering` 查詢參數並且
   `POST /v1/accounts/query` 接受 JSON 信封內的相同字段。
   支持的值為：
-  - `ih58`（默認）——響應發出規範的 IH58 Base58 有效負載（例如，
+  - `i105`（默認）——響應發出規範的 I105 Base58 有效負載（例如，
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`）。
-  - `compressed` — 響應發出僅 Sora 的 `sora…` 壓縮視圖，同時
+  - `i105_default` — 響應發出僅 Sora 的 `i105` 壓縮視圖，同時
     保持過濾器/路徑參數規範。
 - 無效值返回 `400` (`QueryExecutionFail::Conversion`)。這允許
   錢包和瀏覽器請求壓縮字符串以獲得僅限 Sora 的 UX，同時
-  將 IH58 保留為可互操作的默認值。
+  將 I105 保留為可互操作的默認值。
 - 資產持有者列表 (`GET /v1/assets/{definition_id}/holders`) 及其 JSON
-  對應的信封 (`POST …/holders/query`) 也兌現 `address_format`。
+  對應的信封 (`POST …/holders/query`) 也兌現 `canonical I105 rendering`。
   每當 `items[*].account_id` 字段發出壓縮文字
-  參數/信封字段設置為 `compressed`，鏡像帳戶
+  參數/信封字段設置為 `i105_default`，鏡像帳戶
   端點，以便瀏覽器可以跨目錄呈現一致的輸出。
 - **測試：** 添加編碼器/解碼器往返、錯誤鏈的單元測試
   失敗和明顯的查找；在 Torii 和 SDK 中添加集成覆蓋範圍
-  對於 IH58 流端到端。
+  對於 I105 流端到端。
 
 ## 錯誤代碼註冊表
 
@@ -704,30 +707,30 @@ SDK、錢包和 Torii 表面應與人類可讀的表面一起顯示
 | `ERR_KEY_PAYLOAD_TOO_LONG` |簽名密鑰有效負載長度超出支持的限制。 |單鍵控制器僅限於 `u8` 長度；對大型公鑰使用多重簽名（例如 ML-DSA）。 |
 | `ERR_INVALID_HEADER_VERSION` |地址標頭版本超出支持範圍。 |為 V1 地址發出標頭版本 `0`；在採用新版本之前升級編碼器。 |
 | `ERR_INVALID_NORM_VERSION` |無法識別標準化版本標誌。 |使用規範化版本 `1` 並避免切換保留位。 |
-| `ERR_INVALID_IH58_PREFIX` |無法對請求的 IH58 網絡前綴進行編碼。 |在鏈註冊表中發布的包含 `0..=16383` 範圍內選擇一個前綴。 |
+| `ERR_INVALID_I105_PREFIX` |無法對請求的 I105 網絡前綴進行編碼。 |在鏈註冊表中發布的包含 `0..=16383` 範圍內選擇一個前綴。 |
 | `ERR_CANONICAL_HASH_FAILURE` |規範有效負載哈希失敗。 |重試操作；如果錯誤仍然存​​在，請將其視為哈希堆棧中的內部錯誤。 |
 
 ### 格式解碼和自動檢測
 
 |代碼|失敗|建議的補救措施|
 |------|---------|------------------------|
-| `ERR_INVALID_IH58_ENCODING` | IH58 字符串包含字母表之外的字符。 |確保地址使用已發布的 IH58 字母表，並且在復制/粘貼過程中未被截斷。 |
+| `ERR_INVALID_I105_ENCODING` | I105 字符串包含字母表之外的字符。 |確保地址使用已發布的 I105 字母表，並且在復制/粘貼過程中未被截斷。 |
 | `ERR_INVALID_LENGTH` |有效負載長度與選擇器/控制器的預期規範大小不匹配。 |為選定的域選擇器和控制器佈局提供完整的規範有效負載。 |
-| `ERR_CHECKSUM_MISMATCH` | IH58（首選）或壓縮（`sora`，第二好的）校驗和驗證失敗。 |從可信來源重新生成地址；這通常表示複製/粘貼錯誤。 |
-| `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 前綴字節格式錯誤。 |使用兼容的編碼器重新編碼地址；不要手動更改前導 Base58 字節。 |
+| `ERR_CHECKSUM_MISMATCH` | I105（首選）或壓縮（`sora`，第二好的）校驗和驗證失敗。 |從可信來源重新生成地址；這通常表示複製/粘貼錯誤。 |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 前綴字節格式錯誤。 |使用兼容的編碼器重新編碼地址；不要手動更改前導 Base58 字節。 |
 | `ERR_INVALID_HEX_ADDRESS` |規範的十六進制形式無法解碼。 |提供由官方編碼器生成的以 `0x` 為前綴、偶數長度的十六進製字符串。 |
 | `ERR_MISSING_COMPRESSED_SENTINEL` |壓縮形式不以 `sora` 開頭。 |在將壓縮的 Sora 地址交給解碼器之前，使用所需的哨兵作為前綴。 |
 | `ERR_COMPRESSED_TOO_SHORT` |壓縮字符串缺少足夠的有效負載和校驗和數字。 |使用編碼器發出的完整壓縮字符串而不是截斷的片段。 |
 | `ERR_INVALID_COMPRESSED_CHAR` |遇到壓縮字母表之外的字符。 |將字符替換為已發布的半角/全角表中的有效 Base-105 字形。 |
 | `ERR_INVALID_COMPRESSED_BASE` |編碼器嘗試使用不受支持的基數。 |針對編碼器提交錯誤； V1 中壓縮字母表固定為基數 105。 |
 | `ERR_INVALID_COMPRESSED_DIGIT` |數字值超過壓縮字母大小。 |確保每個數字都在 `0..105)` 範圍內，如有必要，請重新生成地址。 |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` |自動檢測無法識別輸入格式。 |調用解析器時提供 IH58（首選）、壓縮的 (`sora`) 或規範的 `0x` 十六進製字符串。 |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` |自動檢測無法識別輸入格式。 |調用解析器時提供 I105（首選）、壓縮的 (`sora`) 或規範的 `0x` 十六進製字符串。 |
 
 ### 域和網絡驗證|代碼|失敗|建議的補救措施|
 |------|---------|------------------------|
 | `ERR_DOMAIN_MISMATCH` |域選擇器與預期域不匹配。 |使用為目標域頒發的地址或更新期望。 |
 | `ERR_INVALID_DOMAIN_LABEL` |域標籤未通過規範化檢查。 |編碼前使用 UTS-46 非過渡處理規範化域。 |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` |解碼後的 IH58 網絡前綴與配置的值不同。 |切換到目標鏈中的地址或調整預期的判別式/前綴。 |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` |解碼後的 I105 網絡前綴與配置的值不同。 |切換到目標鏈中的地址或調整預期的判別式/前綴。 |
 | `ERR_UNKNOWN_ADDRESS_CLASS` |地址類別位無法識別。 |將解碼器升級到可以理解新類的版本，或避免篡改標頭位。 |
 | `ERR_UNKNOWN_DOMAIN_TAG` |域選擇器標籤未知。 |更新到支持新選擇器類型的版本，或避免在 V1 節點上使用實驗性負載。 |
 | `ERR_UNEXPECTED_EXTENSION_FLAG` |保留擴展位已設置。 |清除保留位；它們將保持封閉狀態，直到未來的 ABI 引入它們。 |
@@ -746,14 +749,14 @@ SDK、錢包和 Torii 表面應與人類可讀的表面一起顯示
 ## 考慮的替代方案
 
 - **純 Base58Check（比特幣風格）。 ** 校驗和更簡單，但錯誤檢測更弱
-  比 Blake2b 派生的 IH58 校驗和（`encode_ih58` 截斷 512 位哈希值）
+  比 Blake2b 派生的 I105 校驗和（`encode_i105` 截斷 512 位哈希值）
   並且缺乏 16 位判別式的顯式前綴語義。
 - **在域字符串中嵌入鏈名稱（例如，`finance@chain`）。 ** 中斷
 - **僅依靠 Nexus 路由而不更改地址。 **用戶仍然會
   複製/粘貼不明確的字符串；我們希望地址本身攜帶上下文。
 - **Bech32m 信封。 ** QR 友好並提供人類可讀的前綴，但是
-  將偏離運輸 IH58 實施 (`AccountAddress::to_ih58`)
-  並需要重新創建所有裝置/SDK。目前的路線圖保持 IH58+
+  將偏離運輸 I105 實施 (`AccountAddress::to_i105`)
+  並需要重新創建所有裝置/SDK。目前的路線圖保持 I105+
   壓縮（`sora`）支持，同時繼續研究未來
   Bech32m/QR 層（CAIP-10 映射被推遲）。
 
@@ -767,15 +770,15 @@ SDK、錢包和 Torii 表面應與人類可讀的表面一起顯示
   Nexus 分發的傳輸安全（HTTPS 固定、IPFS 哈希格式）。
 - 確定是否支持遷移的域別名/重定向以及如何支持
   在不打破決定論的情況下將它們浮現出來。
-- 指定 Kotodama/IVM 合約如何訪問 IH58 助手（`to_address()`、
+- 指定 Kotodama/IVM 合約如何訪問 I105 助手（`to_address()`、
   `parse_address()`）以及鏈上存儲是否應該公開 CAIP-10
-  映射（現在 IH58 是規範的）。
-- 探索在外部註冊表中註冊 Iroha 鏈（例如 IH58 註冊表、
+  映射（現在 I105 是規範的）。
+- 探索在外部註冊表中註冊 Iroha 鏈（例如 I105 註冊表、
   CAIP 命名空間目錄）以實現更廣泛的生態系統協調。
 
 ## 後續步驟
 
-1、IH58編碼登陸`iroha_data_model`（`AccountAddress::to_ih58`，
+1、I105編碼登陸`iroha_data_model`（`AccountAddress::to_i105`，
    `parse_encoded`);繼續將固定裝置/測試移植到每個 SDK 並清除任何
    Bech32m 佔位符。
 2. 使用 `chain_discriminant` 擴展配置模式並導出合理的

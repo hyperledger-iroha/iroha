@@ -20,7 +20,7 @@ title: ציות כתובת חשבון
 description: סיכום זרימת העבודה של fixture ADDR-2 וכיצד צוותי SDK נשארים מסונכרנים.
 ---
 
-חבילת ה-ADDR-2 הקנונית (`fixtures/account/address_vectors.json`) כוללת fixtures של IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature ו-negative. כל משטח SDK + Torii מסתמך על אותו JSON כדי לזהות כל סטייה של codec לפני הגעה לפרודקשן. דף זה משקף את תקציר הסטטוס הפנימי (`docs/source/account_address_status.md` בשורש המאגר) כדי שקוראי הפורטל יוכלו לעיין בזרימה בלי לחפור ב-mono-repo.
+חבילת ה-ADDR-2 הקנונית (`fixtures/account/address_vectors.json`) כוללת fixtures של I105 and i105-default (`sora`; half/full width), multisignature ו-negative. כל משטח SDK + Torii מסתמך על אותו JSON כדי לזהות כל סטייה של codec לפני הגעה לפרודקשן. דף זה משקף את תקציר הסטטוס הפנימי (`docs/source/account_address_status.md` בשורש המאגר) כדי שקוראי הפורטל יוכלו לעיין בזרימה בלי לחפור ב-mono-repo.
 
 ## יצירה מחדש או אימות של החבילה
 
@@ -51,7 +51,7 @@ Flags:
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-כל harness מבצע round-trip של הבייטים הקנוניים + IH58 + קידודים דחוסים ובודק שקודי השגיאה בסגנון Norito תואמים ל-fixture עבור המקרים השליליים.
+כל harness מבצע round-trip של הבייטים הקנוניים + I105 + קידודים דחוסים ובודק שקודי השגיאה בסגנון Norito תואמים ל-fixture עבור המקרים השליליים.
 
 ## צריכים אוטומציה?
 

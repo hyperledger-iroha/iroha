@@ -105,7 +105,7 @@ async function main() {
     AccountAddress.fromAccount({
       domain: "wonderland",
       publicKey: publicKeyFromPrivate(sessionPrivate),
-    }).toIH58();
+    }).toI105();
 
   const instructions = [
     buildSendToTwitterInstruction({ bindingHash: binding, amount }),

@@ -767,8 +767,9 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+        let alice =
+            Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let bob = Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
         let delivery_asset_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
         let payment_asset_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
@@ -806,8 +807,9 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+        let alice =
+            Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let bob = Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
         let delivery_asset_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
         let payment_asset_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();

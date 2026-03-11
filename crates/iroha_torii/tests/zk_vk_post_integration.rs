@@ -101,10 +101,7 @@ async fn vk_register_update_return_202() {
     // Prepare a keypair whose public key matches the authority account id.
     let kp = iroha_crypto::KeyPair::random();
     let exposed = iroha_crypto::ExposedPrivateKey(kp.private_key().clone());
-    let authority = AccountId::new(
-        "wonderland".parse().expect("domain"),
-        kp.public_key().clone(),
-    );
+    let authority = AccountId::new(kp.public_key().clone());
 
     // 1) Register (vk_bytes omitted; provide commitment_hex only)
     let body_reg_value = iroha_torii::json_object(vec![

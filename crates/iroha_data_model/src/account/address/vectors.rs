@@ -11,9 +11,10 @@ use norito::{
 };
 
 use super::{
-    AccountAddressError::*, COMPRESSED_BASE_U8, COMPRESSED_CHECKSUM_LEN, COMPRESSED_SENTINEL,
-    CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, DomainSelector, compressed_alphabet,
-    compressed_to_digits, compute_local_digest, default_domain_guard, default_domain_name,
+    AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, DomainSelector,
+    I105_BASE_U8, I105_CHECKSUM_LEN, chain_discriminant, compute_local_digest,
+    default_domain_guard, default_domain_name, i105_alphabet, i105_sentinel_for_discriminant,
+    i105_to_digits,
 };
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
@@ -21,7 +22,7 @@ use crate::{
     name::Name,
 };
 
-/// Default IH58 prefix used for deterministic vectors.
+/// Default I105 prefix used for deterministic vectors.
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
 
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
@@ -83,7 +84,7 @@ fn json_object(pairs: Vec<(&str, Value)>) -> Value {
 pub struct AddressVectorBundle {
     /// Default human-readable label applied when deriving account identifiers.
     pub default_domain_label: String,
-    /// Network prefix encoded in IH58-addressed test vectors.
+    /// Network prefix encoded in I105-addressed test vectors.
     pub network_prefix: u16,
     /// Deterministic fixtures covering single-key address encodings.
     pub single_key: Vec<SingleKeyVector>,
@@ -124,10 +125,10 @@ impl AddressVectorBundle {
                 "formats",
                 Value::Array(
                     [
-                        "ih58",
+                        "i105",
                         "canonical_hex",
-                        "compressed_halfwidth",
-                        "compressed_fullwidth",
+                        "i105_default_halfwidth",
+                        "i105_default_fullwidth",
                     ]
                     .into_iter()
                     .map(json_value)
@@ -156,12 +157,12 @@ pub struct SingleKeyVector {
     pub account_id: String,
     /// Canonical uppercase hexadecimal encoding of the controller address.
     pub canonical_hex: String,
-    /// IH58-encoded controller address string.
-    pub ih58: String,
-    /// Halfwidth compressed representation of the controller address.
-    pub compressed_halfwidth: String,
-    /// Fullwidth compressed representation of the controller address.
-    pub compressed_fullwidth: String,
+    /// I105-encoded controller address string.
+    pub i105: String,
+    /// Halfwidth i105_default representation of the controller address.
+    pub i105_default_halfwidth: String,
+    /// Fullwidth i105_default representation of the controller address.
+    pub i105_default_fullwidth: String,
     /// Domain selector input data required to reproduce the controller address.
     pub domain_selector: DomainSelectorVector,
     /// Curve identifier used by the controller's public key.
@@ -177,13 +178,13 @@ impl SingleKeyVector {
         let network_prefix_hex = format_u16_hex(network_prefix);
         let controller_curve_hex = format_u8_hex(self.controller_curve_id);
         let seed_byte_hex = format_u8_hex(self.seed_byte);
-        let ih58 = json_object(vec![
-            ("value", json_value(&self.ih58)),
+        let i105 = json_object(vec![
+            ("value", json_value(&self.i105)),
             ("network_prefix", json_value(&network_prefix_hex)),
         ]);
-        let compressed = json_object(vec![
-            ("halfwidth", json_value(&self.compressed_halfwidth)),
-            ("fullwidth", json_value(&self.compressed_fullwidth)),
+        let i105_default = json_object(vec![
+            ("halfwidth", json_value(&self.i105_default_halfwidth)),
+            ("fullwidth", json_value(&self.i105_default_fullwidth)),
         ]);
         let controller = json_object(vec![
             ("kind", json_value("single")),
@@ -197,8 +198,8 @@ impl SingleKeyVector {
             ("seed_byte", json_value(&seed_byte_hex)),
             ("account_id", json_value(&self.account_id)),
             ("canonical_hex", json_value(&self.canonical_hex)),
-            ("ih58", ih58),
-            ("compressed", compressed),
+            ("i105", i105),
+            ("i105_default", i105_default),
             ("domain_selector", self.domain_selector.to_json_value()),
             ("controller", controller),
         ])
@@ -214,12 +215,12 @@ pub struct MultisigVector {
     pub account_id: String,
     /// Canonical uppercase hexadecimal encoding of the account address.
     pub canonical_hex: String,
-    /// IH58-encoded multisig address string.
-    pub ih58: String,
-    /// Halfwidth compressed representation of the address.
-    pub compressed_halfwidth: String,
-    /// Fullwidth compressed representation of the address.
-    pub compressed_fullwidth: String,
+    /// I105-encoded multisig address string.
+    pub i105: String,
+    /// Halfwidth i105_default representation of the address.
+    pub i105_default_halfwidth: String,
+    /// Fullwidth i105_default representation of the address.
+    pub i105_default_fullwidth: String,
     /// Domain selector inputs that reproduce the canonical account.
     pub domain_selector: DomainSelectorVector,
     /// Multisig version number embedded in the controller payload.
@@ -244,13 +245,13 @@ impl MultisigVector {
             .iter()
             .map(MultisigMemberVector::to_json_value)
             .collect::<Vec<Value>>();
-        let ih58 = json_object(vec![
-            ("value", json_value(&self.ih58)),
+        let i105 = json_object(vec![
+            ("value", json_value(&self.i105)),
             ("network_prefix", json_value(&network_prefix_hex)),
         ]);
-        let compressed = json_object(vec![
-            ("halfwidth", json_value(&self.compressed_halfwidth)),
-            ("fullwidth", json_value(&self.compressed_fullwidth)),
+        let i105_default = json_object(vec![
+            ("halfwidth", json_value(&self.i105_default_halfwidth)),
+            ("fullwidth", json_value(&self.i105_default_fullwidth)),
         ]);
         let version = self.version;
         let threshold = self.threshold;
@@ -269,8 +270,8 @@ impl MultisigVector {
             ("domain", json_value(self.domain_label)),
             ("account_id", json_value(&self.account_id)),
             ("canonical_hex", json_value(&self.canonical_hex)),
-            ("ih58", ih58),
-            ("compressed", compressed),
+            ("i105", i105),
+            ("i105_default", i105_default),
             ("domain_selector", self.domain_selector.to_json_value()),
             ("controller", controller),
         ])
@@ -425,11 +426,10 @@ fn build_single_key_vectors(network_prefix: u16) -> Vec<SingleKeyVector> {
     VECTOR_SINGLE_DOMAINS
         .iter()
         .map(|(label, seed)| {
-            let domain = domain_id(label);
             let public_key = ed25519_pk_with(*seed);
-            let account = AccountId::new(domain, public_key);
+            let account = AccountId::new(public_key);
             let address = AccountAddress::from_account_id(&account)
-                .expect("account should encode into AccountAddress");
+                .expect("single-key account should encode into AccountAddress");
             build_single_vector(label, *seed, &account, &address, network_prefix)
         })
         .collect()
@@ -445,15 +445,15 @@ fn build_single_vector(
     let canonical_hex = address
         .canonical_hex()
         .expect("canonical hex must encode for deterministic vectors");
-    let ih58 = address
-        .to_ih58(network_prefix)
-        .expect("IH58 encoding must succeed");
-    let compressed_halfwidth = address
-        .to_compressed_sora()
-        .expect("compressed encoding must succeed");
-    let compressed_fullwidth = address
-        .to_compressed_sora_fullwidth()
-        .expect("fullwidth compressed encoding must succeed");
+    let i105 = address
+        .to_i105_for_discriminant(network_prefix)
+        .expect("I105 encoding must succeed");
+    let i105_default_halfwidth = address
+        .to_i105()
+        .expect("i105_default encoding must succeed");
+    let i105_default_fullwidth = address
+        .to_i105_fullwidth()
+        .expect("fullwidth i105_default encoding must succeed");
     let canonical_bytes = address
         .canonical_bytes()
         .expect("canonical bytes must be obtainable");
@@ -478,9 +478,9 @@ fn build_single_vector(
         seed_byte: seed,
         account_id: account.to_string(),
         canonical_hex,
-        ih58,
-        compressed_halfwidth,
-        compressed_fullwidth,
+        i105,
+        i105_default_halfwidth,
+        i105_default_fullwidth,
         domain_selector,
         controller_curve_id: single_payload.curve_id,
         controller_algorithm: algorithm.to_string(),
@@ -492,7 +492,6 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
     MULTISIG_FIXTURES
         .iter()
         .map(|spec| {
-            let domain = domain_id(spec.domain);
             let members = spec
                 .members
                 .iter()
@@ -502,7 +501,7 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                 })
                 .collect::<Vec<_>>();
             let policy = MultisigPolicy::new(spec.threshold, members).expect("valid policy");
-            let account = AccountId::new_multisig(domain, policy.clone());
+            let account = AccountId::new_multisig(policy.clone());
             let address = AccountAddress::from_account_id(&account)
                 .expect("multisig account should encode into AccountAddress");
             let canonical_bytes = address
@@ -536,15 +535,15 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                 canonical_hex: address
                     .canonical_hex()
                     .expect("canonical hex must encode for multisig vector"),
-                ih58: address
-                    .to_ih58(network_prefix)
-                    .expect("IH58 encoding must succeed for multisig vector"),
-                compressed_halfwidth: address
-                    .to_compressed_sora()
-                    .expect("compressed encoding must succeed for multisig vector"),
-                compressed_fullwidth: address
-                    .to_compressed_sora_fullwidth()
-                    .expect("fullwidth compressed encoding must succeed for multisig vector"),
+                i105: address
+                    .to_i105_for_discriminant(network_prefix)
+                    .expect("I105 encoding must succeed for multisig vector"),
+                i105_default_halfwidth: address
+                    .to_i105()
+                    .expect("i105_default encoding must succeed for multisig vector"),
+                i105_default_fullwidth: address
+                    .to_i105_fullwidth()
+                    .expect("fullwidth i105_default encoding must succeed for multisig vector"),
                 domain_selector: canonical_selector_metadata(),
                 version: controller_payload.version,
                 threshold: controller_payload.threshold,
@@ -564,59 +563,55 @@ fn build_error_vectors(network_prefix: u16) -> Vec<ErrorVector> {
 struct ErrorHarness {
     network_prefix: u16,
     address: AccountAddress,
-    compressed: String,
-    ih58: String,
+    i105_default: String,
+    i105: String,
     canonical_hex: String,
 }
 
 impl ErrorHarness {
     fn new(network_prefix: u16) -> Self {
-        let domain = domain_id("default");
-        let account = AccountId::new(domain, ed25519_pk_with(0x00));
+        let account = AccountId::new(ed25519_pk_with(0x2A));
         let address = AccountAddress::from_account_id(&account)
-            .expect("base account should encode successfully");
-        let compressed = address
-            .to_compressed_sora()
-            .expect("compressed encoding must succeed for base error harness");
-        let ih58 = address
-            .to_ih58(network_prefix)
-            .expect("IH58 encoding must succeed for error harness");
+            .expect("single-key account should encode into AccountAddress");
+        let i105_default = address.to_i105().expect("I105 encoding must succeed");
+        let i105 = address
+            .to_i105_for_discriminant(network_prefix)
+            .expect("I105 encoding must succeed");
         let canonical_hex = address
             .canonical_hex()
-            .expect("canonical hex must succeed for error harness");
-
+            .expect("canonical hex must encode for error harness");
         Self {
             network_prefix,
             address,
-            compressed,
-            ih58,
+            i105_default,
+            i105,
             canonical_hex,
         }
     }
 
     fn build_all(&self) -> Vec<ErrorVector> {
         vec![
-            self.compressed_invalid_char(),
-            self.compressed_checksum_mismatch(),
-            self.compressed_missing_sentinel(),
-            Self::compressed_too_short(),
-            self.ih58_unexpected_prefix(),
+            self.i105_invalid_char(),
+            self.i105_checksum_mismatch(),
+            self.i105_missing_sentinel(),
+            Self::i105_too_short(),
+            self.i105_unexpected_discriminant(),
             Self::canonical_invalid_hex(),
             Self::unsupported_alias_literal(),
             self.domain_mismatch(),
         ]
     }
 
-    fn compressed_invalid_char(&self) -> ErrorVector {
-        let mut invalid_char = self.compressed.clone();
-        let sentinel_len = COMPRESSED_SENTINEL.len();
+    fn i105_invalid_char(&self) -> ErrorVector {
+        let mut invalid_char = self.i105_default.clone();
+        let sentinel_len = i105_sentinel_for_discriminant(chain_discriminant()).len();
         invalid_char.replace_range(sentinel_len..=sentinel_len, "!");
-        let err = AccountAddress::from_compressed_sora(&invalid_char)
-            .expect_err("invalid character must fail");
+        let err =
+            AccountAddress::from_i105(&invalid_char).expect_err("invalid character must fail");
 
         ErrorVector {
-            label: "compressed_invalid_char",
-            decoder: "compressed_sora",
+            label: "i105_invalid_char",
+            decoder: "i105",
             input: invalid_char,
             error_variant: variant_name(&err),
             error_code: err.code_str(),
@@ -625,24 +620,24 @@ impl ErrorHarness {
         }
     }
 
-    fn compressed_checksum_mismatch(&self) -> ErrorVector {
-        let mut digits = compressed_to_digits(&self.compressed[COMPRESSED_SENTINEL.len()..])
-            .expect("valid compressed digits");
+    fn i105_checksum_mismatch(&self) -> ErrorVector {
+        let sentinel = i105_sentinel_for_discriminant(chain_discriminant());
+        let mut digits = i105_to_digits(&self.i105_default[sentinel.len()..])
+            .expect("valid i105_default digits");
         let tamper_index = digits
             .len()
-            .saturating_sub(COMPRESSED_CHECKSUM_LEN)
+            .saturating_sub(I105_CHECKSUM_LEN)
             .saturating_sub(1);
-        digits[tamper_index] = (digits[tamper_index] + 1) % COMPRESSED_BASE_U8;
-        let mut tampered = String::from(COMPRESSED_SENTINEL);
+        digits[tamper_index] = (digits[tamper_index] + 1) % I105_BASE_U8;
+        let mut tampered = sentinel;
         for digit in &digits {
-            tampered.push_str(compressed_alphabet()[usize::from(*digit)]);
+            tampered.push_str(i105_alphabet()[usize::from(*digit)]);
         }
-        let err = AccountAddress::from_compressed_sora(&tampered)
-            .expect_err("checksum mismatch must fail");
+        let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch must fail");
 
         ErrorVector {
-            label: "compressed_checksum_mismatch",
-            decoder: "compressed_sora",
+            label: "i105_checksum_mismatch",
+            decoder: "i105",
             input: tampered,
             error_variant: variant_name(&err),
             error_code: err.code_str(),
@@ -651,14 +646,15 @@ impl ErrorHarness {
         }
     }
 
-    fn compressed_missing_sentinel(&self) -> ErrorVector {
-        let missing_sentinel = self.compressed[COMPRESSED_SENTINEL.len()..].to_string();
-        let err = AccountAddress::from_compressed_sora(&missing_sentinel)
-            .expect_err("missing sentinel must fail");
+    fn i105_missing_sentinel(&self) -> ErrorVector {
+        let sentinel = i105_sentinel_for_discriminant(chain_discriminant());
+        let missing_sentinel = self.i105_default[sentinel.len()..].to_string();
+        let err =
+            AccountAddress::from_i105(&missing_sentinel).expect_err("missing sentinel must fail");
 
         ErrorVector {
-            label: "compressed_missing_sentinel",
-            decoder: "compressed_sora",
+            label: "i105_missing_sentinel",
+            decoder: "i105",
             input: missing_sentinel,
             error_variant: variant_name(&err),
             error_code: err.code_str(),
@@ -667,14 +663,13 @@ impl ErrorHarness {
         }
     }
 
-    fn compressed_too_short() -> ErrorVector {
-        let too_short = String::from("sora");
-        let err = AccountAddress::from_compressed_sora(&too_short)
-            .expect_err("too short compressed form must fail");
+    fn i105_too_short() -> ErrorVector {
+        let too_short = i105_sentinel_for_discriminant(chain_discriminant());
+        let err = AccountAddress::from_i105(&too_short).expect_err("too short i105 form must fail");
 
         ErrorVector {
-            label: "compressed_too_short",
-            decoder: "compressed_sora",
+            label: "i105_too_short",
+            decoder: "i105",
             input: too_short,
             error_variant: variant_name(&err),
             error_code: err.code_str(),
@@ -683,19 +678,22 @@ impl ErrorHarness {
         }
     }
 
-    fn ih58_unexpected_prefix(&self) -> ErrorVector {
-        let err = AccountAddress::from_ih58(&self.ih58, Some(self.network_prefix.wrapping_add(1)))
-            .expect_err("unexpected network prefix must fail");
-        let AccountAddressError::UnexpectedNetworkPrefix { expected, found } = &err else {
-            panic!("unexpected error variant from IH58 prefix guard: {err:?}");
+    fn i105_unexpected_discriminant(&self) -> ErrorVector {
+        let err = AccountAddress::from_i105_for_discriminant(
+            &self.i105,
+            Some(self.network_prefix.wrapping_add(1)),
+        )
+        .expect_err("unexpected network prefix must fail");
+        let AccountAddressError::UnexpectedNetworkPrefix { expected, found } = err else {
+            panic!("unexpected error variant from I105 discriminant guard");
         };
-        let expected_hex = format_u16_hex(*expected);
-        let found_hex = format_u16_hex(*found);
+        let expected_hex = format_u16_hex(expected);
+        let found_hex = format_u16_hex(found);
 
         ErrorVector {
-            label: "ih58_unexpected_prefix",
-            decoder: "ih58",
-            input: self.ih58.clone(),
+            label: "i105_unexpected_discriminant",
+            decoder: "i105",
+            input: self.i105.clone(),
             error_variant: variant_name(&err),
             error_code: err.code_str(),
             message: err.to_string(),
@@ -708,7 +706,8 @@ impl ErrorHarness {
 
     fn canonical_invalid_hex() -> ErrorVector {
         let invalid_hex = "0xnothex";
-        let err = AccountAddress::from_str(invalid_hex).expect_err("invalid hex must fail");
+        let err = AccountAddress::parse_encoded(invalid_hex, None)
+            .expect_err("invalid canonical_hex strict decode must fail");
 
         ErrorVector {
             label: "canonical_invalid_hex",
@@ -890,9 +889,6 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         KeyPayloadTooLong(_) => "KeyPayloadTooLong",
         InvalidHeaderVersion(_) => "InvalidHeaderVersion",
         InvalidNormVersion(_) => "InvalidNormVersion",
-        InvalidIh58Prefix(_) => "InvalidIh58Prefix",
-        HashError => "HashError",
-        InvalidIh58Encoding => "InvalidIh58Encoding",
         InvalidLength => "InvalidLength",
         ChecksumMismatch => "ChecksumMismatch",
         InvalidHexAddress => "InvalidHexAddress",
@@ -905,12 +901,11 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         InvalidPublicKey => "InvalidPublicKey",
         UnknownCurve(_) => "UnknownCurve",
         UnexpectedTrailingBytes => "UnexpectedTrailingBytes",
-        InvalidIh58PrefixEncoding(_) => "InvalidIh58PrefixEncoding",
-        MissingCompressedSentinel => "MissingCompressedSentinel",
-        CompressedTooShort => "CompressedTooShort",
-        InvalidCompressedChar(_) => "InvalidCompressedChar",
-        InvalidCompressedBase => "InvalidCompressedBase",
-        InvalidCompressedDigit(_) => "InvalidCompressedDigit",
+        MissingI105Sentinel => "MissingI105Sentinel",
+        I105TooShort => "I105TooShort",
+        InvalidI105Char(_) => "InvalidI105Char",
+        InvalidI105Base => "InvalidI105Base",
+        InvalidI105Digit(_) => "InvalidI105Digit",
         UnsupportedAddressFormat => "UnsupportedAddressFormat",
         MultisigMemberOverflow(_) => "MultisigMemberOverflow",
         InvalidMultisigPolicy(_) => "InvalidMultisigPolicy",
@@ -942,7 +937,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::account::address::{AccountAddress, AccountAddressFormat};
+    use crate::account::address::AccountAddress;
 
     #[test]
     fn json_value_serialises_borrowed_inputs() {
@@ -987,11 +982,11 @@ mod tests {
             "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
         );
         assert_eq!(
-            default_vector.ih58,
+            default_vector.i105,
             "6n7GJpgAsyaEoHR6UoQ39uQBWyJ896aEhEV2zDUAkryN943iyVxm5Rw"
         );
         assert_eq!(
-            default_vector.compressed_halfwidth,
+            default_vector.i105_default_halfwidth,
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert!(matches!(
@@ -1014,20 +1009,18 @@ mod tests {
             .map(|vector| vector.error_code)
             .collect::<Vec<_>>();
 
-        assert!(variants.contains(&"InvalidCompressedChar"));
+        assert!(variants.contains(&"InvalidI105Char"));
         assert!(variants.contains(&"ChecksumMismatch"));
-        assert!(variants.contains(&"MissingCompressedSentinel"));
-        assert!(variants.contains(&"CompressedTooShort"));
+        assert!(variants.contains(&"MissingI105Sentinel"));
+        assert!(variants.contains(&"I105TooShort"));
         assert!(variants.contains(&"UnexpectedNetworkPrefix"));
-        assert!(variants.contains(&"InvalidHexAddress"));
         assert!(variants.contains(&"UnsupportedAddressFormat"));
         assert!(variants.contains(&"DomainMismatch"));
-        assert!(codes.contains(&"ERR_INVALID_COMPRESSED_CHAR"));
+        assert!(codes.contains(&"ERR_INVALID_I105_CHAR"));
         assert!(codes.contains(&"ERR_CHECKSUM_MISMATCH"));
-        assert!(codes.contains(&"ERR_MISSING_COMPRESSED_SENTINEL"));
-        assert!(codes.contains(&"ERR_COMPRESSED_TOO_SHORT"));
+        assert!(codes.contains(&"ERR_MISSING_I105_SENTINEL"));
+        assert!(codes.contains(&"ERR_I105_TOO_SHORT"));
         assert!(codes.contains(&"ERR_UNEXPECTED_NETWORK_PREFIX"));
-        assert!(codes.contains(&"ERR_INVALID_HEX_ADDRESS"));
         assert!(codes.contains(&"ERR_UNSUPPORTED_ADDRESS_FORMAT"));
         assert!(codes.contains(&"ERR_DOMAIN_MISMATCH"));
     }
@@ -1041,11 +1034,11 @@ mod tests {
             .map(|vector| (vector.label, vector.decoder))
             .collect::<Vec<_>>();
         let expected = vec![
-            ("compressed_invalid_char", "compressed_sora"),
-            ("compressed_checksum_mismatch", "compressed_sora"),
-            ("compressed_missing_sentinel", "compressed_sora"),
-            ("compressed_too_short", "compressed_sora"),
-            ("ih58_unexpected_prefix", "ih58"),
+            ("i105_invalid_char", "i105"),
+            ("i105_checksum_mismatch", "i105"),
+            ("i105_missing_sentinel", "i105"),
+            ("i105_too_short", "i105"),
+            ("i105_unexpected_discriminant", "i105"),
             ("canonical_invalid_hex", "canonical_hex"),
             ("unsupported_alias_literal", "auto_detect"),
             ("domain_mismatch", "domain_check"),
@@ -1055,16 +1048,15 @@ mod tests {
 
     proptest! {
         #[test]
-        fn compressed_roundtrip(seed in any::<u8>(), domain_index in 0usize..VECTOR_SINGLE_DOMAINS.len()) {
+        fn i105_default_roundtrip(seed in any::<u8>(), domain_index in 0usize..VECTOR_SINGLE_DOMAINS.len()) {
             let _guard = default_domain_guard(Some("default"));
             let label = VECTOR_SINGLE_DOMAINS[domain_index].0;
-            let domain = domain_id(label);
-            let account = AccountId::new(domain, ed25519_pk_with(seed));
+            let _domain = domain_id(label);
+            let account = AccountId::new(ed25519_pk_with(seed));
             let address = AccountAddress::from_account_id(&account)
                 .expect("account must encode into AccountAddress");
-            let compressed = address.to_compressed_sora().expect("compressed encoding succeeds");
-            let (decoded, format) = AccountAddress::parse_encoded(&compressed, None).expect("parse compressed value succeeds");
-            prop_assert_eq!(format, AccountAddressFormat::Compressed);
+            let literal = address.to_i105().expect("i105 encoding succeeds");
+            let decoded = AccountAddress::parse_encoded(&literal, None).expect("parse i105 value succeeds");
             prop_assert_eq!(
                 decoded.canonical_bytes().expect("decoded canonical bytes"),
                 address.canonical_bytes().expect("source canonical bytes")

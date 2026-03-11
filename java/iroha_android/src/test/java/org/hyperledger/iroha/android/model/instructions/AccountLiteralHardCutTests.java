@@ -14,7 +14,7 @@ public final class AccountLiteralHardCutTests {
 
   @Test
   public void accountBuildersRejectDomainSuffixedLiterals() throws Exception {
-    final String account = sampleIh58(0x11);
+    final String account = sampleI105(0x11);
     final String legacy = account + "@wonderland";
 
     expectIllegalArgument(() -> GrantRoleInstruction.builder().setDestinationAccountId(legacy));
@@ -37,7 +37,7 @@ public final class AccountLiteralHardCutTests {
 
   @Test
   public void accountTargetInstructionsRejectDomainSuffixedLiterals() throws Exception {
-    final String account = sampleIh58(0x22);
+    final String account = sampleI105(0x22);
     final String legacy = account + "@wonderland";
 
     expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(legacy));
@@ -47,7 +47,7 @@ public final class AccountLiteralHardCutTests {
 
   @Test
   public void persistCouncilRejectsDomainSuffixedMembers() throws Exception {
-    final String account = sampleIh58(0x33);
+    final String account = sampleI105(0x33);
     expectIllegalArgument(
         () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@wonderland"));
     expectIllegalArgument(
@@ -70,7 +70,7 @@ public final class AccountLiteralHardCutTests {
     final byte[] sessionId = fill(0x10, 32);
     final byte[] appPublic = fill(0x20, 32);
     final byte[] walletPublic = fill(0x30, 32);
-    final String account = sampleIh58(0x44);
+    final String account = sampleI105(0x44);
 
     final byte[] preimage =
         ConnectCrypto.buildApprovePreimage(sessionId, appPublic, walletPublic, account, null, null);
@@ -83,7 +83,7 @@ public final class AccountLiteralHardCutTests {
           sessionId, appPublic, walletPublic, account + "@wonderland", null, null);
       throw new AssertionError("expected ConnectProtocolException");
     } catch (final ConnectProtocolException expected) {
-      assert expected.getMessage().contains("encoded IH58 or compressed sora")
+      assert expected.getMessage().contains("canonical I105 encoded")
           : "unexpected error: " + expected.getMessage();
     }
   }
@@ -103,10 +103,10 @@ public final class AccountLiteralHardCutTests {
     return out;
   }
 
-  private static String sampleIh58(final int fill) throws Exception {
+  private static String sampleI105(final int fill) throws Exception {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) fill);
     return AccountAddress.fromAccount(publicKey, "ed25519")
-        .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 }

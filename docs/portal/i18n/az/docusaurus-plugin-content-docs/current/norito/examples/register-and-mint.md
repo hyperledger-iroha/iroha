@@ -21,9 +21,9 @@ mənbə: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## Ledger prospekti
 
-- Hər bir SDK sürətli başlanğıcda quraşdırma mərhələsini əks etdirərək təyinat hesabının (məsələn, `ih58...`) mövcud olduğundan əmin olun.
+- Hər bir SDK sürətli başlanğıcda quraşdırma mərhələsini əks etdirərək təyinat hesabının (məsələn, `i105...`) mövcud olduğundan əmin olun.
 - ROSE aktivinin tərifini yaratmaq üçün `register_and_mint` giriş nöqtəsini çağırın və bir əməliyyatda Aliceyə 250 vahid nanə edin.
-- Nanənin uğur qazandığını təsdiqləmək üçün `client.request(FindAccountAssets)` və ya `iroha_cli ledger asset list --account ih58...` vasitəsilə balansları yoxlayın.
+- Nanənin uğur qazandığını təsdiqləmək üçün `client.request(FindAccountAssets)` və ya `iroha_cli ledger asset list --account i105...` vasitəsilə balansları yoxlayın.
 
 ## Əlaqədar SDK təlimatları
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

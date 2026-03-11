@@ -30,8 +30,8 @@ conta que voceplaneja usar. تحتوي الحزمة على حسابين مشتق
 شافيز دي التجريبي:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 قم بتأكيد القيم المدرجة كحسابات أولية:

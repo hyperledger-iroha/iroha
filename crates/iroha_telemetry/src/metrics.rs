@@ -7515,8 +7515,8 @@ pub struct Metrics {
     pub torii_address_collision_total: IntCounterVec,
     /// Torii Local-12 collision detections grouped by endpoint/domain label.
     pub torii_address_collision_domain_total: IntCounterVec,
-    /// Torii address_format selections grouped by endpoint/format.
-    pub torii_address_format_total: IntCounterVec,
+    /// Torii account literal selections grouped by endpoint/format.
+    pub torii_account_literal_total: IntCounterVec,
     /// Torii Norito RPC decode failures grouped by payload kind/reason.
     pub torii_norito_decode_failures_total: IntCounterVec,
     /// Torii pre-auth: active connections tracked by scheme (http/ws)
@@ -13080,10 +13080,10 @@ impl Default for Metrics {
             &["endpoint", "domain"],
         )
         .expect("Infallible");
-        let torii_address_format_total = IntCounterVec::new(
+        let torii_account_literal_total = IntCounterVec::new(
             Opts::new(
-                "torii_address_format_total",
-                "Torii address_format selections grouped by endpoint and format",
+                "torii_account_literal_total",
+                "Torii account literal selections grouped by endpoint and format",
             ),
             &["endpoint", "format"],
         )
@@ -13116,7 +13116,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_address_domain_total);
         register_guarded(&registry, &torii_address_collision_total);
         register_guarded(&registry, &torii_address_collision_domain_total);
-        register_guarded(&registry, &torii_address_format_total);
+        register_guarded(&registry, &torii_account_literal_total);
         register_guarded(&registry, &torii_norito_decode_failures_total);
         register_guarded(&registry, &torii_connect_sessions_total);
         register_guarded(&registry, &torii_connect_sessions_active);
@@ -14639,7 +14639,7 @@ impl Default for Metrics {
             torii_address_domain_total,
             torii_address_collision_total,
             torii_address_collision_domain_total,
-            torii_address_format_total,
+            torii_account_literal_total,
             torii_norito_decode_failures_total,
             torii_proof_throttled_total,
             torii_contract_throttled_total,
@@ -15145,9 +15145,9 @@ impl Metrics {
             .inc();
     }
 
-    /// Increment the address_format selection counter.
-    pub fn inc_torii_address_format(&self, endpoint: &str, format: &str) {
-        self.torii_address_format_total
+    /// Increment the account literal selection counter.
+    pub fn inc_torii_account_literal(&self, endpoint: &str, format: &str) {
+        self.torii_account_literal_total
             .with_label_values(&[endpoint, format])
             .inc();
     }

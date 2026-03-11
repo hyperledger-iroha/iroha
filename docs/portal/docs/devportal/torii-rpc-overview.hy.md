@@ -58,6 +58,7 @@ SDK-ի հատուկ ուղեցույց.
 1. [Սկսել վստահված անձը] (./try-it.md#start-the-proxy-locally) և սահմանել
    `TRYIT_PROXY_PUBLIC_URL`, որպեսզի վիջեթներն իմանան, թե ուր ուղարկել թրաֆիկը:
 2. Բացեք այս էջում **Փորձեք** քարտը կամ `/reference/torii-swagger`
+   For MCP/agent flows, use `/reference/torii-mcp`.
    վահանակ և ընտրեք վերջնակետ, ինչպիսին է `POST /v1/pipeline/submit`:
 3. Անցեք **Content-Type**-ը `application/x-norito`-ի, ընտրեք **Երկուական**
    խմբագրել և վերբեռնել `fixtures/norito_rpc/transfer_asset.norito`

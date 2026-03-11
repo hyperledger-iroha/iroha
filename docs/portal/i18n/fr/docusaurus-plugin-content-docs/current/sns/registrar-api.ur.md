@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (mise en cache)۔ |
 | `/v1/sns/registrations/{selector}` | OBTENIR | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) et کرتا ہے۔ |
 
-**Encodage du sélecteur :** Segment de chemin `{selector}` IH58, compressé (`sora`) et hexadécimal canonique ADDR-5 pour le segment de chemin d'accès. Torii `NameSelectorV1` pour normaliser les choses**Modèle d'erreur :** Les points de terminaison Norito JSON `code`, `message`, `details` sont affichés. Codes `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` en anglais
+**Encodage du sélecteur :** Segment de chemin `{selector}` I105, compressé (`sora`) et hexadécimal canonique ADDR-5 pour le segment de chemin d'accès. Torii `NameSelectorV1` pour normaliser les choses**Modèle d'erreur :** Les points de terminaison Norito JSON `code`, `message`, `details` sont affichés. Codes `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` en anglais
 
 ### 3.1 Assistants CLI (N0 دستی registrar ضرورت)
 
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -215,7 +215,7 @@ Torii preuves en anglais:
 
 ### 6.1 Inscription standard1. Client `/v1/sns/policies/{suffix_id}` pour une requête sur les tarifs et les niveaux de grâce
 2. Client `RegisterNameRequestV1` utilisé :
-   - `selector` pour IH58, deuxième meilleure étiquette compressée (`sora`) et dérivée
+   - `selector` pour I105, deuxième meilleure étiquette compressée (`sora`) et dérivée
    - `term_years` پالیسی حدود میں۔
    - Transfert répartiteur de trésorerie/intendant `payment` et voir ici
 3. Torii valide la question :
