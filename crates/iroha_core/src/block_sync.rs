@@ -4992,7 +4992,10 @@ pub mod message {
                                 .max(peer_share_decision.repeat_count);
                             if share_unknown_prev {
                                 if should_request_latest
-                                    && matches!(unknown_prev_share_mode, UnknownPrevShareMode::Full)
+                                    && (matches!(
+                                        unknown_prev_share_mode,
+                                        UnknownPrevShareMode::Full
+                                    ) || unknown_prev_repeat_count > 0)
                                 {
                                     block_sync
                                         .request_latest_blocks_from_peer(peer_id.clone())
@@ -5848,6 +5851,105 @@ pub mod message {
                         .request_tracker
                         .pending
                         .contains_key(&registered_peer_id)
+                );
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_repeated_unknown_prev_probe_requests_latest_on_incremental_repeats() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id.clone());
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    gossip_period: Duration::from_millis(1),
+                    gossip_max_period: Duration::from_millis(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_millis(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x93; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x94; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    registered_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+                let first_pending = block_sync
+                    .request_tracker
+                    .pending
+                    .get(&registered_peer_id)
+                    .map_or(0, |entry| entry.pending);
+                assert!(
+                    first_pending > 0,
+                    "initial unknown-prev fallback should trigger a latest-block probe request"
+                );
+
+                // Cooldown floor is 250ms; repeated request after this delay should be served in
+                // incremental mode and still trigger a latest probe.
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                msg.handle_message(&mut block_sync).await;
+                let second_pending = block_sync
+                    .request_tracker
+                    .pending
+                    .get(&registered_peer_id)
+                    .map_or(0, |entry| entry.pending);
+                assert!(
+                    second_pending > first_pending,
+                    "repeated unknown-prev incremental fallback should trigger an additional latest-block probe request"
                 );
             });
         }

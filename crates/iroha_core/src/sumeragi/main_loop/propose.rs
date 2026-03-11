@@ -2697,6 +2697,12 @@ impl Actor {
                         );
                     }
                     if highest_missing {
+                        if self
+                            .suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal")
+                        {
+                            self.clear_missing_block_view_change(&highest_qc.subject_block_hash);
+                            return false;
+                        }
                         let first_defer_in_round = self
                             .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc);
                         if first_defer_in_round {

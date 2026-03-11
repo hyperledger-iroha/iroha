@@ -12350,6 +12350,7 @@ mod tests {
                 last_targets: 0,
                 last_dwell_ms: 0,
             },
+            committed_edge_conflict_obsolete_total: 0,
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,

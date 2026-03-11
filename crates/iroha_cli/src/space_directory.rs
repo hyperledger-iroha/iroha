@@ -701,10 +701,9 @@ impl ManifestScaffoldProfileArgs {
             .clone()
             .unwrap_or_else(|| format!("profile.{dataspace}.v1"));
         let activation_epoch = self.activation_epoch.unwrap_or(manifest.activation_epoch);
-        let governance_issuer = self
-            .governance_issuer
-            .clone()
-            .unwrap_or_else(|| "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned());
+        let governance_issuer = self.governance_issuer.clone().unwrap_or_else(|| {
+            "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()
+        });
         let governance_ticket = self
             .governance_ticket
             .clone()
@@ -1441,7 +1440,9 @@ mod tests {
         };
         let profile_args = ManifestScaffoldProfileArgs {
             profile_id: Some("profile.cbdc.preview".to_owned()),
-            governance_issuer: Some("6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()),
+            governance_issuer: Some(
+                "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned(),
+            ),
             governance_ticket: Some("gov-ticket".to_owned()),
             governance_quorum: Some(4),
             validators: vec![

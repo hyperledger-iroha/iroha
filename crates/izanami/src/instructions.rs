@@ -256,11 +256,14 @@ pub struct PreparedChaos {
     pub recipes: Vec<RecipeKind>,
 }
 
-/// Build post-topology NPoS bootstrap instructions for Izanami peers.
-pub fn npos_post_topology_instructions(peer_count: usize) -> Vec<InstructionBox> {
+/// Build post-topology NPoS bootstrap instructions using an explicit minimum self-bond.
+pub fn npos_post_topology_instructions(
+    peer_count: usize,
+    min_self_bond: u64,
+) -> Vec<InstructionBox> {
     let effective_peers = peer_count.max(1);
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let stake_amount: Numeric = SumeragiNposParameters::default().min_self_bond().into();
+    let stake_amount: Numeric = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index);
@@ -3006,7 +3009,10 @@ mod tests {
         }
         assert!(found_fee_sink, "fee sink account should be registered");
 
-        let post_topology = npos_post_topology_instructions(setup.validator_accounts.len());
+        let post_topology = npos_post_topology_instructions(
+            setup.validator_accounts.len(),
+            SumeragiNposParameters::default().min_self_bond(),
+        );
         let mut registered_validators = HashSet::new();
         let mut activated_validators = HashSet::new();
         for instruction in &post_topology {
@@ -3050,6 +3056,45 @@ mod tests {
                 validator.id
             );
         }
+    }
+
+    #[test]
+    fn npos_post_topology_instructions_use_requested_min_self_bond() {
+        let min_self_bond = 2_048_u64;
+        let instructions = npos_post_topology_instructions(4, min_self_bond);
+
+        let mut register_count = 0usize;
+        let mut activate_count = 0usize;
+        for instruction in &instructions {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                register_count = register_count.saturating_add(1);
+                let stake = u64::try_from(register.initial_stake.clone())
+                    .expect("stake should remain integer-valued");
+                assert_eq!(
+                    stake, min_self_bond,
+                    "post-topology validator registrations must use configured min self-bond"
+                );
+            }
+            if instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+                .is_some()
+            {
+                activate_count = activate_count.saturating_add(1);
+            }
+        }
+
+        assert_eq!(
+            register_count, 4,
+            "expected one validator registration per peer"
+        );
+        assert_eq!(
+            activate_count, 4,
+            "expected one validator activation per peer"
+        );
     }
 
     #[test]

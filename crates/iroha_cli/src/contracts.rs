@@ -181,9 +181,7 @@ impl Run for DeployActivateArgs {
         let authority = crate::resolve_account_id(context, &self.authority)
             .wrap_err("failed to resolve --authority")?;
         let cfg_authority = context.config().account.clone();
-        if authority != cfg_authority
-            && authority.to_string() != cfg_authority.to_string()
-        {
+        if authority != cfg_authority && authority.to_string() != cfg_authority.to_string() {
             return Err(eyre!(
                 "--authority must match client.toml authority (expected {cfg_authority}, got {authority})"
             ));

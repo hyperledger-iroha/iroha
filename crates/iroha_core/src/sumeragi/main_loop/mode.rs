@@ -229,6 +229,7 @@ impl Actor {
         self.qc_missing_payload_range_pull_cooldowns.clear();
         self.block_sync_warning_log.clear();
         self.qc_insufficient_warning_log.clear();
+        self.roster_sidecar_mismatch_obsolete.clear();
         self.sidecar_mismatch_window_gates.clear();
         self.sidecar_mismatch_committed_edge_gates.clear();
         self.frontier_catchup_window_gates.clear();

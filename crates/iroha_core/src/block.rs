@@ -794,7 +794,15 @@ fn parse_encoded_account_literal(
     match subject_accounts.len() {
         0 => resolve_selector_domain_candidate(world, &parsed).or(Some(parsed)),
         1 => subject_accounts.into_iter().next(),
-        _ => subject_accounts.contains(&parsed).then_some(parsed),
+        _ => {
+            if subject_accounts.contains(&parsed) {
+                Some(parsed)
+            } else {
+                resolve_selector_domain_candidate(world, &parsed)
+                    .filter(|candidate| subject_accounts.contains(candidate))
+                    .or_else(|| subject_accounts.into_iter().next())
+            }
+        }
     }
 }
 

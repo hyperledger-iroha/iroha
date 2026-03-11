@@ -30,8 +30,8 @@ use sha2::{Digest, Sha256};
 
 use super::{
     Actor, BlockPayloadDedupKey, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome,
-    LaneAllocation, MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS,
-    RbcRosterSource, RbcSession, RbcSessionError,
+    LaneAllocation, MissingBlockClearReason, MissingBlockFetchDecision, PipelinePhase,
+    RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession, RbcSessionError,
     pending_rbc::{
         PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
         rbc_ready_stash_bytes,
@@ -2232,6 +2232,28 @@ impl Actor {
         reason: Option<PendingRbcDropReason>,
     ) {
         if self.block_known_locally(key.0) {
+            return;
+        }
+        let (_, lock_lag_active, lock_lag_far_future, canonical_height) =
+            self.lock_lag_range_pull_scope_for_height(key.1);
+        if lock_lag_active && lock_lag_far_future {
+            if self.pending.missing_block_requests.contains_key(&key.0) {
+                self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+            }
+            let reanchor_requested = self.request_range_pull_from_anchor(
+                canonical_height,
+                "rbc_far_future_missing_block",
+                Instant::now(),
+            );
+            debug!(
+                height = key.1,
+                view = key.2,
+                canonical_height,
+                block = %key.0,
+                context,
+                reanchor_requested,
+                "suppressing far-future RBC missing-block fetch while lock-lag catch-up is unresolved"
+            );
             return;
         }
         let mut roster = self.ensure_rbc_session_roster(key);

@@ -23867,6 +23867,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
         json_entry("missing_block_fetch", missing_block_fetch),
+        json_entry(
+            "committed_edge_conflict_obsolete_total",
+            snap.committed_edge_conflict_obsolete_total,
+        ),
+        json_entry(
+            "roster_sidecar_mismatch_obsolete_total",
+            snap.roster_sidecar_mismatch_obsolete_total,
+        ),
         json_entry("block_sync", block_sync),
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
@@ -25358,6 +25366,8 @@ mod status_tests {
             missing_block_fetch_total: 9,
             missing_block_fetch_last_targets: 2,
             missing_block_fetch_last_dwell_ms: 13,
+            committed_edge_conflict_obsolete_total: 3,
+            roster_sidecar_mismatch_obsolete_total: 4,
             kura_store: status::KuraStoreSnapshot {
                 failures_total: 1,
                 abort_total: 3,
@@ -25402,6 +25412,18 @@ mod status_tests {
         assert_eq!(fetch.get("total").and_then(Value::as_u64), Some(9));
         assert_eq!(fetch.get("last_targets").and_then(Value::as_u64), Some(2));
         assert_eq!(fetch.get("last_dwell_ms").and_then(Value::as_u64), Some(13));
+        assert_eq!(
+            payload
+                .get("committed_edge_conflict_obsolete_total")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            payload
+                .get("roster_sidecar_mismatch_obsolete_total")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
 
         let kura = payload
             .get("kura_store")
@@ -25740,6 +25762,8 @@ pub async fn handle_v1_sumeragi_status(
                 last_targets: snap.missing_block_fetch_last_targets,
                 last_dwell_ms: snap.missing_block_fetch_last_dwell_ms,
             },
+            committed_edge_conflict_obsolete_total: snap.committed_edge_conflict_obsolete_total,
+            roster_sidecar_mismatch_obsolete_total: snap.roster_sidecar_mismatch_obsolete_total,
             da_gate: SumeragiDaGateStatus {
                 reason: match snap.da_gate.reason {
                     sumeragi::status::DaGateReasonSnapshot::MissingLocalData => {
