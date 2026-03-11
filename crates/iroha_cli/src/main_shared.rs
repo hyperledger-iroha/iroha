@@ -3504,15 +3504,22 @@ mod multisig {
             .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
     }
 
-    fn approval_contains_subject(approvals: &BTreeSet<ScopedAccountId>, account: &ScopedAccountId) -> bool {
+    fn approval_contains_subject(
+        approvals: &BTreeSet<ScopedAccountId>,
+        account: &ScopedAccountId,
+    ) -> bool {
         let subject = account.subject_id();
         approvals
             .iter()
             .any(|approved| approved.subject_id() == subject)
     }
 
-    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<ScopedAccountId>) -> u16 {
-        let approved_subjects: BTreeSet<_> = approvals.iter().map(ScopedAccountId::subject_id).collect();
+    fn approval_weight_by_subject(
+        spec: &MultisigSpec,
+        approvals: &BTreeSet<ScopedAccountId>,
+    ) -> u16 {
+        let approved_subjects: BTreeSet<_> =
+            approvals.iter().map(ScopedAccountId::subject_id).collect();
         spec.signatories
             .iter()
             .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
@@ -6524,8 +6531,63 @@ fn resolve_account_id_with(literal: &str) -> Result<ScopedAccountId> {
     Ok(parsed.into_account_id())
 }
 
-pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<ScopedAccountId> {
-    resolve_account_id_with(literal)
+fn resolve_scoped_account_for_subject(
+    parsed: &ScopedAccountId,
+    subject_accounts: std::collections::BTreeSet<ScopedAccountId>,
+) -> Result<ScopedAccountId> {
+    match subject_accounts.len() {
+        0 => Ok(parsed.clone()),
+        1 => Ok(subject_accounts
+            .into_iter()
+            .next()
+            .expect("set length of 1 must contain one account")),
+        _ => {
+            if subject_accounts.contains(parsed) {
+                return Ok(parsed.clone());
+            }
+            let candidates = subject_accounts
+                .into_iter()
+                .map(|account| account.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            eyre::bail!(
+                "account literal resolves to a subject with multiple scoped accounts; pass one of: {candidates}"
+            );
+        }
+    }
+}
+
+fn resolve_account_id_against_chain<C: RunContext>(
+    context: &C,
+    parsed: &ScopedAccountId,
+) -> Result<Option<ScopedAccountId>> {
+    let accounts = match context
+        .client_from_config()
+        .query(FindAccounts)
+        .execute_all()
+    {
+        Ok(accounts) => accounts,
+        Err(_) => return Ok(None),
+    };
+
+    let subject = parsed.subject_id();
+    let subject_accounts = accounts
+        .into_iter()
+        .map(|entry| entry.id().clone())
+        .filter(|account_id| account_id.subject_id() == subject)
+        .collect::<std::collections::BTreeSet<_>>();
+    resolve_scoped_account_for_subject(parsed, subject_accounts).map(Some)
+}
+
+pub(crate) fn resolve_account_id<C: RunContext>(
+    context: &C,
+    literal: &str,
+) -> Result<ScopedAccountId> {
+    let parsed = resolve_account_id_with(literal)?;
+    match resolve_account_id_against_chain(context, &parsed)? {
+        Some(resolved) => Ok(resolved),
+        None => Ok(parsed),
+    }
 }
 
 fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
@@ -6936,6 +6998,70 @@ mod tests {
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());
+    }
+
+    #[test]
+    fn resolve_scoped_account_for_subject_prefers_single_chain_match() {
+        let key_pair = KeyPair::from_seed(vec![10_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "selector".parse().expect("selector domain"),
+            key_pair.public_key().clone(),
+        );
+        let chain_scoped = ScopedAccountId::new(
+            "nexus".parse().expect("nexus domain"),
+            key_pair.public_key().clone(),
+        );
+        let resolved = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([chain_scoped.clone()]),
+        )
+        .expect("subject-aware resolution");
+        assert_eq!(resolved, chain_scoped);
+    }
+
+    #[test]
+    fn resolve_scoped_account_for_subject_keeps_parsed_when_present_in_ambiguous_set() {
+        let key_pair = KeyPair::from_seed(vec![12_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "alpha".parse().expect("alpha domain"),
+            key_pair.public_key().clone(),
+        );
+        let alternative = ScopedAccountId::new(
+            "beta".parse().expect("beta domain"),
+            key_pair.public_key().clone(),
+        );
+        let resolved = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([parsed.clone(), alternative]),
+        )
+        .expect("resolution should keep parsed literal");
+        assert_eq!(resolved, parsed);
+    }
+
+    #[test]
+    fn resolve_scoped_account_for_subject_rejects_ambiguous_subject_without_explicit_scope() {
+        let key_pair = KeyPair::from_seed(vec![15_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "gamma".parse().expect("gamma domain"),
+            key_pair.public_key().clone(),
+        );
+        let first = ScopedAccountId::new(
+            "delta".parse().expect("delta domain"),
+            key_pair.public_key().clone(),
+        );
+        let second = ScopedAccountId::new(
+            "epsilon".parse().expect("epsilon domain"),
+            key_pair.public_key().clone(),
+        );
+        let err = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([first, second]),
+        )
+        .expect_err("ambiguous subject should be rejected");
+        assert!(
+            err.to_string().contains("multiple scoped accounts"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -8989,7 +9115,8 @@ mod tests {
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
-            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner =
+                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
@@ -9161,7 +9288,8 @@ mod tests {
                 use iroha::data_model::domain::DomainId;
 
                 let domain: DomainId = "land".parse().unwrap();
-                let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let owner =
+                    ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| format!("ad{i}#land").parse().unwrap())
                     .collect();
@@ -9461,7 +9589,8 @@ mod tests {
             use iroha::data_model::nft::{Nft, NftId};
 
             let domain: DomainId = "art".parse().unwrap();
-            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner =
+                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
             let ids: Vec<NftId> = (0..5)
@@ -9632,7 +9761,8 @@ mod tests {
                 use iroha::data_model::nft::{Nft, NftId};
 
                 let domain: DomainId = "art".parse().unwrap();
-                let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let owner =
+                    ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
                 let ids: Vec<NftId> = (0..5)
                     .map(|i| format!("n{i}$art").parse().unwrap())
@@ -9956,7 +10086,8 @@ mod tests {
             use iroha::data_model::domain::DomainId;
 
             let domain: DomainId = "land".parse().unwrap();
-            let owner = ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let owner =
+                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
 
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();

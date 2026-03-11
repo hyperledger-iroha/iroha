@@ -348,12 +348,15 @@ impl Actor {
             if highest_qc.height <= committed_height
                 && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
             {
+                let committed_conflict_suppressed = self
+                    .suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal_hint");
                 info!(
                         height,
                         view,
                     committed_height,
                     committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
                     highest_hash = %highest_qc.subject_block_hash,
+                    committed_conflict_suppressed,
                     "dropping proposal hint: highest QC conflicts with committed block at height"
                 );
                 self.record_consensus_message_handling(
@@ -364,12 +367,15 @@ impl Actor {
                 return Ok(());
             }
         } else if highest_qc.height <= committed_height {
+            let committed_conflict_suppressed =
+                self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal_hint");
             info!(
                 height,
                 view,
                 committed_height,
                 highest_height = highest_qc.height,
                 block = %highest_qc.subject_block_hash,
+                committed_conflict_suppressed,
                 "dropping proposal hint: highest QC block missing locally for committed height"
             );
             self.record_consensus_message_handling(
@@ -729,6 +735,8 @@ impl Actor {
             if highest_qc.height <= committed_qc_height
                 && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
             {
+                let committed_conflict_suppressed =
+                    self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal");
                 info!(
                         height,
                         view,
@@ -736,6 +744,7 @@ impl Actor {
                     committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
                     highest_hash = %highest_qc.subject_block_hash,
                     payload = %proposal.payload_hash,
+                    committed_conflict_suppressed,
                     "dropping proposal: highest QC conflicts with committed block at height"
                 );
                 self.record_consensus_message_handling(
@@ -746,6 +755,8 @@ impl Actor {
                 return Ok(());
             }
         } else if highest_qc.height <= committed_qc_height {
+            let committed_conflict_suppressed =
+                self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal");
             info!(
                 height,
                 view,
@@ -753,6 +764,7 @@ impl Actor {
                 highest_height = highest_qc.height,
                 block = %highest_qc.subject_block_hash,
                 payload = %proposal.payload_hash,
+                committed_conflict_suppressed,
                 "dropping proposal: highest QC block missing locally for committed height"
             );
             self.record_consensus_message_handling(

@@ -2,7 +2,7 @@
 
 use std::{
     borrow::Cow,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -18,8 +18,15 @@ use iroha::client::Client;
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
-    parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
-    query::trigger::prelude::FindTriggers, trigger::action::Repeats,
+    isi::{
+        register::RegisterPeerWithPop,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
+    parameter::SumeragiParameter,
+    parameter::system::SumeragiNposParameters,
+    prelude::*,
+    query::trigger::prelude::FindTriggers,
+    trigger::action::Repeats,
 };
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
@@ -58,6 +65,8 @@ const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
+const IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: u16 = 3;
+const IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS: u8 = 3;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
 // Shared-host soak profile: bias towards deterministic progress over peak throughput.
 const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
@@ -80,6 +89,15 @@ const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
 const IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 40;
 const IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 60;
 const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
+const IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 1;
+const IZANAMI_NPOS_TIMEOUT_DA_MIN_MS: u64 = 1;
+const IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 1;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 150;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 250;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 350;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 900;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 900;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 50;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -122,12 +140,12 @@ const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 300;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 500;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 4_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 2_500;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 4_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 0;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 1;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 6_000;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 4_000;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 6_000;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubmissionConfirmationMode {
@@ -1031,6 +1049,25 @@ struct NposTiming {
     aggregator_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NposGenesisPreflightSummary {
+    peer_with_pop_count: usize,
+    register_validator_count: usize,
+    activate_validator_count: usize,
+    min_self_bond: u64,
+    stake_distribution: Vec<(u64, usize)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NposTimeoutFloors {
+    propose_ms: u64,
+    prevote_ms: u64,
+    precommit_ms: u64,
+    commit_ms: u64,
+    da_ms: u64,
+    aggregator_ms: u64,
+}
+
 fn clamp_nonzero_ms(value: u64) -> u64 {
     value.max(1)
 }
@@ -1042,6 +1079,51 @@ fn pending_stall_grace_ms(block_ms: u64) -> i64 {
     let capped =
         scaled.min(u64::try_from(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS).unwrap_or(u64::MAX));
     i64::try_from(capped).unwrap_or(i64::MAX)
+}
+
+fn is_reliability_first_npos_soak(config: &ChaosConfig) -> bool {
+    is_shared_host_stable_recovery_run(config)
+}
+
+fn npos_timeout_floors(config: &ChaosConfig) -> NposTimeoutFloors {
+    if is_reliability_first_npos_soak(config) {
+        NposTimeoutFloors {
+            propose_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS,
+            prevote_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS,
+            precommit_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
+            commit_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS,
+            da_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS,
+            aggregator_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
+        }
+    } else {
+        NposTimeoutFloors {
+            propose_ms: IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS,
+            prevote_ms: IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS,
+            precommit_ms: IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
+            commit_ms: IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS,
+            da_ms: IZANAMI_NPOS_TIMEOUT_DA_MIN_MS,
+            aggregator_ms: IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
+        }
+    }
+}
+
+fn npos_pending_stall_grace_ms(config: &ChaosConfig, block_ms: u64) -> i64 {
+    if is_reliability_first_npos_soak(config) {
+        IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS
+    } else {
+        pending_stall_grace_ms(block_ms)
+    }
+}
+
+fn npos_collectors_and_redundancy(config: &ChaosConfig) -> (u16, u8) {
+    if is_reliability_first_npos_soak(config) && config.peer_count == 4 {
+        (
+            IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS,
+            IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS,
+        )
+    } else {
+        (IZANAMI_COLLECTORS_K, IZANAMI_REDUNDANT_SEND_R)
+    }
 }
 
 fn duration_ms(duration: Duration) -> u64 {
@@ -1086,14 +1168,13 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
         };
     let block_ms = clamp_nonzero_ms(block_ms);
     let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
+    let timeout_floors = npos_timeout_floors(config);
     // Derive per-phase timeouts from the scaled block time to keep soak cadence tight.
     let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
-    let propose_ms =
-        clamp_nonzero_ms(duration_ms(timeouts.propose)).max(IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS);
-    let prevote_ms =
-        clamp_nonzero_ms(duration_ms(timeouts.prevote)).max(IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS);
-    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit))
-        .max(IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS);
+    let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose)).max(timeout_floors.propose_ms);
+    let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote)).max(timeout_floors.prevote_ms);
+    let precommit_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.precommit)).max(timeout_floors.precommit_ms);
     // Keep commit/DA windows at least as large as the target commit time for DA stability.
     let mut commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
     let mut da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
@@ -1101,7 +1182,10 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
         commit_timeout_ms = commit_timeout_ms.max(commit_time_ms);
         da_ms = da_ms.max(commit_time_ms);
     }
-    let aggregator_ms = clamp_nonzero_ms(duration_ms(timeouts.aggregator));
+    commit_timeout_ms = commit_timeout_ms.max(timeout_floors.commit_ms);
+    da_ms = da_ms.max(timeout_floors.da_ms);
+    let aggregator_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.aggregator)).max(timeout_floors.aggregator_ms);
     NposTiming {
         block_ms,
         propose_ms,
@@ -1136,6 +1220,158 @@ fn izanami_npos_parameters(peer_count: usize) -> SumeragiNposParameters {
     params
 }
 
+fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
+    let mut params = Parameters::default();
+    for tx in genesis.0.transactions_vec() {
+        let Executable::Instructions(instructions) = tx.instructions() else {
+            continue;
+        };
+        for instruction in instructions {
+            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            params.set_parameter(set_param.inner().clone());
+        }
+    }
+    params
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .unwrap_or_default()
+        .min_self_bond()
+}
+
+#[allow(single_use_lifetimes)]
+fn audit_npos_preflight_instructions<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+    peer_count: usize,
+    min_self_bond: u64,
+) -> Result<NposGenesisPreflightSummary> {
+    let expected_peers = peer_count.max(1);
+    let mut peer_with_pop_count = 0usize;
+    let mut register_validator_count = 0usize;
+    let mut activate_validator_count = 0usize;
+    let mut validator_stakes = BTreeMap::<ScopedAccountId, u64>::new();
+    let mut activated_validators = BTreeSet::<ScopedAccountId>::new();
+
+    for instruction in instructions {
+        if instruction
+            .as_any()
+            .downcast_ref::<RegisterPeerWithPop>()
+            .is_some()
+        {
+            peer_with_pop_count = peer_with_pop_count.saturating_add(1);
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+        {
+            register_validator_count = register_validator_count.saturating_add(1);
+            let stake = u64::try_from(register.initial_stake.clone()).map_err(|_| {
+                eyre!(
+                    "Izanami NPoS preflight failed: validator {} has non-integer initial_stake {}",
+                    register.validator,
+                    register.initial_stake
+                )
+            })?;
+            if stake < min_self_bond {
+                return Err(eyre!(
+                    "Izanami NPoS preflight failed: validator {} initial_stake={} below min_self_bond={}",
+                    register.validator,
+                    stake,
+                    min_self_bond
+                ));
+            }
+            validator_stakes.insert(register.validator.clone(), stake);
+        }
+        if let Some(activate) = instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+        {
+            activate_validator_count = activate_validator_count.saturating_add(1);
+            activated_validators.insert(activate.validator.clone());
+        }
+    }
+
+    if peer_with_pop_count != expected_peers {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: RegisterPeerWithPop count={} expected={}",
+            peer_with_pop_count,
+            expected_peers
+        ));
+    }
+    if register_validator_count != expected_peers {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: RegisterPublicLaneValidator count={} expected={}",
+            register_validator_count,
+            expected_peers
+        ));
+    }
+    if activate_validator_count != expected_peers {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: ActivatePublicLaneValidator count={} expected={}",
+            activate_validator_count,
+            expected_peers
+        ));
+    }
+
+    let registered_validators: BTreeSet<_> = validator_stakes.keys().cloned().collect();
+    let missing_activation: Vec<_> = registered_validators
+        .difference(&activated_validators)
+        .cloned()
+        .collect();
+    if !missing_activation.is_empty() {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: validator activation missing for {} account(s)",
+            missing_activation.len()
+        ));
+    }
+    let unexpected_activation: Vec<_> = activated_validators
+        .difference(&registered_validators)
+        .cloned()
+        .collect();
+    if !unexpected_activation.is_empty() {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: activation references {} unregistered validator account(s)",
+            unexpected_activation.len()
+        ));
+    }
+
+    let mut stake_distribution = BTreeMap::<u64, usize>::new();
+    for stake in validator_stakes.values().copied() {
+        *stake_distribution.entry(stake).or_insert(0) += 1;
+    }
+    if stake_distribution.len() != 1 {
+        return Err(eyre!(
+            "Izanami NPoS preflight failed: validator initial_stake distribution is non-uniform: {:?}",
+            stake_distribution
+        ));
+    }
+
+    Ok(NposGenesisPreflightSummary {
+        peer_with_pop_count,
+        register_validator_count,
+        activate_validator_count,
+        min_self_bond,
+        stake_distribution: stake_distribution.into_iter().collect(),
+    })
+}
+
+fn audit_npos_genesis_preflight(
+    genesis: &GenesisBlock,
+    peer_count: usize,
+) -> Result<NposGenesisPreflightSummary> {
+    let min_self_bond = npos_min_self_bond_from_genesis(genesis);
+    let mut instructions = Vec::<InstructionBox>::new();
+    for tx in genesis.0.transactions_vec() {
+        let Executable::Instructions(tx_instructions) = tx.instructions() else {
+            continue;
+        };
+        instructions.extend(tx_instructions.iter().cloned());
+    }
+    audit_npos_preflight_instructions(instructions.iter(), peer_count, min_self_bond)
+}
+
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.faulty_peers == 0
@@ -1144,8 +1380,7 @@ fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
 }
 
 fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
-    config.nexus.is_some()
-        && matches!(config.workload_profile, WorkloadProfile::Stable)
+    matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.faulty_peers == 0
         && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
@@ -1226,6 +1461,40 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     }
 }
 
+fn consensus_mode_label(config: &ChaosConfig) -> &'static str {
+    if config.nexus.is_some() {
+        "npos"
+    } else {
+        "permissioned"
+    }
+}
+
+fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
+    let recovery_profile = recovery_profile_for(config);
+    let npos_timing = derive_npos_timing(config);
+    let pending_stall_grace_ms = npos_pending_stall_grace_ms(config, npos_timing.block_ms);
+    let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
+    info!(
+        target: "izanami::profile",
+        consensus_mode = consensus_mode_label(config),
+        shared_host_consensus_profile = is_shared_host_stable_recovery_run(config),
+        pending_stall_grace_ms,
+        da_fast_reschedule = !is_reliability_first_npos_soak(config),
+        collectors_k,
+        redundant_send_r,
+        recovery_height_window_ms = recovery_profile.height_window_ms,
+        recovery_missing_qc_reacquire_window_ms = recovery_profile.missing_qc_reacquire_window_ms,
+        recovery_deferred_qc_ttl_ms = recovery_profile.deferred_qc_ttl_ms,
+        recovery_missing_block_height_ttl_ms = recovery_profile.missing_block_height_ttl_ms,
+        recovery_hash_miss_cap_before_range_pull = recovery_profile.hash_miss_cap_before_range_pull,
+        recovery_missing_block_signer_fallback_attempts = recovery_profile
+            .missing_block_signer_fallback_attempts,
+        recovery_range_pull_escalation_after_hash_misses = recovery_profile
+            .range_pull_escalation_after_hash_misses,
+        "effective consensus soak overrides"
+    );
+}
+
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
     let recovery_profile = recovery_profile_for(config);
@@ -1236,6 +1505,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed(instructions::IZANAMI_BASE_SEED);
+    let npos_params = izanami_npos_parameters(config.peer_count);
     let pipeline_time = config
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
@@ -1267,9 +1537,11 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     }
     if config.nexus.is_some() {
         builder = builder.without_npos_genesis_bootstrap();
-        builder = builder.with_genesis_post_topology_isi(
-            instructions::npos_post_topology_instructions(config.peer_count),
-        );
+        builder =
+            builder.with_genesis_post_topology_isi(instructions::npos_post_topology_instructions(
+                config.peer_count,
+                npos_params.min_self_bond(),
+            ));
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
         let filter = filter.trim();
@@ -1285,6 +1557,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     }
     // Inject Izanami timing into on-chain Sumeragi parameters.
     let npos_timing = derive_npos_timing(config);
+    let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
     if config.nexus.is_some() {
         let mut injected = Vec::new();
         injected.push(InstructionBox::from(SetParameter::new(
@@ -1299,12 +1572,11 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             )),
         )));
         injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::CollectorsK(IZANAMI_COLLECTORS_K)),
+            Parameter::Sumeragi(SumeragiParameter::CollectorsK(collectors_k)),
         )));
         injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::RedundantSendR(IZANAMI_REDUNDANT_SEND_R)),
+            Parameter::Sumeragi(SumeragiParameter::RedundantSendR(redundant_send_r)),
         )));
-        let npos_params = izanami_npos_parameters(config.peer_count);
         injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         ))));
@@ -1424,11 +1696,11 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                     "pacemaker",
                     "pending_stall_grace_ms",
                 ],
-                pending_stall_grace_ms(npos_timing.block_ms),
+                npos_pending_stall_grace_ms(config, npos_timing.block_ms),
             )
             .write(
                 ["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"],
-                true,
+                !is_reliability_first_npos_soak(config),
             )
             .write(
                 [
@@ -1659,6 +1931,10 @@ impl RunControl {
         self.stop_notify.notify_waiters();
     }
 
+    fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
     fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed) || Instant::now() >= self.deadline
     }
@@ -1680,6 +1956,7 @@ impl IzanamiRunner {
     pub async fn new(config: ChaosConfig) -> Result<Self> {
         let mut config = config;
         apply_shared_host_stable_soak_profile(&mut config);
+        log_effective_consensus_soak_overrides(&config);
 
         if !config.allow_net {
             return Err(eyre!(
@@ -1703,6 +1980,20 @@ impl IzanamiRunner {
         let builder = make_network_builder(&config, genesis);
 
         let network = builder.start().await?;
+        if config.nexus.is_some() {
+            let genesis = network.genesis();
+            let preflight = audit_npos_genesis_preflight(&genesis, config.peer_count)?;
+            info!(
+                target: "izanami::preflight",
+                peer_with_pop_count = preflight.peer_with_pop_count,
+                register_validator_count = preflight.register_validator_count,
+                activate_validator_count = preflight.activate_validator_count,
+                min_self_bond = preflight.min_self_bond,
+                validator_stake_distribution = ?preflight.stake_distribution,
+                validator_stake_distribution_entries = preflight.stake_distribution.len(),
+                "validated Izanami NPoS genesis preflight"
+            );
+        }
         let peers = network.peers().clone();
         let workload = Arc::new(WorkloadEngine::new(state, recipes));
 
@@ -1745,6 +2036,8 @@ impl IzanamiRunner {
             &submission_counter,
         );
 
+        let soft_target_kpi =
+            self.config.target_blocks.is_some() && is_shared_host_stable_soak(&self.config);
         let target_result = if let Some(target_blocks) = self.config.target_blocks {
             wait_for_target_blocks(
                 &self.peers,
@@ -1755,21 +2048,45 @@ impl IzanamiRunner {
                 self.config.latency_p95_threshold,
                 &run_control,
                 Some(ingress_pool.as_ref()),
+                soft_target_kpi,
             )
             .await
         } else {
-            Ok(())
+            Ok(TargetProgressResult::default())
         };
 
         let mut run_error = None;
-        if let Err(err) = target_result {
-            warn!(
-                target: "izanami::progress",
-                ?err,
-                "target progress monitoring failed; stopping run"
-            );
-            run_control.stop();
-            run_error = Some(err);
+        match target_result {
+            Ok(target_progress) => {
+                if soft_target_kpi && let Some(target_blocks) = self.config.target_blocks {
+                    if target_progress.target_reached {
+                        info!(
+                            target: "izanami::progress",
+                            target_blocks,
+                            quorum_min_height = target_progress.quorum_min_height,
+                            strict_min_height = target_progress.strict_min_height,
+                            "stable soak duration completed and target_blocks KPI was reached"
+                        );
+                    } else {
+                        warn!(
+                            target: "izanami::progress",
+                            target_blocks,
+                            quorum_min_height = target_progress.quorum_min_height,
+                            strict_min_height = target_progress.strict_min_height,
+                            "stable soak duration completed without target_blocks KPI; reporting as warning (non-fatal)"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(
+                    target: "izanami::progress",
+                    ?err,
+                    "target progress monitoring failed; stopping run"
+                );
+                run_control.stop();
+                run_error = Some(err);
+            }
         }
 
         if self.config.target_blocks.is_some() {
@@ -2085,8 +2402,8 @@ fn tolerated_peer_failures(peer_count: usize) -> usize {
     }
 }
 
-fn effective_tolerated_peer_failures(peer_count: usize, configured_faulty_peers: usize) -> usize {
-    tolerated_peer_failures(peer_count).min(configured_faulty_peers)
+fn effective_tolerated_peer_failures(peer_count: usize, _configured_faulty_peers: usize) -> usize {
+    tolerated_peer_failures(peer_count)
 }
 
 fn quorum_min_height_from_samples(mut heights: Vec<u64>) -> u64 {
@@ -2308,6 +2625,13 @@ impl HeightDivergenceState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TargetProgressResult {
+    target_reached: bool,
+    quorum_min_height: u64,
+    strict_min_height: u64,
+}
+
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
@@ -2317,7 +2641,8 @@ async fn wait_for_target_blocks(
     latency_p95_threshold: Option<Duration>,
     run_control: &RunControl,
     ingress_pool: Option<&IngressEndpointPool>,
-) -> Result<()> {
+    target_blocks_soft_kpi: bool,
+) -> Result<TargetProgressResult> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
     let mut strict_progress = ProgressState::new(start);
@@ -2325,12 +2650,13 @@ async fn wait_for_target_blocks(
     let mut divergence = HeightDivergenceState::new();
     let mut block_intervals = BlockIntervalTracker::default();
     let mut strict_block_intervals = BlockIntervalTracker::default();
+    let mut target_reached = false;
     let tolerated_failures =
         effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
     let strict_divergence_window =
         Duration::from_secs(IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS);
     loop {
-        if run_control.should_stop() {
+        if run_control.stop_requested() {
             return Err(eyre!("izanami run stopped before target blocks reached"));
         }
         let now = Instant::now();
@@ -2352,6 +2678,13 @@ async fn wait_for_target_blocks(
         let strict_guard_active =
             should_enforce_strict_progress_timeout(lagging_peers, tolerated_failures);
         if now >= run_control.deadline() {
+            if target_blocks_soft_kpi {
+                return Ok(TargetProgressResult {
+                    target_reached,
+                    quorum_min_height: min_height,
+                    strict_min_height,
+                });
+            }
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 progress.last_height,
@@ -2399,7 +2732,8 @@ async fn wait_for_target_blocks(
                 tolerated_failures
             ));
         }
-        if min_height >= target_blocks {
+        if min_height >= target_blocks && !target_reached {
+            target_reached = true;
             let strict_summary = strict_block_intervals.summary();
             if let Some(summary) = block_intervals.summary() {
                 info!(
@@ -2499,7 +2833,21 @@ async fn wait_for_target_blocks(
                     }
                 }
             }
-            return Ok(());
+            if !target_blocks_soft_kpi {
+                return Ok(TargetProgressResult {
+                    target_reached: true,
+                    quorum_min_height: min_height,
+                    strict_min_height,
+                });
+            }
+            info!(
+                target: "izanami::progress",
+                target_blocks,
+                quorum_min_height = min_height,
+                strict_min_height,
+                tolerated_failures,
+                "target_blocks KPI reached; continuing until soak deadline"
+            );
         }
 
         if let Some((blocks_advanced, elapsed)) = strict_progress.update(now, strict_min_height) {
@@ -2608,6 +2956,13 @@ async fn wait_for_target_blocks(
             .checked_duration_since(Instant::now())
             .unwrap_or_default();
         if remaining.is_zero() {
+            if target_blocks_soft_kpi {
+                return Ok(TargetProgressResult {
+                    target_reached,
+                    quorum_min_height: min_height,
+                    strict_min_height,
+                });
+            }
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
                 min_height,
@@ -3060,6 +3415,54 @@ mod tests {
         }
     }
 
+    fn synthetic_npos_preflight_instructions(
+        peer_count: usize,
+        include_pop: bool,
+        include_activation: bool,
+        stake_values: &[u64],
+    ) -> Vec<InstructionBox> {
+        let mut instructions = Vec::new();
+        let domain: DomainId = "nexus".parse().expect("nexus domain");
+        let fallback_stake = SumeragiNposParameters::default().min_self_bond();
+        for idx in 0..peer_count {
+            let key_pair = KeyPair::random();
+            let validator = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
+            let stake = stake_values.get(idx).copied().unwrap_or(fallback_stake);
+            if include_pop {
+                instructions.push(
+                    <RegisterPeerWithPop as iroha_data_model::isi::Instruction>::into_instruction_box(
+                        Box::new(RegisterPeerWithPop::new(
+                            PeerId::new(key_pair.public_key().clone()),
+                            vec![u8::try_from(idx).unwrap_or(u8::MAX)],
+                        )),
+                    ),
+                );
+            }
+            instructions.push(
+                <RegisterPublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                    Box::new(RegisterPublicLaneValidator {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        stake_account: validator.clone(),
+                        initial_stake: Numeric::from(stake),
+                        metadata: Metadata::default(),
+                    }),
+                ),
+            );
+            if include_activation {
+                instructions.push(
+                    <ActivatePublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                        Box::new(ActivatePublicLaneValidator {
+                            lane_id: LaneId::SINGLE,
+                            validator,
+                        }),
+                    ),
+                );
+            }
+        }
+        instructions
+    }
+
     #[test]
     fn repetitions_from_repeats_exactly_returns_value() {
         assert_eq!(repetitions_from_repeats(Repeats::Exactly(7)), Some(7));
@@ -3430,6 +3833,154 @@ mod tests {
     }
 
     #[test]
+    fn derive_npos_timing_uses_conservative_floors_for_shared_host_npos_soak() -> Result<()> {
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: false,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(7),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(profile),
+        };
+
+        let timing = derive_npos_timing(&config);
+        assert!(
+            timing.propose_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS
+                && timing.prevote_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS
+                && timing.precommit_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS
+                && timing.commit_timeout_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS
+                && timing.da_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS
+                && timing.aggregator_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
+            "shared-host NPoS soak should enforce conservative timeout floors"
+        );
+        assert_eq!(
+            npos_pending_stall_grace_ms(&config, timing.block_ms),
+            IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS
+        );
+        assert_eq!(
+            npos_collectors_and_redundancy(&config),
+            (
+                IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS,
+                IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn npos_preflight_audit_passes_for_generated_genesis() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(23),
+            tps: 2.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = make_network_builder(&config, genesis).build();
+        let summary = audit_npos_genesis_preflight(&network.genesis(), config.peer_count)?;
+        assert_eq!(summary.peer_with_pop_count, config.peer_count);
+        assert_eq!(summary.register_validator_count, config.peer_count);
+        assert_eq!(summary.activate_validator_count, config.peer_count);
+        assert_eq!(
+            summary.stake_distribution.len(),
+            1,
+            "generated NPoS genesis should have a uniform validator self-bond distribution"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn npos_preflight_audit_fails_on_missing_activation() {
+        init_instruction_registry();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let instructions =
+            synthetic_npos_preflight_instructions(4, true, false, &[min_self_bond; 4]);
+        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
+            .expect_err("missing activation should fail preflight");
+        let message = err.to_string();
+        assert!(
+            message.contains("ActivatePublicLaneValidator count="),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn npos_preflight_audit_fails_on_missing_pop() {
+        init_instruction_registry();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let instructions =
+            synthetic_npos_preflight_instructions(4, false, true, &[min_self_bond; 4]);
+        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
+            .expect_err("missing pop should fail preflight");
+        let message = err.to_string();
+        assert!(
+            message.contains("RegisterPeerWithPop count="),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn npos_preflight_audit_fails_on_unequal_initial_stake() {
+        init_instruction_registry();
+        let min_self_bond = SumeragiNposParameters::default().min_self_bond();
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            true,
+            true,
+            &[
+                min_self_bond,
+                min_self_bond.saturating_add(1),
+                min_self_bond,
+                min_self_bond,
+            ],
+        );
+        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
+            .expect_err("unequal initial stake should fail preflight");
+        let message = err.to_string();
+        assert!(
+            message.contains("non-uniform"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
     fn shared_host_stable_soak_profile_caps_load_and_timeout() {
         let mut config = ChaosConfig {
             allow_net: true,
@@ -3551,6 +4102,62 @@ mod tests {
         assert!(
             config.progress_timeout
                 >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS)
+        );
+    }
+
+    #[test]
+    fn shared_host_stable_soak_consensus_overrides_match_between_permissioned_and_npos() {
+        let mut permissioned = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(2_000),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(22),
+            tps: 7.0,
+            max_inflight: 13,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+        let mut npos = ChaosConfig {
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            ..permissioned.clone()
+        };
+
+        apply_shared_host_stable_soak_profile(&mut permissioned);
+        apply_shared_host_stable_soak_profile(&mut npos);
+
+        let permissioned_recovery = recovery_profile_for(&permissioned);
+        let npos_recovery = recovery_profile_for(&npos);
+        assert_eq!(
+            permissioned_recovery, npos_recovery,
+            "stable shared-host consensus recovery tuning should be mode-parity"
+        );
+
+        let permissioned_timing = derive_npos_timing(&permissioned);
+        let npos_timing = derive_npos_timing(&npos);
+        assert_eq!(
+            npos_pending_stall_grace_ms(&permissioned, permissioned_timing.block_ms),
+            npos_pending_stall_grace_ms(&npos, npos_timing.block_ms),
+            "stable shared-host pending stall grace should be mode-parity"
+        );
+        assert_eq!(
+            npos_collectors_and_redundancy(&permissioned),
+            npos_collectors_and_redundancy(&npos),
+            "stable shared-host collector/redundancy tuning should be mode-parity"
+        );
+        assert_eq!(
+            !is_reliability_first_npos_soak(&permissioned),
+            !is_reliability_first_npos_soak(&npos),
+            "stable shared-host DA fast-reschedule policy should be mode-parity"
         );
     }
 
@@ -3771,6 +4378,37 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(!is_shared_host_stable_soak(&config));
+        assert!(is_shared_host_stable_recovery_run(&config));
+        assert_eq!(
+            recovery_profile_for(&config),
+            shared_host_recovery_profile()
+        );
+    }
+
+    #[test]
+    fn shared_host_recovery_profile_applies_to_permissioned_stable_pilot_runs() {
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1_200),
+            pipeline_time: None,
+            target_blocks: Some(1_200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(13),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
         };
 
         assert!(!is_shared_host_stable_soak(&config));
@@ -4918,18 +5556,18 @@ mod tests {
     }
 
     #[test]
-    fn effective_tolerated_peer_failures_respects_configured_fault_budget() {
-        assert_eq!(effective_tolerated_peer_failures(4, 0), 0);
+    fn effective_tolerated_peer_failures_uses_protocol_tolerance() {
+        assert_eq!(effective_tolerated_peer_failures(4, 0), 1);
         assert_eq!(effective_tolerated_peer_failures(4, 1), 1);
         assert_eq!(
             effective_tolerated_peer_failures(7, 1),
-            1,
-            "configured fault budget should clamp BFT tolerance"
+            2,
+            "strict guard should respect protocol tolerance, not expected fault injections"
         );
         assert_eq!(
             effective_tolerated_peer_failures(7, 5),
             2,
-            "configured budget above BFT window should keep protocol tolerance"
+            "protocol tolerance remains bounded by peer count"
         );
     }
 
@@ -5204,7 +5842,7 @@ mod tests {
         };
 
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(20));
-        wait_for_target_blocks(
+        let progress = wait_for_target_blocks(
             network.peers(),
             2,
             0,
@@ -5213,11 +5851,122 @@ mod tests {
             None,
             &run_control,
             None,
+            false,
         )
         .await?;
+        assert!(progress.target_reached);
         network.shutdown().await;
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_target_blocks_soft_kpi_allows_duration_completion_without_target()
+    -> Result<()> {
+        if !allow_net_for_tests() {
+            return Ok(());
+        }
+        crate::config::init_tracing_with_filter("warn");
+        init_instruction_registry();
+
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(4),
+            pipeline_time: Some(Duration::from_millis(250)),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(10),
+            tps: 1.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos {
+            state: _,
+            genesis,
+            recipes: _,
+        } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let builder = make_network_builder(&config, genesis);
+
+        let network = match builder.start().await {
+            Ok(network) => network,
+            Err(err) => {
+                let looks_like_permission_denied = err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
+                    || err.to_string().contains("Operation not permitted");
+                if looks_like_permission_denied {
+                    return Ok(());
+                }
+                return Err(err);
+            }
+        };
+
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
+        let target_blocks = 10_000;
+        let progress = wait_for_target_blocks(
+            network.peers(),
+            target_blocks,
+            0,
+            Duration::from_millis(200),
+            Duration::from_secs(30),
+            None,
+            &run_control,
+            None,
+            true,
+        )
+        .await?;
+        assert!(
+            !progress.target_reached,
+            "soft-KPI monitoring should complete duration without forcing a target hit"
+        );
+        assert!(
+            progress.quorum_min_height < target_blocks,
+            "expected unmet target for soft-KPI duration test"
+        );
+        network.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_target_blocks_explicit_stop_is_error_even_in_soft_kpi_mode() {
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(30));
+        run_control.stop();
+        let err = wait_for_target_blocks(
+            &[],
+            100,
+            0,
+            Duration::from_millis(5),
+            Duration::from_secs(1),
+            None,
+            &run_control,
+            None,
+            true,
+        )
+        .await
+        .expect_err("explicit stop must terminate target monitoring");
+        assert!(
+            err.to_string()
+                .contains("izanami run stopped before target blocks reached"),
+            "unexpected stop error: {err}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5421,7 +6170,7 @@ mod tests {
         let npos_da_ms = i64::try_from(npos_timing.da_ms).expect("npos DA timeout fits into i64");
         let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
             .expect("npos aggregator timeout fits into i64");
-        let pending_stall_ms = pending_stall_grace_ms(npos_timing.block_ms);
+        let pending_stall_ms = npos_pending_stall_grace_ms(&config, npos_timing.block_ms);
         assert_eq!(
             lookup_bool(&["pipeline", "dynamic_prepass"]),
             Some(IZANAMI_PIPELINE_DYNAMIC_PREPASS)
@@ -5522,6 +6271,10 @@ mod tests {
                 "pending_stall_grace_ms"
             ]),
             Some(pending_stall_ms)
+        );
+        assert_eq!(
+            lookup_bool(&["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"]),
+            Some(!is_reliability_first_npos_soak(&config))
         );
         assert_eq!(
             lookup(&[

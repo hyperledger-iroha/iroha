@@ -198,6 +198,7 @@ impl Actor {
         let aborted_retention = quorum_reschedule_retention.saturating_mul(retention_factor);
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
+        let committed_height = self.committed_height_snapshot();
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let fast_timeout_permissioned = self.pending_fast_path_timeout_current();
@@ -235,7 +236,20 @@ impl Actor {
                         && vote.height == pending.height
                         && vote.view == pending.view
                 });
-                let missing_request = self.pending.missing_block_requests.contains_key(hash);
+                let missing_request =
+                    self.pending
+                        .missing_block_requests
+                        .get(hash)
+                        .is_some_and(|request| {
+                            request.height == pending.height
+                                && request.view == pending.view
+                                && self.missing_block_request_has_actionable_dependency(
+                                    *hash,
+                                    request,
+                                    committed_height,
+                                    now,
+                                )
+                        });
                 let expected_epoch = self.epoch_for_height(pending.height);
                 let commit_qc_cached = cached_qc_for(
                     &self.qc_cache,
@@ -650,6 +664,14 @@ impl Actor {
                     .get(&key.0)
                     .is_some_and(|request| {
                         if request.height != key.1 || request.view != key.2 {
+                            return false;
+                        }
+                        if !self.missing_block_request_has_actionable_dependency(
+                            key.0,
+                            request,
+                            committed_height,
+                            now,
+                        ) {
                             return false;
                         }
                         let request_age = now.saturating_duration_since(request.last_requested);

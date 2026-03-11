@@ -471,6 +471,7 @@ impl Actor {
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let dependency_check_now = Instant::now();
         let mut topology_peers = if matches!(vote.phase, Phase::NewView) {
             self.roster_for_new_view_with_mode(
                 vote.block_hash,
@@ -488,10 +489,11 @@ impl Actor {
             )
         };
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&vote.block_hash);
+            let missing_request = self.missing_request_hash_has_actionable_dependency(
+                vote.block_hash,
+                committed_height,
+                dependency_check_now,
+            );
             let allow_fallback = missing_request
                 || (vote.height <= committed_height.saturating_add(1)
                     && (self.block_known_locally(vote.block_hash) || self.runtime_da_enabled()));
@@ -1005,10 +1007,11 @@ impl Actor {
         }
         if let Some(local_view) = stale_view {
             let da_enabled = self.runtime_da_enabled();
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&vote.block_hash);
+            let missing_request = self.missing_request_hash_has_actionable_dependency(
+                vote.block_hash,
+                committed_height,
+                Instant::now(),
+            );
             if vote.phase == crate::sumeragi::consensus::Phase::Commit
                 && (self.block_known_locally(vote.block_hash) || da_enabled || missing_request)
             {
@@ -1069,21 +1072,7 @@ impl Actor {
         self.request_missing_block_for_highest_qc_inner(highest, source, true, true)
     }
 
-    pub(super) fn request_missing_block_for_highest_qc_force_skip_sidecar_observation(
-        &mut self,
-        highest: crate::sumeragi::consensus::QcHeaderRef,
-        source: &'static str,
-    ) -> bool {
-        self.sidecar_observation_suppression_depth =
-            self.sidecar_observation_suppression_depth.saturating_add(1);
-        let requested =
-            self.request_missing_block_for_highest_qc_inner(highest, source, true, false);
-        self.sidecar_observation_suppression_depth =
-            self.sidecar_observation_suppression_depth.saturating_sub(1);
-        requested
-    }
-
-    fn suppress_committed_edge_conflicting_highest_qc(
+    pub(super) fn suppress_committed_edge_conflicting_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
@@ -1126,6 +1115,30 @@ impl Actor {
             highest.view,
             highest.subject_block_hash,
         );
+        let descendant_pending: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(pending_hash, pending)| {
+                (pending.block.header().prev_block_hash() == Some(highest.subject_block_hash))
+                    .then_some((*pending_hash, pending.height, pending.view))
+            })
+            .collect();
+        let mut descendant_pending_removed = 0usize;
+        let mut descendant_requeued = 0usize;
+        let mut descendant_requeue_failures = 0usize;
+        let mut descendant_requeue_duplicates = 0usize;
+        for (pending_hash, pending_height, pending_view) in descendant_pending {
+            if let Some((_, requeued, failures, duplicate_failures)) =
+                self.drop_stale_pending_block(pending_hash, pending_height, pending_view)
+            {
+                descendant_pending_removed = descendant_pending_removed.saturating_add(1);
+                descendant_requeued = descendant_requeued.saturating_add(requeued);
+                descendant_requeue_failures = descendant_requeue_failures.saturating_add(failures);
+                descendant_requeue_duplicates =
+                    descendant_requeue_duplicates.saturating_add(duplicate_failures);
+            }
+        }
 
         if let Some(committed_qc) = self.latest_committed_qc()
             && self
@@ -1152,8 +1165,44 @@ impl Actor {
             );
         }
 
-        let recovery_requested =
-            self.request_missing_block_for_highest_qc(highest, "highest_qc_committed_conflict");
+        let has_obsolete_request = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .is_some();
+        let cleared_obsolete_request = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .is_some_and(|request| {
+                self.missing_block_request_has_actionable_dependency(
+                    highest.subject_block_hash,
+                    request,
+                    committed_height,
+                    Instant::now(),
+                )
+            });
+        if has_obsolete_request {
+            self.clear_missing_block_request(
+                &highest.subject_block_hash,
+                MissingBlockClearReason::Obsolete,
+            );
+        }
+        super::status::inc_committed_edge_conflict_obsolete();
+        self.clear_sidecar_mismatch_for_height(highest.height);
+        let now = Instant::now();
+        let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
+            highest.height,
+            "highest_qc_committed_conflict",
+            now,
+        );
+        let contiguous_height = committed_height.saturating_add(1);
+        let recovery_reanchor_requested = recovery_allowed
+            && self.request_range_pull_from_anchor(
+                contiguous_height,
+                "highest_qc_committed_conflict",
+                now,
+            );
         warn!(
             height = highest.height,
             view = highest.view,
@@ -1161,7 +1210,10 @@ impl Actor {
             incoming_hash = %highest.subject_block_hash,
             committed_hash = %committed_hash,
             source,
-            recovery_requested,
+            cleared_obsolete_request,
+            recovery_allowed,
+            contiguous_height,
+            recovery_reanchor_requested,
             votes_removed,
             qcs_removed,
             qc_tally_removed,
@@ -1172,7 +1224,11 @@ impl Actor {
             pending_blocks_removed,
             proposal_hints_removed,
             proposal_cache_removed,
-            "suppressing committed-edge conflicting highest-QC reference and preserving canonical state"
+            descendant_pending_removed,
+            descendant_requeued,
+            descendant_requeue_failures,
+            descendant_requeue_duplicates,
+            "suppressing committed-edge conflicting highest-QC reference and preserving canonical state with bounded canonical reanchor"
         );
         true
     }
@@ -1192,47 +1248,6 @@ impl Actor {
         self.missing_block_retry_window_with_rbc_progress(block_hash, height, view, retry_window)
     }
 
-    fn should_clear_missing_request_for_committed_edge_conflict(
-        &self,
-        highest: crate::sumeragi::consensus::QcHeaderRef,
-        committed_height: u64,
-    ) -> bool {
-        let Some(request) = self
-            .pending
-            .missing_block_requests
-            .get(&highest.subject_block_hash)
-        else {
-            return false;
-        };
-        request.height <= highest.height || request.height <= committed_height
-    }
-
-    fn request_targeted_missing_fetch_for_committed_edge_conflict(
-        &mut self,
-        highest: crate::sumeragi::consensus::QcHeaderRef,
-        committed_height: u64,
-    ) -> bool {
-        let target_height = self
-            .active_consensus_round_height()
-            .max(committed_height.saturating_add(1));
-        let target_view = self
-            .phase_tracker
-            .current_view(target_height)
-            .unwrap_or(highest.view)
-            .max(highest.view);
-        let targeted = crate::sumeragi::consensus::QcHeaderRef {
-            phase: highest.phase,
-            subject_block_hash: highest.subject_block_hash,
-            height: target_height,
-            view: target_view,
-            epoch: self.epoch_for_height(target_height),
-        };
-        self.request_missing_block_for_highest_qc_force_skip_sidecar_observation(
-            targeted,
-            "highest_qc_committed_conflict",
-        )
-    }
-
     #[allow(clippy::too_many_lines)]
     fn request_missing_block_for_highest_qc_inner(
         &mut self,
@@ -1242,54 +1257,20 @@ impl Actor {
         observe_sidecar_mismatch: bool,
     ) -> bool {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if self.suppress_committed_edge_conflicting_highest_qc(highest, source) {
+            return false;
+        }
         if highest.height <= committed_height {
             match self.committed_block_hash_for_height(highest.height) {
                 Some(committed_hash) if committed_hash != highest.subject_block_hash => {
-                    let cleared_obsolete_request = if self
-                        .should_clear_missing_request_for_committed_edge_conflict(
-                            highest,
-                            committed_height,
-                        ) {
-                        self.clear_missing_block_request(
-                            &highest.subject_block_hash,
-                            MissingBlockClearReason::Obsolete,
-                        );
-                        true
-                    } else {
-                        false
-                    };
-                    self.clear_sidecar_mismatch_for_height(highest.height);
-                    let now = Instant::now();
-                    let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
-                        highest.height,
-                        "highest_qc_committed_conflict",
-                        now,
-                    );
-                    let contiguous_height = committed_height.saturating_add(1);
-                    let recovery_reanchor_requested = recovery_allowed
-                        && self.request_range_pull_from_anchor(
-                            contiguous_height,
-                            "highest_qc_committed_conflict",
-                            now,
-                        );
-                    let recovery_targeted_fetch_requested = recovery_allowed
-                        && self.request_targeted_missing_fetch_for_committed_edge_conflict(
-                            highest,
-                            committed_height,
-                        );
                     debug!(
                         height = highest.height,
                         view = highest.view,
                         committed_height,
                         committed_hash = %committed_hash,
                         highest_hash = %highest.subject_block_hash,
-                        cleared_obsolete_request,
-                        recovery_allowed,
-                        contiguous_height,
-                        recovery_reanchor_requested,
-                        recovery_targeted_fetch_requested,
                         source,
-                        "suppressing highest QC committed-edge conflict and scheduling bounded contiguous recovery bundle"
+                        "suppressing highest QC committed-edge conflict as obsolete"
                     );
                     return false;
                 }

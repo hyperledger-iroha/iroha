@@ -393,6 +393,8 @@ static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
 static MISSING_REQUEST_PRUNED_STALE_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static PENDING_QUEUE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_QC_TRIGGER_SUPPRESSED_STALE: AtomicU64 = AtomicU64::new(0);
+static COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_QC_REPLACED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3476,6 +3478,10 @@ pub struct StatusSnapshot {
     pub pending_queue_evictions_total: u64,
     /// Total stale-height missing-QC triggers suppressed instead of rotating view.
     pub missing_qc_trigger_suppressed_stale: u64,
+    /// Total committed-edge conflicting dependencies reclassified as obsolete/non-actionable.
+    pub committed_edge_conflict_obsolete_total: u64,
+    /// Total repeated roster-sidecar mismatch tuples classified as obsolete/non-actionable.
+    pub roster_sidecar_mismatch_obsolete_total: u64,
     /// Total QC-missing payload fetches escalated to topology-wide aggressive mode.
     pub qc_missing_payload_aggressive_fetch_total: u64,
     /// Data-availability gate snapshot and counters.
@@ -4433,6 +4439,10 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         pending_queue_evictions_total: PENDING_QUEUE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
         missing_qc_trigger_suppressed_stale: MISSING_QC_TRIGGER_SUPPRESSED_STALE
+            .load(Ordering::Relaxed),
+        committed_edge_conflict_obsolete_total: COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL
+            .load(Ordering::Relaxed),
+        roster_sidecar_mismatch_obsolete_total: ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL
             .load(Ordering::Relaxed),
         qc_missing_payload_aggressive_fetch_total: QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL
             .load(Ordering::Relaxed),
@@ -5475,6 +5485,20 @@ pub fn inc_missing_qc_trigger_suppressed_stale() {
     MISSING_QC_TRIGGER_SUPPRESSED_STALE.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when committed-edge conflicting dependencies are suppressed as obsolete.
+pub fn inc_committed_edge_conflict_obsolete() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when repeated roster-sidecar mismatch tuples are suppressed as obsolete.
+pub fn inc_roster_sidecar_mismatch_obsolete() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_BLOCK_FETCH_TOTAL.store(0, Ordering::Relaxed);
@@ -5483,6 +5507,8 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_REQUEST_PRUNED_STALE_HEIGHT.store(0, Ordering::Relaxed);
     PENDING_QUEUE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
     MISSING_QC_TRIGGER_SUPPRESSED_STALE.store(0, Ordering::Relaxed);
+    COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL.store(0, Ordering::Relaxed);
+    ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL.store(0, Ordering::Relaxed);
     QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_RESOLVED_TOTAL.store(0, Ordering::Relaxed);
@@ -8257,6 +8283,8 @@ mod tests {
         super::inc_missing_request_pruned_stale_height(3);
         super::inc_pending_queue_evictions_total(2);
         super::inc_missing_qc_trigger_suppressed_stale();
+        super::inc_committed_edge_conflict_obsolete();
+        super::inc_roster_sidecar_mismatch_obsolete();
         let snapshot = super::snapshot();
         assert_eq!(snapshot.missing_block_fetch_total, 1);
         assert_eq!(snapshot.missing_block_fetch_last_targets, 3);
@@ -8264,6 +8292,8 @@ mod tests {
         assert_eq!(snapshot.missing_request_pruned_stale_height, 3);
         assert_eq!(snapshot.pending_queue_evictions_total, 2);
         assert_eq!(snapshot.missing_qc_trigger_suppressed_stale, 1);
+        assert_eq!(snapshot.committed_edge_conflict_obsolete_total, 1);
+        assert_eq!(snapshot.roster_sidecar_mismatch_obsolete_total, 1);
         assert_eq!(snapshot.qc_missing_payload_aggressive_fetch_total, 1);
         assert_eq!(snapshot.qc_deferred_missing_payload_total, 1);
         assert_eq!(snapshot.qc_deferred_resolved_total, 1);
