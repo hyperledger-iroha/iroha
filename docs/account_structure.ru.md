@@ -665,7 +665,7 @@ Nexus публикует **манифест, предназначенный то
   Пользователи отмечают, что сжатая форма `i105` предназначена только для Sora и допускает перезапись IME.
 - **Интеграция Тори:** Кэшируйте манифесты Nexus с соблюдением TTL,
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` детерминированно, и
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Форматы ответов Тории
 

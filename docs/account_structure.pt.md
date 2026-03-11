@@ -665,7 +665,7 @@ seus bilhetes de mudança.
   usuários que o formulário `i105` compactado é somente Sora e suscetível a reescritas de IME.
 - **Integração Torii:** Cache Nexus manifesta respeitando TTL, emite
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministicamente, e
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Formatos de resposta Torii
 

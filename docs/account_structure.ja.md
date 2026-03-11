@@ -665,7 +665,7 @@ HTTP エンドポイントにより、監査人は検証手順をそのまま再
   ユーザーは、圧縮された `i105` フォームは Sora 専用であり、IME の書き換えの影響を受けやすいことを認識しています。
 - **Torii の統合:** TTL を考慮したキャッシュ Nexus マニフェスト、エミット
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` を決定的に、そして
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### 鳥居応答フォーマット
 

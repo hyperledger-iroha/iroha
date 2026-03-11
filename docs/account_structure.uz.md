@@ -669,7 +669,7 @@ ularning almashtirish chiptalari.
   siqilgan `i105` shakli faqat Sora va IME qayta yozishga moyil bo'lgan foydalanuvchilar.
 - **Torii integratsiyasi:** Nexus keshi TTLga nisbatan namoyon bo'ladi, chiqaradi
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` aniq va
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii javob formatlari
 

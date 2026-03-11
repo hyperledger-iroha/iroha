@@ -669,7 +669,7 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   օգտվողներ, որոնց սեղմված `i105` ձևը միայն Sora-ի համար է և ենթակա է IME-ի վերաշարադրումների:
 - **Torii ինտեգրում.** Cache Nexus դրսևորվում է TTL-ի նկատմամբ, արտանետում
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` դետերմինիստորեն, և
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii պատասխանի ձևաչափեր
 

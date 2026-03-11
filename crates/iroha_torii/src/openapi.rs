@@ -8430,7 +8430,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered with the requested address format."
+                    "description": "Controller rendered as canonical I105 account literal."
                 },
                 "receiver_id": {
                     "type": "string",
@@ -8438,7 +8438,7 @@ fn openapi_schemas() -> Map {
                 },
                 "receiver_display": {
                     "type": "string",
-                    "description": "Receiver rendered with requested address format."
+                    "description": "Receiver rendered as canonical I105 account literal."
                 },
                 "deposit_account_id": {
                     "type": "string",
@@ -8446,7 +8446,7 @@ fn openapi_schemas() -> Map {
                 },
                 "deposit_account_display": {
                     "type": "string",
-                    "description": "Deposit account rendered with requested address format."
+                    "description": "Deposit account rendered as canonical I105 account literal."
                 },
                 "asset_id": {
                     "type": "string",

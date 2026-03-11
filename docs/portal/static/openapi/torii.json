@@ -1777,7 +1777,7 @@
             "type": "string"
           },
           "controller_display": {
-            "description": "Controller rendered with the requested address format.",
+            "description": "Controller rendered as canonical I105 account literal.",
             "type": "string"
           },
           "controller_id": {
@@ -1785,7 +1785,7 @@
             "type": "string"
           },
           "deposit_account_display": {
-            "description": "Deposit account rendered with requested address format.",
+            "description": "Deposit account rendered as canonical I105 account literal.",
             "type": "string"
           },
           "deposit_account_id": {
@@ -1814,7 +1814,7 @@
             "type": "integer"
           },
           "receiver_display": {
-            "description": "Receiver rendered with requested address format.",
+            "description": "Receiver rendered as canonical I105 account literal.",
             "type": "string"
           },
           "receiver_id": {

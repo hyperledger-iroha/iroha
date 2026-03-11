@@ -95,14 +95,12 @@ fn persist_da_payload(client: &Client, payload: Vec<u8>, storage_ticket: &str) -
 
 ```rust
 use iroha_client::client::{
-    Client, ExplorerAccountQrOptions,
+    Client,
 };
 
 fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
         "i105...",
-        Some(ExplorerAccountQrOptions {
-        }),
     )?;
     println!("I105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;

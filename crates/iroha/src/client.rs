@@ -681,23 +681,12 @@ pub struct UaidBindingsResponse {
     pub dataspaces: Vec<UaidBindingsDataspace>,
 }
 
-/// Optional knobs accepted by the explorer QR endpoint.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ExplorerAccountQrOptions;
-
-impl ExplorerAccountQrOptions {
-    fn apply(self, builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        let _ = self;
-        builder
-    }
-}
-
 /// Snapshot returned by `/v1/explorer/accounts/{account_id}/qr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountQrSnapshot {
     /// Canonical account identifier (I105).
     pub canonical_id: String,
-    /// Rendered literal using the requested address format.
+    /// Rendered literal (I105).
     pub literal: String,
     /// I105 prefix for the network.
     pub network_prefix: u16,
@@ -8967,11 +8956,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the account id fails validation, the HTTP request fails,
     /// the response is non-OK, or JSON deserialization fails.
-    pub fn get_explorer_account_qr(
-        &self,
-        account_id: &str,
-        options: Option<ExplorerAccountQrOptions>,
-    ) -> Result<ExplorerAccountQrSnapshot> {
+    pub fn get_explorer_account_qr(&self, account_id: &str) -> Result<ExplorerAccountQrSnapshot> {
         let trimmed = account_id.trim();
         if trimmed.is_empty() {
             return Err(eyre!(
@@ -8983,7 +8968,6 @@ impl Client {
         let builder = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON);
-        let builder = options.unwrap_or_default().apply(builder);
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
         ExplorerAccountQrSnapshot::from_value(payload)
@@ -13440,7 +13424,7 @@ mod tests {
     }
 
     #[test]
-    fn get_public_lane_validators_omits_address_format_query() {
+    fn get_public_lane_validators_omits_query_params() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":7,"total":0,"items":[]}"#);
@@ -13522,7 +13506,7 @@ mod tests {
     }
 
     #[test]
-    fn get_explorer_account_qr_parses_payload_and_omits_address_format_query() {
+    fn get_explorer_account_qr_parses_payload_and_omits_query_params() {
         let account_id = ALICE_ID.to_string();
         let address = AccountAddress::from_account_id(&ALICE_ID).expect("address from account");
         let i105_literal = address.to_i105().expect("i105 literal");
@@ -13542,7 +13526,7 @@ mod tests {
         let response = json_response(StatusCode::OK, &payload);
         let snapshot_store = Arc::clone(&snapshots);
         let qr = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.get_explorer_account_qr(&account_id, Some(ExplorerAccountQrOptions))
+            client.get_explorer_account_qr(&account_id)
         })
         .expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
