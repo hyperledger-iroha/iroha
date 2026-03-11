@@ -32,21 +32,21 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64шестнадцатеричный",
       "abi_version": "1",
       "окно": { "нижний": 12345, "верхний": 12400 },
-      "authority": "ih58…?",
+      "authority": "i105…?",
       "private_key": "...?"
     }
   - Ответ (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Проверка: узлы могут быть обнаружены `abi_version` или `abi_hash`, чтобы канонизировать или отклонить несоответствие. ہیں۔ `abi_version = "v1"` کے لئے متوقع value `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ہے۔API контрактов (развертывание)
 - ПОСТ `/v1/contracts/deploy`
-  - Запрос: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Запрос: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Поведение: IVM в заголовке `code_hash` `abi_version` в `abi_hash` в заголовке IVM `RegisterSmartContractCode` (манифест) и `RegisterSmartContractBytes` (за исключением `.to` байт) `authority`. ہے۔
   - Ответ: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Связано:
     - GET `/v1/contracts/code/{code_hash}` -> ذخیرہ شدہ Manifest واپس کرتا ہے
     - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` в исходном коде.
 - ПОСТ `/v1/contracts/instance`
-  - Запрос: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Запрос: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Поведение: развертывание байт-кода или отображение `ActivateContractInstance` или отображение `(namespace, contract_id)`. ہے۔
   - Ответ: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -59,11 +59,11 @@ translation_last_reviewed: 2026-02-07
   - Ошибки: неправильный шестнадцатеричный ввод HTTP `400`۔. Torii Norito `ValidationFail::QueryFailed::Conversion` сообщение об ошибке декодера конверта واپس کرتا ہے۔
 - ПОСТ `/v1/aliases/resolve`
   - Запрос: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Ответ: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Ответ: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Примечания: Промежуточный этап выполнения моста ISO درکار ہے (`[iso_bridge.account_aliases]` в `iroha_config`)۔ Torii пробелы ہٹا کر اور в верхнем регистре بنا کر search کرتا ہے۔ псевдоним от 404 до 404 в среде выполнения моста ISO от 503 до 503
 - ПОСТ `/v1/aliases/resolve_index`
   - Запрос: { "индекс": 0 }
-  - Ответ: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - Ответ: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Примечания: порядок конфигурации индексов псевдонимов کے مطابق детерминированный طریقے سے назначить ہوتے ہیں (на основе 0). Автономный кэш и события аттестации псевдонимов, журналы аудита и многое другое.
 
 Код Размер ограничения
@@ -71,7 +71,7 @@ translation_last_reviewed: 2026-02-07
   - Хранение кода контракта в сети.
   - По умолчанию: 16 МБ۔ `.to` image حد سے بڑی ہو تو nodes `RegisterSmartContractBytes` کو ошибка нарушения инварианта или отклонить ошибку
   - Операторы `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور числовая полезная нагрузка دے کر ایڈجسٹ کر سکتے ہیں۔- ПОСТ `/v1/gov/ballots/zk`
-  - Запрос: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Запрос: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Ответ: { "ОК": правда, "принято": правда, "tx_instructions": [{...}] }
   - Примечания:
     - Схема для общедоступных входов `owner`, `amount`, `duration_blocks` для проверки конфигурации VK и подтверждения для проверки. В узле `election_id` можно отключить блокировку управления. направление چھپی رہتی ہے (`unknown`); Сумма/срок действия اپڈیٹ ہوتے ہیں۔ повторное голосование монотонное ہیں: сумма до истечения срока действия صرف بڑھتے ہیں (node ​​max(amount, prev.amount) اور max(expiry, prev.expiry) لگاتا ہے)۔
@@ -79,12 +79,12 @@ translation_last_reviewed: 2026-02-07
     - Выполнение контракта может быть поставлено в очередь `SubmitBallot` или `ZK_VOTE_VERIFY_BALLOT` для завершения процесса. применение одноразовой блокировки хостов کرتے ہیں۔
 
 - ПОСТ `/v1/gov/ballots/plain`
-  - Запрос: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "владелец": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Да|Нет|Воздержаться" }
+  - Запрос: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "владелец": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Да|Нет|Воздержаться" }
   - Ответ: { "ОК": правда, "принято": правда, "tx_instructions": [{...}] }
   - Примечания: повторное голосование только для продления. `owner` — полномочия по транзакциям, необходимые для управления транзакциями. کم از کم مدت `conviction_step_blocks` ہے۔
 
 - ПОСТ `/v1/gov/finalize`
-  - Запрос: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Запрос: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Ответ: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Эффект on-chain (текущий эшафот): Вы можете развернуть предложение и ввести в действие `code_hash` с минимальным ключом `ContractManifest`, чтобы установить его. متوقع `abi_hash` ہوتا ہے اور предложение принято ہو جاتا ہے۔ `code_hash` может быть использован `abi_hash` в манифесте, если законодательный акт отклонен.
   - Примечания:
@@ -93,7 +93,7 @@ translation_last_reviewed: 2026-02-07
     - Проверка явки: одобрение+отклонение воздержаться от явки میں شمار نہیں ہوتا۔
 
 - ПОСТ `/v1/gov/enact`
-  - Запрос: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Запрос: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Ответ: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Примечания: جب `authority`/`private_key` فراہم ہوں تو Torii подписал транзакцию سبمٹ کرتا ہے؛ ورنہ وہ скелет и его скелет прообраз اختیاری اور فی الحال معلوماتی ہے۔- ПОЛУЧИТЬ `/v1/gov/proposals/{id}`
   - Путь `{id}`: шестнадцатеричный идентификатор предложения (64 символа).
@@ -191,15 +191,15 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے принятое предложение по управлению موجود ہے جو اسی хеширование идентификатора предложения سے получение ہوتا ہے جو node استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (проблемы, сводки манифеста/кода/предложения) `--no-summary` نہ ہو)۔
   - Защищенные пространства имен, аудит, рабочие процессы развертывания, контролируемые управлением, и контрольные проверки.
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Защищенные пространства имен, развертывание и скелет метаданных JSON, дополнительные функции `gov_manifest_approvers` и дополнительные правила кворума манифеста.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے کسی بھی подсказки для блокировки подсказок. Если `owner`, `amount` или `duration_blocks`, это может быть сделано в случае необходимости.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے کسی بھی подсказки для блокировки подсказок. Если `owner`, `amount` или `duration_blocks`, это может быть сделано в случае необходимости.
   — Проверяет канонические идентификаторы учетных записей, канонизирует 32-байтовые подсказки обнулителя и объединяет подсказки в `public_inputs_json` (с `--public <path>` для дополнительных переопределений).
   - Обнулитель получается из обязательства доказательства (общедоступный вклад) плюс `domain_tag`, `chain_id` и `election_id`; `--nullifier` проверяется на соответствие при поставке.
   - Детерминированный `fingerprint=<hex>` и закодированный `CastZkBallot` для получения декодированных подсказок (`owner`, `amount`, `duration_blocks`, `direction` جب فراہم ہوں)۔
   - Ответы CLI `tx_instructions[]` или `payload_fingerprint_hex` для декодированных полей или аннотаций, а также скелета последующих инструментов. Norito декодирование کے проверить کر سکے۔
   - Подсказки по блокировке دینے سے node ZK избирательные бюллетени کے لئے `LockCreated`/`LockExtended` события выдают کر سکتا ہے جب цепи и значения выставляют کرے۔
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` псевдонимы ZK-флаги или зеркало, или контроль четности сценариев.
   - Сводный вывод `vote --mode zk`, закодированный отпечаток инструкции и читаемые поля голосования (`owner`, `amount`, `duration_blocks`, `direction`). ہے، جس سے подпись سے پہلے فوری تصدیق ہو جاتی ہے۔
 
@@ -218,14 +218,14 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
 - ПОСТ `/v1/gov/ballots/zk-v1`
   - Запрос (DTO в стиле v1):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "бэкэнд": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "владелец": "ih58…?",
+      "владелец": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - Ответ: { "ОК": правда, "принято": правда, "tx_instructions": [{...}] }
@@ -234,7 +234,7 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
   - `BallotProof` JSON-файл для создания скелета `CastZkBallot`
   - Запрос:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

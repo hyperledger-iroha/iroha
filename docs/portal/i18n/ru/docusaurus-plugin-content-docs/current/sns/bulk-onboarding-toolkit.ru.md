@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-02-07
 |---------|-------------|----------|
 | `label` | Да | Запрошенная метка (допускается смешанный случай; инструмент нормализует по Норме v1 и УТС-46). |
 | `suffix_id` | Да | Суффикс числового идентификатора (десятичный или `0x` hex). |
-| `owner` | Да | Строка AccountId (домен-независимый encoded AccountId (IH58 предпочтительно; compressed допускается; без @domain)) регистрация владельца. |
+| `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Целое число `1..=255`. |
 | `payment_asset_id` | Да | Активный расчет (например, `xor#sora`). |
 | `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие собой важные активы. |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **Разбор метаданных/управления:** встроенный JSON парсится напрямую; ссылки на файлы
   CSV разрешены. Отсутствие метаданных приводит к необходимости проверки.
 - **Контроллеры:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные назначенные контроллеры (например, `ih58...;ih58...`) при делегировании невладельцем.
+  явные назначенные контроллеры (например, `i105...;i105...`) при делегировании невладельцем.
 
 Ошибки сообщаются с контекстными номерами строк (например
 `error: row 12 term_years must be between 1 and 255`). Скрипт выходит с кодом `1`

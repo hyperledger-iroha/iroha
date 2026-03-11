@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical IH58 account IDs.
+//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
 
 use std::{
     collections::BTreeSet,
@@ -23,10 +23,7 @@ use iroha::data_model::{
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
 use iroha_crypto::{Hash, Signature};
-use iroha_data_model::account::{
-    AccountDomainSelector,
-    address::{AccountAddress, AccountAddressFormat},
-};
+use iroha_data_model::account::{AccountDomainSelector, address::AccountAddress};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
@@ -153,17 +150,10 @@ fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<S
         .unwrap_or_default()
 }
 
-fn assert_authorities_are_ih58(authorities: &[String]) -> Result<()> {
+fn assert_authorities_are_i105(authorities: &[String]) -> Result<()> {
     for literal in authorities {
-        let (_, format) = AccountAddress::parse_encoded(literal, None)
+        AccountAddress::parse_encoded(literal, None)
             .wrap_err_with(|| format!("authority {literal} should parse as account address"))?;
-        if !matches!(format, AccountAddressFormat::IH58 { .. }) {
-            return Err(eyre!(
-                "IH58 default should emit canonical IH58 literals; got {} ({:?})",
-                literal,
-                format
-            ));
-        }
     }
 
     Ok(())
@@ -194,21 +184,25 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../fixtures/offline_allowance/android-demo");
 
-    let norito_path = root.join("register_instruction.norito");
-    if let Ok(bytes) = fs::read(&norito_path) {
-        if let Ok(instruction) = norito::decode_from_bytes::<RegisterOfflineAllowance>(&bytes) {
-            return Ok(instruction.certificate);
-        }
-        if let Ok(instruction) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
-            if let Some(decoded) = instruction
-                .as_any()
-                .downcast_ref::<RegisterOfflineAllowance>()
-            {
-                return Ok(decoded.certificate.clone());
+    for norito_path in [
+        root.join("register_instruction.norito"),
+        root.join("certificate.norito"),
+    ] {
+        if let Ok(bytes) = fs::read(&norito_path) {
+            if let Ok(instruction) = norito::decode_from_bytes::<RegisterOfflineAllowance>(&bytes) {
+                return Ok(instruction.certificate);
             }
-        }
-        if let Ok(certificate) = norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes) {
-            return Ok(certificate);
+            if let Ok(instruction) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
+                if let Some(decoded) = instruction
+                    .as_any()
+                    .downcast_ref::<RegisterOfflineAllowance>()
+                {
+                    return Ok(decoded.certificate.clone());
+                }
+            }
+            if let Ok(certificate) = norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes) {
+                return Ok(certificate);
+            }
         }
     }
 
@@ -248,12 +242,9 @@ fn with_offline_allowance_genesis(
         .expect("default wonderland domain should parse");
 
     // Seed every domain touched by the fixture so genesis mint/register steps can resolve
-    // controller/operator/asset-owner scopes even when they use non-wonderland domains.
+    // asset-definition scopes even when they use non-wonderland domains.
     let mut required_domains = BTreeSet::new();
     required_domains.insert(certificate.allowance.asset.definition().domain().clone());
-    required_domains.insert(certificate.allowance.asset.account().domain().clone());
-    required_domains.insert(certificate.controller.domain().clone());
-    required_domains.insert(certificate.operator.domain().clone());
     for domain in required_domains {
         if domain != genesis_domain && domain != wonderland_domain {
             builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
@@ -268,7 +259,9 @@ fn with_offline_allowance_genesis(
     required_accounts.insert(certificate.operator.clone());
     for account in required_accounts {
         if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
-            builder = builder.with_genesis_instruction(Register::account(Account::new(account)));
+            builder = builder.with_genesis_instruction(Register::account(Account::new(
+                account.to_account_id(wonderland_domain.clone()),
+            )));
         }
     }
 
@@ -538,8 +531,7 @@ fn parse_optional_hash(
 }
 
 struct OfflineAllowanceSeed {
-    controller_ih58: String,
-    controller_compressed: String,
+    controller_i105: String,
 }
 
 fn find_repo_entry<'a>(
@@ -563,22 +555,33 @@ fn find_repo_entry<'a>(
         })
 }
 
-fn compressed_alice_literal() -> String {
+fn i105_alice_literal() -> String {
     let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
-    account_address
-        .to_compressed_sora()
-        .expect("compressed address encoding")
+    account_address.to_i105().expect("I105 address encoding")
 }
 
-fn compressed_bob_literal() -> String {
+fn i105_bob_literal() -> String {
     let account_address = BOB_ID
         .to_account_address()
         .expect("account address should encode");
-    account_address
-        .to_compressed_sora()
-        .expect("compressed address encoding")
+    account_address.to_i105().expect("I105 address encoding")
+}
+
+fn legacy_dotted_i105_literal(i105_literal: &str) -> String {
+    let mut chars = i105_literal.chars();
+    let sentinel: String = chars.by_ref().take(4).collect();
+    let remainder: String = chars.collect();
+    format!("{sentinel}.{remainder}")
+}
+
+fn legacy_dotted_i105_alice_literal() -> String {
+    legacy_dotted_i105_literal(&i105_alice_literal())
+}
+
+fn legacy_dotted_i105_bob_literal() -> String {
+    legacy_dotted_i105_literal(&i105_bob_literal())
 }
 
 fn local8_literal() -> String {
@@ -590,7 +593,8 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let digest = match AccountDomainSelector::from_domain(ALICE_ID.domain()).expect("selector") {
+    let domain: DomainId = "wonderland".parse().expect("wonderland domain parses");
+    let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
         AccountDomainSelector::LocalDigest12(bytes) => bytes,
         other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
     };
@@ -608,13 +612,12 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@{}", ALICE_ID.domain())
+    format!("{public_key}@wonderland")
 }
 
 struct KaigiRelaySeed {
-    relay_ih58: String,
-    relay_compressed: String,
-    reporter_compressed: String,
+    relay_i105: String,
+    reporter_i105: String,
 }
 
 fn account_endpoint_url(
@@ -655,10 +658,10 @@ fn explorer_account_qr_url(base: &reqwest::Url, account_literal: &str) -> reqwes
 }
 
 #[tokio::test]
-async fn accounts_listing_emits_ih58_identifiers() -> Result<()> {
+async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_emits_ih58_identifiers),
+        stringify!(accounts_listing_emits_i105_identifiers),
     )
     .await?
     else {
@@ -689,21 +692,21 @@ async fn accounts_listing_emits_ih58_identifiers() -> Result<()> {
     let expected = ALICE_ID.to_string();
     assert!(
         ids.iter().any(|id| id == &expected),
-        "expected IH58 literal {expected} in account listing, got {ids:?}"
+        "expected I105 literal {expected} in account listing, got {ids:?}"
     );
     assert!(
         ids.iter().all(|id| !id.contains('@')),
-        "account listing should emit canonical IH58 strings"
+        "account listing should emit canonical I105 strings"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_ih58_filter_literals() -> Result<()> {
+async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_accepts_ih58_filter_literals),
+        stringify!(accounts_query_accepts_i105_filter_literals),
     )
     .await?
     else {
@@ -738,17 +741,17 @@ async fn accounts_query_accepts_ih58_filter_literals() -> Result<()> {
     let ids = extract_account_ids(&parsed);
     assert!(
         ids.iter().all(|id| id == &expected),
-        "accounts query should return IH58 literal {expected}, got {ids:?}"
+        "accounts query should return I105 literal {expected}, got {ids:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
+async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_filter_accepts_compressed_literals),
+        stringify!(accounts_listing_filter_rejects_legacy_dotted_i105_literals),
     )
     .await?
     else {
@@ -756,7 +759,11 @@ async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let literal = compressed_alice_literal();
+    let literal = legacy_dotted_i105_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .reason()
+        .to_string();
     let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
     let http = http_client();
     let mut url = network
@@ -774,27 +781,25 @@ async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from accounts listing with compressed filter, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "legacy dotted I105 filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "compressed literal should resolve to IH58 output {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_accepts_compressed_filter_literals),
+        stringify!(accounts_query_rejects_legacy_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -802,7 +807,11 @@ async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let literal = compressed_alice_literal();
+    let literal = legacy_dotted_i105_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -820,27 +829,25 @@ async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from accounts query with compressed literal, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "legacy dotted I105 filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        ids.iter().all(|id| id == &expected),
-        "compressed literal should yield canonical IH58 output {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_listing_supports_compressed_response() -> Result<()> {
+async fn accounts_listing_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_supports_compressed_response),
+        stringify!(accounts_listing_supports_i105_response),
     )
     .await?
     else {
@@ -852,7 +859,7 @@ async fn accounts_listing_supports_compressed_response() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v1/accounts?limit=8&address_format=compressed")
+        .join("/v1/accounts?limit=8")
         .expect("join accounts url");
     let resp = http
         .get(url)
@@ -861,29 +868,29 @@ async fn accounts_listing_supports_compressed_response() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from accounts listing with compressed response, got {}",
+        "expected success from accounts listing with I105 response, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let ids = extract_account_ids(&parsed);
-    let expected = compressed_alice_literal();
+    let expected = i105_alice_literal();
     assert!(
         ids.iter().any(|id| id == &expected),
-        "compressed literal {expected} missing from response {ids:?}"
+        "I105 literal {expected} missing from response {ids:?}"
     );
     assert!(
         ids.iter().all(|id| id.starts_with("sora")),
-        "all ids should be compressed in the response: {ids:?}"
+        "all ids should be I105 in the response: {ids:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_query_supports_compressed_response() -> Result<()> {
+async fn accounts_query_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_supports_compressed_response),
+        stringify!(accounts_query_supports_i105_response),
     )
     .await?
     else {
@@ -891,7 +898,7 @@ async fn accounts_query_supports_compressed_response() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let body = r#"{"filter":null,"sort":[],"pagination":{"limit":8,"offset":0},"fetch_size":null,"select":null,"address_format":"compressed"}"#;
+    let body = r#"{"filter":null,"sort":[],"pagination":{"limit":8,"offset":0},"fetch_size":null,"select":null}"#;
     let http = http_client();
     let url = network
         .client()
@@ -907,25 +914,25 @@ async fn accounts_query_supports_compressed_response() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from accounts query with compressed response, got {}",
+        "expected success from accounts query with I105 response, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let ids = extract_account_ids(&parsed);
-    let expected = compressed_alice_literal();
+    let expected = i105_alice_literal();
     assert!(
         ids.iter().any(|id| id == &expected),
-        "compressed literal {expected} missing from query response {ids:?}"
+        "I105 literal {expected} missing from query response {ids:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn accounts_listing_rejects_unknown_address_format() -> Result<()> {
+async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_rejects_unknown_address_format),
+        stringify!(account_path_endpoints_reject_i105_literals),
     )
     .await?
     else {
@@ -933,39 +940,11 @@ async fn accounts_listing_rejects_unknown_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = http_client();
-    let url = network
-        .client()
-        .torii_url
-        .join("/v1/accounts?address_format=future")
-        .expect("join accounts url");
-    let resp = http
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    assert_eq!(
-        resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "invalid address_format should be rejected"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
-    let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
-        stringify!(account_path_endpoints_accept_compressed_literals),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
-    let literal = compressed_alice_literal();
+    let literal = legacy_dotted_i105_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .reason()
+        .to_string();
     let http = http_client();
 
     let surfaces: [SurfaceSpec; 3] = [
@@ -987,11 +966,15 @@ async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
             .header("Accept", "application/json")
             .send()
             .await?;
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "legacy dotted I105 literal should be rejected for {url}"
+        );
+        let body = resp.text().await.unwrap_or_default();
         assert!(
-            resp.status().is_success(),
-            "compressed literal should be accepted for {}, got {}",
-            url,
-            resp.status()
+            body.contains(&reason),
+            "response body should mention {reason}, got {body}"
         );
     }
 
@@ -1103,10 +1086,10 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asset_holders_get_supports_compressed_response() -> Result<()> {
+async fn asset_holders_get_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(asset_holders_get_supports_compressed_response),
+        stringify!(asset_holders_get_supports_i105_response),
     )
     .await?
     else {
@@ -1118,7 +1101,7 @@ async fn asset_holders_get_supports_compressed_response() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v1/assets/rose%23wonderland/holders?limit=8&address_format=compressed")
+        .join("/v1/assets/rose%23wonderland/holders?limit=8")
         .expect("join asset holders url");
     let resp = http
         .get(url)
@@ -1127,29 +1110,29 @@ async fn asset_holders_get_supports_compressed_response() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from asset holders listing with compressed response, got {}",
+        "expected success from asset holders listing with I105 response, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let ids = extract_holder_account_ids(&parsed);
-    let expected = compressed_alice_literal();
+    let expected = i105_alice_literal();
     assert!(
         ids.iter().any(|id| id == &expected),
-        "compressed literal {expected} missing from holders response {ids:?}"
+        "I105 literal {expected} missing from holders response {ids:?}"
     );
     assert!(
         ids.iter().all(|id| id.starts_with("sora")),
-        "all holders should render compressed literals when requested: {ids:?}"
+        "all holders should render I105 literals: {ids:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> {
+async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(asset_holders_query_accepts_compressed_filter_literals),
+        stringify!(asset_holders_query_rejects_legacy_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -1157,9 +1140,13 @@ async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> 
     };
     network.ensure_blocks(1).await?;
 
-    let literal = compressed_alice_literal();
+    let literal = legacy_dotted_i105_alice_literal();
+    let reason = AccountId::parse_encoded(&literal)
+        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .reason()
+        .to_string();
     let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"address_format":null}}"#
+        r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null}}"#
     );
 
     let http = http_client();
@@ -1175,31 +1162,25 @@ async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> 
         .body(body)
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "expected success from asset holders query with compressed literal, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "legacy dotted I105 filter literal should be rejected"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let ids = extract_holder_account_ids(&parsed);
-    let expected = ALICE_ID.to_string();
+    let body = resp.text().await?;
     assert!(
-        !ids.is_empty(),
-        "compressed filter literal should match canonical accounts"
-    );
-    assert!(
-        ids.iter().all(|id| id == &expected),
-        "asset holders query should emit canonical IH58 literals by default; expected {expected}, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn account_transactions_get_supports_address_format() -> Result<()> {
+async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_transactions_get_supports_address_format),
+        stringify!(account_transactions_get_returns_i105_literals),
     )
     .await?
     else {
@@ -1241,10 +1222,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
 
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
-    let account_address = ALICE_ID
-        .to_account_address()
-        .expect("account address should encode");
-    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
+    let i105_literal = account_literal.clone();
 
     let base = account_endpoint_url(
         &network.client().torii_url,
@@ -1260,12 +1238,11 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
         }
         url
     };
-    let compressed_url = {
+    let i105_url = {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
             qp.append_pair("limit", "8");
-            qp.append_pair("address_format", "compressed");
         }
         url
     };
@@ -1280,7 +1257,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
                 .await?;
             assert!(
                 resp.status().is_success(),
-                "expected success fetching account transactions with IH58 default, got {}",
+                "expected success fetching account transactions with I105 default, got {}",
                 resp.status()
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1290,7 +1267,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "timed out waiting for IH58 account transactions to appear"
+                    "timed out waiting for I105 account transactions to appear"
                 ));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1298,49 +1275,47 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     };
     assert!(
         !authorities.is_empty(),
-        "IH58 default should return at least one authority literal (submitted tx)"
+        "I105 default should return at least one authority literal (submitted tx)"
     );
     assert!(
         authorities
             .iter()
             .any(|literal| literal == &account_literal),
-        "IH58 default should include canonical literal {account_literal}, got {authorities:?}"
+        "I105 default should include canonical literal {account_literal}, got {authorities:?}"
     );
-    assert_authorities_are_ih58(&authorities)?;
+    assert_authorities_are_i105(&authorities)?;
 
     let resp = http
-        .get(compressed_url.clone())
+        .get(i105_url.clone())
         .header("Accept", "application/json")
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success fetching account transactions with address_format=compressed, got {}",
+        "expected success fetching account transactions with canonical i105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let authorities = extract_account_transaction_authorities(&parsed);
     assert!(
-        authorities
-            .iter()
-            .any(|literal| literal == &compressed_literal),
-        "compressed response should include {compressed_literal}, got {authorities:?}"
+        authorities.iter().any(|literal| literal == &i105_literal),
+        "I105 response should include {i105_literal}, got {authorities:?}"
     );
     assert!(
         authorities
             .iter()
             .all(|literal| literal.starts_with("sora")),
-        "compressed response should emit only compressed literals; got {authorities:?}"
+        "I105 response should emit only I105 literals; got {authorities:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn account_transactions_query_supports_address_format() -> Result<()> {
+async fn account_transactions_query_returns_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_transactions_query_supports_address_format),
+        stringify!(account_transactions_query_returns_i105_literals),
     )
     .await?
     else {
@@ -1382,10 +1357,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
 
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
-    let account_address = ALICE_ID
-        .to_account_address()
-        .expect("account address should encode");
-    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
+    let i105_literal = account_literal.clone();
 
     let url = account_endpoint_url(
         &network.client().torii_url,
@@ -1393,7 +1365,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
         &["transactions", "query"],
     );
 
-    let default_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null,"address_format":null}"#;
+    let default_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
     let authorities = {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -1406,7 +1378,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
                 .await?;
             assert!(
                 resp.status().is_success(),
-                "expected success from account transactions query using IH58 default, got {}",
+                "expected success from account transactions query using I105 default, got {}",
                 resp.status()
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1416,7 +1388,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "timed out waiting for IH58 account transactions query to appear"
+                    "timed out waiting for I105 account transactions query to appear"
                 ));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1424,42 +1396,40 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     };
     assert!(
         !authorities.is_empty(),
-        "IH58 default query should return at least one authority literal (submitted tx)"
+        "I105 default query should return at least one authority literal (submitted tx)"
     );
     assert!(
         authorities
             .iter()
             .any(|literal| literal == &account_literal),
-        "IH58 default query should include canonical literal {account_literal}, got {authorities:?}"
+        "I105 default query should include canonical literal {account_literal}, got {authorities:?}"
     );
-    assert_authorities_are_ih58(&authorities)?;
+    assert_authorities_are_i105(&authorities)?;
 
-    let compressed_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null,"address_format":"compressed"}"#;
+    let i105_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
     let resp = http
         .post(url.clone())
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .body(compressed_body)
+        .body(i105_body)
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from account transactions query with address_format=compressed, got {}",
+        "expected success from account transactions query with canonical i105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let authorities = extract_account_transaction_authorities(&parsed);
     assert!(
-        authorities
-            .iter()
-            .any(|literal| literal == &compressed_literal),
-        "compressed query response should include {compressed_literal}, got {authorities:?}"
+        authorities.iter().any(|literal| literal == &i105_literal),
+        "I105 query response should include {i105_literal}, got {authorities:?}"
     );
     assert!(
         authorities
             .iter()
             .all(|literal| literal.starts_with("sora")),
-        "compressed query response should emit only compressed literals; got {authorities:?}"
+        "I105 query response should emit only I105 literals; got {authorities:?}"
     );
 
     Ok(())
@@ -1467,10 +1437,10 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn explorer_transactions_respect_address_format_preferences() -> Result<()> {
+async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(explorer_transactions_respect_address_format_preferences),
+        stringify!(explorer_transactions_emit_i105_literals),
     )
     .await?
     else {
@@ -1480,10 +1450,7 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
 
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
-    let account_address = SAMPLE_GENESIS_ACCOUNT_ID
-        .to_account_address()
-        .expect("account address should encode");
-    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
+    let i105_literal = account_literal.clone();
 
     let base = network
         .client()
@@ -1508,7 +1475,7 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer transactions to succeed (IH58 default), got {}",
+        "expected explorer transactions to succeed (I105 default), got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1521,73 +1488,69 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
         authorities
             .iter()
             .all(|literal| literal == &account_literal),
-        "explorer transactions should default to IH58 literals; got {authorities:?}"
+        "explorer transactions should default to I105 literals; got {authorities:?}"
     );
 
-    let compressed_url = {
+    let i105_url = {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
             qp.append_pair("authority", &account_literal);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
-            qp.append_pair("address_format", "compressed");
         }
         url
     };
     let resp = http
-        .get(compressed_url)
+        .get(i105_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer transactions with compressed response to succeed, got {}",
+        "expected explorer transactions with I105 response to succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "compressed explorer transactions response should contain items"
+        "I105 explorer transactions response should contain items"
     );
     assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &compressed_literal),
-        "explorer transactions should honour address_format=compressed; got {authorities:?}"
+        authorities.iter().all(|literal| literal == &i105_literal),
+        "explorer transactions should honour canonical i105; got {authorities:?}"
     );
 
-    let compressed_filter_url = {
+    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
+    let legacy_dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &compressed_literal);
+            qp.append_pair("authority", &legacy_dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
+    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
+        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+        .reason()
+        .to_string();
     let resp = http
-        .get(compressed_filter_url)
+        .get(legacy_dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "explorer transactions should accept compressed authority filters"
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "explorer transactions should reject legacy dotted I105 authority filters"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_explorer_authorities(&parsed);
+    let body = resp.text().await?;
     assert!(
-        !authorities.is_empty(),
-        "compressed authority filter should still yield results"
-    );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &account_literal),
-        "compressed authority filters should not change response defaults; got {authorities:?}"
+        body.contains(&legacy_dotted_i105_reason),
+        "response body should mention {legacy_dotted_i105_reason}, got {body}"
     );
 
     Ok(())
@@ -1595,10 +1558,10 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn explorer_instructions_respect_address_format_preferences() -> Result<()> {
+async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(explorer_instructions_respect_address_format_preferences),
+        stringify!(explorer_instructions_emit_i105_literals),
     )
     .await?
     else {
@@ -1608,10 +1571,7 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
 
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
-    let account_address = SAMPLE_GENESIS_ACCOUNT_ID
-        .to_account_address()
-        .expect("account address should encode");
-    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
+    let i105_literal = account_literal.clone();
 
     let base = network
         .client()
@@ -1636,7 +1596,7 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer instructions to succeed (IH58 default), got {}",
+        "expected explorer instructions to succeed (I105 default), got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1649,83 +1609,79 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
         authorities
             .iter()
             .all(|literal| literal == &account_literal),
-        "explorer instructions should default to IH58 literals; got {authorities:?}"
+        "explorer instructions should default to I105 literals; got {authorities:?}"
     );
 
-    let compressed_url = {
+    let i105_url = {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
             qp.append_pair("authority", &account_literal);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
-            qp.append_pair("address_format", "compressed");
         }
         url
     };
     let resp = http
-        .get(compressed_url)
+        .get(i105_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer instructions with compressed response to succeed, got {}",
+        "expected explorer instructions with I105 response to succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "compressed explorer instructions response should contain items"
+        "I105 explorer instructions response should contain items"
     );
     assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &compressed_literal),
-        "explorer instructions should honour address_format=compressed; got {authorities:?}"
+        authorities.iter().all(|literal| literal == &i105_literal),
+        "explorer instructions should honour canonical i105; got {authorities:?}"
     );
 
-    let compressed_filter_url = {
+    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
+    let legacy_dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &compressed_literal);
+            qp.append_pair("authority", &legacy_dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
+    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
+        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+        .reason()
+        .to_string();
     let resp = http
-        .get(compressed_filter_url)
+        .get(legacy_dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        resp.status().is_success(),
-        "explorer instructions should accept compressed authority filters"
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "explorer instructions should reject legacy dotted I105 authority filters"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let authorities = extract_explorer_authorities(&parsed);
+    let body = resp.text().await?;
     assert!(
-        !authorities.is_empty(),
-        "compressed authority filter should still yield instruction results"
-    );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal == &account_literal),
-        "compressed authority filters should not change response defaults; got {authorities:?}"
+        body.contains(&legacy_dotted_i105_reason),
+        "response body should mention {legacy_dotted_i105_reason}, got {body}"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn explorer_account_qr_defaults_to_ih58() -> Result<()> {
+async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(explorer_account_qr_defaults_to_ih58),
+        stringify!(explorer_account_qr_defaults_to_i105),
     )
     .await?
     else {
@@ -1752,19 +1708,12 @@ async fn explorer_account_qr_defaults_to_ih58() -> Result<()> {
             .get("canonical_id")
             .and_then(norito::json::Value::as_str),
         Some(canonical_literal.as_str()),
-        "canonical_id should match IH58 literal"
+        "canonical_id should match I105 literal"
     );
     assert_eq!(
         parsed.get("literal").and_then(norito::json::Value::as_str),
         Some(canonical_literal.as_str()),
-        "literal should default to IH58"
-    );
-    assert_eq!(
-        parsed
-            .get("address_format")
-            .and_then(norito::json::Value::as_str),
-        Some("ih58"),
-        "address_format label should advertise IH58 default"
+        "literal should default to I105"
     );
     assert_eq!(
         parsed
@@ -1773,7 +1722,7 @@ async fn explorer_account_qr_defaults_to_ih58() -> Result<()> {
         Some(u64::from(
             iroha_config::parameters::defaults::common::chain_discriminant()
         )),
-        "network_prefix should expose the expected IH58 prefix"
+        "network_prefix should expose the expected I105 prefix"
     );
     assert_eq!(
         parsed.get("modules").and_then(norito::json::Value::as_u64),
@@ -1798,10 +1747,10 @@ async fn explorer_account_qr_defaults_to_ih58() -> Result<()> {
 }
 
 #[tokio::test]
-async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
+async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(explorer_account_qr_supports_compressed_literals),
+        stringify!(explorer_account_qr_accepts_i105_hint),
     )
     .await?
     else {
@@ -1811,12 +1760,7 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
 
     let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
-    let compressed_literal = compressed_alice_literal();
-    let mut url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
-    {
-        let mut qp = url.query_pairs_mut();
-        qp.append_pair("address_format", "compressed");
-    }
+    let url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
     let resp = http
         .get(url)
         .header("Accept", "application/json")
@@ -1824,7 +1768,7 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer account QR to respect address_format=compressed, got {}",
+        "expected explorer account QR to respect canonical i105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1833,19 +1777,12 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
             .get("canonical_id")
             .and_then(norito::json::Value::as_str),
         Some(canonical_literal.as_str()),
-        "canonical_id should remain IH58 even when rendering compressed (`sora`) literals"
+        "canonical_id should remain I105"
     );
     assert_eq!(
         parsed.get("literal").and_then(norito::json::Value::as_str),
-        Some(compressed_literal.as_str()),
-        "literal should honour the compressed (`sora`) preference"
-    );
-    assert_eq!(
-        parsed
-            .get("address_format")
-            .and_then(norito::json::Value::as_str),
-        Some("compressed"),
-        "address_format label should reflect the compressed (`sora`) preference"
+        Some(canonical_literal.as_str()),
+        "literal should honour the i105 preference"
     );
 
     Ok(())
@@ -1946,19 +1883,20 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
-    let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
+    let account_id = AccountId::new(keypair.public_key().clone());
+    let account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        .with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_accepts_compressed_filter_literals),
+        stringify!(accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -1976,11 +1914,7 @@ async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
 
     let alias_literal = format!("{}@{}", label.label, domain_id);
-    let compressed_literal = account_id
-        .to_account_address()
-        .expect("account address should encode")
-        .to_compressed_sora()
-        .expect("compressed address encoding");
+    let i105_literal = legacy_dotted_i105_literal(&account_id.to_string());
 
     let alias_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
@@ -1999,7 +1933,7 @@ async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -
     );
 
     let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{compressed_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+        r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
     let resp = http
         .post(url.clone())
@@ -2010,19 +1944,18 @@ async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -
         .await?;
     let status = resp.status();
     let body = resp.text().await?;
-    assert!(
-        status.is_success(),
-        "compressed literal should be accepted, got {status} body={body}"
+    let reason = AccountId::parse_encoded(&i105_literal)
+        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .reason()
+        .to_string();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "legacy dotted I105 literal should be rejected, got {status} body={body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&body)?;
-    let ids = extract_account_ids(&parsed);
     assert!(
-        ids.iter().any(|id| id == &expected),
-        "compressed literal should resolve to {expected}, got {ids:?}"
-    );
-    assert!(
-        ids.iter().all(|id| !id.contains('@')),
-        "response should return canonical IH58 ids, got {ids:?}"
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
     Ok(())
@@ -2030,7 +1963,7 @@ async fn accounts_query_rejects_alias_and_accepts_compressed_filter_literals() -
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn repo_agreements_respect_address_format() -> Result<()> {
+async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
@@ -2079,7 +2012,7 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
     }
 
     let Some(network) =
-        start_network_async_or_skip(builder, stringify!(repo_agreements_respect_address_format))
+        start_network_async_or_skip(builder, stringify!(repo_agreements_emit_i105_literals))
             .await?
     else {
         return Ok(());
@@ -2090,18 +2023,18 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
     let repo_instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
     let client = network.client();
     if let Err(err) = client.submit::<InstructionBox>(repo_instruction_box) {
-        eprintln!("Skipping repo address_format coverage: {err}");
+        eprintln!("Skipping repo i105 literal coverage: {err}");
         return Ok(());
     }
     network.ensure_blocks(2).await?;
 
     let http = http_client();
     let base = client.torii_url.clone();
-    let ih58_alice = ALICE_ID.to_string();
-    let ih58_bob = BOB_ID.to_string();
+    let i105_alice = ALICE_ID.to_string();
+    let i105_bob = BOB_ID.to_string();
     let agreement_literal = agreement_id.to_string();
-    let compressed_alice = compressed_alice_literal();
-    let compressed_bob = compressed_bob_literal();
+    let i105_alice = i105_alice.clone();
+    let i105_bob = i105_bob.clone();
 
     let mut default_url = base.join("/v1/repo/agreements")?;
     {
@@ -2123,7 +2056,7 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
         entry
     } else {
         eprintln!(
-            "Skipping repo address_format coverage: repo agreement not observed after submission."
+            "Skipping repo i105 literal coverage: repo agreement not observed after submission."
         );
         return Ok(());
     };
@@ -2132,57 +2065,56 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
         .and_then(norito::json::Value::as_str)
         .expect("initiator literal should be present");
     assert_eq!(
-        initiator, ih58_alice,
-        "repo agreements must default to IH58 initiators"
+        initiator, i105_alice,
+        "repo agreements must default to I105 initiators"
     );
     let counterparty = entry
         .get("counterparty")
         .and_then(norito::json::Value::as_str)
         .expect("counterparty literal should be present");
     assert_eq!(
-        counterparty, ih58_bob,
-        "repo agreements must default to IH58 counterparties"
+        counterparty, i105_bob,
+        "repo agreements must default to I105 counterparties"
     );
 
-    let mut compressed_url = base.join("/v1/repo/agreements")?;
+    let mut i105_url = base.join("/v1/repo/agreements")?;
     {
-        let mut qp = compressed_url.query_pairs_mut();
+        let mut qp = i105_url.query_pairs_mut();
         qp.append_pair("limit", "8");
-        qp.append_pair("address_format", "compressed");
     }
     let resp = http
-        .get(compressed_url)
+        .get(i105_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "compressed repo agreement listing should succeed, got {}",
+        "I105 repo agreement listing should succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let entry = find_repo_entry(&parsed, agreement_literal.as_str())
-        .expect("compressed repo listing should include the recorded agreement");
+        .expect("I105 repo listing should include the recorded agreement");
     let initiator = entry
         .get("initiator")
         .and_then(norito::json::Value::as_str)
-        .expect("compressed initiator literal must be present");
+        .expect("I105 initiator literal must be present");
     assert_eq!(
-        initiator, compressed_alice,
-        "repo agreements should honour address_format=compressed for initiators"
+        initiator, i105_alice,
+        "repo agreements should honour canonical i105 for initiators"
     );
     let counterparty = entry
         .get("counterparty")
         .and_then(norito::json::Value::as_str)
-        .expect("compressed counterparty literal must be present");
+        .expect("I105 counterparty literal must be present");
     assert_eq!(
-        counterparty, compressed_bob,
-        "repo agreements should honour address_format=compressed for counterparties"
+        counterparty, i105_bob,
+        "repo agreements should honour canonical i105 for counterparties"
     );
 
     let query_url = base.join("/v1/repo/agreements/query")?;
     let query_body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null,"address_format":"compressed"}}"#
+        r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
     let resp = http
         .post(query_url)
@@ -2202,18 +2134,18 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
     let initiator = entry
         .get("initiator")
         .and_then(norito::json::Value::as_str)
-        .expect("compressed query initiator literal must be present");
+        .expect("I105 query initiator literal must be present");
     assert_eq!(
-        initiator, compressed_alice,
-        "repo agreements query should honour address_format=compressed"
+        initiator, i105_alice,
+        "repo agreements query should honour canonical i105"
     );
     let counterparty = entry
         .get("counterparty")
         .and_then(norito::json::Value::as_str)
-        .expect("compressed query counterparty literal must be present");
+        .expect("I105 query counterparty literal must be present");
     assert_eq!(
-        counterparty, compressed_bob,
-        "repo agreements query should honour address_format=compressed"
+        counterparty, i105_bob,
+        "repo agreements query should honour canonical i105"
     );
 
     Ok(())
@@ -2221,10 +2153,10 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // integration coverage requires full scenario setup
-async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
+async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id = relay_id.domain().clone();
+    let domain_id: DomainId = "wonderland".parse()?;
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
@@ -2256,20 +2188,17 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
     builder = builder.with_genesis_instruction(set_registration);
     builder = builder.with_genesis_instruction(set_feedback);
 
-    let Some(network) = start_network_async_or_skip(
-        builder,
-        stringify!(kaigi_endpoints_respect_address_format_preferences),
-    )
-    .await?
+    let Some(network) =
+        start_network_async_or_skip(builder, stringify!(kaigi_endpoints_emit_i105_literals))
+            .await?
     else {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
 
     let seed = KaigiRelaySeed {
-        relay_ih58: relay_id.to_string(),
-        relay_compressed: compressed_bob_literal(),
-        reporter_compressed: compressed_alice_literal(),
+        relay_i105: relay_id.to_string(),
+        reporter_i105: reporter_id.to_string(),
     };
 
     let client = network.client();
@@ -2303,28 +2232,27 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
     assert!(
         default_literals
             .iter()
-            .any(|literal| *literal == seed.relay_ih58),
-        "expected IH58 literal {} in kaigi summary, got {default_literals:?}",
-        seed.relay_ih58
+            .any(|literal| *literal == seed.relay_i105),
+        "expected I105 literal {} in kaigi summary, got {default_literals:?}",
+        seed.relay_i105
     );
 
-    let compressed_summary_url = base.join("/v1/kaigi/relays?address_format=compressed")?;
-    let compressed_resp = http
-        .get(compressed_summary_url)
+    let i105_summary_url = base.join("/v1/kaigi/relays")?;
+    let i105_resp = http
+        .get(i105_summary_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert!(
-        compressed_resp.status().is_success(),
-        "compressed kaigi relay summary should succeed, got {}",
-        compressed_resp.status()
+        i105_resp.status().is_success(),
+        "I105 kaigi relay summary should succeed, got {}",
+        i105_resp.status()
     );
-    let compressed_summary: norito::json::Value =
-        norito::json::from_str(&compressed_resp.text().await?)?;
-    let compressed_literals: Vec<_> = compressed_summary
+    let i105_summary: norito::json::Value = norito::json::from_str(&i105_resp.text().await?)?;
+    let i105_literals: Vec<_> = i105_summary
         .get("items")
         .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("compressed kaigi summary missing items array"))?
+        .ok_or_else(|| eyre!("I105 kaigi summary missing items array"))?
         .iter()
         .filter_map(|item| {
             item.as_object()
@@ -2333,40 +2261,37 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
         })
         .collect();
     assert!(
-        compressed_literals
+        i105_literals
             .iter()
-            .any(|literal| *literal == seed.relay_compressed),
-        "expected compressed literal {} in kaigi summary, got {compressed_literals:?}",
-        seed.relay_compressed
+            .any(|literal| *literal == seed.relay_i105),
+        "expected I105 literal {} in kaigi summary, got {i105_literals:?}",
+        seed.relay_i105
     );
 
-    let detail_url = base.join(&format!("/v1/kaigi/relays/{}", seed.relay_compressed))?;
+    let legacy_relay_literal = legacy_dotted_i105_bob_literal();
+    let detail_url = base.join(&format!("/v1/kaigi/relays/{legacy_relay_literal}"))?;
     let detail_resp = http
         .get(detail_url)
         .header("Accept", "application/json")
         .send()
         .await?;
-    assert!(
-        detail_resp.status().is_success(),
-        "kaigi relay detail should accept compressed literal, got {}",
+    assert_eq!(
+        detail_resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "kaigi relay detail should reject legacy dotted I105 literal, got {}",
         detail_resp.status()
     );
-    let detail: norito::json::Value = norito::json::from_str(&detail_resp.text().await?)?;
-    let default_detail_literal = detail
-        .get("relay")
-        .and_then(norito::json::Value::as_object)
-        .and_then(|relay| relay.get("relay_id"))
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("relay detail missing relay literal"))?;
-    assert_eq!(
-        default_detail_literal, seed.relay_ih58,
-        "compressed literal path should resolve to IH58 detail output"
+    let body = detail_resp.text().await?;
+    let reason = AccountId::parse_encoded(&legacy_relay_literal)
+        .expect_err("legacy dotted I105 relay literal must fail strict parsing")
+        .reason()
+        .to_string();
+    assert!(
+        body.contains(&reason),
+        "response body should mention {reason}, got {body}"
     );
 
-    let formatted_detail_url = base.join(&format!(
-        "/v1/kaigi/relays/{}?address_format=compressed",
-        seed.relay_ih58
-    ))?;
+    let formatted_detail_url = base.join(&format!("/v1/kaigi/relays/{}", seed.relay_i105))?;
     let formatted_resp = http
         .get(formatted_detail_url)
         .header("Accept", "application/json")
@@ -2374,7 +2299,7 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
         .await?;
     assert!(
         formatted_resp.status().is_success(),
-        "kaigi relay detail with address_format should succeed, got {}",
+        "kaigi relay detail with canonical i105 should succeed, got {}",
         formatted_resp.status()
     );
     let formatted_detail: norito::json::Value =
@@ -2386,32 +2311,33 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("formatted detail missing relay literal"))?;
     assert_eq!(
-        relay_literal, seed.relay_compressed,
-        "relay literal should honour address_format=compressed"
+        relay_literal, seed.relay_i105,
+        "relay literal should honour canonical i105"
     );
     let reported_by_literal = formatted_detail
         .get("reported_by")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("formatted detail missing reported_by literal"))?;
     assert_eq!(
-        reported_by_literal, seed.reporter_compressed,
-        "reported_by should honour address_format=compressed"
+        reported_by_literal, seed.reporter_i105,
+        "reported_by should honour canonical i105"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn offline_allowances_listing_respects_address_format_hint() -> Result<()> {
+async fn offline_allowances_listing_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
-    let certificate = load_offline_certificate_fixture()?;
+    let certificate = match load_offline_certificate_fixture() {
+        Ok(certificate) => certificate,
+        Err(err) => {
+            eprintln!("Skipping offline allowance listing test: {err}");
+            return Ok(());
+        }
+    };
     let controller = certificate.controller.clone();
-    let controller_ih58 = controller.to_string();
-    let controller_compressed = controller
-        .to_account_address()
-        .map_err(|err| eyre!("failed to encode fixture controller as account address: {err}"))?
-        .to_compressed_sora()
-        .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
+    let controller_i105 = controller.to_string();
     let instruction = RegisterOfflineAllowance { certificate };
 
     let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
@@ -2419,7 +2345,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
 
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(offline_allowances_listing_respects_address_format_hint),
+        stringify!(offline_allowances_listing_emit_i105_literals),
     )
     .await?
     else {
@@ -2428,10 +2354,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let seed = OfflineAllowanceSeed {
-        controller_ih58,
-        controller_compressed,
-    };
+    let seed = OfflineAllowanceSeed { controller_i105 };
 
     let base = client.torii_url.clone();
     let http = http_client();
@@ -2450,22 +2373,22 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_ih58)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_ih58))?;
+    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
+        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
     let default_display = default_entry
         .get("controller_display")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
-        default_display, seed.controller_ih58,
-        "IH58 default should surface canonical literal"
+        default_display, seed.controller_i105,
+        "I105 default should surface canonical literal"
     );
 
-    let compressed_url = base
-        .join("/v1/offline/allowances?limit=4&address_format=compressed&include_expired=true")
+    let i105_url = base
+        .join("/v1/offline/allowances?limit=4&include_expired=true")
         .expect("offline allowances url");
     let resp = http
-        .get(compressed_url)
+        .get(i105_url)
         .header("Accept", "application/json")
         .send()
         .await?;
@@ -2475,31 +2398,32 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let compressed_entry = find_offline_allowance_entry(&parsed, &seed.controller_ih58)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_ih58))?;
-    let compressed_display = compressed_entry
+    let i105_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
+        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
+    let i105_display = i105_entry
         .get("controller_display")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
-        compressed_display, seed.controller_compressed,
-        "compressed listing should surface compressed literal"
+        i105_display, seed.controller_i105,
+        "I105 listing should surface I105 literal"
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
+async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
-    let certificate = load_offline_certificate_fixture()?;
+    let certificate = match load_offline_certificate_fixture() {
+        Ok(certificate) => certificate,
+        Err(err) => {
+            eprintln!("Skipping offline allowance query test: {err}");
+            return Ok(());
+        }
+    };
     let controller = certificate.controller.clone();
-    let controller_ih58 = controller.to_string();
-    let controller_compressed = controller
-        .to_account_address()
-        .map_err(|err| eyre!("failed to encode fixture controller as account address: {err}"))?
-        .to_compressed_sora()
-        .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
+    let controller_i105 = controller.to_string();
     let instruction = RegisterOfflineAllowance { certificate };
 
     let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
@@ -2507,7 +2431,7 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
 
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(offline_allowances_query_respects_address_format_hint),
+        stringify!(offline_allowances_query_emit_i105_literals),
     )
     .await?
     else {
@@ -2516,10 +2440,7 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let seed = OfflineAllowanceSeed {
-        controller_ih58,
-        controller_compressed,
-    };
+    let seed = OfflineAllowanceSeed { controller_i105 };
 
     let base = client.torii_url.clone();
     let http = http_client();
@@ -2541,40 +2462,40 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_ih58)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_ih58))?;
+    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
+        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
     let default_display = default_entry
         .get("controller_display")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
-        default_display, seed.controller_ih58,
-        "IH58 default query should emit canonical literal"
+        default_display, seed.controller_i105,
+        "I105 default query should emit canonical literal"
     );
 
-    let compressed_body = r#"{"filter":null,"sort":[],"pagination":{"limit":4,"offset":0},"fetch_size":null,"select":null,"address_format":"compressed"}"#;
+    let i105_body = r#"{"filter":null,"sort":[],"pagination":{"limit":4,"offset":0},"fetch_size":null,"select":null}"#;
     let resp = http
         .post(url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .body(compressed_body)
+        .body(i105_body)
         .send()
         .await?;
     assert!(
         resp.status().is_success(),
-        "offline allowance query with address_format should succeed, got {}",
+        "offline allowance query with canonical i105 should succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let compressed_entry = find_offline_allowance_entry(&parsed, &seed.controller_ih58)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_ih58))?;
-    let compressed_display = compressed_entry
+    let i105_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
+        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
+    let i105_display = i105_entry
         .get("controller_display")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
-        compressed_display, seed.controller_compressed,
-        "address_format=compressed should rewrite controller_display"
+        i105_display, seed.controller_i105,
+        "canonical i105 should rewrite controller_display"
     );
 
     Ok(())

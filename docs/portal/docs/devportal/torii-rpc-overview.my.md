@@ -58,6 +58,7 @@ SDK ၏ သီးခြားလမ်းညွှန်ချက်-
 1. [ပရောက်စီကို စတင်ပါ](./try-it.md#start-the-proxy-locally) နှင့် သတ်မှတ်ပါ။
    `TRYIT_PROXY_PUBLIC_URL` ထို့ကြောင့် ဝစ်ဂျက်များသည် အသွားအလာပေးပို့ရမည့်နေရာကို သိသည်။
 2. ဤစာမျက်နှာရှိ **စမ်းသုံးကြည့်ပါ** ကတ် သို့မဟုတ် `/reference/torii-swagger` ကိုဖွင့်ပါ။
+   For MCP/agent flows, use `/reference/torii-mcp`.
    အကန့်နှင့် `POST /v1/pipeline/submit` ကဲ့သို့သော အဆုံးမှတ်တစ်ခုကို ရွေးပါ။
 3. **Content-Type** ကို `application/x-norito` သို့ပြောင်းပါ၊ **Binary** ကို ရွေးပါ။
    တည်းဖြတ်ပြီး `fixtures/norito_rpc/transfer_asset.norito` ကို အပ်လုဒ်လုပ်ပါ။

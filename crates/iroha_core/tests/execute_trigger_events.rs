@@ -14,8 +14,9 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 
 fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
-    let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
-    let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+    let account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
     let asset_definition = AssetDefinition::new(
         "rose#wonderland".parse().expect("asset definition id"),
         NumericSpec::default(),

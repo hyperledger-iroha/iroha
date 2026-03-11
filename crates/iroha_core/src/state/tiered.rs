@@ -2862,7 +2862,6 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AccountId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountId>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
             total = total.saturating_add(self.controller.measured_bytes_extra());
             total
         }
@@ -4497,8 +4496,8 @@ mod tests {
             r#"{
                 "domain": "wonderland",
                 "accounts": [
-                    {"id": "ih58-subject-alice", "metadata": {"email": "alice@example.com"}},
-                    {"id": "ih58-subject-bob", "metadata": {"roles": ["admin", "auditor"]}}
+                    {"id": "i105-subject-alice", "metadata": {"email": "alice@example.com"}},
+                    {"id": "i105-subject-bob", "metadata": {"roles": ["admin", "auditor"]}}
                 ],
                 "supply": 42,
                 "flags": {
@@ -4527,7 +4526,7 @@ mod tests {
 
     #[test]
     fn measured_bytes_track_governance_approval_sizes() {
-        use std::{collections::BTreeSet, str::FromStr};
+        use std::collections::BTreeSet;
 
         let mut approval = crate::state::GovernanceStageApproval {
             epoch: 1,
@@ -4540,11 +4539,9 @@ mod tests {
             b"tiered-approval".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
         );
-        let domain = iroha_data_model::domain::DomainId::from_str("wonderland").expect("domain");
         approval
             .approvers
             .insert(iroha_data_model::account::AccountId::new(
-                domain,
                 keypair.public_key().clone(),
             ));
         let filled_bytes = MeasuredBytes::measured_bytes(&approval);

@@ -57,8 +57,22 @@ covers every route group.
 ## Migration Notes
 
 Projects embedding Torii should migrate any direct `Router` manipulations to
-`RouterBuilder` helpers. The historical pattern of returning a modified router from
+`RouterBuilder` helpers.
+The historical pattern of returning a modified router from each `add_*_routes`
+helper has been replaced by in-place builder composition.
+
+Recommended migration pattern:
+
+1. Construct `RouterBuilder::new(app_state.clone())`.
+2. Call the `Torii::add_*_routes` helpers in the desired order.
+3. Register custom routes with `builder.apply(...)` (or
+   `builder.apply_with_state(...)` when extra state is required).
+4. Finalize with `builder.finish()`.
+
+This keeps route registration deterministic across feature flags and avoids
+reassigning intermediate `Router` values.
 
 ## Further Reading
 
 - `docs/source/torii/app_api_parity_audit.md` — parity matrix covering the `app_api` and `connect` route groups, their DTOs, and existing test coverage.
+- `crates/iroha_torii/docs/mcp_api.md` — canonical Torii MCP JSON-RPC contract (`/v1/mcp`) for agent/tool integrations.

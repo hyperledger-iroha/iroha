@@ -138,9 +138,7 @@ const ACCOUNT_A_LITERAL: &str = "6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JA
 const ACCOUNT_B_LITERAL: &str = "6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb";
 
 fn parse_account_literal(raw: &str) -> ScopedAccountId {
-    ScopedAccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("valid encoded account literal")
+    ScopedAccountId::parse_encoded(raw).expect("valid encoded account literal")
 }
 
 #[derive(Default)]
@@ -215,7 +213,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let asset_id_clone = asset_id.clone();
@@ -260,7 +258,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let asset_id_clone = asset_id.clone();
@@ -324,7 +322,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
         &program,
         WsvHost::new_with_subject(
             wsv,
-            ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+            ivm::mock_wsv::AccountId::from(&caller.clone()),
             HashMap::new(),
         ),
         move |host| {
@@ -362,7 +360,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     ));
     vm.load_program(&program)

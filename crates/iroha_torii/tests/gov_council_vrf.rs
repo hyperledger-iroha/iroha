@@ -14,7 +14,7 @@ use iroha_core::{
     state::{State, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{account::AccountId, domain::DomainId};
+use iroha_data_model::account::AccountId;
 
 #[tokio::test]
 async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
@@ -42,22 +42,18 @@ async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
         .unwrap_or([0u8; 32]);
     let seed = parliament::compute_seed(&chain_id_value, epoch, &beacon_bytes);
 
-    // Build two distinct candidates with valid VRF proofs (Normal variant)
-    let domain: DomainId = "wonderland".parse().unwrap();
+    // Build three distinct candidates with valid VRF proofs (Normal variant).
     let account_alice = AccountId::new(
-        domain.clone(),
         KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
     let account_bob = AccountId::new(
-        domain.clone(),
         KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
     );
     let account_carol = AccountId::new(
-        domain,
         KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),

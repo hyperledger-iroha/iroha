@@ -36,7 +36,7 @@
         {
           "Register": {
             "Account": {
-              "id": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -221,7 +221,7 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": "rose#wonderland",
               "source": "34mSYmtx2t7jKZDQcTrSU7yorGf7KNpNpWoBsunpaw15xULDLeEEtcehDJrgChTacL4HyMruA"
             }
@@ -230,7 +230,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -240,7 +240,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -250,17 +250,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
-              "object": {
-                "name": "CanRegisterAssetDefinition"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
                 "name": "CanRegisterAccount"
               }

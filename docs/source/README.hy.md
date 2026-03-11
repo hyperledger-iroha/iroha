@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (կցորդներ, պրովեր, ձայների հաշվարկ)՝ `zk_app_api.md`
 - Torii ZK հավելվածներ/պրովերի մատյան՝ `zk/prover_runbook.md`
 - Torii ZK App API օպերատորի ուղեցույց (կցորդներ/պրովեր; տուփի փաստաթուղթ)՝ `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof կյանքի ցիկլ (գրանցամատյան, ստուգում, հեռաչափություն)՝ `zk/lifecycle.md`
 - Torii Օպերատորի օժանդակություն (տեսանելիության վերջնակետեր)՝ `references/operator_aids.md`
 - Nexus լռելյայն արագ մեկնարկ՝ `quickstart/default_lane.md`

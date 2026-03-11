@@ -1,8 +1,8 @@
-# مذكرة طرح IH58 لمالكي SDK والمرمزات
+# مذكرة طرح I105 لمالكي SDK والمرمزات
 
 الفرق: SDK ‏Rust، SDK ‏TypeScript/JavaScript، SDK ‏Python، SDK ‏Kotlin، أدوات الترميز
 
-السياق: يعكس `docs/account_structure.md` الآن تنفيذ معرّف الحساب IH58 المُشغَّل.
+السياق: يعكس `docs/account_structure.md` الآن تنفيذ معرّف الحساب I105 المُشغَّل.
 يرجى مواءمة سلوك الـSDK والاختبارات مع المواصفة القياسية.
 
 مراجع أساسية:
@@ -12,16 +12,11 @@
 - متجهات الـfixtures — `fixtures/account/address_vectors.json`
 
 بنود العمل:
-1. **الإخراج القياسي:** يجب أن يُخرج `AccountId::to_string()`/Display قيمة IH58 فقط
+1. **الإخراج القياسي:** يجب أن يُخرج `AccountId::to_string()`/Display قيمة I105 فقط
    (بدون لاحقة `@domain`). الهيكس القياسي للتصحيح فقط (`0x...`).
-2. **المدخلات المقبولة:** يجب أن تقبل المُحلِّلات IH58 (المفضّل)، و`sora` المضغوط،
-   والهيكس القياسي (فقط `0x...`؛ الهيكس بدون بادئة مرفوض). يمكن أن تتضمن المدخلات لاحقة
-   `@<domain>` لتلميحات التوجيه؛ تتطلب أسماء `<label>@<domain>` (rejected legacy form) محلِّلًا. ما يزال
-   
-3. **المحلِّلات:** تحليل IH58/sora بدون نطاق يتطلب محلِّل مُحدِّد نطاق ما لم يكن المُحدِّد هو
-   الافتراضي الضمني (استخدم وسم النطاق الافتراضي المكوَّن). تتطلب القيم الحرفية UAID
-   (`uaid:...`) وopaque (`opaque:...`) محلِّلات أيضًا.
-4. **مجموع التحقق IH58:** استخدم Blake2b-512 على `IH58PRE || prefix || payload` وخذ أول
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **مجموع التحقق I105:** استخدم Blake2b-512 على `I105PRE || prefix || payload` وخذ أول
    بايتين. أساس الأبجدية المضغوطة هو **105**.
 5. **تقييد المنحنيات:** إعدادات SDK الافتراضية Ed25519 فقط. وفر opt‑in صريحًا لـ ML‑DSA/GOST/SM
    (أعلام بناء Swift؛ `configureCurveSupport` في JS/Android). لا تفترض تفعيل secp256k1 افتراضيًا

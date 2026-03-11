@@ -1,9 +1,9 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  ih58: '6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw',
-  compressed: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
-  warning: 'Compressed addresses are legacy bridge compatibility only; prefer IH58.',
+  i105: '6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw',
+  i105Default: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
+  i105Warning: 'i105-default literals are Sora-only compatibility output; prefer canonical I105.',
 };
 
 export default function ExplorerAddressCard() {
@@ -35,44 +35,44 @@ export default function ExplorerAddressCard() {
       <div className="card__header">
         <h3>Explorer copy instrumentation</h3>
         <p id={domainHelperId}>
-          IH58 literals are global and selector-free. Domain/dataspace access is granted on-chain.
+          I105 literals are global and selector-free. Domain/dataspace access is granted on-chain.
         </p>
       </div>
       <div className="card__body" aria-describedby={domainHelperId}>
         <dl>
-          <dt>IH58 literal (preferred)</dt>
+          <dt>I105 literal (preferred)</dt>
           <dd>
-            <code>{SAMPLE_ADDRESS.ih58}</code>
+            <code>{SAMPLE_ADDRESS.i105}</code>
           </dd>
-          <dt>Compressed Sora-only literal (second-best)</dt>
+          <dt>i105-default Sora-only literal</dt>
           <dd>
-            <code>{SAMPLE_ADDRESS.compressed}</code>
-            <div className="text--warning">{SAMPLE_ADDRESS.warning}</div>
+            <code>{SAMPLE_ADDRESS.i105Default}</code>
+            <div className="text--warning">{SAMPLE_ADDRESS.i105Warning}</div>
           </dd>
         </dl>
 
         <div className="button-group" role="group" aria-label="Copy controls">
           <button
             className="button button--primary"
-            data-copy-mode="ih58"
+            data-copy-mode="i105"
             aria-pressed="false"
-            aria-label="Copy IH58 address (preferred, safe to share)"
-            onClick={() => handleCopy('ih58', SAMPLE_ADDRESS.ih58, null)}>
-            Copy IH58 (preferred)
+            aria-label="Copy I105 address (preferred, safe to share)"
+            onClick={() => handleCopy('i105', SAMPLE_ADDRESS.i105, null)}>
+            Copy I105 (preferred)
           </button>
           <button
             className="button button--secondary"
-            data-copy-mode="compressed"
+            data-copy-mode="i105_default"
             aria-pressed="false"
-            aria-label="Copy compressed Sora-only address (second-best; warn recipients)"
-            onClick={() => handleCopy('compressed', SAMPLE_ADDRESS.compressed, SAMPLE_ADDRESS.warning)}>
-            Copy compressed (`sora`, second-best)
+            aria-label="Copy i105-default Sora-only address (warn recipients)"
+            onClick={() => handleCopy('i105_default', SAMPLE_ADDRESS.i105Default, SAMPLE_ADDRESS.i105Warning)}>
+            Copy i105-default
           </button>
         </div>
 
-        <figure className="margin-top--md" role="img" aria-label={`IH58 QR for ${SAMPLE_ADDRESS.ih58}`}>
-          <img src="/img/sns/address_copy_ios.svg" alt="IH58 QR reference" />
-          <figcaption>QR payloads must encode IH58 strings (preferred).</figcaption>
+        <figure className="margin-top--md" role="img" aria-label={`I105 QR for ${SAMPLE_ADDRESS.i105}`}>
+          <img src="/img/sns/address_copy_ios.svg" alt="I105 QR reference" />
+          <figcaption>QR payloads must encode I105 strings (preferred).</figcaption>
         </figure>
         <output
           aria-live="polite"

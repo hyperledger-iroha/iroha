@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. მიმოხილვა
 
-- მოწყობილობა: `fixtures/account/address_vectors.json` (IH58 (სასურველია) + შეკუმშული (`sora`, მეორე საუკეთესო) + მრავალმხრივი დადებითი/უარყოფითი შემთხვევები).
+- მოწყობილობა: `fixtures/account/address_vectors.json` (I105 (სასურველია) + შეკუმშული (`sora`, მეორე საუკეთესო) + მრავალმხრივი დადებითი/უარყოფითი შემთხვევები).
 - ფარგლები: განმსაზღვრელი V1 დატვირთვა, რომელიც მოიცავს ნაგულისხმევს, ლოკალურ-12, გლობალურ რეესტრს და მრავალსიგლიან კონტროლერებს სრული შეცდომების ტაქსონომიით.
 - განაწილება: გაზიარებული Rust მონაცემთა მოდელის, Torii, JS/TS, Swift და Android SDK-ებში; CI ვერ ხერხდება, თუ რომელიმე მომხმარებელი გადახრის.
 - სიმართლის წყარო: გენერატორი ცხოვრობს `crates/iroha_data_model/src/account/address/compliance_vectors.rs`-ში და ვლინდება `cargo xtask address-vectors`-ის საშუალებით.
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | ზედაპირი | აღსრულება | შენიშვნები |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | აანალიზებს JSON-ს, აღადგენს კანონიკურ დატვირთვას და ამოწმებს IH58 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო)/კანონიკურ კონვერტაციებს + სტრუქტურირებულ შეცდომებს. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | ამოწმებს სერვერის კოდეკებს, ასე რომ Torii უარს ამბობს არასწორადფორმირებულ IH58 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო) იტვირთებაზე. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | სარკეები V1 მოწყობილობები (IH58 სასურველია/შეკუმშული (`sora`) მეორე საუკეთესო/სრული სიგანე) და ამტკიცებს Norito სტილის შეცდომის კოდებს ყველა უარყოფითი შემთხვევისთვის. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | სავარჯიშოები IH58 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო) გაშიფვრა, მრავალსაფეხურიანი დატვირთვა და შეცდომა Apple-ის პლატფორმებზე. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | აანალიზებს JSON-ს, აღადგენს კანონიკურ დატვირთვას და ამოწმებს I105 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო)/კანონიკურ კონვერტაციებს + სტრუქტურირებულ შეცდომებს. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | ამოწმებს სერვერის კოდეკებს, ასე რომ Torii უარს ამბობს არასწორადფორმირებულ I105 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო) იტვირთებაზე. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | სარკეები V1 მოწყობილობები (I105 სასურველია/შეკუმშული (`sora`) მეორე საუკეთესო/სრული სიგანე) და ამტკიცებს Norito სტილის შეცდომის კოდებს ყველა უარყოფითი შემთხვევისთვის. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | სავარჯიშოები I105 (სასურველია)/შეკუმშული (`sora`, მეორე საუკეთესო) გაშიფვრა, მრავალსაფეხურიანი დატვირთვა და შეცდომა Apple-ის პლატფორმებზე. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | უზრუნველყოფს Kotlin/Java საკინძები დარჩება კანონიკურ ფიქსაციასთან შესაბამისობაში. |
 
 ### 4. მონიტორინგი და გამორჩეული სამუშაო- სტატუსის მოხსენება: ეს დოკუმენტი დაკავშირებულია `status.md`-დან და საგზაო რუქიდან, ასე რომ, ყოველკვირეულ მიმოხილვებს შეუძლია დაადასტუროს მოწყობილობების ჯანმრთელობა.

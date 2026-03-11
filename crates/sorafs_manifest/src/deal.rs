@@ -239,7 +239,7 @@ pub struct DealTermsV1 {
     pub deal_id: [u8; 32],
     /// Provider identifier backing the agreement.
     pub provider_id: [u8; 32],
-    /// Client account identifier (IH58 bytes).
+    /// Client account identifier (I105 bytes).
     pub client_account: Vec<u8>,
     /// Chunker profile handle associated with the deal.
     pub profile_handle: String,

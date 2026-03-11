@@ -157,6 +157,16 @@ pub enum SingularQueryJson {
     FindExecutorDataModel,
     /// Returns the current blockchain parameter set.
     FindParameters,
+    /// Lists domains linked to an account subject.
+    FindDomainsByAccountId {
+        /// Account identifier used to resolve the subject.
+        account_id: String,
+    },
+    /// Lists account identifiers linked to a domain.
+    FindAccountIdsByDomainId {
+        /// Domain identifier used to resolve linked subjects.
+        domain_id: String,
+    },
     /// Looks up an asset by identifier.
     FindAssetById {
         /// String representation of the asset identifier.
@@ -192,6 +202,16 @@ impl SingularQueryJson {
                 payload.insert("asset_id".to_owned(), Value::String(asset_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
+            Self::FindDomainsByAccountId { account_id } => {
+                let mut payload = Map::new();
+                payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindAccountIdsByDomainId { domain_id } => {
+                let mut payload = Map::new();
+                payload.insert("domain_id".to_owned(), Value::String(domain_id.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             Self::FindTwitterBindingByHash { binding_hash } => {
                 let mut payload = Map::new();
                 payload.insert(
@@ -217,6 +237,32 @@ impl SingularQueryJson {
             "FindActiveAbiVersions" => Ok(SingularQueryJson::FindActiveAbiVersions),
             "FindExecutorDataModel" => Ok(SingularQueryJson::FindExecutorDataModel),
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
+            "FindDomainsByAccountId" => {
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
+                let account_id = payload
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
+                Ok(SingularQueryJson::FindDomainsByAccountId {
+                    account_id: account_id.to_owned(),
+                })
+            }
+            "FindAccountIdsByDomainId" => {
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
+                let domain_id = payload
+                    .get("domain_id")
+                    .and_then(Value::as_str)
+                    .ok_or(QueryJsonError::MissingField("payload", "domain_id"))?;
+                Ok(SingularQueryJson::FindAccountIdsByDomainId {
+                    domain_id: domain_id.to_owned(),
+                })
+            }
             "FindContractManifestByCodeHash" => {
                 let payload = map
                     .get("payload")
@@ -265,6 +311,8 @@ impl SingularQueryJson {
             SingularQueryJson::FindActiveAbiVersions => "FindActiveAbiVersions",
             SingularQueryJson::FindExecutorDataModel => "FindExecutorDataModel",
             SingularQueryJson::FindParameters => "FindParameters",
+            SingularQueryJson::FindDomainsByAccountId { .. } => "FindDomainsByAccountId",
+            SingularQueryJson::FindAccountIdsByDomainId { .. } => "FindAccountIdsByDomainId",
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
             SingularQueryJson::FindContractManifestByCodeHash { .. } => {
                 "FindContractManifestByCodeHash"
@@ -288,6 +336,22 @@ impl SingularQueryJson {
             SingularQueryJson::FindParameters => Ok(SingularQueryBox::FindParameters(
                 crate::query::executor::prelude::FindParameters,
             )),
+            SingularQueryJson::FindDomainsByAccountId { account_id } => {
+                let id = crate::account::AccountId::parse_encoded(&account_id)
+                    .map(crate::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                Ok(SingularQueryBox::FindDomainsByAccountId(
+                    crate::query::account::prelude::FindDomainsByAccountId::new(id),
+                ))
+            }
+            SingularQueryJson::FindAccountIdsByDomainId { domain_id } => {
+                let id = domain_id
+                    .parse()
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "domain_id"))?;
+                Ok(SingularQueryBox::FindAccountIdsByDomainId(
+                    crate::query::domain::prelude::FindAccountIdsByDomainId::new(id),
+                ))
+            }
             SingularQueryJson::FindAssetById { asset_id } => {
                 let id = asset_id
                     .parse()
@@ -869,6 +933,8 @@ impl IterableQueryJson {
 mod tests {
     use std::num::NonZeroU64;
 
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
 
     #[test]
@@ -907,6 +973,54 @@ mod tests {
             SingularQueryBox::FindTwitterBindingByHash(query)
                 if query.binding_hash == binding_hash
         ));
+    }
+
+    #[test]
+    fn find_domains_by_account_id_accepts_canonical_i105_literal() {
+        let _domain: crate::domain::DomainId = "wonderland".parse().expect("valid domain id");
+        let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
+        let account_id = crate::account::AccountId::new(keypair.public_key().clone());
+
+        let singular = SingularQueryJson::FindDomainsByAccountId {
+            account_id: account_id.to_string(),
+        };
+        let query = singular.into_box().expect("query conversion succeeds");
+        let parsed = match query {
+            SingularQueryBox::FindDomainsByAccountId(query) => query.account_id().clone(),
+            other => panic!("unexpected query variant: {other:?}"),
+        };
+        assert_eq!(parsed.controller(), account_id.controller());
+        assert_eq!(
+            parsed
+                .canonical_i105()
+                .expect("parsed account id should emit canonical literal"),
+            account_id
+                .canonical_i105()
+                .expect("source account id should emit canonical literal")
+        );
+    }
+
+    #[test]
+    fn find_account_ids_by_domain_id_roundtrip() {
+        let domain_id: crate::domain::DomainId = "wonderland".parse().expect("valid domain id");
+        let singular = SingularQueryJson::FindAccountIdsByDomainId {
+            domain_id: domain_id.to_string(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindAccountIdsByDomainId(q) => {
+                assert_eq!(q.domain_id(), &domain_id);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
     }
 
     #[test]

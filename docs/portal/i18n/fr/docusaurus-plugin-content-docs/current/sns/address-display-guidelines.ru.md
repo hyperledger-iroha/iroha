@@ -17,8 +17,8 @@ Cette page indique `docs/source/sns/address_display_guidelines.md` et prend en c
 
 Les kits, les applications et les premiers SDK sont également disponibles pour les comptes d'adresses.
 к неизменяемым charge utile. Exemple de module Android
-`examples/android/retail-wallet` vous permet de démonter le modèle UX :- **Две цели копирования.** Précédent deux boutons de copie : IH58
-  (Pредпочтительно) et le formulaire Sora uniquement (`sora...`, juste en avant-première). IH58 est totalement gratuit
+`examples/android/retail-wallet` vous permet de démonter le modèle UX :- **Две цели копирования.** Précédent deux boutons de copie : I105
+  (Pредпочтительно) et le formulaire Sora uniquement (`sora...`, juste en avant-première). I105 est totalement gratuit
   Supprimez-le et utilisez-le dans la charge utile QR. Cette forme doit être sélectionnée
   Il est généralement prévu que vous puissiez travailler uniquement dans les applications prenant en charge Sora.
   L'exemple Android inclut les boutons Matériel et les info-bulles dans
@@ -33,7 +33,7 @@ Les kits, les applications et les premiers SDK sont également disponibles pour 
   Nouvelle maison `default`, veuillez contacter l'opérateur, c'est-à-dire
   суффикс не требуется. Les personnes qui vous intéressent doivent choisir un endroit canonique
   ярлык, когда селектор кодирует digest.
-- **QR pour IH58.** Les QR-codes doivent coder le bouton IH58. Comment générer le QR
+- **QR pour I105.** Les QR-codes doivent coder le bouton I105. Comment générer le QR
   провалилась, покажите явную ошибку вместо пустого изображения.
 - **Сообщение буфера обмена.** После копирования сжатой отправьте toast
   ou un snack-bar, un restaurant populaire, qui est sur Sora-only et подвержена
@@ -55,7 +55,7 @@ Boutons, info-bulles et pré-installation des plates-formes :
 
 ## SDK vidéo
 
-Le SDK fournit un assistant supplémentaire, qui prend en charge les formulaires IH58 et
+Le SDK fournit un assistant supplémentaire, qui prend en charge les formulaires I105 et
 En prélude à cette action, les liens UI s'installent :
 
 - Javascript : `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -76,7 +76,7 @@ Si vous utilisez le sélecteur Local-12 ou le registre, vous ne pouvez pas utili
 
 
 
-Les utilisateurs doivent utiliser le téléphone et installer le téléphone :- Ajoutez `data-copy-mode="ih58|compressed|qr"` aux boutons de copie, qui sont
+Les utilisateurs doivent utiliser le téléphone et installer le téléphone :- Ajoutez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie, qui sont
   Les frontends peuvent émettre des signaux en utilisant une fréquence métrique Torii
   `torii_address_format_total`. Le composant de démonstration doit être utilisé
   associer `iroha:address-copy` à `{mode,timestamp}` - vous connecter à votre compte
@@ -87,7 +87,7 @@ Les utilisateurs doivent utiliser le téléphone et installer le téléphone :-
   livraisons locales-12 mois d'exportation 30 jours de documentation
   `domain_kind="local12"` pour les panneaux Grafana `address_ingest`.
 - Сопоставляйте каждому контролу отдельные `aria-label`/`aria-describedby`,
-  объясняющие, безопасен ли littéral для обмена (IH58) ou только для Sora
+  объясняющие, безопасен ли littéral для обмена (I105) ou только для Sora
   (сжатый). Cliquez sur le nouveau domaine dans la description de ce que vous avez prévu
   Les technologies sont adaptées à tout le contexte.
 - Utilisez la région live (par exemple, `<output aria-live="polite">...</output>`),
@@ -100,7 +100,7 @@ sélecteurs.
 
 ## Набор миграции Local -> GlobalUtiliser [Local -> Global Toolkit](local-to-global-toolkit.md) pour
 L'audit automatique et la conversion sont effectués par des sélecteurs locaux. Helper выводит и
-JSON-obtient l'audio et convertit le code IH58/сжатых значений, который
+JSON-obtient l'audio et convertit le code I105/сжатых значений, который
 les opérateurs fournissent des tickets de préparation et un runbook client
 Les panneaux Grafana et Alertmanager permettent de gérer le basculement strict.
 
@@ -152,16 +152,16 @@ et `docs/account_structure.md` pour le diagramme du batteur.
 
 ## Formulaire canonique
 
-Opérateurs de conversion de codes locaux en canonique IH58 ou
+Opérateurs de conversion de codes locaux en canonique I105 ou
 Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI depuis ADDR-5 :
 
-1. `iroha tools address inspect` vous permet de créer une structure JSON avec IH58,
+1. `iroha tools address inspect` vous permet de créer une structure JSON avec I105,
    charge utile hexagonale compressée et canonique. Резюме также включает объект `domain`
    Avec les polymères `kind`/`warning` et l'amour pour la maison précédente
    `input_domain`. Lorsque `kind` s'ouvre sur `local12`, la CLI est disponible avant la mise à jour
    stderr, la réponse JSON vous permet de télécharger les cartes CI et les SDK
    ее показывать. Prenez le `legacy  suffix`, si vous êtes intéressé par votre projet.
-   codage de conversion selon `<ih58>@<domain>`.
+   codage de conversion selon `<i105>@<domain>`.
 2. Le SDK peut afficher l'avertissement/résumé de l'assistant JavaScript :```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
@@ -169,12 +169,12 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  Helper сохраняет IH58 префикс, извлеченный из littéral, если только вы явно не
+  Helper сохраняет I105 префикс, извлеченный из littéral, если только вы явно не
   Si vous utilisez le `networkPrefix`, la reprise n'est pas effectuée par défaut et n'est pas configurée par défaut.
-  тихо с дефолтным префиксом.3. Convertissez la charge utile canonique en utilisant `ih58.value` ou
-   `compressed` à partir du résumé (ou à utiliser le codage suivant pour `--format`). Eti
+  тихо с дефолтным префиксом.3. Convertissez la charge utile canonique en utilisant `i105.value` ou
+   `i105_default` à partir du résumé (ou à utiliser le codage suivant pour `--format`). Eti
    Les coups sont parfaits pour tout le monde.
 4. Ouvrir les manifestes, les registres et les documents clients sous forme canonique et
    Vous pouvez également activer les sélecteurs locaux après le basculement.
@@ -182,7 +182,7 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
    `iroha tools address audit --input addresses.txt --network-prefix 753`. Commanda
    читает littéraux, разделенные переводом строки (комментарии с `#` игнорируются,
    (`--input -` ou le drapeau standard utilisant STDIN), vous pouvez utiliser JSON
-   canoniques/IH58/sжатыми резюме для каждой записи и считает ошибки парсинга
+   canoniques/I105/sжатыми резюме для каждой записи и считает ошибки парсинга
    и предупреждения Local домена. Utilisez `--allow-errors` pour auditer
    `strict CI post-check`, les opérateurs doivent sélectionner les sélecteurs locaux dans CI.
 6. Quand il faut commencer, utilisez
@@ -190,7 +190,7 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
   Pour l'exportation CSV `input,status,format,...`, le contenu est canonique
   codes, pré-commandes et analyses possibles pour la procédure à suivre.
    Helper по умолчанию пропускает не-Local строки, конвертирует каждую оставшуюся
-   Utilisez l'encodage automatique (IH58/сжатый/hex/JSON) et votre domaine d'activité
+   Utilisez l'encodage automatique (I105/сжатый/hex/JSON) et votre domaine d'activité
    par `legacy  suffix`. Connectez-vous avec `--allow-errors` pour effectuer une analyse à partir de maintenant
    если dump содержит поврежденные littéraux.7. L'automatisation CI/lint peut utiliser `ci/check_address_normalize.sh`, ici
    Utilisez les sélecteurs locaux `fixtures/account/address_vectors.json`,
@@ -232,6 +232,6 @@ Cliquez sur Bullet dans les notes de version pour le basculement :
 > **Adresse :** Ajout de l'assistant `iroha tools address normalize`
 > и подключен в CI (`ci/check_address_normalize.sh`), чтобы пайплайны кошелька/
 > Vous pouvez utiliser les sélecteurs locaux dans les canaux canoniques
-> IH58/Formulaires de blocage Local-8/Local-12 sur le réseau principal. Обновите любые
+> I105/Formulaires de blocage Local-8/Local-12 sur le réseau principal. Обновите любые
 > Exportations douanières, qui commandent et normalisent
 > список к paquet de preuves реLISа.

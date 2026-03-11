@@ -140,15 +140,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -157,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` משקף את ה‑JSON `/v1/explorer/accounts/{id}/qr`: כולל מזהה חשבון קנוני, literal בפורמט המבוקש, מטא‑נתוני prefix/תיקון שגיאות, ממדי QR ו‑SVG inline שניתן להטמיע ישירות. השמיטו `ExplorerAccountQrOptions` כדי להשתמש ב‑IH58 המועדף או הגדירו `address_format: Some(AddressFormat::Compressed)` כדי לקבל את וריאנט `sora…` של ADDR-6b.
+`ExplorerAccountQrSnapshot` משקף את ה‑JSON `/v1/explorer/accounts/{id}/qr`: כולל מזהה חשבון קנוני, literal בפורמט המבוקש, מטא‑נתוני prefix/תיקון שגיאות, ממדי QR ו‑SVG inline שניתן להטמיע ישירות. השמיטו `ExplorerAccountQrOptions` כדי להשתמש ב‑I105 המועדף או הגדירו canonical I105 output כדי לקבל את וריאנט `i105` של ADDR-6b.
 
 ## 7. הירשמו לאירועים
 

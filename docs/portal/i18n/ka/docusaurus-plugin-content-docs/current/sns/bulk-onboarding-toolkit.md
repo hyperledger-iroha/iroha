@@ -45,7 +45,7 @@ Torii ან CLI. დამხმარე ამოწმებს ყველ
 |--------|----------|-------------|
 | `label` | დიახ | მოთხოვნილი ეტიკეტი (მიღებულია შერეული შემთხვევა; ინსტრუმენტი ნორმალიზდება ნორმის მიხედვით v1 და UTS-46). |
 | `suffix_id` | დიახ | რიცხვითი სუფიქსის იდენტიფიკატორი (ათწილადი ან `0x` თექვსმეტობითი). |
-| `owner` | დიახ | AccountId სტრიქონი (IH58 ლიტერალური; სურვილისამებრ @domain მინიშნება) რეგისტრაციის მფლობელისთვის. |
+| `owner` | დიახ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | დიახ | მთელი რიცხვი `1..=255`. |
 | `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `xor#sora`). |
 | `payment_gross` / `payment_net` | დიახ | ხელმოუწერელი მთელი რიცხვები, რომლებიც წარმოადგენენ აქტივის მშობლიურ ერთეულებს. |
@@ -86,9 +86,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   მითითებები წყდება CSV მდებარეობის მიმართ. არაობიექტური მეტამონაცემები
   წარმოქმნის ვალიდაციის შეცდომას.
 - **კონტროლერები:** ცარიელი უჯრედები პატივია `--default-controllers`. მიაწოდეთ მკაფიო
-  კონტროლერების სიები (მაგალითად `ih58...;ih58...`) არამფლობელზე დელეგირებისას
+  კონტროლერების სიები (მაგალითად `i105...;i105...`) არამფლობელზე დელეგირებისას
   მსახიობები.
 
 წარუმატებლობა მოხსენებულია კონტექსტური მწკრივის ნომრებით (მაგალითად

@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,7 +164,7 @@ fn download_qr() -> eyre::Result<()> {
 ཁ་ཐོག་: དེ་ནང་ལུ་ ཀེ་ནོ་ནིག་རྩིས་ཐོ་ id དང་ ཡིག་ཆའི་བརྡ་སྟོན་འབད་མི་ཚུ་ཨིན།
 ཞུ་བ་འབད་ཡོད་པའི་རྩ་སྒྲིག་, ཡོངས་འབྲེལ་སྔོན་སྒྲིག་/ནོར་འཁྲུལ་-ནོར་བཅོས་མེ་ཊ་ཌེ་ཊ་, ཀིའུ་ཨར་རྒྱ་ཚད་, དང་།
 དངུལ་ཁུག་/འཚོལ་ཞིབ་འབད་མི་ ནང་ཐིག་ཨེསི་ཝི་ཇི་ པེ་ལོཌ་འདི་ ཐད་ཀར་དུ་ བཙུགས་ཚུགས། བདོད༌ནི༌; བདོབར༌ནི
-IH58 ཐོན་འབྲས་ཡང་ན་ གཞི་སྒྲིག་ལུ་ སྔོན་སྒྲིག་འབད་ནི་ལུ་ I18NI000000034X ཨིན།
+I105 ཐོན་འབྲས་ཡང་ན་ གཞི་སྒྲིག་ལུ་ སྔོན་སྒྲིག་འབད་ནི་ལུ་ I18NI000000034X ཨིན།
 I18NI000000035X ལ་དྲག་ཤོས་གཉིས་པ་བསྐྱར་ལེན་བྱེད་པར་།
 I18NI000000036X གིས་ ADDR-6b གིས་ལག་ལེན་འཐབ་མི་ འགྱུར་ལྡོག་ཅན་།
 

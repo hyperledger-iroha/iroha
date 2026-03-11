@@ -93,9 +93,9 @@ final class DemoConnectViewModel: ObservableObject {
   }
 
   struct AddressPreview: Equatable {
-    let ih58: String
-    let compressed: String
-    let compressedWarning: String
+    let i105: String
+    let i105Default: String
+    let i105Warning: String
     let domain: String
     let implicitDefault: Bool
     let networkPrefix: UInt16
@@ -109,18 +109,18 @@ final class DemoConnectViewModel: ObservableObject {
       let address = try AccountAddress.fromAccount(publicKey: sampleKey, algorithm: "ed25519")
       let formats = try address.displayFormats()
       return AddressPreview(
-        ih58: formats.ih58,
-        compressed: formats.compressed,
-        compressedWarning: formats.compressedWarning,
+        i105: formats.i105,
+        i105Default: formats.i105Default,
+        i105Warning: formats.i105Warning,
         domain: sampleDomain,
         implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
         networkPrefix: formats.networkPrefix
       )
     } catch {
       return AddressPreview(
-        ih58: "ih58-unavailable",
-        compressed: "sora-unavailable",
-        compressedWarning: "Address preview unavailable: \(error.localizedDescription)",
+        i105: "i105-unavailable",
+        i105Default: "sora-unavailable",
+        i105Warning: "Address preview unavailable: \(error.localizedDescription)",
         domain: sampleDomain,
         implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
         networkPrefix: 42
@@ -707,53 +707,53 @@ struct AddressPreviewCard: View {
         .foregroundColor(.secondary)
 
       VStack(alignment: .leading, spacing: 4) {
-        Text("IH58 (prefix \(address.networkPrefix))").font(.subheadline)
+        Text("I105 (prefix \(address.networkPrefix))").font(.subheadline)
         ScrollView(.horizontal) {
-          Text(address.ih58)
+          Text(address.i105)
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
         }
       }
 
       VStack(alignment: .leading, spacing: 4) {
-        Text("Compressed Sora-only").font(.subheadline)
+        Text("i105-default Sora-only").font(.subheadline)
         ScrollView(.horizontal) {
-          Text(address.compressed)
+          Text(address.i105Default)
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
         }
-        Text(address.compressedWarning)
+        Text(address.i105Warning)
           .font(.caption)
           .foregroundColor(.orange)
       }
 
       HStack(spacing: 12) {
-        Button("Copy IH58") {
-          copy(value: address.ih58, label: "IH58", warning: nil, mode: .ih58)
+        Button("Copy I105") {
+          copy(value: address.i105, label: "I105", warning: nil, mode: .i105)
         }
-        .help("Copy the canonical IH58 string; safe for QR codes and shared screens.")
-        .accessibilityLabel("Copy IH58 address")
-        .accessibilityHint("Copies the canonical IH58 payload to the clipboard and records telemetry.")
-        .accessibilityIdentifier("address-copy-ih58")
+        .help("Copy the canonical I105 string; safe for QR codes and shared screens.")
+        .accessibilityLabel("Copy I105 address")
+        .accessibilityHint("Copies the canonical I105 payload to the clipboard and records telemetry.")
+        .accessibilityIdentifier("address-copy-i105")
 
-        Button("Copy Compressed") {
+        Button("Copy i105-default") {
           copy(
-            value: address.compressed,
-            label: "compressed",
-            warning: address.compressedWarning,
-            mode: .compressed
+            value: address.i105Default,
+            label: "i105_default",
+            warning: address.i105Warning,
+            mode: .i105Default
           )
         }
-        .help("Compressed addresses are Sora-only; remind recipients before sharing.")
-        .accessibilityLabel("Copy compressed Sora-only address")
-        .accessibilityHint("Copies the compressed Sora-only literal and announces the inline warning.")
-        .accessibilityIdentifier("address-copy-compressed")
+        .help("i105-default addresses are Sora-only; remind recipients before sharing.")
+        .accessibilityLabel("Copy i105-default Sora-only address")
+        .accessibilityHint("Copies the i105-default Sora-only literal and announces the inline warning.")
+        .accessibilityIdentifier("address-copy-i105-default")
       }
 
-      QRCodeView(text: address.ih58)
+      QRCodeView(text: address.i105)
         .frame(width: 160, height: 160)
-        .accessibilityLabel("IH58 QR for \(address.ih58)")
-        .accessibilityHint("Share this QR with explorers or wallets; payload always encodes the IH58 form.")
+        .accessibilityLabel("I105 QR for \(address.i105)")
+        .accessibilityHint("Share this QR with explorers or wallets; payload always encodes the I105 form.")
         .accessibilityIdentifier("address-qr-preview")
 
       if let status = copyStatus {
@@ -777,7 +777,7 @@ struct AddressPreviewCard: View {
 
   private var domainNote: String {
     if address.implicitDefault {
-      return "Implicit default domain: \(address.domain) (no suffix required when sharing IH58)."
+      return "Implicit default domain: \(address.domain) (no suffix required when sharing I105)."
     }
     return "Domain selector: \(address.domain)"
   }
@@ -887,8 +887,8 @@ struct ContentView: View {
 #endif
 
 enum AddressCopyMode: String {
-  case ih58
-  case compressed
+  case i105 = "i105"
+  case i105Default = "i105_default"
 }
 
 final class AddressCopyTelemetry {

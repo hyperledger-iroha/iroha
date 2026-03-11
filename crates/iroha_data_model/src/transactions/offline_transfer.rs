@@ -309,8 +309,8 @@ mod tests {
 
     fn sample_account(seed: u8, domain: &str) -> AccountId {
         let key = sample_public_key(seed);
-        let domain_id = DomainId::from_str(domain).expect("domain");
-        AccountId::new(domain_id, key)
+        let _domain_id = DomainId::from_str(domain).expect("domain");
+        AccountId::new(key)
     }
 
     fn sample_asset(domain: &str) -> crate::asset::AssetId {

@@ -29,10 +29,8 @@ fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bo
         let GrantBox::Permission(grant) = grant_box else {
             return false;
         };
-        matches!(
-            grant.object().name(),
-            "CanRegisterAccount" | "CanRegisterAssetDefinition"
-        ) && grant.object().payload() == &Json::default()
+        matches!(grant.object().name(), "CanRegisterAccount")
+            && grant.object().payload() == &Json::default()
     })
 }
 
@@ -72,10 +70,7 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         .asset("rose".parse().expect("asset"), NumericSpec::default())
         .finish_domain();
 
-    let genesis_account = AccountId::new(
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-    );
+    let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
     let rose_definition_id: AssetDefinitionId = "rose#wonderland".parse().expect("rose asset");
 

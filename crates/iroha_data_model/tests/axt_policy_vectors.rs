@@ -66,11 +66,8 @@ fn sample_binding(descriptor: &AxtDescriptor) -> AxtBinding {
 }
 
 fn encoded_account(public_key_hex: &str) -> String {
-    iroha_data_model::account::AccountId::new(
-        "wonderland".parse().expect("domain id"),
-        public_key_hex.parse().expect("public key"),
-    )
-    .to_string()
+    iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
+        .to_string()
 }
 
 fn sample_handle(binding: AxtBinding) -> AssetHandle {

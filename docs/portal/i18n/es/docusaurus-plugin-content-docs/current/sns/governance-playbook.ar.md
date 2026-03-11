@@ -54,7 +54,7 @@ Adaptador de corriente CLI `sns governance ...` y Norito
 | الميثاق + ملاحق KPI | `docs/source/sns/governance_addenda/` | Utilice los KPI y los KPI y acceda a la CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | Ajuste Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | حمولات REST/gRPC, مقاييس `sns_registrar_status_total`, وتوقعات حوكمة ganchos. |
-| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | Utilice IH58 (المفضلة) y (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
+| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | Utilice I105 (المفضلة) y (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
 | Descripción SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | اشتقاق المضيفات الحتمي، سير عمل tailer للشفافية، وقواعد التنبيه. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | ملاحظات استقبال حسب الولاية (مثل EU DSA), اقرارات Steward, ملاحق قوالب. |
 | Taladros perforados | `ops/drill-log.md` | سجل لتجارب الفوضى وIR المطلوبة قبل الخروج من المراحل. |
@@ -91,7 +91,7 @@ Adaptador de corriente CLI `sns governance ...` y Norito
    الشفافية الخاص بالresolver لتاكيد انتشار الحالة الجديدة GAR/zone (انظر 4.5).
 6. **افصاح العميل:** حدث دفتر المستخدِم (billetera/explorador) عبر accesorios المشتركة في
    [`address-display-guidelines.md`](./address-display-guidelines.md) ، مع ضمان ان
-   Utilice el IH58 y el código QR.
+   Utilice el I105 y el código QR.
 
 ### 4.3 التجديد والفوترة وتسوية الخزينة- **سير عمل التجديد:** يفرض المسجلون نافذة سماح 30 يوم + نافذة استرداد 60 يوم
   Haga clic en `SuffixPolicyV1`. بعد 60 يوما، تتفعل تلقائيا سلسلة اعادة الفتح
@@ -115,11 +115,11 @@ Adaptador de corriente CLI `sns governance ...` y Norito
 ### 4.4 Herramientas y servicios| المرحلة | المالك | الاجراء والدليل | Acuerdo de Nivel de Servicio |
 |---------|--------|------------------|-----|
 | طلب تجميد suave | mayordomo / الدعم | Asegúrese de que `SNS-DF-<id>` esté conectado a un enlace de conexión y de enlace. | <=4 h من الاستلام. |
-| تذكرة guardián | مجلس guardián | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` y `GuardianFreezeTicketV1`. El archivo JSON es `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
+| تذكرة guardián | مجلس guardián | `sns governance freeze --selector <I105> --reason <text> --until <ts>` y `GuardianFreezeTicketV1`. El archivo JSON es `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
 | تصديق المجلس | مجلس الحوكمة | يوافق او يرفض التجميدات، ويوثق القرار مع رابط لتذكرة guardian وبصمة bond النزاع. | جلسة المجلس التالية او تصويت غير متزامن. |
 | لجنة التحكيم | الامتثال + mayordomo | Verá 7 meses (hoja de ruta) para obtener información sobre `sns governance dispute ballot`. ارفق ايصالات التصويت المجهولة بحزمة الحادث. | الحكم <=7 ايام بعد ايداع bono. |
 | استئناف | guardián + المجلس | يضاعف الاستئناف bono ويعيد عملية المحلفين; Esta es la configuración Norito `DisputeAppealV1` y la configuración del sistema. | <=10 días. |
-| فك التجميد Yالمعالجة | المسجل + عمليات resolver | Aquí `sns governance unfreeze --selector <IH58> --ticket <id>`, está conectado a GAR/resolver. | مباشرة بعد الحكم. |
+| فك التجميد Yالمعالجة | المسجل + عمليات resolver | Aquí `sns governance unfreeze --selector <I105> --ticket <id>`, está conectado a GAR/resolver. | مباشرة بعد الحكم. |
 
 القوانين الطارئة (تجميدات يطلقها tutor <=72 h) تتبع نفس التدفق لكنها تتطلب
 Para obtener más información, consulte el documento `docs/source/sns/regulatory/`.

@@ -17,6 +17,105 @@ pub mod isi {
     use super::*;
     use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
 
+    fn is_permission_nft_associated(permission: &Permission, nft_id: &NftId) -> bool {
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::nft::CanUnregisterNft::try_from(permission)
+        {
+            return &permission.nft == nft_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::nft::CanTransferNft::try_from(permission)
+        {
+            return &permission.nft == nft_id;
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::nft::CanModifyNftMetadata::try_from(permission)
+        {
+            return &permission.nft == nft_id;
+        }
+
+        false
+    }
+
+    pub(crate) fn remove_nft_associated_permissions(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        nft_id: &NftId,
+    ) {
+        let account_ids: Vec<AccountId> = state_transaction
+            .world
+            .account_permissions
+            .iter()
+            .map(|(holder, _)| holder.clone())
+            .collect();
+
+        for holder in account_ids {
+            let should_remove = state_transaction
+                .world
+                .account_permissions
+                .get(&holder)
+                .is_some_and(|permissions| {
+                    permissions
+                        .iter()
+                        .any(|permission| is_permission_nft_associated(permission, nft_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let remove_entry = if let Some(permissions) =
+                state_transaction.world.account_permissions.get_mut(&holder)
+            {
+                permissions.retain(|permission| !is_permission_nft_associated(permission, nft_id));
+                permissions.is_empty()
+            } else {
+                false
+            };
+
+            if remove_entry {
+                state_transaction
+                    .world
+                    .account_permissions
+                    .remove(holder.clone());
+            }
+
+            state_transaction.invalidate_permission_cache_for_account(&holder);
+        }
+
+        let role_ids: Vec<RoleId> = state_transaction
+            .world
+            .roles
+            .iter()
+            .map(|(role_id, _)| role_id.clone())
+            .collect();
+
+        for role_id in role_ids {
+            let should_remove = state_transaction
+                .world
+                .roles
+                .get(&role_id)
+                .is_some_and(|role| {
+                    role.permissions()
+                        .any(|permission| is_permission_nft_associated(permission, nft_id))
+                });
+            if !should_remove {
+                continue;
+            }
+
+            let impacted_accounts = state_transaction.accounts_with_role(&role_id);
+
+            if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+                role.permissions
+                    .retain(|permission| !is_permission_nft_associated(permission, nft_id));
+                role.permission_epochs
+                    .retain(|permission, _| role.permissions.contains(permission));
+            }
+
+            if !impacted_accounts.is_empty() {
+                state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
+            }
+        }
+    }
+
     impl Execute for Register<Nft> {
         #[metrics(+"register_nft")]
         fn execute(
@@ -54,6 +153,8 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let nft_id = self.object().clone();
+
+            remove_nft_associated_permissions(state_transaction, &nft_id);
 
             state_transaction
                 .world
@@ -152,10 +253,7 @@ pub mod isi {
             state_transaction.world.account(&source)?;
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;
-            let authority_is_source_owner = authority == &source
-                || state_transaction.world.domain(source.domain())?.owned_by() == authority;
-            let authority_is_nft_domain_owner =
-                state_transaction.world.domain(object.domain())?.owned_by() == authority;
+            let authority_is_source_owner = authority == &source;
             let required_permission: Permission =
                 iroha_executor_data_model::permission::nft::CanTransferNft {
                     nft: object.clone(),
@@ -179,10 +277,7 @@ pub mod isi {
                                     .any(|permission| permission == &required_permission)
                             })
                     });
-            if !(authority_is_source_owner
-                || authority_is_nft_domain_owner
-                || authority_has_transfer_permission)
-            {
+            if !(authority_is_source_owner || authority_has_transfer_permission) {
                 return Err(Error::InvariantViolation(
                     "Can't transfer NFT of another account".to_owned().into(),
                 ));
@@ -212,7 +307,12 @@ pub mod isi {
     mod tests {
         use core::num::NonZeroU64;
 
-        use iroha_data_model::query::error::FindError;
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            permission::Permission,
+            query::error::FindError,
+            role::{Role, RoleId},
+        };
         use iroha_test_samples::ALICE_ID;
 
         use super::*;
@@ -284,41 +384,119 @@ pub mod isi {
         }
 
         #[test]
+        fn unregister_nft_removes_associated_permissions_from_accounts_and_roles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "nft-cleanup".parse().expect("domain id");
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register domain");
+
+            let holder_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(Account::new(
+                holder_id.clone().to_account_id(domain_id.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register holder account");
+
+            let nft_id: NftId = "cleanup$nft-cleanup".parse().expect("nft id");
+            Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register nft");
+
+            let permission: Permission =
+                iroha_executor_data_model::permission::nft::CanModifyNftMetadata {
+                    nft: nft_id.clone(),
+                }
+                .into();
+            Grant::account_permission(permission.clone(), holder_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant permission to holder");
+
+            let role_id: RoleId = "NFT_CLEANUP".parse().expect("role id");
+            Register::role(Role::new(role_id.clone(), holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register role");
+            Grant::role_permission(permission.clone(), role_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant permission to role");
+
+            assert!(
+                stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder should have permission before unregister"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                role.permissions().any(|perm| perm == &permission),
+                "role should include permission before unregister"
+            );
+
+            Unregister::nft(nft_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister nft");
+
+            assert!(
+                !stx.world
+                    .account_permissions
+                    .get(&holder_id)
+                    .is_some_and(|perms| perms.contains(&permission)),
+                "holder permission should be removed"
+            );
+            let role = stx.world.roles.get(&role_id).expect("role should exist");
+            assert!(
+                !role.permissions().any(|perm| perm == &permission),
+                "role permission should be removed"
+            );
+            assert!(
+                !role.permission_epochs().contains_key(&permission),
+                "permission epoch should be pruned"
+            );
+        }
+
+        #[test]
         fn transfer_nft_rejects_authority_without_ownership() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
             let users_domain: DomainId = "users".parse().expect("domain id");
-            let user1 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
-            let user2 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
+            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&user1, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(user1.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user1 account");
-            Register::account(Account::new(user2.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user2 account");
+            Register::account(Account::new(
+                user1.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user1 account");
+            Register::account(Account::new(
+                user2.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
@@ -342,35 +520,34 @@ pub mod isi {
             let state = State::new(World::default(), kura, query_handle);
 
             let users_domain: DomainId = "users".parse().expect("domain id");
-            let user1 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
-            let user2 = AccountId::new(
-                users_domain.clone(),
-                iroha_crypto::KeyPair::random().into_parts().0,
-            );
+            let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
+            let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new(ALICE_ID.domain().clone()))
+            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(user1.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user1 account");
-            Register::account(Account::new(user2.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register user2 account");
+            Register::account(Account::new(
+                user1.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user1 account");
+            Register::account(Account::new(
+                user2.clone().to_account_id(users_domain.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))

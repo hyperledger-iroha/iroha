@@ -14,7 +14,7 @@ titre : Conformidade de enderecos de conta
 description : Résumé du flux du luminaire ADDR-2 et comme équipement de SDK ficam synchronisé.
 ---
 
-Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture les appareils IH58 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatif. Chaque surface du SDK + Torii utilise le fichier JSON pour détecter toute dérive du codec avant de télécharger la production. Cette page affiche le bref statut interne (`docs/source/account_address_status.md` dans le référentiel principal) pour que les lecteurs du portail consultent le flux sem vasculhar ou le mono-repo.
+Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture les appareils I105 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatif. Chaque surface du SDK + Torii utilise le fichier JSON pour détecter toute dérive du codec avant de télécharger la production. Cette page affiche le bref statut interne (`docs/source/account_address_status.md` dans le référentiel principal) pour que les lecteurs du portail consultent le flux sem vasculhar ou le mono-repo.
 
 ## Régénérer ou vérifier le paquet
 
@@ -43,7 +43,7 @@ Toujours que le luminaire, le générateur ou les documents soient utilisés pou
 | Torii (serveur) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Chaque harnais permet un aller-retour de octets canoniques + IH58 + encodages compressés et vérifie les codes d'erreur dans le style Norito avec le luminaire pour les cas négatifs.
+| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Chaque harnais permet un aller-retour de octets canoniques + I105 + encodages compressés et vérifie les codes d'erreur dans le style Norito avec le luminaire pour les cas négatifs.
 
 ## Précision de l'automatisation ?
 

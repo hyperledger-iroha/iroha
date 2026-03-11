@@ -42,8 +42,8 @@ use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
     ChainId,
     account::{
-        Account, NewAccount, ScopedAccountId,
-        address::{AccountAddress, AccountAddressError, AccountAddressFormat},
+        Account, AccountId, NewAccount,
+        address::{AccountAddress, AccountAddressError},
     },
     asset::{
         definition::{AssetDefinition, NewAssetDefinition},
@@ -277,9 +277,7 @@ pub struct JsAliasEvaluation {
 pub struct JsAccountAddressParse {
     /// Canonical bytes for the parsed account address.
     pub canonical_bytes: Buffer,
-    /// Detected textual format (`ih58` or `compressed`).
-    pub detected_format: String,
-    /// Network prefix when the source was IH58.
+    /// Network prefix inferred while parsing the encoded literal.
     pub network_prefix: Option<u16>,
 }
 
@@ -288,12 +286,12 @@ pub struct JsAccountAddressParse {
 pub struct JsAccountAddressRender {
     /// Canonical hexadecimal encoding with `0x` prefix.
     pub canonical_hex: String,
-    /// IH58 encoding generated with the supplied network prefix.
-    pub ih58: String,
-    /// Compressed half-width Sora encoding (`sora…`).
-    pub compressed: String,
-    /// Compressed full-width Sora encoding (イロハ glyphs).
-    pub compressed_fullwidth: String,
+    /// I105 encoding generated with the supplied network prefix.
+    pub i105: String,
+    /// I105-default half-width sentinel encoding (`sora…`).
+    pub i105_default: String,
+    /// I105-default full-width sentinel encoding (イロハ glyphs).
+    pub i105_default_fullwidth: String,
 }
 
 /// Deterministic gateway host bindings exposed to JavaScript callers.
@@ -431,15 +429,14 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string in strict encoded form
-/// (IH58 (preferred) or compressed (`sora`, second-best)).
+/// Parse an account address string in strict encoded form (canonical I105).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_encoded(
     input: String,
     expected_prefix: Option<u16>,
 ) -> napi::Result<JsAccountAddressParse> {
-    let (address, format) =
+    let address =
         AccountAddress::parse_encoded(&input, expected_prefix).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
     let hex_body = canonical_hex
@@ -447,13 +444,11 @@ pub fn account_address_parse_encoded(
         .unwrap_or(canonical_hex.as_str());
     let canonical =
         hex::decode(hex_body).map_err(|err| napi::Error::from_reason(err.to_string()))?;
-    let (detected_format, network_prefix) = match format {
-        AccountAddressFormat::IH58 { network_prefix } => ("ih58".to_owned(), Some(network_prefix)),
-        AccountAddressFormat::Compressed => ("compressed".to_owned(), None),
-    };
+    let network_prefix = Some(
+        expected_prefix.unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+    );
     Ok(JsAccountAddressParse {
         canonical_bytes: Buffer::from(canonical),
-        detected_format,
         network_prefix,
     })
 }
@@ -468,19 +463,39 @@ pub fn account_address_render(
     let address =
         AccountAddress::from_canonical_bytes(bytes.as_ref()).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
-    let ih58 = address
-        .to_ih58(network_prefix)
+    let i105 = address
+        .to_i105_for_discriminant(network_prefix)
         .map_err(account_address_err)?;
-    let compressed = address.to_compressed_sora().map_err(account_address_err)?;
-    let compressed_fullwidth = address
-        .to_compressed_sora_fullwidth()
-        .map_err(account_address_err)?;
+    let i105_default = address.to_i105().map_err(account_address_err)?;
+    let i105_default_fullwidth = address.to_i105_fullwidth().map_err(account_address_err)?;
     Ok(JsAccountAddressRender {
         canonical_hex,
-        ih58,
-        compressed,
-        compressed_fullwidth,
+        i105,
+        i105_default,
+        i105_default_fullwidth,
     })
+}
+
+fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
+    AccountId::parse_encoded(input)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| {
+            napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
+        })
+}
+
+/// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from definition/account parts.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` inputs at the boundary
+pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi::Result<String> {
+    let definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let account = parse_account_id(&account_id, "account id")?;
+    Ok(AssetId::new(definition, account).canonical_encoded())
 }
 
 #[napi(js_name = "blake3Hash")]
@@ -4655,6 +4670,11 @@ fn parse_string_value(value: json::Value, context: &str) -> napi::Result<String>
     }
 }
 
+fn parse_account_id_value(value: json::Value, context: &str) -> napi::Result<AccountId> {
+    let literal = parse_string_value(value, context)?;
+    parse_account_id(&literal, context)
+}
+
 fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -4740,12 +4760,15 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
             format!("{context}.owner must be a canonical account id"),
         )
     })?;
-    let canonical = ScopedAccountId::canonicalize(owner).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context}.owner must be a canonical account id"),
-        )
-    })?;
+    let canonical = AccountId::parse_encoded(owner)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map(|account| account.to_string())
+        .map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context}.owner must be a canonical account id"),
+            )
+        })?;
     if canonical != owner {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -5091,8 +5114,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     return Ok(InstructionBox::from(unregister_box));
                 }
                 if let Some(account_value) = unregister_map.remove("Account") {
-                    let account_id: ScopedAccountId =
-                        json::from_value(account_value).map_err(norito_to_napi)?;
+                    let account_id = parse_account_id_value(account_value, "Unregister.Account")?;
                     let unregister_box =
                         UnregisterBox::Account(Unregister::<Account>::account(account_id));
                     return Ok(InstructionBox::from(unregister_box));
@@ -5202,8 +5224,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
                     let quantity: Numeric =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
-                    let destination: ScopedAccountId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let destination =
+                        parse_account_id_value(destination_value, "Transfer.Asset.destination")?;
                     let transfer = Transfer::asset_numeric(source, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
                 }
@@ -5228,12 +5250,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.Domain.destination field missing",
                             )
                         })?;
-                    let source: ScopedAccountId =
-                        json::from_value(source_value).map_err(norito_to_napi)?;
+                    let source = parse_account_id_value(source_value, "Transfer.Domain.source")?;
                     let domain_id: DomainId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: ScopedAccountId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let destination =
+                        parse_account_id_value(destination_value, "Transfer.Domain.destination")?;
                     let transfer = Transfer::domain(source, domain_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Domain(transfer)));
                 }
@@ -5259,12 +5280,14 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Transfer.AssetDefinition.destination field missing",
                             )
                         })?;
-                    let source: ScopedAccountId =
-                        json::from_value(source_value).map_err(norito_to_napi)?;
+                    let source =
+                        parse_account_id_value(source_value, "Transfer.AssetDefinition.source")?;
                     let definition: AssetDefinitionId =
                         json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: ScopedAccountId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let destination = parse_account_id_value(
+                        destination_value,
+                        "Transfer.AssetDefinition.destination",
+                    )?;
                     let transfer = Transfer::asset_definition(source, definition, destination);
                     return Ok(InstructionBox::from(TransferBox::AssetDefinition(transfer)));
                 }
@@ -5287,11 +5310,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "Transfer.Nft.destination field missing",
                         )
                     })?;
-                    let source: ScopedAccountId =
-                        json::from_value(source_value).map_err(norito_to_napi)?;
+                    let source = parse_account_id_value(source_value, "Transfer.Nft.source")?;
                     let nft_id: NftId = json::from_value(object_value).map_err(norito_to_napi)?;
-                    let destination: ScopedAccountId =
-                        json::from_value(destination_value).map_err(norito_to_napi)?;
+                    let destination =
+                        parse_account_id_value(destination_value, "Transfer.Nft.destination")?;
                     let transfer = Transfer::nft(source, nft_id, destination);
                     return Ok(InstructionBox::from(TransferBox::Nft(transfer)));
                 }
@@ -5331,8 +5353,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "JoinKaigi.participant field missing",
                         )
                     })?;
-                    let participant: ScopedAccountId =
-                        json::from_value(participant_value).map_err(norito_to_napi)?;
+                    let participant =
+                        parse_account_id_value(participant_value, "JoinKaigi.participant")?;
                     let commitment =
                         parse_optional_commitment(join_fields.remove("commitment"), "JoinKaigi")?;
                     let nullifier =
@@ -5370,8 +5392,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "LeaveKaigi.participant field missing",
                             )
                         })?;
-                    let participant: ScopedAccountId =
-                        json::from_value(participant_value).map_err(norito_to_napi)?;
+                    let participant =
+                        parse_account_id_value(participant_value, "LeaveKaigi.participant")?;
                     let commitment =
                         parse_optional_commitment(leave_fields.remove("commitment"), "LeaveKaigi")?;
                     let nullifier =
@@ -5504,8 +5526,8 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             "ReportKaigiRelayHealth.relay_id field missing",
                         )
                     })?;
-                    let relay_id: ScopedAccountId =
-                        json::from_value(relay_id_value).map_err(norito_to_napi)?;
+                    let relay_id =
+                        parse_account_id_value(relay_id_value, "ReportKaigiRelayHealth.relay_id")?;
                     let status_value = health_fields.remove("status").ok_or_else(|| {
                         napi::Error::new(
                             napi::Status::InvalidArg,
@@ -5616,8 +5638,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "CastPlainBallot.referendum_id",
                 )?;
                 let owner_value = required_value(&mut fields, "owner", "CastPlainBallot")?;
-                let owner: ScopedAccountId =
-                    json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner = parse_account_id_value(owner_value, "CastPlainBallot.owner")?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "CastPlainBallot")?,
                     "CastPlainBallot.amount",
@@ -5642,8 +5663,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
-                let owner: ScopedAccountId =
-                    json::from_value(owner_value).map_err(norito_to_napi)?;
+                let owner = parse_account_id_value(owner_value, "RegisterCitizen.owner")?;
                 let amount = parse_u128_value(
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
@@ -5671,12 +5691,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let members_value =
                     required_value(&mut fields, "members", "PersistCouncilForEpoch")?;
-                let members: Vec<ScopedAccountId> =
+                let members: Vec<AccountId> =
                     json::from_value(members_value).map_err(norito_to_napi)?;
                 let alternates_value = fields
                     .remove("alternates")
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
-                let alternates: Vec<ScopedAccountId> =
+                let alternates: Vec<AccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
                 let verified = parse_u32_value(
                     fields
@@ -6805,7 +6825,7 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
     chain_id: ChainId,
-    authority: ScopedAccountId,
+    authority: AccountId,
     instructions: Vec<InstructionBox>,
     metadata: Metadata,
     creation_time_ms: Option<i64>,
@@ -6954,14 +6974,7 @@ pub fn build_register_domain_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid authority account id: {err}"),
-            )
-        })?;
+    let authority = parse_account_id(&authority, "authority account id")?;
     let domain_id: DomainId = domain_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -6987,7 +7000,7 @@ pub fn build_register_domain_transaction(
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
 fn build_transaction_from_instructions_json(
     chain_id: ChainId,
-    authority: ScopedAccountId,
+    authority: AccountId,
     instructions_json: Vec<String>,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
@@ -7026,14 +7039,7 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid authority account id: {err}"),
-            )
-        })?;
+    let authority = parse_account_id(&authority, "authority account id")?;
 
     build_transaction_from_instructions_json(
         chain_id,
@@ -7088,14 +7094,7 @@ pub fn build_time_trigger_action(
         None
     };
 
-    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid trigger authority: {err}"),
-            )
-        })?;
+    let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -7134,14 +7133,7 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let authority: ScopedAccountId = ScopedAccountId::parse_encoded(&authority)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid trigger authority: {err}"),
-            )
-        })?;
+    let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
     let repeats = match repeats {
@@ -7174,7 +7166,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
-        account::ScopedAccountId,
+        account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
         da::{
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
@@ -7258,13 +7250,12 @@ mod tests {
         buf
     }
 
-    fn sample_account(domain: &str) -> ScopedAccountId {
+    fn sample_account(_domain: &str) -> AccountId {
         let keypair = KeyPair::random();
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
-        ScopedAccountId::new(domain_id, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
-    fn account_json_literal(account: &ScopedAccountId) -> String {
+    fn account_json_literal(account: &AccountId) -> String {
         json::to_value(account)
             .expect("serialize account id")
             .as_str()
@@ -7273,14 +7264,13 @@ mod tests {
     }
 
     fn canonical_owner_literal(_domain: &str) -> String {
-        let default_domain = iroha_data_model::account::address::default_domain_name();
-        sample_account(default_domain.as_ref()).to_string()
+        account_json_literal(&sample_account("wonderland"))
     }
 
     fn noncanonical_owner_literal(domain: &str) -> String {
         let account = sample_account(domain);
-        let address_hex = account.to_canonical_hex().expect("canonical hex");
-        format!("{address_hex}@{}", account.domain())
+        let domain_id: DomainId = domain.parse().expect("valid domain id");
+        account.to_account_id(domain_id).to_string()
     }
 
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
@@ -9449,7 +9439,7 @@ mod tests {
                         "metadata": norito_json!({
                             "topic": "status"
                         }),
-                        "scheduled_start_ms": 1700000000000_u64,
+                        "scheduled_start_ms": 1_700_000_000_000_u64,
                         "billing_account": billing_account,
                         "privacy_mode": norito_json!({
                             "mode": "ZkRosterV1",
@@ -9461,7 +9451,7 @@ mod tests {
                                 "hpke_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
                                 "weight": 5
                             })],
-                            "expiry_ms": 1700111000000_u64
+                            "expiry_ms": 1_700_111_000_000_u64
                         })
                     })
                 })
@@ -9478,7 +9468,7 @@ mod tests {
             .and_then(|v| v.get("host"))
             .and_then(|v| v.as_str())
         {
-            ScopedAccountId::parse_encoded(host)
+            AccountId::parse_encoded(host)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("host account id");
         }
@@ -9489,7 +9479,7 @@ mod tests {
             .and_then(|v| v.get("billing_account"))
             .and_then(|v| v.as_str())
         {
-            ScopedAccountId::parse_encoded(billing)
+            AccountId::parse_encoded(billing)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("billing account id");
         }
@@ -9503,7 +9493,7 @@ mod tests {
             .and_then(|v| v.get("relay_id"))
             .and_then(|v| v.as_str())
         {
-            ScopedAccountId::parse_encoded(relay_id)
+            AccountId::parse_encoded(relay_id)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("relay account id");
         }
@@ -9516,8 +9506,7 @@ mod tests {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
 
         let asset_definition: AssetDefinitionId = "rose#wonderland"
             .parse()
@@ -9584,8 +9573,7 @@ mod tests {
     #[test]
     fn build_transaction_with_empty_instructions_fails() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority = ScopedAccountId::new(domain_id, keypair.public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
@@ -9606,8 +9594,7 @@ mod tests {
     #[test]
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = AccountId::new(keypair.public_key().clone());
         let encoded = build_time_trigger_action(
             account_json_literal(&authority_id),
             vec![
@@ -9642,8 +9629,7 @@ mod tests {
     #[test]
     fn build_precommit_trigger_action_encodes_filter() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
-        let authority_id = ScopedAccountId::new(domain_id, keypair.public_key().clone());
+        let authority_id = AccountId::new(keypair.public_key().clone());
         let encoded = build_precommit_trigger_action(
             account_json_literal(&authority_id),
             vec![

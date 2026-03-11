@@ -27,10 +27,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   callers get deterministic errors when the bridge returns an unexpected
   state. Typings, README/docs snippets, and Jest coverage exercise the new
   validation paths.【javascript/iroha_js/src/toriiClient.js:7168】【javascript/iroha_js/index.d.ts:3600】【javascript/iroha_js/test/toriiClient.test.js:940】【javascript/iroha_js/README.md:1232】【docs/source/sdk/js/governance_iso_examples.md:79】
-- `decodeCompressedAccountAddress` now enforces string inputs and surfaces a
+- `decodeI105AccountAddress` now enforces string inputs and surfaces a
   clear `TypeError` for non-string values, keeping JS-04 validation parity for
-  compressed address helpers and preventing accidental coercion when decoding
-  selectors. Jest coverage guards the new behaviour.【javascript/iroha_js/src/address.js:1635】【javascript/iroha_js/test/address.test.js:482】
+  I105 helpers and preventing accidental coercion when decoding selectors.
+  Jest coverage guards the new behaviour.【javascript/iroha_js/src/address.js:1635】【javascript/iroha_js/test/address.test.js:482】
 - Added optional SNS integration smoke coverage gated by
   `IROHA_TORII_INTEGRATION_SNS_SUFFIX`/`IROHA_TORII_INTEGRATION_SNS_SELECTOR`
   so JS-04/ADDR-5 adopters can validate suffix policies and registration
@@ -93,7 +93,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   deliverable.
 - Added `ToriiClient.getExplorerAccountQr` with typed DTOs, TypeScript
   definitions, README usage, and Jest coverage so wallets and explorers can
-  fetch share-ready QR payloads (IH58 preferred or compressed (`sora`, second-best)) directly from Torii
+  fetch share-ready QR payloads in canonical I105 form directly from Torii
   instead of reimplementing the renderer, progressing ADDR-6b’s SDK coverage
   goals.【javascript/iroha_js/src/toriiClient.js:1440】【javascript/iroha_js/index.d.ts:3513】【javascript/iroha_js/README.md:1538】【javascript/iroha_js/test/toriiClient.test.js:6650】
 - Broadened the Dockerised integration smoke suite to cover asset re-mint
@@ -173,9 +173,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   validation, README snippets, and TypeScript definitions so the JS SDK covers
   the `/v1/gov/proposals/deploy-contract` and ballot DTOs described in
   `docs/source/governance_api.md`.
-- Added `addressFormat` support to `ToriiClient.listAccounts`/`queryAccounts`
-  (plus TypeScript definitions, README guidance, and tests) so SDK consumers
-  can request compressed `sora` literals when fulfilling ADDR-5 roadmap items.
+- Removed legacy `addressFormat` support from `ToriiClient.listAccounts`/`queryAccounts`;
+  SDK account-list/query helpers are now canonical I105-only.
 - Added runtime capability helpers to `ToriiClient`
   (`getNodeCapabilities`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
   `getRuntimeMetrics`, `listRuntimeUpgrades`) with README snippets, TypeScript

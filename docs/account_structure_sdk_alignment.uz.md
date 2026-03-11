@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-SDK va kodek egalari uchun # IH58 tarqatish eslatmasi
+SDK va kodek egalari uchun # I105 tarqatish eslatmasi
 
 Jamoalar: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec asboblari
 
-Kontekst: `docs/account_structure.md` endi yuk tashish IH58 hisob identifikatorini aks ettiradi
+Kontekst: `docs/account_structure.md` endi yuk tashish I105 hisob identifikatorini aks ettiradi
 amalga oshirish. Iltimos, SDK xatti-harakatlari va testlarini kanonik spetsifikatsiyaga moslang.
 
 Asosiy havolalar:
@@ -24,16 +24,11 @@ Asosiy havolalar:
 - Fikstur vektorlari — `fixtures/account/address_vectors.json`
 
 Harakat elementlari:
-1. **Kanonik chiqish:** `AccountId::to_string()`/Displey faqat IH58 chiqarishi KERAK
+1. **Kanonik chiqish:** `AccountId::to_string()`/Displey faqat I105 chiqarishi KERAK
    (`@domain` qo'shimchasi yo'q). Kanonik hex disk raskadrovka uchun mo'ljallangan (`0x...`).
-2. **Qabul qilingan kiritishlar:** tahlilchilar IH58 (afzal), `sora` siqilgan,
-   va kanonik hex (faqat `0x...`; yalang'och olti burchak rad etiladi). Kirishlar MUMKIN
-   Marshrutlash bo'yicha maslahatlar uchun `@<domain>` qo'shimchasi; `<label>@<domain>` (rejected legacy form) taxalluslari a talab qiladi
-   hal qiluvchi.  3. **Resolvers:** domensiz IH58/sora tahlil qilish uchun domen tanlagich kerak
-   resolver, agar selektor aniq sukut bo'lmasa (konfiguratsiya qilingan standartdan foydalaning
-   domen yorlig'i). UAID (`uaid:...`) va noaniq (`opaque:...`) harflar talab qiladi
-   hal qiluvchilar.
-4. **IH58 nazorat summasi:** `IH58PRE || prefix || payload` orqali Blake2b-512 dan foydalaning, oling
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **I105 nazorat summasi:** `I105PRE || prefix || payload` orqali Blake2b-512 dan foydalaning, oling
    birinchi 2 bayt. Siqilgan alifbo bazasi **105**.
 5. **Egri chiziq:** SDK standarti faqat Ed25519 uchun. Aniq ro'yxatdan o'tishni ta'minlang
    ML‑DSA/GOST/SM (Swift yaratish bayroqlari; JS/Android `configureCurveSupport`). Do

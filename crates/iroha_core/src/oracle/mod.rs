@@ -350,7 +350,6 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
         name::Name,
         oracle::{
             AggregationRule, FeedConfigVersion, ObservationBody, ObservationOutcome,
@@ -365,10 +364,9 @@ mod tests {
     }
 
     fn oracle(name: &str, domain: &str) -> iroha_data_model::oracle::OracleId {
-        let domain_id = DomainId::from_str(domain).expect("domain id");
         let seed = format!("{name}:{domain}");
         let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
-        AccountId::new(domain_id, keypair.public_key().clone())
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_providers() -> Vec<iroha_data_model::oracle::OracleId> {

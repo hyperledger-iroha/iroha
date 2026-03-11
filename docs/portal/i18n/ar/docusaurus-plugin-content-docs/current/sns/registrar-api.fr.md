@@ -114,7 +114,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | استرجع `SuffixPolicyV1` courant (قابل للتخزين المؤقت). |
 | `/v1/sns/registrations/{selector}` | احصل على | -- | Retourne le `NameRecordV1` courant + Etat Effectif (Active, Grace, etc.). |
 
-**تشفير المحدد:** الجزء `{selector}` يقبل IH58، ضغط، أو سداسي عشري canonique selon ADDR-5؛ Torii يتم التطبيع عبر `NameSelectorV1`.**نماذج الأخطاء:** جميع نقاط النهاية العائدة Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
+**تشفير المحدد:** الجزء `{selector}` يقبل I105، ضغط، أو سداسي عشري canonique selon ADDR-5؛ Torii يتم التطبيع عبر `NameSelectorV1`.**نماذج الأخطاء:** جميع نقاط النهاية العائدة Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
 ### 3.1 مساعدي CLI (شرط التسجيل اليدوي N0)
 
@@ -158,7 +158,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -216,7 +216,7 @@ Torii التحقق من الإجراءات والتحقق:1. معرف الاقت
 
 1. يقوم العميل باستجواب `/v1/sns/policies/{suffix_id}` لاستعادة الجائزة والنعمة والمستويات المتاحة.
 2. بناء العميل `RegisterNameRequestV1`:
-   - `selector` اشتقاق التسمية IH58 (تفضيل) أو ضغط (الاختيار الثاني).
+   - `selector` اشتقاق التسمية I105 (تفضيل) أو ضغط (الاختيار الثاني).
    - `term_years` في حدود السياسة.
    - `payment` يشير إلى نقل خزانة/مضيف الفاصل.
 3. Torii صالح:

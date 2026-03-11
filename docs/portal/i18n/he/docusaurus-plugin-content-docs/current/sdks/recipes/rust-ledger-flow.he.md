@@ -37,8 +37,8 @@ import SampleDownload from '@site/src/components/SampleDownload';
    `defaults/client.toml`:
 
    ```bash
-   export ADMIN_ACCOUNT="ih58..."
-   export RECEIVER_ACCOUNT="ih58..."
+   export ADMIN_ACCOUNT="i105..."
+   export RECEIVER_ACCOUNT="i105..."
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
@@ -124,7 +124,7 @@ cargo run
 אתם אמורים לראות פלט דומה ל:
 
 ```
-ih58... now holds:
+i105... now holds:
   50 units of coffee#wonderland
 ```
 

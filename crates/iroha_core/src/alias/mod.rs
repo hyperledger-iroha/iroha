@@ -324,17 +324,14 @@ mod tests {
         sync::Arc,
     };
 
-    use iroha_data_model::{account::AccountId, alias::AliasIndex, domain::DomainId, name::Name};
+    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
 
     use super::*;
 
     fn owner() -> AccountId {
         const SIGNATORY: &str =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-        AccountId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            SIGNATORY.parse().expect("public key"),
-        )
+        AccountId::new(SIGNATORY.parse().expect("public key"))
     }
 
     #[test]

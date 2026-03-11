@@ -354,10 +354,12 @@ pub struct KaigiRelayAllowlist {
 }
 
 impl KaigiRelayAllowlist {
-    /// Check whether the given relay account is included in the allowlist.
+    /// Check whether the given relay subject is included in the allowlist.
     #[must_use]
     pub fn contains(&self, relay_id: &AccountId) -> bool {
-        self.allowed_relays.contains(relay_id)
+        self.allowed_relays
+            .iter()
+            .any(|allowed| allowed.subject_id() == relay_id.subject_id())
     }
 }
 
@@ -568,10 +570,12 @@ impl KaigiRecord {
         }
     }
 
-    /// Determine if the participant list already contains `account`.
+    /// Determine if the participant list already contains `account` by subject.
     #[must_use]
     pub fn has_participant(&self, account: &AccountId) -> bool {
-        self.participants.iter().any(|p| p == account)
+        self.participants
+            .iter()
+            .any(|participant| participant.subject_id() == account.subject_id())
     }
 
     /// Determine if the roster already contains `commitment`.
@@ -646,7 +650,8 @@ impl KaigiRecord {
     /// Remove a participant if present.
     pub fn remove_participant(&mut self, account: &AccountId) -> bool {
         let len_before = self.participants.len();
-        self.participants.retain(|p| p != account);
+        self.participants
+            .retain(|participant| participant.subject_id() != account.subject_id());
         len_before != self.participants.len()
     }
 
@@ -734,7 +739,7 @@ mod tests {
     #[test]
     fn call_record_participant_management_is_deterministic() {
         let domain_id = DomainId::from_str("nexus").expect("domain id");
-        let host = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let host = AccountId::new(KeyPair::random().public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("daily").unwrap());
         let template = NewKaigi::with_defaults(call_id, host);
         let mut record = KaigiRecord::from_new(&template, 1234);
@@ -742,7 +747,7 @@ mod tests {
         assert_eq!(record.status, KaigiStatus::Active);
         assert!(record.participants.is_empty());
 
-        let bob = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let bob = AccountId::new(KeyPair::random().public_key().clone());
         record.push_participant(bob.clone());
         record.push_participant(bob.clone());
         assert_eq!(record.participants.len(), 1);
@@ -757,14 +762,14 @@ mod tests {
     #[test]
     fn call_record_preserves_creation_timestamp_and_schedule() {
         let domain_id = DomainId::from_str("nexus").expect("domain id");
-        let host = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let host = AccountId::new(KeyPair::random().public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("standup").unwrap());
         let mut template = NewKaigi::with_defaults(call_id, host);
         template.scheduled_start_ms = Some(7_777);
         template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
         template.relay_manifest = Some(KaigiRelayManifest {
             hops: vec![KaigiRelayHop {
-                relay_id: AccountId::new(domain_id, KeyPair::random().public_key().clone()),
+                relay_id: AccountId::new(KeyPair::random().public_key().clone()),
                 hpke_public_key: vec![0, 1, 2],
                 weight: 1,
             }],
@@ -786,8 +791,8 @@ mod tests {
 
     #[test]
     fn relay_hop_canonical_roundtrip() {
-        let domain = DomainId::from_str("relay-domain").expect("domain");
-        let relay = AccountId::new(domain, KeyPair::random().public_key().clone());
+        let _domain = DomainId::from_str("relay-domain").expect("domain");
+        let relay = AccountId::new(KeyPair::random().public_key().clone());
         let hop = KaigiRelayHop {
             relay_id: relay.clone(),
             hpke_public_key: vec![0xAA, 0xBB, 0xCC],
@@ -802,12 +807,12 @@ mod tests {
     fn new_kaigi_canonical_roundtrip() {
         let domain = DomainId::from_str("wonderland").expect("domain");
         let host_keypair = KeyPair::random();
-        let host = AccountId::new(domain.clone(), host_keypair.public_key().clone());
+        let host = AccountId::new(host_keypair.public_key().clone());
         let id = KaigiId::new(
             domain.clone(),
             Name::from_str("weekly-sync").expect("call name"),
         );
-        let relay = AccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+        let relay = AccountId::new(KeyPair::random().public_key().clone());
         let manifest = KaigiRelayManifest {
             hops: vec![KaigiRelayHop {
                 relay_id: relay,
@@ -872,7 +877,7 @@ mod tests {
 
         let domain = DomainId::from_str("kaigi").expect("domain");
         let host_key = KeyPair::random();
-        let host = AccountId::new(domain.clone(), host_key.public_key().clone());
+        let host = AccountId::new(host_key.public_key().clone());
         let call_id = KaigiId::new(domain.clone(), Name::from_str("privacy").expect("call"));
         let template = NewKaigi::with_defaults(call_id, host.clone());
         let mut record = KaigiRecord::from_new(&template, 0);
@@ -892,12 +897,12 @@ mod tests {
     fn relay_manifest_can_be_replaced_or_cleared() {
         let domain_id = DomainId::from_str("kaigi").expect("domain");
         let host_key = KeyPair::random();
-        let host = AccountId::new(domain_id.clone(), host_key.public_key().clone());
+        let host = AccountId::new(host_key.public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("route").expect("call"));
         let mut template = NewKaigi::with_defaults(call_id, host.clone());
         let initial_manifest = KaigiRelayManifest {
             hops: vec![KaigiRelayHop {
-                relay_id: AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone()),
+                relay_id: AccountId::new(KeyPair::random().public_key().clone()),
                 hpke_public_key: vec![1, 2, 3],
                 weight: 5,
             }],
@@ -911,15 +916,12 @@ mod tests {
         let updated_manifest = KaigiRelayManifest {
             hops: vec![
                 KaigiRelayHop {
-                    relay_id: AccountId::new(
-                        domain_id.clone(),
-                        KeyPair::random().public_key().clone(),
-                    ),
+                    relay_id: AccountId::new(KeyPair::random().public_key().clone()),
                     hpke_public_key: vec![4, 5, 6],
                     weight: 7,
                 },
                 KaigiRelayHop {
-                    relay_id: AccountId::new(domain_id, KeyPair::random().public_key().clone()),
+                    relay_id: AccountId::new(KeyPair::random().public_key().clone()),
                     hpke_public_key: vec![7, 8, 9],
                     weight: 3,
                 },
@@ -936,8 +938,8 @@ mod tests {
 
     #[test]
     fn relay_registration_norito_roundtrip() {
-        let domain_id = DomainId::from_str("kaigi").expect("domain");
-        let relay_id = AccountId::new(domain_id, KeyPair::random().public_key().clone());
+        let _domain_id = DomainId::from_str("kaigi").expect("domain");
+        let relay_id = AccountId::new(KeyPair::random().public_key().clone());
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
             hpke_public_key: vec![0xAA, 0xBB, 0xCC],
@@ -955,10 +957,7 @@ mod tests {
 
     #[test]
     fn relay_feedback_key_uses_sanitized_signatory() {
-        let relay = AccountId::new(
-            DomainId::from_str("overlay").expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let relay = AccountId::new(KeyPair::random().public_key().clone());
         let key = kaigi_relay_feedback_key(&relay).expect("feedback key");
         let sanitized_fragment = relay.signatory().to_string();
         assert_eq!(
@@ -969,17 +968,11 @@ mod tests {
 
     #[test]
     fn allowlist_membership_checks_handle_present_and_missing_relays() {
-        let relay = AccountId::new(
-            DomainId::from_str("overlay").expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let relay = AccountId::new(KeyPair::random().public_key().clone());
         let mut allowlist = KaigiRelayAllowlist::default();
         allowlist.allowed_relays.insert(relay.clone());
         assert!(allowlist.contains(&relay));
-        let other = AccountId::new(
-            DomainId::from_str("overlay").expect("domain"),
-            KeyPair::random().public_key().clone(),
-        );
+        let other = AccountId::new(KeyPair::random().public_key().clone());
         assert!(!allowlist.contains(&other));
     }
 

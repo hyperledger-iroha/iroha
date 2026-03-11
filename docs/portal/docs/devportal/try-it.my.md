@@ -95,6 +95,7 @@ npm run start
 အောက်ပါ အစိတ်အပိုင်းများသည် `docusaurus.config.js` မှ ဤတန်ဖိုးများကို ဖတ်ပြသည်-
 
 - **Swagger UI** — `/reference/torii-swagger` တွင် ပြန်ဆိုထားသည်။ ကြိုတင်ခွင့်ပြုပေးသည်။
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   တိုကင်တစ်ခုရှိသည့်အခါ ကိုင်ဆောင်သူအစီအစဥ်၊ `X-TryIt-Client` ဖြင့် တဂ်များတောင်းဆိုမှုများ၊
   `X-TryIt-Auth` ကို ထိုးသွင်းပြီး ပရောက်စီမှတစ်ဆင့် ခေါ်ဆိုမှုများကို ပြန်လည်ရေးသားသည့်အခါ၊
   `TRYIT_PROXY_PUBLIC_URL` ကို သတ်မှတ်ထားသည်။

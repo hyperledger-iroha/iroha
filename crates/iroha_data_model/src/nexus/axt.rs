@@ -879,14 +879,12 @@ mod tests {
         let descriptor = sample_descriptor(dsid);
         let binding = AxtBinding::new([0xAB; 32]);
         let alice_account = crate::account::AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
         )
         .to_string();
         let merchant_account = crate::account::AccountId::new(
-            "wonderland".parse().expect("domain id"),
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),

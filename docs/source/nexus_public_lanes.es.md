@@ -232,19 +232,19 @@ Este ISI es idempotente por `(lane_id, epoch)` y sustenta la contabilidad noctur
   - `iroha app nexus lane-report --summary` muestra entradas del catalogo de lanes, readiness de manifest,
     y modos de validadores (stake-elected vs admin-managed) para que operadores confirmen si la admision
     de staking esta habilitada para una lane.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     muestra marcadores de ciclo de vida/activacion (epoca objetivo pendiente, `activation_epoch` /
     `activation_height`, release de salida, slash id) junto con stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     refleja el endpoint `/stake` con hints de pending-unbond por par `(validator, staker)`.
   - Snapshots Torii para dashboards y SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, estado
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoca/altura de activacion,
       temporizadores de release, stake bonded, ultima epoca de recompensa.
-      `address_format=ih58|compressed` controla la renderizacion literal (IH58 es preferido; compressed (`sora`) es segunda mejor opcion solo Sora).
+      `canonical I105 literal rendering` controla la renderizacion literal (I105 es preferido; I105 es segunda mejor opcion solo Sora).
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
-      `staker`, monto bonded) mas temporizadores de pending unbond. `?validator=ih58...`
-      filtra la respuesta para dashboards enfocados en un validador; `address_format` aplica a
+      `staker`, monto bonded) mas temporizadores de pending unbond. `?validator=i105...`
+      filtra la respuesta para dashboards enfocados en un validador; `canonical I105 rendering` aplica a
       todos los literales.
   - ISIs de ciclo de vida usan el path de transaccion estandar (Torii
     `/v1/transactions` o el pipeline de instrucciones CLI). Payloads Norito JSON de ejemplo:

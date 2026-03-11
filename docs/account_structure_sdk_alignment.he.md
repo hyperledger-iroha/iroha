@@ -1,8 +1,8 @@
-# הערת פריסה של IH58 לבעלי SDK וקודקים
+# הערת פריסה של I105 לבעלי SDK וקודקים
 
 צוותים: SDK ‏Rust, SDK ‏TypeScript/JavaScript, SDK ‏Python, SDK ‏Kotlin, כלי קודקים
 
-הקשר: `docs/account_structure.md` משקף כעת את מימוש מזהה החשבון IH58 שבייצור.
+הקשר: `docs/account_structure.md` משקף כעת את מימוש מזהה החשבון I105 שבייצור.
 אנא יישרו את התנהגות ה‑SDK והבדיקות למפרט הקנוני.
 
 הפניות מרכזיות:
@@ -12,16 +12,11 @@
 - וקטורי fixtures — `fixtures/account/address_vectors.json`
 
 משימות:
-1. **פלט קנוני:** `AccountId::to_string()`/Display חייב להפיק IH58 בלבד
+1. **פלט קנוני:** `AccountId::to_string()`/Display חייב להפיק I105 בלבד
    (ללא סיומת `@domain`). ה‑hex הקנוני מיועד לדיבוג (`0x...`).
-2. **קלטים נתמכים:** מפרשים חייבים לקבל IH58 (מועדף), `sora` דחוס, ו‑hex קנוני
-   (רק `0x...`; hex ללא תחילית נדחה). הקלטים יכולים לכלול סיומת `@<domain>`
-   לרמזי ניתוב; כינויים `<label>@<domain>` (rejected legacy form) דורשים resolver. 
-   (multihash hex) נשאר נתמך.
-3. **Resolvers:** פיענוח IH58/sora ללא דומיין דורש resolver לבוחר דומיין אלא אם
-   הסלקטור הוא ברירת מחדל מובלעת (השתמשו בתווית הדומיין ברירת המחדל המוגדרת).
-   ליטרלים UAID (`uaid:...`) ו‑opaque (`opaque:...`) דורשים resolvers.
-4. **Checksum של IH58:** השתמשו ב‑Blake2b‑512 על `IH58PRE || prefix || payload`,
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **Checksum של I105:** השתמשו ב‑Blake2b‑512 על `I105PRE || prefix || payload`,
    וקחו את שני הבייטים הראשונים. בסיס האלפבית הדחוס הוא **105**.
 5. **גייטינג עקומות:** ברירת המחדל ב‑SDK היא Ed25519 בלבד. ספקו opt‑in מפורש
    ל‑ML‑DSA/GOST/SM (דגלי build ב‑Swift; `configureCurveSupport` ב‑JS/Android).

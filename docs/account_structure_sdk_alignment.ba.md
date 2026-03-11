@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# IH58 SDK өсөн ролл-аут иҫкәрмә & Кодексы хужалары
+# I105 SDK өсөн ролл-аут иҫкәрмә & Кодексы хужалары
 
 Командалар: Туст СДК, ТипСкрипт/JavaScript SDK, Python SDK, Котлин СДК, Кодк инструменталь
 
-Контекст: I18NI000000000X хәҙер IH58 иҫәбе ID ташыуҙы сағылдыра.
+Контекст: I18NI000000000X хәҙер I105 иҫәбе ID ташыуҙы сағылдыра.
 тормошҡа ашырыу. Зинһар, SDK тәртибе һәм тестар менән канон спецификацияһы тура килтерергә.
 
 Төп һылтанмалар:
@@ -24,17 +24,11 @@ translator: machine-google-reviewed
 - Фикстура векторҙары — `fixtures/account/address_vectors.json`
 
 Эш пункттары:
-1. **Каноник сығыш:** I18NI000000005X/Display IH58 ғына Эй
+1. **Каноник сығыш:** I18NI000000005X/Display I105 ғына Эй
    (юҡ I18NI000000006X суффиксы). Канон hex өсөн отладка (`0x...`).
-2. **Ҡабул ителгән индереүҙәр:** анализлаусылар ҡабул итергә тейеш IH58 (өҫтөнлөк), `sora` ҡыҫылған,
-   һәм канонлы гекс (`0x...` ғына; яланғас гекс кире ҡағыла). Инпуттар МАЙ ташый ан
-   Маршрутлаштырыу кәңәштәре өсөн `@<domain>` суффиксы; I18NI000000011X псевдонимы талап итә.
-   хәл итеүсе. Сеймал I18NI0000012X (күпхаш гекс) ярҙам итә.
-3. **Репочинкалар:** доменһыҙ IH58/сора анализлау домен-һайлаусы талап итә .
-   әгәр селектор асыҡланмаған ғәҙәттәгесә (конфигурацияланған ғәҙәттәгесә ҡулланыу
-   домен ярлығы). УАИД (`uaid:...`) һәм асыҡ булмаған (I18NI000000014X) литрҙар кәрәк
-   хәл итеүселәр.
-4. **IH58 тикшерелгән сумма:** ҡулланыу Blak2b-512 өҫтөндә I18NI000000015X, алыу
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **I105 тикшерелгән сумма:** ҡулланыу Blak2b-512 өҫтөндә I18NI000000015X, алыу
    тәүге 2 байт. Ҡыҫылған алфавит базаһы **105**.
 5. **Ҡырмыҫҡа ҡапҡаһы:** SDKs ғәҙәттәгесә Ed25519-тик. Асыҡтан-асыҡ опт-ин тәьмин итеү өсөн .
    ML-DSA/GOST/SM (Свифт төҙөү флагтары; JS/Android I18NI0000016X). Итергә

@@ -7,7 +7,7 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Account Address Checksum Incident Runbook
 sidebar_label: Checksum incidents
-description: Operational response for IH58 (preferred) / compressed (`sora`, second-best) checksum failures (ADDR-7).
+description: Operational response for I105 checksum failures (ADDR-7).
 translator: machine-google-reviewed
 translation_last_reviewed: 2026-02-07
 ---

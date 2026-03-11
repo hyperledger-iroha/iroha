@@ -142,9 +142,8 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
     let receiver_keys = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
     let spend_keys = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
 
-    let controller = AccountId::of(domain.clone(), controller_keys.public_key().clone());
-    let receiver = AccountId::of(domain.clone(), receiver_keys.public_key().clone());
-
+    let controller = AccountId::of(controller_keys.public_key().clone());
+    let receiver = AccountId::of(receiver_keys.public_key().clone());
     let asset_definition =
         AssetDefinitionId::new(domain.clone(), Name::from_str("xor").expect("asset name"));
     let asset = AssetId::new(asset_definition, controller.clone());

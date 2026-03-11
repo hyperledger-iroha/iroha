@@ -36,11 +36,8 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
 );
 
 fn encoded_account(public_key_hex: &str) -> String {
-    iroha_data_model::account::AccountId::new(
-        "wonderland".parse().expect("domain id"),
-        public_key_hex.parse().expect("public key"),
-    )
-    .to_string()
+    iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
+        .to_string()
 }
 
 fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {

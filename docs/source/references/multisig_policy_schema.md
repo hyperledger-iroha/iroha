@@ -74,6 +74,9 @@ computed from the spec once validation succeeds.
   private key, because multisig controllers never sign transactions directly.
 - Newly registered controllers persist `multisig/spec` metadata and are rekeyed
   to the canonical multisig account id.
+- Signatories do not have to be pre-registered. Missing signatory accounts are
+  materialized during successful `MultisigRegister`/`AddSignatory` execution and
+  tagged with `iroha:created_via = "multisig"` metadata.
 - JSON decoding errors when the `account` field is omitted, so clients must send
   it even though the final account id is deterministic.
 - Signatories must be single-key accounts; nested multisig controllers are

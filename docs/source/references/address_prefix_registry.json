@@ -10,7 +10,7 @@
         "decimal": 753,
         "hex": "0x02F1"
       },
-      "ih58_prefix": {
+      "i105_prefix": {
         "decimal": 753,
         "hex": "0x02F1"
       },
@@ -28,7 +28,7 @@
         "decimal": 369,
         "hex": "0x0171"
       },
-      "ih58_prefix": {
+      "i105_prefix": {
         "decimal": 369,
         "hex": "0x0171"
       },
@@ -46,7 +46,7 @@
         "decimal": 0,
         "hex": "0x0000"
       },
-      "ih58_prefix": {
+      "i105_prefix": {
         "decimal": 0,
         "hex": "0x0000"
       },

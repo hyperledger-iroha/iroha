@@ -16,9 +16,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{
-    GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
-};
+use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use iroha_version::BuildLine;
@@ -38,7 +36,7 @@ pub fn default_manifest(
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let ivm_dir = ivm_dir.into();
     let builder = GenesisBuilder::new_without_executor(chain_id, ivm_dir);
-    let genesis_account_id = AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_public_key.clone());
+    let genesis_account_id = AccountId::new(genesis_public_key.clone());
 
     let mut meta = Metadata::default();
     meta.insert("key".parse()?, Json::new("value"));

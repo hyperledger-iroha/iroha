@@ -18,11 +18,11 @@ translator: manual
 - `authority` と `private_key` が提供された場合（または ballot DTO の `private_key` 指定時）、Torii はトランザクションを署名・送信し、`tx_instructions` は引き続き返します。
 - それ以外はクライアントが `authority` と `chain_id` を使って `SignedTransaction` を組み立て、署名後に `/transaction` へ POST します。
 - CLI 補助コマンド:
-  - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
-  - `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
     - `--lock-amount` / `--lock-duration-blocks` の別名をサポートし、ZK コマンドと同様に fingerprint とヒントをサマリーと JSON へ出力します。
 
 ## エンドポイント一覧
@@ -37,7 +37,7 @@ translator: manual
     "abi_hash": "blake2b32:…" | "…64hex",
     "abi_version": "1",
     "window": { "lower": 12345, "upper": 12400 },
-    "authority": "ih58...?",
+    "authority": "i105...?",
     "private_key": "…?"
   }
   ```
@@ -49,14 +49,14 @@ translator: manual
 
 ### Contracts API（デプロイ）
 - POST `/v1/contracts/deploy`
-  - リクエスト: `{ "authority": "ih58...", "private_key": "…", "code_b64": "…" }`
+  - リクエスト: `{ "authority": "i105...", "private_key": "…", "code_b64": "…" }`
   - 挙動: IVM プログラム本体から `code_hash` を計算し、ヘッダの `abi_version` から `abi_hash` を導出したうえで、`RegisterSmartContractCode`（マニフェスト）と `RegisterSmartContractBytes`（完全な `.to` バイト列）を `authority` の代理で送信します。
   - レスポンス: `{ "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }`
   - 関連エンドポイント:
     - GET `/v1/contracts/code/{code_hash}` → 保管済みマニフェストを返す
     - GET `/v1/contracts/code-bytes/{code_hash}` → `{ "code_b64": "…" }` を返す
 - POST `/v1/contracts/instance`
-  - リクエスト: `{ "authority": "ih58...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }`
+  - リクエスト: `{ "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }`
   - 挙動: バイトコードのデプロイと `(namespace, contract_id)` へのバインドを単一トランザクションで行います（`RegisterSmartContractCode` + `RegisterSmartContractBytes` + `ActivateContractInstance`）。
   - レスポンス: `{ "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }`
 
@@ -67,7 +67,7 @@ translator: manual
   - オペレーターは `id = "max_contract_code_bytes"`、数値ペイロードの `SetParameter(Custom)` 命令で調整できます。
 
 ### POST `/v1/gov/ballots/zk`
-- リクエスト: `{ "authority": "ih58...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": { … } }`
+- リクエスト: `{ "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": { … } }`
 - レスポンス: `{ "ok": true, "accepted": true, "tx_instructions": [{ … }] }`
 - 備考:
   - 回路の公開入力に `owner`, `amount`, `duration_blocks` が含まれ、構成済みの検証鍵に対して証明が通ると、ノードは `election_id` と `owner` に対するガバナンスロックを新規作成または延長します。方向性（賛否）は公開されず `unknown` として扱われ、金額と有効期限のみ更新されます。再投票は単調増加であり、金額と有効期限は増加方向にしか変えられません（ノードは `max(amount, prev.amount)` と `max(expiry, prev.expiry)` を適用します）。
@@ -75,12 +75,12 @@ translator: manual
   - コントラクトは `SubmitBallot` をキューに入れる前に `ZK_VOTE_VERIFY_BALLOT` を呼び出す必要があり、ホストはワンショットラッチを強制します。
 
 ### POST `/v1/gov/ballots/plain`
-- リクエスト: `{ "authority": "ih58...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }`
+- リクエスト: `{ "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }`
 - レスポンス: `{ "ok": true, "accepted": true, "tx_instructions": [{ … }] }`
 - 備考: 再投票は延長のみ許可され、既存ロックの金額や期限を減らすことはできません。`owner` はトランザクションの `authority` と一致している必要があります。最小学習期間は `conviction_step_blocks` に基づきます。
 
 ### POST `/v1/gov/finalize`
-- リクエスト: `{ "referendum_id": "r1", "proposal_id": "…64hex", "authority": "ih58...?", "private_key": "…?" }`
+- リクエスト: `{ "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }`
 - レスポンス: `{ "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }`
 - オンチェーン効果（現時点のスケルトン）: 承認済みデプロイ提案を実行すると、`code_hash` をキーに期待される `abi_hash` を持つ最小限の `ContractManifest` を登録し、提案を Enacted に設定します。すでに同じ `code_hash` に別の `abi_hash` を持つマニフェストが存在する場合は enact を拒否します。
 - 備考:
@@ -89,7 +89,7 @@ translator: manual
   - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
 ### POST `/v1/gov/enact`
-- リクエスト: `{ "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "…?" }`
+- リクエスト: `{ "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }`
 - レスポンス: `{ "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }`
 - 備考: `authority`/`private_key` が提供されると Torii が署名・送信し、それ以外は命令スケルトンを返します。`preimage_hash` は任意で現在は情報目的のみ。
 
@@ -110,14 +110,14 @@ translator: manual
 - リクエスト（v1 形式 DTO）
   ```json
   {
-    "authority": "ih58...",
+    "authority": "i105...",
     "chain_id": "00000000-0000-0000-0000-000000000000",
     "private_key": "…?",
     "election_id": "ref-1",
     "backend": "halo2/ipa",
     "envelope_b64": "AAECAwQ=",
     "root_hint": "0x…64hex?",
-    "owner": "ih58...?",
+    "owner": "i105...?",
     "amount": "100?",
     "duration_blocks": 6000?,
     "direction": "Aye|Nay|Abstain?",
@@ -131,7 +131,7 @@ translator: manual
 - リクエスト
   ```json
   {
-    "authority": "ih58...",
+    "authority": "i105...",
     "chain_id": "00000000-0000-0000-0000-000000000000",
     "private_key": "…?",
     "election_id": "ref-1",

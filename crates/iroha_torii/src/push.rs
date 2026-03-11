@@ -224,7 +224,7 @@ impl PushBridge {
 mod tests {
     use super::*;
 
-    const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     #[test]
     fn disabled_rejected() {
@@ -234,7 +234,7 @@ mod tests {
         });
         let err = bridge
             .register_device(RegisterDeviceRequest {
-                account_id: TEST_ACCOUNT_IH58.to_string(),
+                account_id: TEST_ACCOUNT_I105.to_string(),
                 platform: "FCM".to_string(),
                 token: "t0".to_string(),
                 topics: None,
@@ -252,7 +252,7 @@ mod tests {
         });
         let err = bridge
             .register_device(RegisterDeviceRequest {
-                account_id: TEST_ACCOUNT_IH58.to_string(),
+                account_id: TEST_ACCOUNT_I105.to_string(),
                 platform: "FCM".to_string(),
                 token: "t1".to_string(),
                 topics: None,
@@ -271,7 +271,7 @@ mod tests {
         });
         let err = bridge
             .register_device(RegisterDeviceRequest {
-                account_id: TEST_ACCOUNT_IH58.to_string(),
+                account_id: TEST_ACCOUNT_I105.to_string(),
                 platform: "FCM".to_string(),
                 token: "t2".to_string(),
                 topics: Some(vec!["a".into(), "b".into(), "c".into()]),
@@ -289,7 +289,7 @@ mod tests {
         });
         bridge
             .register_device(RegisterDeviceRequest {
-                account_id: TEST_ACCOUNT_IH58.to_string(),
+                account_id: TEST_ACCOUNT_I105.to_string(),
                 platform: "FCM".to_string(),
                 token: "token-123".to_string(),
                 topics: Some(vec!["incoming".into()]),

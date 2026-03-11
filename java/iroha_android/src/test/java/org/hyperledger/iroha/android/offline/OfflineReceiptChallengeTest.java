@@ -13,6 +13,10 @@ public final class OfflineReceiptChallengeTest {
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
   private static final String SAMPLE_NONCE_HEX =
       "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+  private static final String SAMPLE_RECEIVER_ACCOUNT_ID =
+      "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan";
+  private static final String SAMPLE_ASSET_ID =
+      "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c0000000000000005c0d942ec37b449c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230413938424146423036363343453038443735454244353036464543333841383445353736413743394230383937363933454434423034464439454632443138442f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000757364";
 
   public static void main(final String[] args) throws Exception {
     computeAcceptsScaledAmount();
@@ -29,8 +33,8 @@ public final class OfflineReceiptChallengeTest {
     OfflineReceiptChallenge.compute(
         "testnet",
         "inv-frac",
-        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
-        "norito:00#6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+        SAMPLE_RECEIVER_ACCOUNT_ID,
+        SAMPLE_ASSET_ID,
         "12.5",
         1_700_000_000_000L,
         SAMPLE_CERTIFICATE_ID_HEX,
@@ -49,8 +53,8 @@ public final class OfflineReceiptChallengeTest {
         OfflineReceiptChallenge.compute(
             "testnet",
             "inv-android-tests",
-            "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
-            "norito:00#6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+            SAMPLE_RECEIVER_ACCOUNT_ID,
+            SAMPLE_ASSET_ID,
             "100",
             1_700_000_000_000L,
             SAMPLE_CERTIFICATE_ID_HEX,

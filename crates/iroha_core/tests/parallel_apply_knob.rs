@@ -21,11 +21,12 @@ fn build_world() -> (
 ) {
     let chain_id = ChainId::from("chain");
     let (alice_id, alice_kp) = iroha_test_samples::gen_account_in("wonderland");
-    let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition =
         AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
             .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id)).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

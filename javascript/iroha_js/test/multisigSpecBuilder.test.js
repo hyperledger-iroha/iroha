@@ -15,8 +15,8 @@ const BOB_KEY = Buffer.from(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
   "hex",
 );
-const ALICE_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: ALICE_KEY }).toIH58();
-const BOB_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: BOB_KEY }).toIH58();
+const ALICE_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: ALICE_KEY }).toI105();
+const BOB_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: BOB_KEY }).toI105();
 
 test("builder produces deterministic payload and json", () => {
   const builder = new MultisigSpecBuilder()

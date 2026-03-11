@@ -75,14 +75,6 @@ pub mod asset_definition {
     use super::*;
 
     permission! {
-        /// Permission to register an asset definition within the provided domain.
-        pub struct CanRegisterAssetDefinition {
-            /// Domain in which the asset definition may be registered.
-            pub domain: DomainId,
-        }
-    }
-
-    permission! {
         /// Permission to unregister the specified asset definition.
         pub struct CanUnregisterAssetDefinition {
             /// Identifier of the asset definition targeted by the permission.
@@ -507,11 +499,11 @@ pub mod soranet {
 
 #[cfg(test)]
 mod tests {
-    use super::asset_definition::CanRegisterAssetDefinition;
+    use super::account::CanRegisterAccount;
 
     #[test]
-    fn can_register_asset_definition_serializes_as_json_string_field() {
-        let perm = CanRegisterAssetDefinition {
+    fn can_register_account_serializes_as_json_string_field() {
+        let perm = CanRegisterAccount {
             domain: "wonderland".parse().expect("valid domain"),
         };
 

@@ -11,8 +11,8 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_config::parameters::defaults as config_defaults;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
+    account::AccountId,
     account::NewAccount,
-    account::ScopedAccountId,
     account::rekey::AccountLabel,
     events::{
         EventFilterBox,
@@ -60,7 +60,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::{CanModifyAccountMetadata, CanRegisterAccount},
     asset::{CanMintAssetWithDefinition, CanModifyAssetMetadataWithDefinition},
-    asset_definition::{CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition},
+    asset_definition::CanModifyAssetDefinitionMetadata,
     domain::{CanModifyDomainMetadata, CanRegisterDomain},
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
@@ -94,7 +94,7 @@ use crate::smart_contracts;
 /// Record describing an account and its signing material.
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
-    pub id: ScopedAccountId,
+    pub id: AccountId,
     pub key_pair: KeyPair,
     pub uaid: Option<UniversalAccountId>,
 }
@@ -222,8 +222,8 @@ fn now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
-fn account_from_record(record: &AccountRecord) -> NewAccount {
-    let builder = Account::new(record.id.clone());
+fn account_from_record(record: &AccountRecord, domain: &DomainId) -> NewAccount {
+    let builder = Account::new(record.id.clone().to_account_id(domain.clone()));
     if let Some(uaid) = record.uaid {
         builder.with_uaid(Some(uaid))
     } else {
@@ -267,8 +267,7 @@ pub fn npos_post_topology_instructions(
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index);
-        let validator_id =
-            ScopedAccountId::new(nexus_domain.clone(), key_pair.public_key().clone());
+        let validator_id = AccountId::new(key_pair.public_key().clone());
         instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
@@ -299,7 +298,7 @@ pub fn prepare_state(
     let domain_name = base_domain.name.to_string();
 
     let treasury_key = KeyPair::random();
-    let treasury_id = ScopedAccountId::new(base_domain.clone(), treasury_key.public_key().clone());
+    let treasury_id = AccountId::new(treasury_key.public_key().clone());
     let treasury = AccountRecord {
         id: treasury_id,
         key_pair: treasury_key,
@@ -309,7 +308,7 @@ pub fn prepare_state(
     let mut users = Vec::with_capacity(effective_accounts);
     for _ in 0..effective_accounts {
         let key = KeyPair::random();
-        let account_id = ScopedAccountId::new(base_domain.clone(), key.public_key().clone());
+        let account_id = AccountId::new(key.public_key().clone());
         users.push(AccountRecord {
             id: account_id,
             key_pair: key,
@@ -390,7 +389,7 @@ pub fn prepare_state(
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
-        let gas_account = Account::new(gas_account_id.clone())
+        let gas_account = Account::new(gas_account_id.clone().to_account_id(ivm_domain.clone()))
             .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
 
         let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
@@ -422,15 +421,14 @@ pub fn prepare_state(
         let mut validator_accounts = Vec::new();
         for index in 0..effective_peers {
             let key_pair = peer_keypair(index);
-            let account_id =
-                ScopedAccountId::new(nexus_domain.clone(), key_pair.public_key().clone());
+            let account_id = AccountId::new(key_pair.public_key().clone());
             validator_accounts.push(AccountRecord {
                 id: account_id.clone(),
                 key_pair,
                 uaid: None,
             });
             nexus_genesis.push(InstructionBox::from(Register::account(Account::new(
-                account_id,
+                account_id.to_account_id(nexus_domain.clone()),
             ))));
         }
 
@@ -478,11 +476,11 @@ pub fn prepare_state(
     )));
 
     genesis_tx.push(InstructionBox::from(Register::account(
-        account_from_record(&treasury),
+        account_from_record(&treasury, &base_domain),
     )));
     for account in &users {
         genesis_tx.push(InstructionBox::from(Register::account(
-            account_from_record(account),
+            account_from_record(account, &base_domain),
         )));
     }
     genesis_tx.extend(nexus_genesis);
@@ -498,12 +496,6 @@ pub fn prepare_state(
     )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanRegisterAccount {
-            domain: base_domain.clone(),
-        },
-        treasury.id.clone(),
-    )));
-    genesis_tx.push(InstructionBox::from(Grant::account_permission(
-        CanRegisterAssetDefinition {
             domain: base_domain.clone(),
         },
         treasury.id.clone(),
@@ -600,7 +592,7 @@ pub fn prepare_state(
     if let (Some(stake_amount), Some(setup)) = (npos_bootstrap_stake, state.nexus_staking.as_ref())
     {
         let lane = LaneId::SINGLE;
-        let validator_ids: Vec<ScopedAccountId> = setup
+        let validator_ids: Vec<AccountId> = setup
             .validator_accounts
             .iter()
             .map(|record| record.id.clone())
@@ -846,9 +838,9 @@ const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
 struct NexusStakingSetup {
     stake_asset: AssetDefinitionId,
     fee_asset: AssetDefinitionId,
-    fee_sink: ScopedAccountId,
-    stake_escrow: ScopedAccountId,
-    slash_sink: ScopedAccountId,
+    fee_sink: AccountId,
+    stake_escrow: AccountId,
+    slash_sink: AccountId,
     validator_accounts: Vec<AccountRecord>,
 }
 
@@ -863,15 +855,15 @@ pub struct ChaosState {
     lanes: Vec<LaneId>,
     created_domains: HashSet<DomainId>,
     registered_roles: Vec<RoleId>,
-    role_memberships: HashMap<RoleId, HashSet<ScopedAccountId>>,
+    role_memberships: HashMap<RoleId, HashSet<AccountId>>,
     registered_triggers: Vec<TriggerId>,
     repeatable_triggers: Vec<TriggerId>,
     call_triggers: Vec<TriggerId>,
     asset_definitions: HashSet<AssetDefinitionId>,
     asset_definitions_unclaimed: HashSet<AssetDefinitionId>,
     asset_instances: HashSet<AssetId>,
-    nft_holdings: HashMap<NftId, ScopedAccountId>,
-    account_metadata: HashMap<ScopedAccountId, HashSet<Name>>,
+    nft_holdings: HashMap<NftId, AccountId>,
+    account_metadata: HashMap<AccountId, HashSet<Name>>,
     domain_metadata: HashMap<DomainId, HashSet<Name>>,
     asset_definition_metadata: HashMap<AssetDefinitionId, HashSet<Name>>,
     asset_metadata: HashMap<AssetId, HashSet<Name>>,
@@ -879,8 +871,8 @@ pub struct ChaosState {
     trigger_repetitions: HashMap<TriggerId, u32>,
     pending_trigger_repetitions: HashMap<TriggerId, u32>,
     space_directory_manifests: HashMap<UniversalAccountId, HashSet<DataSpaceId>>,
-    public_lane_validators: HashMap<LaneId, HashSet<ScopedAccountId>>,
-    public_lane_stakes: HashMap<(LaneId, ScopedAccountId, ScopedAccountId), u64>,
+    public_lane_validators: HashMap<LaneId, HashSet<AccountId>>,
+    public_lane_stakes: HashMap<(LaneId, AccountId, AccountId), u64>,
     pending_unbonds: Vec<PendingUnbond>,
     pending_replication_orders: Vec<ReplicationOrderId>,
     sorafs_replication: Option<SorafsReplicationSeed>,
@@ -892,8 +884,8 @@ pub struct ChaosState {
 #[derive(Clone, Debug)]
 struct PendingUnbond {
     lane: LaneId,
-    validator: ScopedAccountId,
-    staker: ScopedAccountId,
+    validator: AccountId,
+    staker: AccountId,
     request_id: Hash,
 }
 
@@ -1001,7 +993,7 @@ impl ChaosState {
         let _ = self.bump_account();
         let key = KeyPair::random();
         let uaid = self.next_uaid();
-        let account_id = ScopedAccountId::new(self.base_domain.clone(), key.public_key().clone());
+        let account_id = AccountId::new(key.public_key().clone());
         AccountRecord {
             id: account_id,
             key_pair: key,
@@ -1164,7 +1156,7 @@ impl ChaosState {
     fn plan_register_account(&mut self) -> TransactionPlan {
         let _suffix = self.bump_account();
         let key = KeyPair::random();
-        let account_id = ScopedAccountId::new(self.base_domain.clone(), key.public_key().clone());
+        let account_id = AccountId::new(key.public_key().clone());
         let record = AccountRecord {
             id: account_id.clone(),
             key_pair: key,
@@ -1175,7 +1167,7 @@ impl ChaosState {
             state_updates: Vec::new(),
             label: "register_account",
             instructions: vec![InstructionBox::from(Register::account(Account::new(
-                account_id,
+                account_id.to_account_id(self.base_domain.clone()),
             )))],
             signer: self.treasury.clone(),
             expect_success: true,
@@ -1188,7 +1180,7 @@ impl ChaosState {
             state_updates: Vec::new(),
             label: "duplicate_account",
             instructions: vec![InstructionBox::from(Register::account(Account::new(
-                candidate.id.clone(),
+                candidate.id.clone().to_account_id(self.base_domain.clone()),
             )))],
             signer: self.treasury.clone(),
             expect_success: false,
@@ -1197,7 +1189,7 @@ impl ChaosState {
 
     fn plan_register_uaid_account(&mut self) -> TransactionPlan {
         let record = self.allocate_uaid_record();
-        let account = account_from_record(&record);
+        let account = account_from_record(&record, &self.base_domain);
         self.track_account(record.clone());
         TransactionPlan {
             state_updates: Vec::new(),
@@ -1779,7 +1771,7 @@ impl ChaosState {
             .choose(rng)
             .expect("role list not empty")
             .clone();
-        let assigned_accounts: HashSet<ScopedAccountId> = self
+        let assigned_accounts: HashSet<AccountId> = self
             .role_memberships
             .get(&role)
             .cloned()
@@ -1805,7 +1797,7 @@ impl ChaosState {
             });
         }
 
-        let assigned_vec: Vec<ScopedAccountId> = assigned_accounts.into_iter().collect();
+        let assigned_vec: Vec<AccountId> = assigned_accounts.into_iter().collect();
         let fallback_account = if let Some(candidate) = assigned_vec.choose(rng) {
             candidate.clone()
         } else {
@@ -1832,7 +1824,7 @@ impl ChaosState {
             .choose(rng)
             .expect("role list not empty")
             .clone();
-        let existing_members: Vec<ScopedAccountId> = self
+        let existing_members: Vec<AccountId> = self
             .role_memberships
             .get(&role)
             .map(|set| set.iter().cloned().collect())
@@ -2072,7 +2064,7 @@ impl ChaosState {
             uaid
         } else {
             let record = self.allocate_uaid_record();
-            let account = account_from_record(&record);
+            let account = account_from_record(&record, &self.base_domain);
             instructions.push(InstructionBox::from(Register::account(account)));
             let uaid = record
                 .uaid
@@ -2672,11 +2664,7 @@ impl ChaosState {
             .ok_or_else(|| eyre!("no accounts available"))
     }
 
-    fn random_user_except(
-        &self,
-        rng: &mut StdRng,
-        excluded: &ScopedAccountId,
-    ) -> Result<AccountRecord> {
+    fn random_user_except(&self, rng: &mut StdRng, excluded: &AccountId) -> Result<AccountRecord> {
         let candidates: Vec<_> = self
             .users
             .iter()
@@ -2690,7 +2678,7 @@ impl ChaosState {
             .ok_or_else(|| eyre!("no alternative accounts available"))
     }
 
-    fn account_by_id(&self, id: &ScopedAccountId) -> Option<AccountRecord> {
+    fn account_by_id(&self, id: &AccountId) -> Option<AccountRecord> {
         if &self.treasury.id == id {
             Some(self.treasury.clone())
         } else {
@@ -2739,7 +2727,7 @@ impl ChaosState {
             .unwrap_or_else(|| self.asset_numeric.clone())
     }
 
-    fn fee_asset_and_sink(&self) -> (AssetDefinitionId, ScopedAccountId) {
+    fn fee_asset_and_sink(&self) -> (AssetDefinitionId, AccountId) {
         self.nexus_staking
             .as_ref()
             .map(|setup| (setup.fee_asset.clone(), setup.fee_sink.clone()))
@@ -2749,8 +2737,8 @@ impl ChaosState {
     fn add_public_lane_stake_share(
         &mut self,
         lane: LaneId,
-        validator: &ScopedAccountId,
-        staker: &ScopedAccountId,
+        validator: &AccountId,
+        staker: &AccountId,
         amount: u64,
     ) {
         let key = (lane, validator.clone(), staker.clone());
@@ -2761,8 +2749,8 @@ impl ChaosState {
     fn available_public_lane_stake_share(
         &self,
         lane: LaneId,
-        validator: &ScopedAccountId,
-        staker: &ScopedAccountId,
+        validator: &AccountId,
+        staker: &AccountId,
     ) -> u64 {
         let key = (lane, validator.clone(), staker.clone());
         self.public_lane_stakes.get(&key).copied().unwrap_or(0)
@@ -2771,8 +2759,8 @@ impl ChaosState {
     fn reduce_public_lane_stake_share(
         &mut self,
         lane: LaneId,
-        validator: &ScopedAccountId,
-        staker: &ScopedAccountId,
+        validator: &AccountId,
+        staker: &AccountId,
         amount: u64,
     ) -> bool {
         let key = (lane, validator.clone(), staker.clone());

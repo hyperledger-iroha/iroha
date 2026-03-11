@@ -37,7 +37,7 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "ih58...",
+  authority: "i105...",
   instructions: [
     buildMintAssetInstruction({
       assetId: "norito:4e52543000000001",

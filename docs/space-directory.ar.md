@@ -163,7 +163,7 @@ POST /v1/space-directory/manifests
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -219,7 +219,7 @@ POST /v1/space-directory/manifests/revoke
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -238,7 +238,7 @@ POST /v1/space-directory/manifests/revoke
 تجمع الـ profiles كل ما يحتاجه validator جديد قبل الاتصال. Fixture
 `profile/cbdc_lane_profile.json` يوضح:
 
-- مصدر الحوكمة/الكورم (`ih58...` + معرف تذكرة الأدلة).
+- مصدر الحوكمة/الكورم (`i105...` + معرف تذكرة الأدلة).
 - مجموعة الـ validators + الكورم والمساحات المحمية (`cbdc`, `gov`).
 - ملف DA (الفئة A، قائمة الشهود (attesters)، وتيرة التدوير).
 - معرف مجموعة composability والـ whitelist التي تربط UAIDs مع capability manifests.

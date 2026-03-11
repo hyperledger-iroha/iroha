@@ -20,7 +20,7 @@ Utilisez ce modele lorsqu'un repo (bilateral ou tri-party) reference un custodia
 | Champ | Valeur |
 |-------|-------|
 | Identifiant d'accord | `<repo-yyMMdd-XX>` |
-| ID de compte custodian | `<ih58...>` |
+| ID de compte custodian | `<i105...>` |
 | Prepare par / date | `<custodian ops lead>` |
 | Contacts desk reconnus | `<desk lead + counterparty>` |
 | Repertoire de preuves | ``artifacts/finance/repo/<slug>/`` |

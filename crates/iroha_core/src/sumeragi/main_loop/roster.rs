@@ -586,7 +586,6 @@ mod tests {
         metadata::Metadata,
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         peer::Peer,
-        prelude::DomainId,
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_primitives::unique_vec::UniqueVec;
@@ -914,11 +913,10 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
-        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let account_active = AccountId::new(keypair_active.public_key().clone());
+        let account_pending = AccountId::new(keypair_pending.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
 
         {
@@ -977,13 +975,12 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypairs: Vec<KeyPair> = (0..3)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let accounts: Vec<AccountId> = keypairs
             .iter()
-            .map(|kp| AccountId::new(domain.clone(), kp.public_key().clone()))
+            .map(|kp| AccountId::new(kp.public_key().clone()))
             .collect();
         let peers: Vec<PeerId> = keypairs
             .iter()
@@ -1048,11 +1045,10 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_inactive = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_active = AccountId::new(domain.clone(), keypair_active.public_key().clone());
-        let account_inactive = AccountId::new(domain, keypair_inactive.public_key().clone());
+        let account_active = AccountId::new(keypair_active.public_key().clone());
+        let account_inactive = AccountId::new(keypair_inactive.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
         let peer_inactive = PeerId::new(keypair_inactive.public_key().clone());
 
@@ -1119,13 +1115,12 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_a = AccountId::new(domain.clone(), keypair_a.public_key().clone());
-        let account_b = AccountId::new(domain.clone(), keypair_b.public_key().clone());
-        let account_c = AccountId::new(domain, keypair_c.public_key().clone());
+        let account_a = AccountId::new(keypair_a.public_key().clone());
+        let account_b = AccountId::new(keypair_b.public_key().clone());
+        let account_c = AccountId::new(keypair_c.public_key().clone());
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
 
@@ -1181,15 +1176,12 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_active_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let keypair_pending = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_active_a =
-            AccountId::new(domain.clone(), keypair_active_a.public_key().clone());
-        let account_active_b =
-            AccountId::new(domain.clone(), keypair_active_b.public_key().clone());
-        let account_pending = AccountId::new(domain, keypair_pending.public_key().clone());
+        let account_active_a = AccountId::new(keypair_active_a.public_key().clone());
+        let account_active_b = AccountId::new(keypair_active_b.public_key().clone());
+        let account_pending = AccountId::new(keypair_pending.public_key().clone());
         let peer_active_a = PeerId::new(keypair_active_a.public_key().clone());
         let peer_active_b = PeerId::new(keypair_active_b.public_key().clone());
         let peer_pending = PeerId::new(keypair_pending.public_key().clone());
@@ -1261,9 +1253,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_active = AccountId::new(domain, keypair_active.public_key().clone());
+        let account_active = AccountId::new(keypair_active.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
 
         {
@@ -1311,9 +1302,8 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
 
-        let domain: DomainId = "validators".parse().expect("domain id");
         let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let account_active = AccountId::new(domain, keypair_active.public_key().clone());
+        let account_active = AccountId::new(keypair_active.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
 
         {

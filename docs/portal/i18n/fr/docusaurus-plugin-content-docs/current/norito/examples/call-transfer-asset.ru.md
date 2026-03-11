@@ -19,9 +19,9 @@ Il est possible que, pour votre Kotodama, vous puissiez utiliser les instruction
 
 ## Пошаговый обход реестра
 
-- Activez le contrat de maintenance (par exemple `ih58...`) en cliquant sur le bouton de commande et activez le rôle de maintenance `CanTransfer`. ou une résolution équivalente.
-- Vous avez besoin de votre `call_transfer_asset` pour avoir 5 éditions de contrat de compte sur `ih58...`, par exemple L'automation peut alors s'occuper de votre hôte.
-- Vérifiez les soldes de `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` et activez le système qui met à jour le système de garde du contexte. avant.
+- Activez le contrat de maintenance (par exemple `i105...`) en cliquant sur le bouton de commande et activez le rôle de maintenance `CanTransfer`. ou une résolution équivalente.
+- Vous avez besoin de votre `call_transfer_asset` pour avoir 5 éditions de contrat de compte sur `i105...`, par exemple L'automation peut alors s'occuper de votre hôte.
+- Vérifiez les soldes de `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` et activez le système qui met à jour le système de garde du contexte. avant.
 
 ## SDK de démarrage rapide
 
@@ -36,8 +36,8 @@ Il est possible que, pour votre Kotodama, vous puissiez utiliser les instruction
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

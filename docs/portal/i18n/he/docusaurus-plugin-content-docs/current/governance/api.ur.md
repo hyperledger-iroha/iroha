@@ -32,21 +32,21 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "ih58...?",
+      "authority": "i105...?",
       "private_key": "...?"
     }
   - תגובה (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validation: nodes فراہم کردہ `abi_version` کے لئے `abi_hash` کو canonicalize کرتے ہیں اور mismatch پر reject کرتے ہیں۔ `abi_version = "v1"` کے لئے متوقع value `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ہے۔Contracts API (פריסה)
 - POST `/v1/contracts/deploy`
-  - בקשה: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - בקשה: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Behavior: IVM پروگرام باڈی سے `code_hash` اور header `abi_version` سے `abi_hash` نکالتا ہے، پھر `RegisterSmartContractCode` (manifest) اور `RegisterSmartContractBytes` (مکمل `.to` bytes) `authority` کی طرف سے سبمٹ کرتا ہے۔
   - תגובה: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - קשור:
     - GET `/v1/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
     - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
 - POST `/v1/contracts/instance`
-  - בקשה: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - בקשה: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Behavior: فراہم کردہ bytecode deploy کرتا ہے اور `ActivateContractInstance` کے ذریعے `(namespace, contract_id)` mapping فوراً فعال کرتا ہے۔
   - תגובה: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -59,11 +59,11 @@ translation_last_reviewed: 2026-02-07
   - Errors: malformed hex input پر HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` envelope اور decoder error message واپس کرتا ہے۔
 - POST `/v1/aliases/resolve`
   - בקשה: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notes: ISO bridge runtime staging درکار ہے (`[iso_bridge.account_aliases]` in `iroha_config`)۔ Torii whitespace ہٹا کر اور uppercase بنا کر lookup کرتا ہے۔ alias نہ ہو تو 404 اور ISO bridge runtime بند ہو تو 503 دیتا ہے۔
 - POST `/v1/aliases/resolve_index`
   - בקשה: { "אינדקס": 0 }
-  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notes: alias indices configuration order کے مطابق deterministic طریقے سے assign ہوتے ہیں (0-based)۔ کلائنٹس offline cache کر کے alias attestation events کے audit trails بنا سکتے ہیں۔
 
 כובע גודל קוד
@@ -71,7 +71,7 @@ translation_last_reviewed: 2026-02-07
   - אחסון קוד חוזה על-שרשרת
   - ברירת מחדל: 16 MiB. جب `.to` image حد سے بڑی ہو تو nodes `RegisterSmartContractBytes` کو invariant violation error کے ساتھ reject کرتے ہیں۔
   - Operators `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور numeric payload دے کر ایڈجسٹ کر سکتے ہیں۔- POST `/v1/gov/ballots/zk`
-  - בקשה: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות:
     - جب circuit کے public inputs میں `owner`, `amount`, `duration_blocks` شامل ہوں اور proof configured VK کے خلاف verify ہو جائے تو node `election_id` کے لئے governance lock بناتا یا بڑھاتا ہے۔ direction چھپی رہتی ہے (`unknown`); صرف amount/expiry اپڈیٹ ہوتے ہیں۔ re-votes monotonic ہیں: amount اور expiry صرف بڑھتے ہیں (node ​​max(amount, prev.amount) اور max(expiry, prev.expiry) لگاتا ہے)۔
@@ -79,12 +79,12 @@ translation_last_reviewed: 2026-02-07
     - Contract execution کو `SubmitBallot` enqueue کرنے سے پہلے `ZK_VOTE_VERIFY_BALLOT` کال کرنا لازم ہے؛ hosts one-shot latch enforce کرتے ہیں۔
 
 - POST `/v1/gov/ballots/plain`
-  - בקשה: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
+  - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - Notes: re-votes extend-only ہیں - نیا ballot موجودہ lock کا amount یا expiry کم نہیں کر سکتا۔ `owner` کو transaction authority کے برابر ہونا چاہئے۔ کم از کم مدت `conviction_step_blocks` ہے۔
 
 - POST `/v1/gov/finalize`
-  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58...?", "private_key": "...?" }
+  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): منظور شدہ deploy proposal کو enact کرنے سے `code_hash` keyed minimal `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposal Enacted ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` والا manifest پہلے سے ہو تو enactment reject ہوتا ہے۔
   - הערות:
@@ -93,7 +93,7 @@ translation_last_reviewed: 2026-02-07
     - Turnout checks صرف approve+reject استعمال کرتی ہیں؛ abstain turnout میں شمار نہیں ہوتا۔
 
 - POST `/v1/gov/enact`
-  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "...?" }
+  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notes: جب `authority`/`private_key` فراہم ہوں تو Torii signed transaction سبمٹ کرتا ہے؛ ورنہ وہ skeleton واپس کرتا ہے جسے کلائنٹ سائن اور سبمٹ کرے۔ preimage اختیاری اور فی الحال معلوماتی ہے۔- קבל את `/v1/gov/proposals/{id}`
   - נתיב `{id}`: hex זיהוי הצעה (64 תווים)
@@ -191,15 +191,15 @@ RBAC
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے enacted governance proposal موجود ہے جو اسی proposal-id hashing سے derive ہوتا ہے جو node استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (issues, manifest/code/proposal summaries) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ ہو)۔
   - Protected namespaces کے audit یا governance-controlled deploy workflows کی تصدیق کے لئے مفید۔
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Protected namespaces میں deployment کے لئے JSON metadata skeleton دیتا ہے، جس میں optional `gov_manifest_approvers` شامل ہیں تاکہ manifest quorum rules پوری ہوں۔
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` רמזים למנעול 18NI00000193X `owner`, `amount` اور `duration_blocks` شامل ہونا ضروری ہے۔
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` רמזים למנעול 18NI00000193X `owner`, `amount` اور `duration_blocks` شامل ہونا ضروری ہے۔
   - מאמת מזהי חשבונות קנוניים, מבצע קנוניזציה של רמזים לביטול של 32 בתים וממזג את הרמזים לתוך `public_inputs_json` (עם `--public <path>` לעקיפות נוספות).
   - המבטל נגזר מהתחייבות ההוכחה (קלט ציבורי) בתוספת `domain_tag`, `chain_id` ו-`election_id`; `--nullifier` מאומת כנגד ההוכחה כאשר היא מסופקת.
   - ایک لائن خلاصہ اب deterministic `fingerprint=<hex>` دکھاتا ہے جو encoded `CastZkBallot` سے derive ہوتا ہے، ساتھ decoded hints (`owner`, `amount`, `duration_blocks`, `direction` جب فراہم ہوں)۔
   - CLI responses `tx_instructions[]` کو `payload_fingerprint_hex` اور decoded fields کے ساتھ annotate کرتے ہیں تاکہ downstream tooling skeleton کو بغیر Norito decoding کے verify کر سکے۔
   - Lock hints دینے سے node ZK ballots کے لئے `LockCreated`/`LockExtended` events emit کر سکتا ہے جب circuit وہی values ​​expose کرے۔
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` aliases ZK flags کے ناموں کو mirror کرتے ہیں تاکہ scripting parity ہو۔
   - Summary output `vote --mode zk` کی طرح encoded instruction fingerprint اور readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے signature سے پہلے فوری تصدیق ہو جاتی ہے۔
 
@@ -218,14 +218,14 @@ RBAC
 - POST `/v1/gov/ballots/zk-v1`
   - בקשה (DTO בסגנון v1):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "ih58...?",
+      "owner": "i105...?",
       "nullifier": "blake2b32:...64hex?"
     }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
@@ -234,7 +234,7 @@ RBAC
   - `BallotProof` JSON براہ راست قبول کر کے `CastZkBallot` skeleton واپس کرتا ہے۔
   - בקשה:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

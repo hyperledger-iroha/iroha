@@ -113,7 +113,7 @@ bütün həmyaşıdları tərəfindən istifadə olunan kanonik imza dəsti.
 
 `iroha_data_model` qutusu bütün kitab obyektlərini, təlimatları, sorğuları və hadisələri müəyyən edir. Əsas məqamlar:
 
-- **Domenlər, hesablar və aktivlər** kanonik IH58 hesab ID-lərindən istifadə edir (üstünlük verilir); `name@domain` marşrutlaşdırma olaraq qalır
+- **Domenlər, hesablar və aktivlər** kanonik I105 hesab ID-lərindən istifadə edir (üstünlük verilir); `name@domain` marşrutlaşdırma olaraq qalır
   açıq şəkildə təqdim edildikdə ləqəb. Metadata deterministikdir (`Metadata` xəritəsi). Rəqəmsal aktivlər sabit nöqtəni dəstəkləyir
   əməliyyatlar; NFT-lər ixtiyari strukturlaşdırılmış metadata daşıyır.
 - **Rollar və icazələr** Norito nömrəli tokenlərdən istifadə edir ki, onlar birbaşa icraçı yoxlamaları ilə əlaqələndirirlər.

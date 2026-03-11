@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-01
 | الحقل | القيمة |
 |-------|-------|
 | معرف الاتفاق | `<repo-yyMMdd-XX>` |
-| معرف حساب امين الحفظ | `<ih58...>` |
+| معرف حساب امين الحفظ | `<i105...>` |
 | اعد بواسطة / التاريخ | `<custodian ops lead>` |
 | جهات اتصال desk المعترف بها | `<desk lead + counterparty>` |
 | دليل الادلة | ``artifacts/finance/repo/<slug>/`` |

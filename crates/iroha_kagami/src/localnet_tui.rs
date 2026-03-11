@@ -174,12 +174,14 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 let id = Text::new("Asset id (asset#domain)")
                     .with_default(&default_id)
                     .prompt()?;
-                let qty: u64 = CustomType::new("Mint quantity to Alice (IH58)?")
+                let qty: u64 = CustomType::new("Mint quantity to Alice (I105)?")
                     .with_default(100u64)
                     .prompt()?;
                 assets.push(AssetSpec {
                     id,
-                    mint_to: ALICE_ID.clone(),
+                    mint_to: ALICE_ID
+                        .clone()
+                        .to_account_id("wonderland".parse().expect("valid domain")),
                     quantity: qty,
                 });
             }

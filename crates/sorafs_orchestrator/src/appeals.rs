@@ -1125,13 +1125,13 @@ mod tests {
 
     use super::*;
 
-    fn make_account(label: u8, domain: &DomainId) -> AccountId {
+    fn make_account(label: u8, _domain: &DomainId) -> AccountId {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
         let pk_bytes = signer.verifying_key().to_bytes();
         let pk =
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
-        AccountId::new(domain.clone(), pk)
+        AccountId::new(pk)
     }
 
     #[test]

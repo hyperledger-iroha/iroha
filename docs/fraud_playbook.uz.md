@@ -85,7 +85,7 @@ Shlyuz endi aniq JSON konvertlarini ochadi, ular birma-bir xaritaga tushadi
 
 - **Riskni qabul qilish** – `POST /v1/fraud/query` `RiskQuery` sxemasini qabul qiladi:
   - `query_id` (`[u8; 32]`, olti burchakli kodlangan)
-  - `subject` (`AccountId`, kanonik IH58 harfi; ixtiyoriy `@<domain>` maslahat yoki taxallus)
+  - `subject` (`AccountId`, kanonik I105 harfi; ixtiyoriy `@<domain>` maslahat yoki taxallus)
   - `operation` (`RiskOperation`ga mos keladigan tegli raqam; JSON `type`
     diskriminator enum variantini aks ettiradi)
   - `related_asset` (`AssetId`, ixtiyoriy)

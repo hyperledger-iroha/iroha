@@ -311,7 +311,7 @@ CLI wrappers:
 Example `vk_register.json`:
 ```json
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed0120...",
   "backend": "halo2/ipa",
   "name": "vk_main",

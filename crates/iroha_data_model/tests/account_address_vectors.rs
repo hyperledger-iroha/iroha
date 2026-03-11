@@ -1,13 +1,11 @@
 //! Compliance-suite validation for account address vectors.
 
-use std::{path::Path, str::FromStr};
+use std::path::Path;
 
 use hex::{FromHex, encode_upper};
 use iroha_crypto::{Algorithm, PublicKey};
-use iroha_data_model::{
-    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
-    domain::DomainId,
-    name::Name,
+use iroha_data_model::account::{
+    AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
 };
 use norito::json::{self, JsonDeserialize};
 
@@ -83,14 +81,14 @@ struct Member {
 #[derive(Debug, JsonDeserialize)]
 struct Encodings {
     canonical_hex: String,
-    ih58: Ih58Encoding,
-    compressed: String,
-    compressed_fullwidth: String,
+    i105: I105Encoding,
+    i105_default: String,
+    i105_default_fullwidth: String,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
-struct Ih58Encoding {
+struct I105Encoding {
     prefix: u16,
     string: String,
 }
@@ -114,10 +112,6 @@ struct ExpectedError {
     found: Option<u16>,
     char: Option<String>,
     policy_error: Option<String>,
-}
-
-fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("expected valid domain label"))
 }
 
 fn decode_canonical(hex_value: &str) -> Vec<u8> {
@@ -164,57 +158,56 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     let canonical_address =
         AccountAddress::from_canonical_bytes(&canonical_bytes).expect("canonical decode");
 
-    // IH58 decoding
-    let ih58_addr = AccountAddress::from_ih58(
-        &case.encodings.ih58.string,
-        Some(case.encodings.ih58.prefix),
+    // I105 decoding (legacy fixture key: `i105`)
+    let i105_addr = AccountAddress::from_i105_for_discriminant(
+        &case.encodings.i105.string,
+        Some(case.encodings.i105.prefix),
     )
-    .expect("ih58 decode");
+    .expect("i105 decode");
     assert_eq!(
-        ih58_addr, canonical_address,
-        "{} ih58 payload mismatch",
+        i105_addr, canonical_address,
+        "{} i105 payload mismatch",
         case.case_id
     );
     assert_eq!(
-        canonical_bytes_from_address(&ih58_addr),
+        canonical_bytes_from_address(&i105_addr),
         canonical_bytes,
-        "{} ih58 canonical mismatch",
+        "{} i105 canonical mismatch",
         case.case_id
     );
     assert_eq!(
-        case.encodings.ih58.prefix, default_prefix,
-        "{} ih58 uses unexpected prefix",
+        case.encodings.i105.prefix, default_prefix,
+        "{} i105 uses unexpected prefix",
         case.case_id
     );
 
-    // Compressed decoding (half-width)
-    let compressed_addr = AccountAddress::from_compressed_sora(&case.encodings.compressed)
-        .expect("compressed decode");
+    // Secondary I105 decoding (half-width sentinel)
+    let compressed_addr =
+        AccountAddress::from_i105(&case.encodings.i105_default).expect("half-width i105 decode");
     assert_eq!(
         compressed_addr, canonical_address,
-        "{} compressed payload mismatch",
+        "{} i105_default payload mismatch",
         case.case_id
     );
     assert_eq!(
         canonical_bytes_from_address(&compressed_addr),
         canonical_bytes,
-        "{} compressed canonical mismatch",
+        "{} i105_default canonical mismatch",
         case.case_id
     );
 
-    // Compressed decoding (full-width)
-    let compressed_full =
-        AccountAddress::from_compressed_sora(&case.encodings.compressed_fullwidth)
-            .expect("compressed fullwidth decode");
+    // Secondary I105 decoding (full-width sentinel)
+    let compressed_full = AccountAddress::from_i105(&case.encodings.i105_default_fullwidth)
+        .expect("fullwidth i105 decode");
     assert_eq!(
         compressed_full, canonical_address,
-        "{} compressed full payload mismatch",
+        "{} i105_default full payload mismatch",
         case.case_id
     );
     assert_eq!(
         canonical_bytes_from_address(&compressed_full),
         canonical_bytes,
-        "{} compressed full canonical mismatch",
+        "{} i105_default full canonical mismatch",
         case.case_id
     );
 
@@ -267,14 +260,14 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
 }
 
 fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
-    if let Some(raw_domain) = case.input.raw_domain.as_deref() {
+    if let Some(_raw_domain) = case.input.raw_domain.as_deref() {
         let public_key_hex = case
             .controller
             .public_key_hex
             .as_ref()
             .expect("single controllers provide public key");
         let public_key = ed25519_public_key(public_key_hex);
-        let account_id = AccountId::new(domain(raw_domain), public_key.clone());
+        let account_id = AccountId::new(public_key.clone());
         let rebuilt =
             AccountAddress::from_account_id(&account_id).expect("rebuild single address succeeds");
         assert_eq!(
@@ -314,12 +307,6 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
         .expect("multisig input must supply threshold");
     let policy = MultisigPolicy::new(threshold, members)
         .expect("multisig policy must construct from fixture");
-    let domain_label = case
-        .input
-        .normalized_domain
-        .as_deref()
-        .expect("multisig must include normalized domain");
-
     if let Some(version) = case.controller.version {
         assert_eq!(
             version,
@@ -357,7 +344,7 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
         );
     }
 
-    let account = AccountId::new_multisig(domain(domain_label), policy);
+    let account = AccountId::new_multisig(policy);
     let rebuilt =
         AccountAddress::from_account_id(&account).expect("multisig address reconstruction");
     assert_eq!(
@@ -369,15 +356,15 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
 
 fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
     match case.format.as_str() {
-        "ih58" => {
+        "i105" => {
             let expected_prefix = case.expected_prefix.unwrap_or(default_prefix);
-            let err = AccountAddress::from_ih58(&case.input, Some(expected_prefix))
-                .expect_err("ih58 case should fail");
+            let err =
+                AccountAddress::from_i105_for_discriminant(&case.input, Some(expected_prefix))
+                    .expect_err("i105 case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
-        "compressed" => {
-            let err = AccountAddress::from_compressed_sora(&case.input)
-                .expect_err("compressed case should fail");
+        "i105_default" => {
+            let err = AccountAddress::from_i105(&case.input).expect_err("i105 case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
@@ -417,14 +404,14 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
         }
-        "MissingCompressedSentinel" => {
+        "MissingI105Sentinel" => {
             assert!(
-                matches!(err, AccountAddressError::MissingCompressedSentinel),
-                "{case_id}: expected MissingCompressedSentinel, got {err}"
+                matches!(err, AccountAddressError::MissingI105Sentinel),
+                "{case_id}: expected MissingI105Sentinel, got {err}"
             );
         }
-        "InvalidCompressedChar" => {
-            if let AccountAddressError::InvalidCompressedChar(ch) = err {
+        "InvalidCompressedChar" | "InvalidI105Char" => {
+            if let AccountAddressError::InvalidI105Char(ch) = err {
                 let expected_char = expected
                     .char
                     .as_deref()
@@ -432,18 +419,21 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                     .chars()
                     .next()
                     .unwrap_or_default();
-                assert_eq!(
-                    expected_char, *ch,
-                    "{case_id}: invalid compressed char mismatch"
-                );
+                assert_eq!(expected_char, *ch, "{case_id}: invalid i105 char mismatch");
             } else {
-                panic!("{case_id}: expected InvalidCompressedChar, got {err}");
+                panic!("{case_id}: expected InvalidI105Char, got {err}");
             }
         }
         "InvalidHexAddress" => {
             assert!(
                 matches!(err, AccountAddressError::InvalidHexAddress),
                 "{case_id}: expected InvalidHexAddress, got {err}"
+            );
+        }
+        "UnsupportedAddressFormat" => {
+            assert!(
+                matches!(err, AccountAddressError::UnsupportedAddressFormat),
+                "{case_id}: expected UnsupportedAddressFormat, got {err}"
             );
         }
         "InvalidLength" => {

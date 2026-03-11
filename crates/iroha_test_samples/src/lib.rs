@@ -19,7 +19,7 @@ use iroha_crypto::KeyPair;
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 
-/// Generate [`AccountId`] in the given `domain`.
+/// Generate a domainless [`AccountId`] using the given `domain` label as seed scope.
 ///
 /// # Panics
 ///
@@ -32,8 +32,8 @@ pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
         let seed_bytes = next_calibration_seed(&base_seed, &domain_str);
         KeyPair::from_seed(seed_bytes, Algorithm::default())
     });
-    let domain_id: DomainId = domain_str.parse().expect("domain name should be valid");
-    let account_id = AccountId::new(domain_id, key_pair.public_key().clone());
+    let _: DomainId = domain_str.parse().expect("domain name should be valid");
+    let account_id = AccountId::new(key_pair.public_key().clone());
     (account_id, key_pair)
 }
 
@@ -105,9 +105,7 @@ mod calibration_tests {
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
         let expected_key = KeyPair::from_seed(hash_bytes.to_vec(), Algorithm::default());
-        let expected_domain: DomainId = "wonderland".parse().expect("domain name should be valid");
-        let expected_account = AccountId::new(expected_domain, expected_key.public_key().clone());
-
+        let expected_account = AccountId::new(expected_key.public_key().clone());
         assert_eq!(account, expected_account);
         assert_eq!(key_pair.public_key(), expected_key.public_key());
 
@@ -147,8 +145,8 @@ macro_rules! declare_account_with_keypair {
     ( $account_id:ident, $domain:literal, $key_pair:ident, $public_key:literal, $private_key:literal ) => {
         /// A standardized [`AccountId`].
         pub static $account_id: LazyLock<AccountId> = LazyLock::new(|| {
-            let domain: DomainId = $domain.parse().expect("domain should be a valid Name");
-            AccountId::new(domain, $key_pair.public_key().clone())
+            let _: DomainId = $domain.parse().expect("domain should be a valid Name");
+            AccountId::new($key_pair.public_key().clone())
         });
 
         declare_keypair!($key_pair, $public_key, $private_key);

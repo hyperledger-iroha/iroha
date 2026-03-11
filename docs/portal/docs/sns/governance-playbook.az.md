@@ -75,7 +75,7 @@ idarə panelləri və eskalasiya yolları.
 | Nizamnamə + KPI əlavəsi | `docs/source/sns/governance_addenda/` | Versiya ilə idarə olunan imzalanmış nizamnamələr, KPI müqavilələri və CLI səsləri ilə istinad edilən idarəetmə qərarları. |
 | Reyestr sxemi | [`registry-schema.md`](./registry-schema.md) | Kanonik Norito strukturları (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Qeydiyyatçı müqaviləsi | [`registrar-api.md`](./registrar-api.md) | REST/gRPC yükləri, `sns_registrar_status_total` ölçüləri və idarəetmə çəngəl gözləntiləri. |
-| Ünvan UX bələdçisi | [`address-display-guidelines.md`](./address-display-guidelines.md) | Kanonik IH58 (üstünlük verilir) + pul kisələri/kəşfiyyatçılar tərəfindən əks olunmuş sıxılmış (`sora`, ikinci ən yaxşı) renderlər. |
+| Ünvan UX bələdçisi | [`address-display-guidelines.md`](./address-display-guidelines.md) | Kanonik I105 (üstünlük verilir) + pul kisələri/kəşfiyyatçılar tərəfindən əks olunmuş sıxılmış (`sora`, ikinci ən yaxşı) renderlər. |
 | SoraDNS / GAR sənədləri | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Deterministik host törəməsi, şəffaflıq təminatçısı iş axını və xəbərdarlıq qaydaları. |
 | Tənzimləyici qeydlər | `docs/source/sns/regulatory/` | Yurisdiksiyaya aid qəbul qeydləri (məsələn, AB DSA), stüard təsdiqləri, şablon əlavələri. |
 | Qazma jurnalı | `ops/drill-log.md` | Faza çıxışlarından əvvəl tələb olunan xaos və IR məşqlərinin qeydi. |
@@ -118,7 +118,7 @@ beləliklə, auditorlar 24 saat ərzində qərar yolunu yenidən qura bilərlər
    yayılan yeni GAR/zona vəziyyətini təsdiqləmək üçün həlledici şəffaflıq tayları
    (bax §4.5).
 6. **Müştəri açıqlaması:** Müştəri ilə bağlı kitabçanı yeniləyin (pul kisəsi/kəşfiyyatçı)
-   paylaşılan qurğular vasitəsilə [`address-display-guidelines.md`](./address-display-guidelines.md), IH58 və
+   paylaşılan qurğular vasitəsilə [`address-display-guidelines.md`](./address-display-guidelines.md), I105 və
    sıxılmış renderlər surət/QR təlimatına uyğun gəlir.
 
 ### 4.3 Yeniləmələr, Faturalandırma və Xəzinədarlığın Üzləşdirilməsi- **Yeniləmə iş axını:** Qeydiyyatçılar 30 günlük güzəşt + 60 günlük ödənişi tətbiq edirlər
@@ -147,11 +147,11 @@ beləliklə, auditorlar 24 saat ərzində qərar yolunu yenidən qura bilərlər
 | Faza | Sahibi | Fəaliyyət və Sübut | SLA |
 |-------|-------|-------------------|-----|
 | Yumşaq dondurma sorğusu | Stüard / dəstək | Ödəniş sübutları, mübahisəli istiqraz arayışı və təsirə məruz qalan seçici(lər) ilə `SNS-DF-<id>` fayl bileti. | qəbuldan ≤4 saat. |
-| Qəyyum bileti | Mühafizə şurası | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` imzalı `GuardianFreezeTicketV1` istehsal edir. JSON biletini `artifacts/sns/guardian/<id>.json` altında saxlayın. | ≤30dəq ACK, ≤2saat icra. |
+| Qəyyum bileti | Mühafizə şurası | `sns governance freeze --selector <I105> --reason <text> --until <ts>` imzalı `GuardianFreezeTicketV1` istehsal edir. JSON biletini `artifacts/sns/guardian/<id>.json` altında saxlayın. | ≤30dəq ACK, ≤2saat icra. |
 | Şuranın ratifikasiyası | İdarəetmə şurası | Dondurulmaları təsdiq və ya rədd edin, qəyyum biletinə sənəd qərarının linki və mübahisəli borc həzmi. | Növbəti şura sessiyası və ya asinxron səsvermə. |
 | Arbitraj paneli | Uyğunluq + stüard | `sns governance dispute ballot` vasitəsilə təqdim edilmiş bülletenlərlə 7 münsiflər heyətini (yol xəritəsi üzrə) çağırın. Anonim səs qəbzlərini insident paketinə əlavə edin. | İstiqraz depozitindən ≤7 gün sonra qərar. |
 | Müraciət | Qəyyum + şura | Apellyasiya şikayəti ikiqat artırır və andlı iclasçı prosesini təkrarlayır; qeyd Norito manifest `DisputeAppealV1` və istinad əsas bilet. | ≤10 gün. |
-| Dondurma və remediasiya | Qeydiyyatçı + həlledici əməliyyatlar | `sns governance unfreeze --selector <IH58> --ticket <id>`-i icra edin, qeydiyyatçı statusunu yeniləyin və GAR/həlledici fərqləri təbliğ edin. | Qərardan dərhal sonra. |
+| Dondurma və remediasiya | Qeydiyyatçı + həlledici əməliyyatlar | `sns governance unfreeze --selector <I105> --ticket <id>`-i icra edin, qeydiyyatçı statusunu yeniləyin və GAR/həlledici fərqləri təbliğ edin. | Qərardan dərhal sonra. |
 
 Fövqəladə hallar (qəyyumun yaratdığı donmalar ≤72 saat) eyni axını izləyir, lakin
 retroaktiv şuranın nəzərdən keçirilməsini və şəffaflıq qeydini tələb edir

@@ -83,6 +83,7 @@ npm run start
 Los siguientes componentes leen estos valores desde `docusaurus.config.js`:
 
 - **Swagger UI** - renderizado en `/reference/torii-swagger`; preautoriza el esquema
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   bearer cuando hay un token, etiqueta las solicitudes con `X-TryIt-Client`,
   inyecta `X-TryIt-Auth`, y reescribe las llamadas a traves del proxy cuando
   `TRYIT_PROXY_PUBLIC_URL` esta definido.

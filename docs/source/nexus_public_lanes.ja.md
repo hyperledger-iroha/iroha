@@ -225,19 +225,19 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
 - **Torii/CLI quickstart:**
   - `iroha app nexus lane-report --summary` は lane catalog entries、manifest readiness、validator modes
     (stake-elected vs admin-managed) を表示し、ステーキング admission が有効か確認できる。
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     は lifecycle/activation 指標 (pending target epoch, `activation_epoch` / `activation_height`,
     exit release, slash id) と bonded/self stake を表示する。
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]` は
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` は
     `(validator, staker)` ペアの pending-unbond ヒント付きで `/stake` をミラーする。
   - Torii snapshots (dashboards/SDKs 向け):
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `address_format=ih58|compressed` で literal 表示を制御（IH58 推奨、compressed（`sora`）は Sora 専用の次善）。
+      `canonical I105 literal rendering` で literal 表示を制御（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) と pending unbond timers。`?validator=ih58...` は
-      特定バリデータ向けにフィルタし、`address_format` は全 literal に適用。
+      `staker`, bonded amount) と pending unbond timers。`?validator=i105...` は
+      特定バリデータ向けにフィルタし、`canonical I105 rendering` は全 literal に適用。
   - Lifecycle ISIs は標準トランザクションパスを使用 (Torii `/v1/transactions`
     または CLI instruction pipeline)。Norito JSON payload 例:
 

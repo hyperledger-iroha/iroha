@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 ---
 
 The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
-IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature, and negative fixtures.
+I105 and i105-default (`sora`; half/full width), multisignature, and negative fixtures.
 Every SDK + Torii surface relies on the same JSON so we can detect any codec
 drift before it hits production. This page mirrors the internal status brief
 (`docs/source/account_address_status.md` in the root repository) so portal
@@ -50,7 +50,7 @@ any time the fixture, generator, or docs change to alert reviewers immediately.
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Each harness round-trips canonical bytes + IH58 + compressed (`sora`, second-best) encodings and
+Each harness round-trips canonical bytes + I105 encodings and
 Norito стиліндегі қате кодтары теріс жағдайларға арналған арматураға сәйкес келетінін тексереді.
 
 ## Автоматтандыру керек пе?

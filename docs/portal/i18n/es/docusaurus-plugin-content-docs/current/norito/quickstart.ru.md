@@ -86,7 +86,7 @@ El corredor envía el registro `info("Hello from Kotodama")` y envía la llamada
 
 ## 4. Отправьте байткод через ToriiCuando utilice un robot, compárelo en Torii mediante CLI. La identificación del desarrollador completa con el clic público en `defaults/client.toml`, cuenta de identificación del usuario:
 ```
-ih58...
+i105...
 ```
 
 Utilice un archivo de configuración, introduzca la URL Torii, ID de cadena y haga clic en:
@@ -106,7 +106,7 @@ Utilice el perfil CLI, consulte los detalles de la cuenta y el contrato anterior
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

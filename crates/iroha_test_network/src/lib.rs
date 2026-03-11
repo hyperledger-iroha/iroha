@@ -2581,10 +2581,7 @@ impl Network {
                 .first()
                 .map(|tx| tx.chain().clone())
                 .unwrap_or_else(|| self.chain_id());
-            let authority = AccountId::new(
-                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                self.genesis_key_pair.public_key().clone(),
-            );
+            let authority = AccountId::new(self.genesis_key_pair.public_key().clone());
             let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
             let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
                 chain_id,
@@ -2648,10 +2645,7 @@ impl Network {
             rebuilt.set_transaction_results(Vec::new(), &hashes, Vec::new());
             let mut augmented = GenesisBlock(rebuilt);
 
-            let genesis_account_id = AccountId::new(
-                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                self.genesis_key_pair.public_key().clone(),
-            );
+            let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
             let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
             ensure_genesis_results(
                 &mut augmented,
@@ -4508,6 +4502,42 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake,
         } = self;
 
+        // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
+        // when callers don't provide explicit nexus account overrides.
+        let genesis_account_literal =
+            AccountId::new(genesis_key_pair.public_key().clone()).to_string();
+        let has_fee_sink_override = config_layers.iter().any(|layer| {
+            get_nested_value(layer, &["nexus", "fees", "fee_sink_account_id"]).is_some()
+        });
+        let has_stake_escrow_override = config_layers.iter().any(|layer| {
+            get_nested_value(layer, &["nexus", "staking", "stake_escrow_account_id"]).is_some()
+        });
+        let has_slash_sink_override = config_layers.iter().any(|layer| {
+            get_nested_value(layer, &["nexus", "staking", "slash_sink_account_id"]).is_some()
+        });
+        if !(has_fee_sink_override && has_stake_escrow_override && has_slash_sink_override) {
+            let mut nexus_accounts_layer = Table::new();
+            if !has_fee_sink_override {
+                TomlWriter::new(&mut nexus_accounts_layer).write(
+                    ["nexus", "fees", "fee_sink_account_id"],
+                    genesis_account_literal.clone(),
+                );
+            }
+            if !has_stake_escrow_override {
+                TomlWriter::new(&mut nexus_accounts_layer).write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    genesis_account_literal.clone(),
+                );
+            }
+            if !has_slash_sink_override {
+                TomlWriter::new(&mut nexus_accounts_layer).write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    genesis_account_literal.clone(),
+                );
+            }
+            config_layers.push(nexus_accounts_layer);
+        }
+
         let mut sumeragi_parameters = sumeragi_parameters;
         let merged_sumeragi = merged_sumeragi_config(&config_layers);
         let default_da_enabled = true;
@@ -4583,10 +4613,7 @@ impl NetworkBuilder {
         if let Some(builder_fn) = custom_genesis.as_ref() {
             let mut block = builder_fn(peer_ids.clone(), topology_entries.clone());
             let genesis_key_pair = genesis_key_pair.clone();
-            let genesis_account_id = AccountId::new(
-                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                genesis_key_pair.public_key().clone(),
-            );
+            let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
             ensure_genesis_results(
                 &mut block,
                 &genesis_account_id,
@@ -4761,10 +4788,7 @@ impl NetworkBuilder {
                 b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
                 Algorithm::Ed25519,
             );
-            let gas_account_id = AccountId::new(
-                ivm_domain.clone(),
-                bootstrap_gas_keypair.public_key().clone(),
-            );
+            let gas_account_id = AccountId::new(bootstrap_gas_keypair.public_key().clone());
             let gas_account_str = gas_account_id.to_string();
 
             let mut bootstrap_layer = Table::new();
@@ -4791,13 +4815,21 @@ impl NetworkBuilder {
             let mut bootstrap_tx = vec![
                 Register::domain(Domain::new(nexus_domain.clone())).into(),
                 Register::domain(Domain::new(ivm_domain.clone())).into(),
-                Register::account(Account::new(gas_account_id.clone())).into(),
+                Register::account(Account::new(
+                    gas_account_id.to_account_id(nexus_domain.clone()),
+                ))
+                .into(),
                 Register::asset_definition(definition).into(),
             ];
 
             for peer in &peer_ids {
-                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
-                bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+                let validator_id = AccountId::new(peer.public_key().clone());
+                bootstrap_tx.push(
+                    Register::account(Account::new(
+                        validator_id.to_account_id(nexus_domain.clone()),
+                    ))
+                    .into(),
+                );
                 bootstrap_tx.push(
                     Mint::asset_numeric(
                         stake_amount,
@@ -4810,7 +4842,7 @@ impl NetworkBuilder {
 
             let mut validator_tx = Vec::new();
             for peer in &peer_ids {
-                let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
+                let validator_id = AccountId::new(peer.public_key().clone());
                 validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
@@ -6366,7 +6398,10 @@ impl NetworkPeer {
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(["account", "domain"], account_id.domain().to_string())
+                    .write(
+                        ["account", "domain"],
+                        iroha::account_address::default_domain_name().to_string(),
+                    )
                     .write(
                         ["account", "public_key"],
                         account_id.signatory().to_string(),
@@ -10655,6 +10690,40 @@ exit 0
             .and_then(Value::as_str)
             .expect("slash_sink_account_id should be present");
 
+        assert!(
+            AccountId::parse_encoded(stake_escrow).is_ok(),
+            "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"
+        );
+        assert!(
+            AccountId::parse_encoded(slash_sink).is_ok(),
+            "slash_sink_account_id must parse as AccountId; got {slash_sink}"
+        );
+    }
+
+    #[test]
+    fn default_builder_sets_parseable_nexus_account_literals() {
+        let network = NetworkBuilder::new().build();
+
+        let mut merged = Table::new();
+        for layer in network.config_layers() {
+            merge_tables(&mut merged, layer.as_ref());
+        }
+
+        let fee_sink = get_nested_value(&merged, &["nexus", "fees", "fee_sink_account_id"])
+            .and_then(Value::as_str)
+            .expect("fee_sink_account_id should be present");
+        let stake_escrow =
+            get_nested_value(&merged, &["nexus", "staking", "stake_escrow_account_id"])
+                .and_then(Value::as_str)
+                .expect("stake_escrow_account_id should be present");
+        let slash_sink = get_nested_value(&merged, &["nexus", "staking", "slash_sink_account_id"])
+            .and_then(Value::as_str)
+            .expect("slash_sink_account_id should be present");
+
+        assert!(
+            AccountId::parse_encoded(fee_sink).is_ok(),
+            "fee_sink_account_id must parse as AccountId; got {fee_sink}"
+        );
         assert!(
             AccountId::parse_encoded(stake_escrow).is_ok(),
             "stake_escrow_account_id must parse as AccountId; got {stake_escrow}"

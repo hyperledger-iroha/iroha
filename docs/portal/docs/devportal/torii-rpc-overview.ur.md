@@ -41,6 +41,7 @@ SDK کے لحاظ سے رہنمائی:
 
 1. [پراکسی شروع کریں](./try-it.md#start-the-proxy-locally) اور `TRYIT_PROXY_PUBLIC_URL` سیٹ کریں تاکہ widgets جان سکیں کہ ٹریفک کہاں بھیجنی ہے۔
 2. اس صفحے پر **Try it** کارڈ یا `/reference/torii-swagger` پینل کھولیں اور `POST /v1/pipeline/submit` جیسا endpoint منتخب کریں۔
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. **Content-Type** کو `application/x-norito` پر سوئچ کریں، **Binary** ایڈیٹر منتخب کریں، اور `fixtures/norito_rpc/transfer_asset.norito` اپ لوڈ کریں (یا `fixtures/norito_rpc/transaction_fixtures.manifest.json` میں درج کوئی بھی payload)۔
 4. OAuth device-code widget یا دستی ٹوکن فیلڈ کے ذریعے bearer token فراہم کریں (جب `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` کنفیگر ہو تو پراکسی `X-TryIt-Auth` overrides قبول کرتا ہے)۔
 5. درخواست بھیجیں اور تصدیق کریں کہ Torii `fixtures/norito_rpc/schema_hashes.json` میں درج `schema_hash` واپس دیتا ہے۔ مطابقت پذیر hashes تصدیق کرتے ہیں کہ Norito header براؤزر/پراکسی hop سے محفوظ رہا۔

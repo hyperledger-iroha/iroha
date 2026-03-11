@@ -67,7 +67,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=ih58... \
+     --authority=i105... \
      --private-key=ed25519:<key>
    ```
 

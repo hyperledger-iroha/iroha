@@ -37,10 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wsv.grant_permission(&user, PermissionToken::MintAsset(debt_asset.clone()));
     wsv.grant_permission(
         &user,
-        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&user)),
+        PermissionToken::ReadAccountAssets(AccountId::from(&user)),
     );
-    let user_subject = AccountId::from_account_id(&user);
-    let vault_subject = AccountId::from_account_id(&vault);
+    let user_subject = AccountId::from(&user);
+    let vault_subject = AccountId::from(&vault);
 
     // 3) Map small integers to domainless account subjects used by syscalls
     let mut account_map = HashMap::new();

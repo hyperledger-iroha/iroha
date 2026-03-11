@@ -367,56 +367,55 @@ public struct Keypair {
         return try privateKey.signature(for: message)
     }
 
-    /// Build IH58 format account ID for this keypair.
+    /// Build i105 format account ID for this keypair.
     ///
     /// - Parameters:
-    ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
-    /// - Returns: Account ID in format `<ih58>`
+    ///   - networkPrefix: Network prefix for i105 encoding (defaults to Iroha mainnet)
+    /// - Returns: Account ID in format `<i105>`
     /// - Throws: `AccountAddressError` if conversion fails
     @available(macOS 10.15, iOS 13.0, *)
     public func accountId(networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
-        try AccountId.makeIH58(publicKey: publicKey, networkPrefix: networkPrefix)
+        try AccountId.makeI105(publicKey: publicKey, networkPrefix: networkPrefix)
     }
 }
 
 public enum AccountId {
-    /// Default network prefix for IH58 encoding (Iroha mainnet).
+    /// Default network prefix for i105 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build an encoded account id literal (IH58).
+    /// Build an encoded account id literal (i105).
     public static func make(publicKey: Data) -> String {
         do {
-            return try makeIH58(publicKey: publicKey)
+            return try makeI105(publicKey: publicKey)
         } catch {
             preconditionFailure("Invalid account id inputs: \(error)")
         }
     }
 
-    /// Build IH58 format account ID string required by Torii API.
+    /// Build i105 format account ID string required by Torii API.
     ///
-    /// Torii API requires account IDs in IH58 format for canonical output; this method
+    /// Torii API requires account IDs in i105 format for canonical output; this method
     /// converts a public key to the correct format.
     ///
     /// - Parameters:
     ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
     ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
-    ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
-    /// - Returns: Account ID in format `<ih58>`
+    ///   - networkPrefix: Network prefix for i105 encoding (defaults to Iroha mainnet)
+    /// - Returns: Account ID in format `<i105>`
     /// - Throws: `AccountAddressError` if conversion fails
-    public static func makeIH58(
+    public static func makeI105(
         publicKey: Data,
         algorithm: String = "ed25519",
         networkPrefix: UInt16 = defaultNetworkPrefix
     ) throws -> String {
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm)
-        let ih58 = try address.toIH58(networkPrefix: networkPrefix)
-        return ih58
+        return try address.toI105(networkPrefix: networkPrefix)
     }
 
     /// Normalizes account id literals for equality checks.
     ///
     /// Semantics:
-    /// - If the literal is an encoded `AccountAddress` (IH58/compressed), returns the canonical IH58 rendering.
+    /// - If the literal is an encoded `AccountAddress`, returns the canonical i105 rendering.
     /// - Otherwise, returns the trimmed literal unchanged.
     public static func normalizeForComparison(
         _ literal: String,
@@ -425,9 +424,9 @@ public enum AccountId {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        if let (address, _) = try? AccountAddress.parseEncoded(trimmed, expectedPrefix: expectedPrefix),
-           let ih58 = try? address.toIH58(networkPrefix: expectedPrefix) {
-            return ih58
+        if let address = try? AccountAddress.parseEncoded(trimmed, expectedPrefix: expectedPrefix),
+           let i105 = try? address.toI105(networkPrefix: expectedPrefix) {
+            return i105
         }
 
         return trimmed

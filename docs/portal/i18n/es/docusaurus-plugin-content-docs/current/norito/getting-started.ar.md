@@ -69,7 +69,7 @@ Utilice el CLI para acceder a la CLI. Aquí está la configuración y la carga �
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority ih58... \
+  --authority i105... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

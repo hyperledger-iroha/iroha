@@ -95,7 +95,7 @@ address-manifest-<REVISION>/
    - يجب أن تتضمن إدخالات `global_domain` `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - يجب أن تتضمن إدخالات `local_alias` digest بطول 12 بايت ينتجه Norm v1
      (استخدم `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
-     للتحقق؛ يعكس ملخص JSON المجال عبر `input_domain` ويعيد `legacy  suffix` الترميز كـ `<ih58>@<domain>` للبيانات).
+     للتحقق؛ يعكس ملخص JSON المجال عبر `input_domain` ويعيد `legacy  suffix` الترميز كـ `<i105>@<domain>` للبيانات).
    - يجب أن تشير إدخالات `tombstone` إلى selector المتقاعد بدقة وتضمين
      `reason_code` و`ticket` و`replaces_sequence`.
 
@@ -129,7 +129,7 @@ address-manifest-<REVISION>/
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **صياغة إدخال البيان.** أضف سجل JSON مثل:
@@ -173,7 +173,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — يطلق لحظة تصادم labelين Local‑12 في نفس digest. أوقف
     ترقيات البيان، نفّذ `scripts/address_local_toolkit.sh` لتأكيد الربط، ونسّق مع
     حوكمة Nexus قبل إعادة إصدار السجل المتأثر.
-  - `AddressInvalidRatioSlo` — يحذر عندما تتجاوز الإرسالات غير الصحيحة IH58/المضغوطة
+  - `AddressInvalidRatioSlo` — يحذر عندما تتجاوز الإرسالات غير الصحيحة I105/المضغوطة
     (مع استثناء رفض Local‑8/strict‑mode) نسبة 0.1 % لمدة 10 دقائق. تحقق من
     `torii_address_invalid_total` حسب السياق/السبب ونسّق مع فريق SDK المالك قبل
     إعادة تفعيل الوضع الصارم.

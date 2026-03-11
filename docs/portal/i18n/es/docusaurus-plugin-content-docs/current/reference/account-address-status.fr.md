@@ -14,7 +14,7 @@ título: Conformite des adresses de compte
 Descripción: Reanudar el flujo de trabajo del dispositivo ADDR-2 y la sincronización de los equipos SDK.
 ---
 
-El paquete canonique ADDR-2 (`fixtures/account/address_vectors.json`) captura los dispositivos IH58 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativos. Cada superficie SDK + Torii se aplica en el meme JSON para detectar todos los derivados del códec antes de la producción. Esta página refleja el breve de estatuto interno (`docs/source/account_address_status.md` en el depósito de Racine) para que los lectores del portal puedan consultar el flujo de trabajo sin seguimiento del monorrepositorio.
+El paquete canonique ADDR-2 (`fixtures/account/address_vectors.json`) captura los dispositivos I105 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativos. Cada superficie SDK + Torii se aplica en el meme JSON para detectar todos los derivados del códec antes de la producción. Esta página refleja el breve de estatuto interno (`docs/source/account_address_status.md` en el depósito de Racine) para que los lectores del portal puedan consultar el flujo de trabajo sin seguimiento del monorrepositorio.
 
 ## Regenerar o verificar el paquete
 
@@ -43,7 +43,7 @@ Cada vez que el dispositivo, el generador o los documentos cambian para alertar 
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Cada arnés haga un aller-retour des octetos canónicos + IH58 + codificaciones compresas y verifique que los códigos de error de estilo Norito correspondientes al dispositivo para los casos negativos.
+Cada arnés haga un aller-retour des octetos canónicos + I105 + codificaciones compresas y verifique que los códigos de error de estilo Norito correspondientes al dispositivo para los casos negativos.
 
 ## ¿Besoin d'automatización?
 

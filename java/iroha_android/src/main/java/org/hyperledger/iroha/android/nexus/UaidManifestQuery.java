@@ -10,14 +10,12 @@ public final class UaidManifestQuery {
   private final UaidManifestStatusFilter status;
   private final Long limit;
   private final Long offset;
-  private final AddressFormatOption addressFormat;
 
   private UaidManifestQuery(final Builder builder) {
     this.dataspaceId = builder.dataspaceId;
     this.status = builder.status;
     this.limit = builder.limit;
     this.offset = builder.offset;
-    this.addressFormat = builder.addressFormat;
   }
 
   public static Builder builder() {
@@ -40,10 +38,6 @@ public final class UaidManifestQuery {
     return offset;
   }
 
-  public AddressFormatOption addressFormat() {
-    return addressFormat;
-  }
-
   /** Serialises the query into URL parameters suitable for Torii. */
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
@@ -59,9 +53,6 @@ public final class UaidManifestQuery {
     if (offset != null) {
       params.put("offset", String.valueOf(offset));
     }
-    if (addressFormat != null) {
-      params.put("address_format", addressFormat.parameterValue());
-    }
     return Collections.unmodifiableMap(params);
   }
 
@@ -71,7 +62,6 @@ public final class UaidManifestQuery {
     private UaidManifestStatusFilter status;
     private Long limit;
     private Long offset;
-    private AddressFormatOption addressFormat;
 
     private Builder() {}
 
@@ -101,11 +91,6 @@ public final class UaidManifestQuery {
         throw new IllegalArgumentException("offset must be non-negative");
       }
       this.offset = offset;
-      return this;
-    }
-
-    public Builder setAddressFormat(final AddressFormatOption addressFormat) {
-      this.addressFormat = addressFormat;
       return this;
     }
 

@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (кэшируемый)۔ |
 | `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Кодировка селектора:** `{selector}` сегмент пути IH58, сжатый (`sora`) или канонический шестнадцатеричный ADDR-5, который может быть использован в качестве исходного кода. Torii `NameSelectorV1` سے нормализовать کرتا ہے۔**Модель ошибки:** Конечные точки Norito JSON `code`, `message`, `details` и многое другое. Коды `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Кодировка селектора:** `{selector}` сегмент пути I105, сжатый (`sora`) или канонический шестнадцатеричный ADDR-5, который может быть использован в качестве исходного кода. Torii `NameSelectorV1` سے нормализовать کرتا ہے۔**Модель ошибки:** Конечные точки Norito JSON `code`, `message`, `details` и многое другое. Коды `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 Помощники CLI (N0 для регистратора)
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ Torii доказательства того, что вам нужно знать
 
 ### 6.1 Стандартная регистрация1. Клиент `/v1/sns/policies/{suffix_id}` для запроса, определения цен, благодати и уровней доступа.
 2. Клиент `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی IH58 یا вторая по качеству сжатая (`sora`) метка سے, производная ہے۔
+   - `selector` ترجیحی I105 یا вторая по качеству сжатая (`sora`) метка سے, производная ہے۔
    - `term_years` پالیسی حدود میں۔
    - `payment` казначейский/распределительный перевод управляющего, обратитесь к нам ہے۔
 3. Torii подтвердите правильность:

@@ -930,12 +930,12 @@ pub struct ExplorerBlocksQuery {
 /// Explorer account entry returned by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountRecord {
-    /// Canonical IH58 identifier.
+    /// Canonical I105 identifier.
     pub id: String,
-    /// IH58-encoded literal for the account.
-    pub ih58_address: String,
-    /// Compressed Sora literal for the account.
-    pub compressed_address: String,
+    /// I105-encoded literal for the account.
+    pub i105_address: String,
+    /// i105-default Sora literal for the account.
+    pub i105_default_address: String,
     /// Network prefix emitted by Torii.
     pub network_prefix: u16,
     /// Metadata payload attached to the account.
@@ -954,15 +954,15 @@ impl ExplorerAccountRecord {
             .as_object()
             .ok_or_else(|| decode_error("explorer account record", "must be a JSON object"))?;
         let id = parse_required_string(record, &["id"], "explorer account record.id")?;
-        let ih58_address = parse_required_string(
+        let i105_address = parse_required_string(
             record,
-            &["ih58_address"],
-            "explorer account record.ih58_address",
+            &["i105_address"],
+            "explorer account record.i105_address",
         )?;
-        let compressed_address = parse_required_string(
+        let i105_default_address = parse_required_string(
             record,
-            &["compressed_address"],
-            "explorer account record.compressed_address",
+            &["i105_default_address"],
+            "explorer account record.i105_default_address",
         )?;
         let network_prefix = parse_u64_field(
             record,
@@ -1004,8 +1004,8 @@ impl ExplorerAccountRecord {
         })?;
         Ok(Self {
             id,
-            ih58_address,
-            compressed_address,
+            i105_address,
+            i105_default_address,
             network_prefix: prefix,
             metadata,
             owned_domains,
@@ -3448,7 +3448,14 @@ fn domain_event_summary(event: &DomainEvent) -> (String, String) {
 
 fn account_event_summary(event: &AccountEvent) -> (String, String) {
     match event {
-        AccountEvent::Created(account) => ("Account created".to_owned(), account.id().to_string()),
+        AccountEvent::Created(account) => (
+            "Account created".to_owned(),
+            account
+                .account
+                .id()
+                .to_account_id(account.domain.clone())
+                .to_string(),
+        ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
         AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
         AccountEvent::PermissionAdded(change) => (
@@ -4462,7 +4469,6 @@ mod tests {
         ChainId,
         account::AccountId,
         block::consensus::{ExecWitness, ExecWitnessMsg},
-        domain::DomainId,
         events::{
             EventBox, SharedDataEvent,
             data::{
@@ -4503,7 +4509,7 @@ mod tests {
             Err(err) => panic!("{context}: {err}"),
         }
     }
-    use std::{iter, str::FromStr};
+    use std::iter;
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -6795,8 +6801,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("wonderland").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))
@@ -6826,8 +6831,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("unexpected").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))
@@ -6860,8 +6864,7 @@ mod tests {
         });
 
         let keypair = KeyPair::random();
-        let domain = DomainId::from_str("decode").expect("domain id");
-        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
         let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
             FindExecutorDataModel,
         ))
@@ -7942,8 +7945,8 @@ state_tiered_cold_entries 2
     fn explorer_account_record_decodes_payload() {
         let value = norito::json!({
             "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "ih58_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "compressed_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "network_prefix": 42,
             "metadata": { "role": "admin" },
             "owned_domains": 2,
@@ -7956,11 +7959,11 @@ state_tiered_cold_entries 2
             "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
         );
         assert_eq!(
-            record.ih58_address,
+            record.i105_address,
             "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
         );
         assert_eq!(
-            record.compressed_address,
+            record.i105_default_address,
             "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
         );
         assert_eq!(record.network_prefix, 42);
@@ -7982,8 +7985,8 @@ state_tiered_cold_entries 2
             "items": [
                 {
                     "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "ih58_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "compressed_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
                     "network_prefix": 1,
                     "metadata": {},
                     "owned_domains": 0,
@@ -8144,8 +8147,8 @@ state_tiered_cold_entries 2
             "items": [
                 {
                     "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "ih58_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "compressed_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
                     "network_prefix": 1,
                     "metadata": { "owned_assets": 4 },
                     "owned_domains": 0,

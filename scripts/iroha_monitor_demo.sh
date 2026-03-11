@@ -12,7 +12,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/iroha_monitor_demo.sh [options]
 
-Launch `iroha_monitor --spawn-lite`, capture the overview/pipeline frames, and
+Launch `iroha_monitor --spawn-lite`, capture the overview/focused-search frames, and
 store the artefacts under docs/source/images/iroha_monitor_demo/.
 
 Options:

@@ -28,8 +28,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 משתנים. דוגמת הארנק הקמעונאי של Android ב-
 `examples/android/retail-wallet` מדגימה כעת את דפוס ה-UX הנדרש:
 
-- **שתי מטרות העתקה.** ספקו שני כפתורי העתקה מפורשים: IH58 (מועדף)
-  והצורה הדחוסה עבור Sora בלבד (`sora...`, אפשרות שנייה). IH58 תמיד בטוחה לשיתוף חיצוני
+- **שתי מטרות העתקה.** ספקו שני כפתורי העתקה מפורשים: I105 (מועדף)
+  והצורה הדחוסה עבור Sora בלבד (`sora...`, אפשרות שנייה). I105 תמיד בטוחה לשיתוף חיצוני
   ומזינה את מטען ה-QR. הצורה הדחוסה חייבת לכלול אזהרה מוטמעת משום שהיא עובדת
   רק באפליקציות מודעות Sora. דוגמת Android מחברת את שני כפתורי Material ואת
   ה-tooltips שלהם ב-
@@ -42,7 +42,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 - **רמזים לדומיין ברירת מחדל משתמע.** כאשר הסלקטור מצביע על הדומיין המשתמע
   `default`, הציגו כיתוב שמזכיר למפעילים שאין צורך בסיומת. סיירים צריכים גם
   להדגיש את תווית הדומיין הקנונית כאשר הסלקטור מקודד digest.
-- **מטעני QR של IH58.** קודי QR חייבים לקודד את מחרוזת IH58. אם יצירת ה-QR
+- **מטעני QR של I105.** קודי QR חייבים לקודד את מחרוזת I105. אם יצירת ה-QR
   נכשלת, הציגו שגיאה מפורשת במקום תמונה ריקה.
 - **הודעות לוח גזירים.** לאחר העתקת הצורה הדחוסה, שלחו toast או snackbar שמזכירים
   למשתמשים שהיא Sora-only ורגישה לשיבוש IME.
@@ -65,7 +65,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 ## עוזרי SDK
 
-כל SDK חושף עוזר נוחות שמחזיר את הצורות IH58 והדחוסה יחד עם מחרוזת האזהרה כדי
+כל SDK חושף עוזר נוחות שמחזיר את הצורות I105 והדחוסה יחד עם מחרוזת האזהרה כדי
 ששכבות UI ישארו עקביות:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -90,7 +90,7 @@ JavaScript חושף גם payload `selector` ב-`domainSummary` (`tag`, `digest_h
 
 סיירים צריכים לשקף את עבודת הטלמטריה והנגישות של הארנק:
 
-- יישמו `data-copy-mode="ih58|compressed|qr"` על כפתורי ההעתקה כדי שהחזיתות
+- יישמו `data-copy-mode="i105|i105_default|qr"` על כפתורי ההעתקה כדי שהחזיתות
   יוכלו לשגר מוני שימוש לצד מדד Torii `torii_address_format_total`. רכיב הדמו
   למעלה שולח אירוע `iroha:address-copy` עם `{mode,timestamp}` - חברו זאת לצינור
   האנליטיקה/טלמטריה שלכם (למשל, שליחה ל-Segment או לאוסף מבוסס NORITO) כדי
@@ -99,7 +99,7 @@ JavaScript חושף גם payload `selector` ב-`domainSummary` (`tag`, `digest_h
   באותו feed כדי שבדיקות פרישה של Local-12 יוכלו לייצא הוכחת 30 יום
   `domain_kind="local12"` ישירות מלוח `address_ingest` ב-Grafana.
 - קשרו כל פקד לרמזי `aria-label`/`aria-describedby` ייחודיים שמסבירים האם literal
-  בטוח לשיתוף (IH58) או Sora-only (דחוס). כללו את כיתוב הדומיין המשתמע
+  בטוח לשיתוף (I105) או Sora-only (דחוס). כללו את כיתוב הדומיין המשתמע
   בתיאור כך שטכנולוגיות מסייעות יציגו את אותו הקשר חזותי.
 - חשפו אזור חי (למשל, `<output aria-live="polite">...</output>`) שמכריז על
   תוצאות העתקה ואזהרות, בהתאם להתנהגות VoiceOver/TalkBack שכבר מחוברת בדוגמאות
@@ -112,7 +112,7 @@ JavaScript חושף גם payload `selector` ב-`domainSummary` (`tag`, `digest_h
 
 השתמשו ב-[Local -> Global toolkit](local-to-global-toolkit.md) כדי לאוטומט
 ביקורת והמרה של סלקטורים Local מורשתיים. העוזר מפיק גם דוח ביקורת JSON וגם את
-רשימת ה-IH58/דחוס שהוסבה שמפעילים מצרפים לכרטיסי readiness, בעוד ה-runbook
+רשימת ה-I105/דחוס שהוסבה שמפעילים מצרפים לכרטיסי readiness, בעוד ה-runbook
 המצורף מקשר ללוחות Grafana ולכללי Alertmanager שמגדרים את ה-cutover במצב strict.
 
 ## הפניה מהירה לפריסת בינארי (ADDR-1a)
@@ -162,15 +162,15 @@ payload bit: │version  │ class  │  norm  │ext │
 
 ## אכיפת צורות קנוניות
 
-מפעילים שממירים קידודים Local מורשתיים ל-IH58 קנוני או למחרוזות דחוסות צריכים
+מפעילים שממירים קידודים Local מורשתיים ל-I105 קנוני או למחרוזות דחוסות צריכים
 לעקוב אחרי תהליך CLI שמתועד תחת ADDR-5:
 
-1. `iroha tools address inspect` מפיק כעת תקציר JSON מובנה עם IH58, דחוס ו-payloads hex
+1. `iroha tools address inspect` מפיק כעת תקציר JSON מובנה עם I105, דחוס ו-payloads hex
    קנוניים. התקציר כולל גם אובייקט `domain` עם שדות `kind`/`warning` ומחזיר כל
    דומיין שסופק דרך השדה `input_domain`. כאשר `kind` הוא `local12`, ה-CLI מדפיס
    אזהרה ל-stderr והתקציר משקף את אותה הנחיה כך שצינורות CI ו-SDKs יוכלו להציג
    אותה. העבירו `legacy  suffix` בכל פעם שתרצו להשמיע את הקידוד המומר בתור
-   `<ih58>@<domain>`.
+   `<i105>@<domain>`.
 2. SDKs יכולים להציג את אותה אזהרה/תקציר דרך עוזר JavaScript:
 
    ```js
@@ -180,20 +180,20 @@ payload bit: │version  │ class  │  norm  │ext │
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  העוזר משמר את קידומת IH58 שזוהתה מה-literal אלא אם מספקים במפורש
+  העוזר משמר את קידומת I105 שזוהתה מה-literal אלא אם מספקים במפורש
   `networkPrefix`, ולכן תקצירים לרשתות שאינן ברירת מחדל לא נבנים מחדש בשקט עם
   הקידומת ברירת המחדל.
 
-3. המירו את ה-payload הקנוני בעזרת השדות `ih58.value` או `compressed` מהתקציר
+3. המירו את ה-payload הקנוני בעזרת השדות `i105.value` או `i105_default` מהתקציר
    (או בקשו קידוד אחר דרך `--format`). מחרוזות אלו כבר בטוחות לשיתוף חיצוני.
 4. עדכנו manifests, registries ומסמכים מול לקוח עם הצורה הקנונית והודיעו
    לשותפים שסלקטורים Local יידחו לאחר השלמת ה-cutover.
 5. עבור מערכי נתונים גדולים, הריצו
    `iroha tools address audit --input addresses.txt --network-prefix 753`. הפקודה
    קוראת literals מופרדים בשורות (תגובות שמתחילות ב-`#` נזנחות, ו-`--input -` או
-   ללא דגל משתמש ב-STDIN), מפיקה דוח JSON עם תקצירים קנוניים/IH58/דחוסים לכל
+   ללא דגל משתמש ב-STDIN), מפיקה דוח JSON עם תקצירים קנוניים/I105/דחוסים לכל
    ערך, וסופרת שגיאות parse ואזהרות דומיין Local. השתמשו ב-`--allow-errors`
    כאשר אתם מבקרים dumps מורשתיים שמכילים שורות זבל, ונעלו אוטומציה עם
    `strict CI post-check` כאשר המפעילים מוכנים לחסום סלקטורים Local ב-CI.
@@ -201,7 +201,7 @@ payload bit: │version  │ class  │  norm  │ext │
   עבור גיליונות remediation של סלקטורים Local, השתמשו
   כדי לייצא CSV `input,status,format,...` שמדגיש קידודים קנוניים, אזהרות ושגיאות
   parse במעבר אחד. העוזר מדלג על שורות שאינן Local כברירת מחדל, ממיר כל ערך
-  שנותר לקידוד המבוקש (IH58/דחוס/hex/JSON), ומשמר את הדומיין המקורי כאשר
+  שנותר לקידוד המבוקש (I105/דחוס/hex/JSON), ומשמר את הדומיין המקורי כאשר
   `legacy  suffix` מוגדר. שלבו עם `--allow-errors` כדי להמשיך בסריקה גם כאשר
   dump מכיל literals פגומים.
 7. אוטומציית CI/lint יכולה להריץ `ci/check_address_normalize.sh`, שמחלצת את
@@ -243,6 +243,6 @@ mainnet מבטל את הסלקטורים הישנים. חבילת Alertmanager
 
 > **כתובות:** נוסף העוזר `iroha tools address normalize`
 > וחובר ל-CI (`ci/check_address_normalize.sh`) כך שצינורות ארנק/מסייר יוכלו להמיר
-> סלקטורים Local מורשתיים לצורות IH58/דחוסות קנוניות לפני ש-Local-8/Local-12
+> סלקטורים Local מורשתיים לצורות I105/דחוסות קנוניות לפני ש-Local-8/Local-12
 > נחסמים ב-mainnet. עדכנו כל export מותאם להריץ את הפקודה ולצרף את הרשימה
 > המנורמלת לחבילת הראיות של השחרור.

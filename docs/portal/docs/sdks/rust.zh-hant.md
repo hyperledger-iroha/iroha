@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 表面：它包括規範的帳戶ID，用
 請求的格式、網絡前綴/糾錯元數據、QR 尺寸以及
 錢包/瀏覽器可以直接嵌入的內聯 SVG 有效負載。省略
-`ExplorerAccountQrOptions` 默認為首選 IH58 輸出或設置
-`address_format: Some(AddressFormat::Compressed)` 檢索第二好
-ADDR-6b 使用的 `sora…` 變體。
+`ExplorerAccountQrOptions` 默認為首選 I105 輸出或設置
+canonical I105 output 檢索第二好
+ADDR-6b 使用的 `i105` 變體。
 
 ## 7. 訂閱事件
 

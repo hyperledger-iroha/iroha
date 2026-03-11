@@ -41,6 +41,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 
 1. [הפעילו את הפרוקסי](./try-it.md#start-the-proxy-locally) והגדירו `TRYIT_PROXY_PUBLIC_URL` כדי שהווידג'טים ידעו לאן לשלוח תעבורה.
 2. פתחו את כרטיס **Try it** בעמוד זה או את הפאנל `/reference/torii-swagger` ובחרו endpoint כמו `POST /v1/pipeline/submit`.
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. החליפו את **Content-Type** ל-`application/x-norito`, בחרו את עורך **Binary**, והעלו `fixtures/norito_rpc/transfer_asset.norito` (או כל payload שמופיע ב-`fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. ספקו bearer token דרך הווידג'ט OAuth device-code או שדה הטוקן הידני (הפרוקסי מקבל overrides של `X-TryIt-Auth` כאשר מוגדר `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. שלחו את הבקשה ואמתו ש-Torii מחזיר את `schema_hash` שמופיע ב-`fixtures/norito_rpc/schema_hashes.json`. hashes תואמים מאשרים שהכותרת Norito שרדה את מעבר הדפדפן/פרוקסי.

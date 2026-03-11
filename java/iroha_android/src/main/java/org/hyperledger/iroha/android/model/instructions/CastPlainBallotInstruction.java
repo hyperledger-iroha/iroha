@@ -143,7 +143,7 @@ public final class CastPlainBallotInstruction implements InstructionTemplate {
     }
 
     public Builder setOwnerAccountId(final String ownerAccountId) {
-      this.ownerAccountId = AccountIdLiteral.extractIh58Address(ownerAccountId);
+      this.ownerAccountId = AccountIdLiteral.extractI105Address(ownerAccountId);
       return this;
     }
 

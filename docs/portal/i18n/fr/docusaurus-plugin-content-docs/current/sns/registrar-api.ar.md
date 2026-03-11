@@ -114,7 +114,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
 | `/v1/sns/registrations/{selector}` | OBTENIR | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Active, Grace, الخ). |
 
-** Sélecteur de type : ** مقطع `{selector}` يقبل IH58 و مضغوط او hex قياسي حسب ADDR-5; Torii est remplacé par `NameSelectorV1`.**Modalités :** Le format de fichier est Norito JSON avec `code`, `message`, `details`. Utilisez `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+** Sélecteur de type : ** مقطع `{selector}` يقبل I105 و مضغوط او hex قياسي حسب ADDR-5; Torii est remplacé par `NameSelectorV1`.**Modalités :** Le format de fichier est Norito JSON avec `code`, `message`, `details`. Utilisez `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 مساعدات CLI (متطلب المسجل اليدوي N0)
 
@@ -158,7 +158,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -216,7 +216,7 @@ Il s'agit de `sns_err_governance_missing`.
 
 ### 6.1 تسجيل قياسي1. يستعلم العميل `/v1/sns/policies/{suffix_id}` للحصول على الاسعار وفترة grace والشرائح المتاحة.
 2. يبني العميل `RegisterNameRequestV1` :
-   - `selector` مشتق من label IH58 (المفضل) او المضغوط (الخيار الثاني).
+   - `selector` مشتق من label I105 (المفضل) او المضغوط (الخيار الثاني).
    - `term_years` est disponible.
    - `payment` pour diviseur/steward.
 3. Torii inclus :

@@ -29,7 +29,7 @@ translator: manual
        "chain" : "testnet",
        "peers" : ["127.0.0.1:1337"],
        "accounts" : [{
-           "id" : "ih58...",
+           "id" : "i105...",
            "public_key" : "ed0120..."
        }]
    }))?;

@@ -103,7 +103,7 @@ tipos Norito implementados em `crates/iroha_data_model::fraud`:
 
 - **Entrada de risco** – `POST /v1/fraud/query` aceita o schema `RiskQuery`:
   - `query_id` (`[u8; 32]`, codificado em hex)
-  - `subject` (`AccountId`, `domainless encoded literal; IH58 preferred, compressed sora accepted`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (enum etiquetado que corresponde a `RiskOperation`; o campo
     `type` no JSON reflete a variante do enum)
   - `related_asset` (`AssetId`, opcional)

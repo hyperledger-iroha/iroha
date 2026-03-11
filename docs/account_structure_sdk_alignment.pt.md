@@ -1,8 +1,8 @@
-# Nota de implantação do IH58 para responsáveis por SDK e codecs
+# Nota de implantação do I105 para responsáveis por SDK e codecs
 
 Equipes: SDK Rust, SDK TypeScript/JavaScript, SDK Python, SDK Kotlin, ferramentas de codec
 
-Contexto: `docs/account_structure.md` agora reflete a implementação de AccountId IH58 em produção.
+Contexto: `docs/account_structure.md` agora reflete a implementação de AccountId I105 em produção.
 Alinhem o comportamento e os testes dos SDKs com a especificação canônica.
 
 Referências-chave:
@@ -12,18 +12,11 @@ Referências-chave:
 - Vetores de fixtures — `fixtures/account/address_vectors.json`
 
 Ações:
-1. **Saída canônica:** `AccountId::to_string()`/Display DEVE emitir apenas IH58
+1. **Saída canônica:** `AccountId::to_string()`/Display DEVE emitir apenas I105
    (sem sufixo `@domain`). O hex canônico é para depuração (`0x...`).
-2. **Entradas aceitas:** parsers DEVEM aceitar IH58 (preferido), `sora`
-   comprimido e hex canônico (somente `0x...`; hex sem prefixo é rejeitado).
-   Entradas PODEM carregar sufixo `@<domain>` para dicas de roteamento;
-   aliases `<label>@<domain>` (rejected legacy form) exigem resolver. 
-   (hex multihash) continua suportado.
-3. **Resolvers:** parsing IH58/sora sem domínio requer resolver de seletor de
-   domínio, a menos que o seletor seja o default implícito (usar o rótulo de
-   domínio padrão configurado). Literais UAID (`uaid:...`) e opaque (`opaque:...`)
-   exigem resolvers.
-4. **Checksum IH58:** use Blake2b-512 sobre `IH58PRE || prefix || payload`,
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **Checksum I105:** use Blake2b-512 sobre `I105PRE || prefix || payload`,
    pegue os primeiros 2 bytes. A base do alfabeto comprimido é **105**.
 5. **Gate de curvas:** SDKs são Ed25519-only por padrão. Forneça opt-in explícito
    para ML‑DSA/GOST/SM (flags de build no Swift; `configureCurveSupport` em JS/Android).

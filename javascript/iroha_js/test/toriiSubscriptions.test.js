@@ -10,7 +10,7 @@ const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({
     "EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
     "hex",
   ),
-}).toIH58();
+}).toI105();
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
   const resolvedHeaders = headers ?? { "content-type": "application/json" };

@@ -681,51 +681,25 @@ pub struct UaidBindingsResponse {
     pub dataspaces: Vec<UaidBindingsDataspace>,
 }
 
-/// Preferred textual representation for account identifiers in Torii responses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AddressFormat {
-    /// IH58 literal (`ih…`).
-    Ih58,
-    /// Compressed literal (`sora…`).
-    Compressed,
-}
-
-impl AddressFormat {
-    fn as_query_str(self) -> &'static str {
-        match self {
-            Self::Ih58 => "ih58",
-            Self::Compressed => "compressed",
-        }
-    }
-}
-
 /// Optional knobs accepted by the explorer QR endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ExplorerAccountQrOptions {
-    /// Preferred address literal encoding (`ih58` by default).
-    pub address_format: Option<AddressFormat>,
-}
+pub struct ExplorerAccountQrOptions;
 
 impl ExplorerAccountQrOptions {
     fn apply(self, builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(format) = self.address_format {
-            builder.param("address_format", format.as_query_str())
-        } else {
-            builder
-        }
+        let _ = self;
+        builder
     }
 }
 
 /// Snapshot returned by `/v1/explorer/accounts/{account_id}/qr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountQrSnapshot {
-    /// Canonical account identifier (IH58).
+    /// Canonical account identifier (I105).
     pub canonical_id: String,
     /// Rendered literal using the requested address format.
     pub literal: String,
-    /// Address format preferred by the caller.
-    pub address_format: AddressFormat,
-    /// IH58 prefix for the network.
+    /// I105 prefix for the network.
     pub network_prefix: u16,
     /// QR error-correction label (`L`, `M`, `Q`, `H`).
     pub error_correction: String,
@@ -749,20 +723,6 @@ impl ExplorerAccountQrSnapshot {
         .to_owned();
         let literal =
             require_string(map.get("literal"), "explorer account qr response.literal")?.to_owned();
-        let address_format_raw = require_string(
-            map.get("address_format"),
-            "explorer account qr response.address_format",
-        )?;
-        let address_format = match address_format_raw.to_ascii_lowercase().as_str() {
-            "ih58" => AddressFormat::Ih58,
-            "compressed" => AddressFormat::Compressed,
-            other => {
-                return Err(eyre!(
-                    "explorer account qr response.address_format must be `ih58` or `compressed` \
-                     (got `{other}`)"
-                ));
-            }
-        };
         let network_prefix = parse_required_u64(
             map.get("network_prefix"),
             "explorer account qr response.network_prefix",
@@ -793,7 +753,6 @@ impl ExplorerAccountQrSnapshot {
         Ok(Self {
             canonical_id,
             literal,
-            address_format,
             network_prefix,
             error_correction,
             modules,
@@ -805,16 +764,11 @@ impl ExplorerAccountQrSnapshot {
 
 /// Query parameters accepted by the UAID bindings endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct UaidBindingsQuery {
-    /// Optional address format for the `accounts` arrays.
-    pub address_format: Option<AddressFormat>,
-}
+pub struct UaidBindingsQuery;
 
 impl UaidBindingsQuery {
-    fn apply(self, mut builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(format) = self.address_format {
-            builder = builder.param("address_format", format.as_query_str());
-        }
+    fn apply(self, builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
+        let _ = self;
         builder
     }
 }
@@ -898,8 +852,6 @@ pub struct UaidManifestQuery {
     pub limit: Option<u32>,
     /// Number of manifests to skip before collecting results.
     pub offset: Option<u32>,
-    /// Optional address format for the embedded account lists.
-    pub address_format: Option<AddressFormat>,
 }
 
 impl UaidManifestQuery {
@@ -915,9 +867,6 @@ impl UaidManifestQuery {
         }
         if let Some(offset) = self.offset {
             builder = builder.param("offset", &offset);
-        }
-        if let Some(format) = self.address_format {
-            builder = builder.param("address_format", format.as_query_str());
         }
         builder
     }
@@ -1364,7 +1313,7 @@ pub struct SorafsRepairWorkerClaimRequest {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier (IH58 account id).
+    /// Repair worker identifier (I105 account id).
     pub worker_id: String,
     /// Unix timestamp (seconds) when the claim was issued.
     pub claimed_at_unix: u64,
@@ -1381,7 +1330,7 @@ pub struct SorafsRepairWorkerCompleteRequest {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier (IH58 account id).
+    /// Repair worker identifier (I105 account id).
     pub worker_id: String,
     /// Unix timestamp (seconds) when remediation completed.
     pub completed_at_unix: u64,
@@ -1400,7 +1349,7 @@ pub struct SorafsRepairWorkerFailRequest {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier (IH58 account id).
+    /// Repair worker identifier (I105 account id).
     pub worker_id: String,
     /// Unix timestamp (seconds) when the failure was recorded.
     pub failed_at_unix: u64,
@@ -2716,19 +2665,12 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_public_lane_validators(
-        &self,
-        lane_id: LaneId,
-        address_format: Option<AddressFormat>,
-    ) -> Result<JsonValue> {
+    pub fn get_public_lane_validators(&self, lane_id: LaneId) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
             &format!("v1/nexus/public_lanes/{}/validators", lane_id.as_u32()),
         );
-        let mut req = self.default_request(HttpMethod::GET, url);
-        if let Some(format) = address_format {
-            req = req.param("address_format", format.as_query_str());
-        }
+        let req = self.default_request(HttpMethod::GET, url);
         let resp = self.send_builder(req)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -2748,16 +2690,12 @@ impl Client {
         &self,
         lane_id: LaneId,
         validator: Option<&str>,
-        address_format: Option<AddressFormat>,
     ) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
             &format!("v1/nexus/public_lanes/{}/stake", lane_id.as_u32()),
         );
         let mut req = self.default_request(HttpMethod::GET, url);
-        if let Some(format) = address_format {
-            req = req.param("address_format", format.as_query_str());
-        }
         if let Some(value) = validator {
             if value.is_empty() {
                 return Err(eyre!("validator filter must not be empty"));
@@ -2784,7 +2722,6 @@ impl Client {
         lane_id: LaneId,
         account: &str,
         upto_epoch: Option<u64>,
-        address_format: Option<AddressFormat>,
     ) -> Result<JsonValue> {
         if account.is_empty() {
             return Err(eyre!("account filter must not be empty"));
@@ -2798,9 +2735,6 @@ impl Client {
             .param("account", account);
         if let Some(epoch) = upto_epoch {
             req = req.param("upto_epoch", &epoch);
-        }
-        if let Some(format) = address_format {
-            req = req.param("address_format", format.as_query_str());
         }
         let resp = self.send_builder(req)?;
         if resp.status() != StatusCode::OK {
@@ -4496,12 +4430,12 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -4700,12 +4634,12 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -4792,12 +4726,12 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -5589,7 +5523,8 @@ impl Client {
     /// # Errors
     /// Fails if sending transaction to peer fails, if it response with error, or if the node
     /// data model version is missing or incompatible. If `/v1/node/capabilities` responds with
-    /// HTTP 429, the compatibility probe is treated as transient and deferred.
+    /// HTTP 429 or transient 5xx statuses, the compatibility probe is treated as transient and
+    /// deferred.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -8886,6 +8821,13 @@ impl Client {
             );
             return Ok(None);
         }
+        if resp.status().is_server_error() {
+            warn!(
+                "node capabilities probe returned transient server error status={}; deferring data model compatibility check",
+                resp.status()
+            );
+            return Ok(None);
+        }
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get node capabilities: {} {}",
@@ -10601,12 +10543,12 @@ mod tx_hash_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let public_key: crate::crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .unwrap();
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let private_key: crate::crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -11998,7 +11940,7 @@ mod tests {
         let chain: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -12007,7 +11949,7 @@ mod tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .expect("private key");
-        let authority = AccountId::new(domain, public_key);
+        let authority = AccountId::new(public_key);
         let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
         let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
 
@@ -13468,7 +13410,6 @@ mod tests {
             status: Some(UaidManifestStatusFilter::Inactive),
             limit: Some(5),
             offset: Some(2),
-            address_format: None,
         };
         let result = with_mock_http(respond_with(&snapshots, response), || {
             client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
@@ -13500,13 +13441,13 @@ mod tests {
     }
 
     #[test]
-    fn get_public_lane_validators_sets_address_format() {
+    fn get_public_lane_validators_omits_address_format_query() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":7,"total":0,"items":[]}"#);
         let snapshot_store = Arc::clone(&snapshots);
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.get_public_lane_validators(LaneId::new(7), Some(AddressFormat::Compressed))
+            client.get_public_lane_validators(LaneId::new(7))
         })
         .expect("request succeeds");
         assert_eq!(payload["lane_id"].as_u64(), Some(7));
@@ -13517,11 +13458,7 @@ mod tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/7/validators");
-        let has_compressed = snapshot
-            .url
-            .query_pairs()
-            .any(|pair| pair == ("address_format".into(), "compressed".into()));
-        assert!(has_compressed);
+        assert_eq!(snapshot.url.query(), None);
     }
 
     #[test]
@@ -13534,7 +13471,6 @@ mod tests {
             client.get_public_lane_stake(
                 LaneId::new(1),
                 Some("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
-                Some(AddressFormat::Ih58),
             )
         })
         .expect("request succeeds");
@@ -13546,12 +13482,11 @@ mod tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/1/stake");
-        let pairs: Vec<_> = snapshot.url.query_pairs().collect();
-        assert!(pairs.contains(&(
-            "validator".into(),
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
-        )));
-        assert!(pairs.contains(&("address_format".into(), "ih58".into())));
+        assert!(snapshot.url.query_pairs().any(|pair| pair
+            == (
+                "validator".into(),
+                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+            )));
     }
 
     #[test]
@@ -13565,7 +13500,6 @@ mod tests {
                 LaneId::new(0),
                 "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
                 Some(5),
-                Some(AddressFormat::Compressed),
             )
         })
         .expect("request succeeds");
@@ -13586,40 +13520,34 @@ mod tests {
             "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
         )));
         assert!(pairs.contains(&("upto_epoch".into(), "5".into())));
-        assert!(pairs.contains(&("address_format".into(), "compressed".into())));
     }
 
     #[test]
-    fn get_explorer_account_qr_parses_payload_and_applies_options() {
+    fn get_explorer_account_qr_parses_payload_and_omits_address_format_query() {
         let account_id = ALICE_ID.to_string();
         let address = AccountAddress::from_account_id(&ALICE_ID).expect("address from account");
-        let compressed_literal = address.to_compressed_sora().expect("compressed literal");
+        let i105_literal = address.to_i105().expect("i105 literal");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let compressed_payload = format!(
+        let payload = format!(
             r#"{{
   "canonical_id":"{account_id}",
-  "literal":"{compressed_literal}",
-  "address_format":"compressed",
+  "literal":"{i105_literal}",
   "network_prefix":73,
   "error_correction":"M",
   "modules":192,
   "qr_version":5,
-  "svg":"<svg compressed />"
+  "svg":"<svg i105 />"
 }}"#
         );
-        let response = json_response(StatusCode::OK, &compressed_payload);
-        let options = ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
-        };
+        let response = json_response(StatusCode::OK, &payload);
         let snapshot_store = Arc::clone(&snapshots);
         let qr = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.get_explorer_account_qr(&account_id, Some(options))
+            client.get_explorer_account_qr(&account_id, Some(ExplorerAccountQrOptions))
         })
         .expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
-        assert_eq!(qr.literal, compressed_literal);
-        assert_eq!(qr.address_format, AddressFormat::Compressed);
+        assert_eq!(qr.literal, i105_literal);
         assert_eq!(qr.network_prefix, 73);
         assert_eq!(qr.modules, 192);
         assert_eq!(qr.qr_version, 5);
@@ -13630,46 +13558,18 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/explorer/accounts/{account_id}/qr")
+        let expected_url = join_torii_url(
+            &client.torii_url,
+            &format!("v1/explorer/accounts/{account_id}/qr"),
         );
-        assert_eq!(snapshot.url.query(), Some("address_format=compressed"));
+        assert_eq!(snapshot.url.path(), expected_url.path());
+        assert_eq!(snapshot.url.query(), None);
         assert!(
             snapshot.headers.iter().any(|(name, value)| {
                 name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
             }),
             "request should set Accept: application/json"
         );
-
-        // Default call should omit the query parameter and decode IH58 payloads.
-        let snapshots_default: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let default_payload = format!(
-            r#"{{
-  "canonical_id":"{account_id}",
-  "literal":"{account_id}",
-  "address_format":"ih58",
-  "network_prefix":73,
-  "error_correction":"M",
-  "modules":192,
-  "qr_version":5,
-  "svg":"<svg ih58 />"
-}}"#
-        );
-        let default_response = json_response(StatusCode::OK, &default_payload);
-        let default_qr = with_mock_http(respond_with(&snapshots_default, default_response), || {
-            client.get_explorer_account_qr(&account_id, None)
-        })
-        .expect("default explorer QR request succeeds");
-        assert_eq!(default_qr.address_format, AddressFormat::Ih58);
-        assert_eq!(default_qr.literal, account_id);
-        let default_snapshot = snapshots_default
-            .lock()
-            .expect("snapshot lock")
-            .first()
-            .cloned()
-            .expect("default snapshot captured");
-        assert_eq!(default_snapshot.url.query(), None);
     }
 
     #[test]
@@ -13878,6 +13778,56 @@ mod tests {
             assert!(
                 matches!(cached, DataModelCompatibility::Unchecked),
                 "rate-limited probe must not mark compatibility state as checked"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            2,
+            "expected node capabilities + transaction requests"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
+    }
+
+    #[test]
+    fn submit_transaction_tolerates_server_error_capabilities_probe() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = if path == "/v1/node/capabilities" {
+                    HttpResponse::builder()
+                        .status(StatusCode::BAD_GATEWAY)
+                        .body(b"bad gateway".to_vec())
+                        .expect("response build")
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .expect("response build")
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            client.submit_transaction(&tx).expect(
+                "transaction submission should proceed despite transient capability server errors",
+            );
+            let cached = client
+                .data_model_compatibility
+                .lock()
+                .expect("data model compatibility lock")
+                .clone();
+            assert!(
+                matches!(cached, DataModelCompatibility::Unchecked),
+                "server-error probe must not mark compatibility state as checked"
             );
         });
 
@@ -15945,17 +15895,15 @@ mod tests {
     }
 
     #[test]
-    fn uaid_bindings_query_sets_address_format_param() {
+    fn uaid_bindings_query_leaves_query_string_empty() {
         let client = Client::new(config_factory());
         let url = join_torii_url(&client.torii_url, "v1/space-directory/uaids/demo");
-        let query = UaidBindingsQuery {
-            address_format: Some(AddressFormat::Compressed),
-        };
+        let query = UaidBindingsQuery;
         let request = query
             .apply(client.default_request(HttpMethod::GET, url))
             .build()
             .expect("build request");
-        assert_eq!(request.uri().query(), Some("address_format=compressed"));
+        assert_eq!(request.uri().query(), None);
     }
 
     #[test]

@@ -110,12 +110,12 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
-    let alice = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+    let alice = AccountId::new(KeyPair::random().public_key().clone());
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(alice.clone())).into(),
+        Register::account(NewAccount::new_in_domain(alice.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), alice.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(

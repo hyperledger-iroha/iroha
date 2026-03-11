@@ -36,7 +36,7 @@ Le parseur exige la ligne d'en-tete suivante (柔軟な選択):
 |----------|----------|---------------|
 | `label` |おうい |リベル要求 (casse mixte acceptee; l'outil 正規化 selon Norm v1 et UTS-46)。 |
 | `suffix_id` |おうい |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
-| `owner` |おうい | Chaine AccountId (IH58 リテラル; オプションの @domain ヒント) は登録の所有権を表します。 |
+| `owner` |おうい | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |おうい |エンティア `1..=255`。 |
 | `payment_asset_id` |おうい |和解行為 (`xor#sora` など)。 |
 | `payment_gross` / `payment_net` |おうい | Entiers nonsignes 代表者 des 団結ネイティブ de l'actif。 |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -251,7 +251,7 @@ Auditeurs puissent se concentrer sur une seule execution CSV。
   CSV の配置に関連する解決策の決定を参照します。
   オブジェクトではないメタデータが検証に失敗する可能性があります。
 - **コントローラー:** セルセルは、関連する `--default-controllers` を参照します。フルニセズ
-  明示的なリスト (`ih58...;ih58...` など) は、完全に削除されたものです。
+  明示的なリスト (`i105...;i105...` など) は、完全に削除されたものです。
   俳優は所有者ではありません。
 
 Les echecs Sont signales avec des numeros de ligne contextuels (par example)

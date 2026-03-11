@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0dc64bb4067d734250852a74a65a2100bd68e5ff35f9e8e9dbf3bd2b86f00cfa
 source_last_modified: "2026-01-22T14:35:36.898296+00:00"
 translation_last_reviewed: 2026-02-07
-id: pin-registry-ops
+id: pin-registry-ops-az
 title: Pin Registry Operations
 sidebar_label: Pin Registry Operations
 description: Monitor and triage the SoraFS pin registry and replication SLA metrics.
 translator: machine-google-reviewed
+slug: /sorafs/pin-registry-ops-az
 ---
 
 :::Qeyd Kanonik Mənbə

@@ -1,15 +1,16 @@
-//! Helpers for domain-scoped account admission and implicit account creation.
+//! Helpers for global account admission and implicit account creation.
 //!
 //! This module provides a deterministic implementation of "implicit accounts":
-//! when a domain opts in via metadata policy, receipt-like operations (asset mint/transfer, NFT
-//! transfer) may create the destination `Account` object automatically if it does not exist yet.
+//! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
+//! destination `Account` object may be created automatically if it does not exist yet.
 
 use std::sync::LazyLock;
 
+use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
-    HasMetadata as _, IntoKeyValue,
+    IntoKeyValue,
     account::{
-        ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
+        AccountAdmissionMode, AccountAdmissionPolicy,
         admission::{ImplicitAccountCreationFee, ImplicitAccountFeeDestination},
         curve::CurveId,
     },
@@ -28,12 +29,6 @@ use crate::{
     role::RoleIdWithOwner,
     state::{StateTransaction, WorldReadOnly},
 };
-
-static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
-    ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-        .parse()
-        .expect("account admission policy metadata key must be a valid Name")
-});
 
 static IMPLICIT_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
@@ -101,55 +96,30 @@ fn ensure_controller_allowed_for_implicit_admission(
 }
 
 fn load_account_admission_policy(
-    destination: &AccountId,
+    _destination: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AccountAdmissionPolicy, InstructionExecutionError> {
-    let domain = state_transaction.world.domain(destination.domain())?;
-    domain
-        .metadata()
-        .get(&*POLICY_METADATA_KEY)
-        .map_or_else(
-            || {
-                state_transaction
-                    .world
-                    .parameters()
-                    .custom()
-                    .get(&AccountAdmissionPolicy::parameter_id())
-                    .map_or_else(
-                        || Ok(AccountAdmissionPolicy::default()),
-                        |custom| {
-                            custom
-                                .payload()
-                                .try_into_any_norito::<AccountAdmissionPolicy>()
-                                .map_err(|err| {
-                                    AccountAdmissionError::InvalidPolicy(
-                                        AccountAdmissionInvalidPolicy {
-                                            domain: destination.domain().clone(),
-                                            reason: format!(
-                                                "chain parameter `{}` decode error: {err}",
-                                                AccountAdmissionPolicy::PARAMETER_ID_STR
-                                            ),
-                                        },
-                                    )
-                                    .into()
-                                })
-                        },
-                    )
-            },
-            |policy_json| {
-                policy_json
-                    .try_into_any_norito::<AccountAdmissionPolicy>()
-                    .map_err(|err| {
-                        AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
-                            domain: destination.domain().clone(),
-                            reason: format!(
-                                "domain metadata key `{ACCOUNT_ADMISSION_POLICY_METADATA_KEY}` decode error: {err}"
-                            ),
-                        })
-                        .into()
-                    })
-            },
-        )
+    let from_chain = state_transaction
+        .world
+        .parameters()
+        .custom()
+        .get(&AccountAdmissionPolicy::parameter_id());
+    if let Some(custom) = from_chain {
+        return custom
+            .payload()
+            .try_into_any_norito::<AccountAdmissionPolicy>()
+            .map_err(|err| {
+                AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
+                    reason: format!(
+                        "chain parameter `{}` decode error: {err}",
+                        AccountAdmissionPolicy::PARAMETER_ID_STR
+                    ),
+                })
+                .into()
+            });
+    }
+
+    Ok(AccountAdmissionPolicy::default())
 }
 
 fn apply_implicit_creation_fee(
@@ -157,7 +127,14 @@ fn apply_implicit_creation_fee(
     fee: &ImplicitAccountCreationFee,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let payer_asset_id = AssetId::new(fee.asset_definition_id.clone(), authority.clone());
+    let payer = resolve_existing_account_for_subject(state_transaction, authority)?;
+    let payer_asset_id =
+        state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&AssetId::new(
+                fee.asset_definition_id.clone(),
+                payer,
+            ))?;
     let available = state_transaction.world.asset(&payer_asset_id).map_or_else(
         |_| Numeric::zero(),
         |asset| asset.value().clone().into_inner(),
@@ -185,7 +162,14 @@ fn apply_implicit_creation_fee(
                 .decrease_asset_total_amount(&fee.asset_definition_id, &fee.amount)?;
         }
         ImplicitAccountFeeDestination::Account(sink) => {
-            let sink_asset_id = AssetId::new(fee.asset_definition_id.clone(), sink.clone());
+            let sink = resolve_existing_account_for_subject(state_transaction, sink)?;
+            let sink_asset_id =
+                state_transaction
+                    .world
+                    .resolve_asset_id_for_current_scope(&AssetId::new(
+                        fee.asset_definition_id.clone(),
+                        sink,
+                    ))?;
             state_transaction
                 .world
                 .deposit_numeric_asset(&sink_asset_id, &fee.amount)?;
@@ -193,6 +177,24 @@ fn apply_implicit_creation_fee(
     }
 
     Ok(())
+}
+
+fn resolve_existing_account_for_subject(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<AccountId, InstructionExecutionError> {
+    match state_transaction.world.account(account) {
+        Ok(_) => return Ok(account.clone()),
+        Err(FindError::Account(_)) => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    state_transaction
+        .world
+        .accounts_for_subject_iter(&account.subject_id())
+        .next()
+        .map(|entry| entry.id().clone())
+        .ok_or_else(|| FindError::Account(account.clone()).into())
 }
 
 fn create_implicit_account(
@@ -239,10 +241,6 @@ fn create_implicit_account(
         state_transaction.invalidate_permission_cache_for_account(destination);
     }
 
-    state_transaction
-        .world
-        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(account))));
-
     if let Some(role) = default_role_granted {
         state_transaction
             .world
@@ -268,17 +266,10 @@ pub(super) fn ensure_receiving_account(
         return Ok(false);
     }
 
-    if *destination.domain() == *iroha_genesis::GENESIS_DOMAIN_ID {
-        return Err(AccountAdmissionError::GenesisDomainForbidden.into());
-    }
-
     let policy = load_account_admission_policy(destination, state_transaction)?;
 
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
-        return Err(AccountAdmissionError::ImplicitAccountCreationDisabled(
-            destination.domain().clone(),
-        )
-        .into());
+        return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
 
     if let Some((asset_def_id, amount)) = value_hint {
@@ -362,9 +353,12 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        account::admission::ImplicitAccountCreationFee, permission::Permissions,
+        account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
+        parameter::Parameters,
+        permission::Permissions,
     };
     use iroha_test_samples::ALICE_ID;
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -375,18 +369,59 @@ mod tests {
         state::{State, World},
     };
 
+    static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
+        ACCOUNT_ADMISSION_POLICY_METADATA_KEY
+            .parse()
+            .expect("account admission policy metadata key must be a valid Name")
+    });
+
+    fn random_account_id() -> AccountId {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
     fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
         let mut metadata = Metadata::default();
-        let key: Name = ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-            .parse()
-            .expect("policy metadata key");
-        metadata.insert(key, Json::new(policy));
+        metadata.insert((*POLICY_METADATA_KEY).clone(), Json::new(policy));
         Domain::new(domain_id)
             .with_metadata(metadata)
             .build(&ALICE_ID)
     }
 
-    fn test_state(world: World) -> State {
+    fn build_account_in_domain(
+        account_id: AccountId,
+        domain_id: DomainId,
+        authority: &AccountId,
+    ) -> iroha_data_model::account::Account {
+        iroha_data_model::account::NewAccount::new_in_domain(account_id, domain_id).build(authority)
+    }
+
+    fn test_state(mut world: World) -> State {
+        let mut policy = None::<AccountAdmissionPolicy>;
+        for (_, domain) in world.domains.view().iter() {
+            let Some(raw) = domain.metadata().get(&*POLICY_METADATA_KEY) else {
+                continue;
+            };
+            let decoded = raw
+                .try_into_any_norito::<AccountAdmissionPolicy>()
+                .expect("domain metadata policy must decode in tests");
+            if let Some(current) = policy.as_ref() {
+                assert_eq!(
+                    current, &decoded,
+                    "all test domains must carry the same admission policy metadata"
+                );
+            } else {
+                policy = Some(decoded);
+            }
+        }
+
+        if let Some(policy) = policy {
+            let custom = policy.into_custom_parameter();
+            let mut params = Parameters::default();
+            params.custom.insert(custom.id.clone(), custom);
+            world.parameters = mv::cell::Cell::new(params);
+        }
+
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)
@@ -406,7 +441,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -418,9 +453,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("transfer succeeds");
@@ -481,7 +514,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -494,8 +527,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let entry = TransferAssetBatchEntry::new(
             ALICE_ID.clone(),
             dest.clone(),
@@ -541,7 +573,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
 
@@ -552,9 +584,8 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
-        let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
+        let dest = random_account_id();
+        let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_numeric(7_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint succeeds");
@@ -594,7 +625,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let nft_id: NftId = "n0$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
 
@@ -605,8 +636,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         Transfer::nft(ALICE_ID.clone(), nft_id.clone(), dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("nft transfer succeeds");
@@ -649,7 +679,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -662,19 +692,22 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
-        let err = Transfer::asset_numeric(alice_asset_id, 10_u32, dest)
+        let dest = random_account_id();
+        let err = Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("transfer should fail in ExplicitOnly domain");
         assert!(
             matches!(
                 err,
                 InstructionExecutionError::AccountAdmission(
-                    AccountAdmissionError::ImplicitAccountCreationDisabled(_)
+                    AccountAdmissionError::ImplicitAccountCreationDisabled
                 )
             ),
             "unexpected error: {err:?}"
+        );
+        assert!(
+            stx.world.account(&dest).is_err(),
+            "destination must not exist"
         );
     }
 
@@ -684,7 +717,7 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -710,9 +743,8 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
-        let err = Transfer::asset_numeric(alice_asset_id, 10_u32, dest.clone())
+        let dest = random_account_id();
+        let err = Transfer::asset_numeric(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("transfer should be rejected via chain default explicit policy");
 
@@ -720,7 +752,7 @@ mod tests {
             matches!(
                 err,
                 InstructionExecutionError::AccountAdmission(
-                    AccountAdmissionError::ImplicitAccountCreationDisabled(_)
+                    AccountAdmissionError::ImplicitAccountCreationDisabled
                 )
             ),
             "unexpected error: {err:?}"
@@ -745,7 +777,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
 
@@ -756,16 +788,14 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest1_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
+        let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
         Mint::asset_numeric(1_u32, dest1_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect("first mint creates account");
 
-        let dest2_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest2 = AccountId::new(domain_id, dest2_kp.public_key().clone());
-        let dest2_asset_id = AssetId::new(asset_def_id, dest2.clone());
+        let dest2 = random_account_id();
+        let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
         let err = Mint::asset_numeric(1_u32, dest2_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("second mint exceeds cap");
@@ -798,7 +828,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
 
@@ -808,8 +838,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        let dest1_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest1 = AccountId::new(domain_id.clone(), dest1_kp.public_key().clone());
+        let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
         {
             let mut stx = block.transaction();
@@ -819,9 +848,8 @@ mod tests {
             stx.apply();
         }
 
-        let dest2_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest2 = AccountId::new(domain_id, dest2_kp.public_key().clone());
-        let dest2_asset_id = AssetId::new(asset_def_id, dest2.clone());
+        let dest2 = random_account_id();
+        let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
         let mut stx = block.transaction();
         let err = Mint::asset_numeric(1_u32, dest2_asset_id)
             .execute(&ALICE_ID, &mut stx)
@@ -845,8 +873,7 @@ mod tests {
     fn implicit_creation_fee_is_enforced_and_charged() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let fee_sink_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let fee_sink = AccountId::new(domain_id.clone(), fee_sink_kp.public_key().clone());
+        let fee_sink = random_account_id();
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -862,8 +889,9 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let fee_sink_account = Account::new(fee_sink.clone()).build(&fee_sink);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
+        let fee_sink_account =
+            build_account_in_domain(fee_sink.clone(), domain_id.clone(), &fee_sink);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(20, 0));
@@ -881,8 +909,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_numeric(10_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -932,7 +959,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(3, 0));
@@ -944,8 +971,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         let err = Mint::asset_numeric(1_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -989,7 +1015,7 @@ mod tests {
                 default_role_on_create: None,
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
 
         let world = World::with([domain], [alice_account], [asset_def]);
@@ -999,8 +1025,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         let err = Mint::asset_numeric(5_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -1041,7 +1066,7 @@ mod tests {
                 default_role_on_create: Some(role_id.clone()),
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
 
@@ -1059,8 +1084,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_numeric(1_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -1105,7 +1129,7 @@ mod tests {
                 default_role_on_create: Some(role_id.clone()),
             },
         );
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
 
         let world = World::with([domain], [alice_account], []);
         let state = test_state(world);
@@ -1114,8 +1138,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
-        let dest_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let dest = AccountId::new(domain_id, dest_kp.public_key().clone());
+        let dest = random_account_id();
         let err = ensure_receiving_account(&ALICE_ID, &dest, None, &mut stx)
             .expect_err("implicit creation should fail when role is absent");
 

@@ -42,9 +42,9 @@ scripts/nexus_lane_bootstrap.sh \
   --dataspace-alias payments \
   --governance-module parliament \
   --settlement-handle xor_global \
-  --validator ih58... \
-  --validator ih58... \
-  --validator ih58... \
+  --validator i105... \
+  --validator i105... \
+  --validator i105... \
   --protected-namespace payments \
   --description "High-throughput interbank payments lane" \
   --dataspace-description "Payments dataspace" \
@@ -278,8 +278,8 @@ scripts/nexus_lane_bootstrap.sh \
   --dataspace-alias payments \
   --governance-module parliament \
   --settlement-handle xor_global \
-  --validator ih58... \
-  --validator ih58... \
+  --validator i105... \
+  --validator i105... \
   --dry-run
 ```
 

@@ -115,7 +115,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar após remediação; garantia override do conselho registrado. |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | Atribuição de nomes reservados por administrador/conselho. |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Busca `SuffixPolicyV1` atual (cacheavel). |
-| `/v1/sns/registrations/{selector}` | OBTER | -- | Retorna `NameRecordV1` atual + estado efetivo (Active, Grace, etc.). |**Codificação de seletor:** o segmento `{selector}` aceita IH58, comprimido ou hex canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
+| `/v1/sns/registrations/{selector}` | OBTER | -- | Retorna `NameRecordV1` atual + estado efetivo (Active, Grace, etc.). |**Codificação de seletor:** o segmento `{selector}` aceita I105, comprimido ou hex canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
 
 **Modelo de erros:** todos os endpoints retornam Norito JSON com `code`, `message`, `details`. Os códigos incluem `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ Falhas retornam `sns_err_governance_missing`.
 
 ### 6.1 Registro padrão1. O cliente consulte `/v1/sns/policies/{suffix_id}` para obter preços, graça e níveis disponíveis.
 2. O cliente monta `RegisterNameRequestV1`:
-   - `selector` derivado do rótulo IH58 (preferido) ou comprimido (segunda melhor opção).
+   - `selector` derivado do rótulo I105 (preferido) ou comprimido (segunda melhor opção).
    - `term_years` dentro dos limites da política.
    - `payment` referenciando a transferência do splitter tesouraria/steward.
 3. Validação Torii:

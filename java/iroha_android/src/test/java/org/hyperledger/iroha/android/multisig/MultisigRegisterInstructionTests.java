@@ -81,7 +81,7 @@ public final class MultisigRegisterInstructionTests {
     try {
       signerId =
           AccountAddress.fromAccount(signerKey, "ed25519")
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build signatory id", ex);
     }
@@ -101,7 +101,7 @@ public final class MultisigRegisterInstructionTests {
     try {
       derivedId =
           AccountAddress.fromAccount(derivedKey, "ed25519")
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build derived controller id", ex);
     }
@@ -122,7 +122,7 @@ public final class MultisigRegisterInstructionTests {
     final byte[] publicKey = privateKey.generatePublicKey().getEncoded();
     try {
       return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to derive account id", ex);
     }

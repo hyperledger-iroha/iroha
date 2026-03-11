@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Result, eyre};
+use eyre::Result;
 use norito::{derive::JsonDeserialize, json};
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -19,6 +19,69 @@ pub const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const METRICS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const STATUS_BODY_LIMIT: usize = 128 * 1024;
 pub const METRICS_BODY_LIMIT: usize = 512 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeLevel {
+    Info,
+    Warning,
+    Critical,
+}
+
+impl NoticeLevel {
+    pub const fn priority(self) -> u8 {
+        match self {
+            Self::Info => 0,
+            Self::Warning => 1,
+            Self::Critical => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeKind {
+    StatusFetchFailed,
+    StatusPayloadTooLarge,
+    StatusParseFailed,
+    MetricsFetchFailed,
+    MetricsPayloadTooLarge,
+    MetricsParseFailed,
+    InternalFetchFailure,
+    SmHelpersAdvertised,
+    SmOpensslPreviewEnabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerNotice {
+    pub level: NoticeLevel,
+    pub kind: NoticeKind,
+    pub message: String,
+}
+
+impl PeerNotice {
+    fn info(kind: NoticeKind, message: impl Into<String>) -> Self {
+        Self {
+            level: NoticeLevel::Info,
+            kind,
+            message: message.into(),
+        }
+    }
+
+    fn warning(kind: NoticeKind, message: impl Into<String>) -> Self {
+        Self {
+            level: NoticeLevel::Warning,
+            kind,
+            message: message.into(),
+        }
+    }
+
+    fn critical(kind: NoticeKind, message: impl Into<String>) -> Self {
+        Self {
+            level: NoticeLevel::Critical,
+            kind,
+            message: message.into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, JsonDeserialize, Default)]
 pub struct CryptoStatusPayload {
@@ -54,7 +117,15 @@ pub struct PeerSnapshot {
     pub status: Option<StatusPayload>,
     pub metrics: MetricsSnapshot,
     pub latency: Option<Duration>,
-    pub warnings: Vec<String>,
+    pub notices: Vec<PeerNotice>,
+}
+
+impl PeerSnapshot {
+    pub fn primary_notice(&self) -> Option<&PeerNotice> {
+        self.notices
+            .iter()
+            .max_by_key(|notice| notice.level.priority())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -91,12 +162,14 @@ impl PeerFetcher {
                             }
                         }
                         Err(err) => {
-                            let msg = format!("fetch task join error: {err}");
                             let snapshot = PeerSnapshot {
                                 status: None,
                                 metrics: MetricsSnapshot::default(),
                                 latency: None,
-                                warnings: vec![msg],
+                                notices: vec![PeerNotice::critical(
+                                    NoticeKind::InternalFetchFailure,
+                                    format!("fetch task join error: {err}"),
+                                )],
                             };
                             if tx_cloned
                                 .send(PeerUpdate { index, snapshot })
@@ -127,7 +200,7 @@ impl Drop for PeerFetcher {
 }
 
 fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
-    let mut warnings = Vec::new();
+    let mut notices = Vec::new();
 
     let trimmed = endpoint.trim_end_matches('/');
     let status_url = format!("{trimmed}/status");
@@ -136,8 +209,8 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
     let status_result = fetch_status(&status_url);
     let latency = status_result.as_ref().ok().and_then(|info| info.latency);
 
-    if let Err(err) = &status_result {
-        warnings.push(format!("status: {err}"));
+    if let Err(notice) = &status_result {
+        notices.push(notice.clone());
     }
 
     let status = status_result.ok().and_then(|info| info.payload);
@@ -146,20 +219,26 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             .sm_helpers_available
             .is_some_and(|available| available)
         {
-            warnings.push("info: peer advertises SM helpers".to_owned());
+            notices.push(PeerNotice::info(
+                NoticeKind::SmHelpersAdvertised,
+                "peer advertises SM helpers",
+            ));
         }
         if crypto
             .sm_openssl_preview_enabled
             .is_some_and(|enabled| enabled)
         {
-            warnings.push("info: peer enables SM OpenSSL preview".to_owned());
+            notices.push(PeerNotice::info(
+                NoticeKind::SmOpensslPreviewEnabled,
+                "peer enables SM OpenSSL preview",
+            ));
         }
     }
 
     let metrics = match fetch_metrics(&metrics_url) {
         Ok(metrics) => metrics,
-        Err(err) => {
-            warnings.push(format!("metrics: {err}"));
+        Err(notice) => {
+            notices.push(notice);
             MetricsSnapshot::default()
         }
     };
@@ -170,7 +249,7 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             status,
             metrics,
             latency,
-            warnings,
+            notices,
         },
     }
 }
@@ -180,7 +259,7 @@ struct StatusFetch {
     latency: Option<Duration>,
 }
 
-fn fetch_status(url: &str) -> Result<StatusFetch> {
+fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/status") {
         let payload = stub_status_payload(descriptor.peer_index, descriptor.total_peers);
         return Ok(StatusFetch {
@@ -192,15 +271,30 @@ fn fetch_status(url: &str) -> Result<StatusFetch> {
     let response = attohttpc::get(url)
         .timeout(STATUS_HTTP_TIMEOUT)
         .send()
-        .map_err(|err| eyre!("GET {url} failed: {err}"))?;
+        .map_err(|err| {
+            PeerNotice::critical(
+                NoticeKind::StatusFetchFailed,
+                format!("GET {url} failed: {err}"),
+            )
+        })?;
     let latency = Some(start.elapsed());
     if !response.is_success() {
-        return Err(eyre!("GET {url} returned {}", response.status()));
+        return Err(PeerNotice::critical(
+            NoticeKind::StatusFetchFailed,
+            format!("GET {url} returned {}", response.status()),
+        ));
     }
-    let (body, truncated) = read_body_with_limit(response, STATUS_BODY_LIMIT)
-        .map_err(|err| eyre!("failed to read status body from {url}: {err}"))?;
+    let (body, truncated) = read_body_with_limit(response, STATUS_BODY_LIMIT).map_err(|err| {
+        PeerNotice::critical(
+            NoticeKind::StatusFetchFailed,
+            format!("failed to read status body from {url}: {err}"),
+        )
+    })?;
     if truncated {
-        return Err(eyre!("GET {url} body exceeds {} bytes", STATUS_BODY_LIMIT));
+        return Err(PeerNotice::warning(
+            NoticeKind::StatusPayloadTooLarge,
+            format!("GET {url} body exceeds {STATUS_BODY_LIMIT} bytes"),
+        ));
     }
     if body.is_empty() {
         return Ok(StatusFetch {
@@ -208,30 +302,59 @@ fn fetch_status(url: &str) -> Result<StatusFetch> {
             latency,
         });
     }
-    let payload: StatusPayload = json::from_slice(&body)?;
+    let payload: StatusPayload = json::from_slice(&body).map_err(|err| {
+        PeerNotice::warning(
+            NoticeKind::StatusParseFailed,
+            format!("status payload parse failed for {url}: {err}"),
+        )
+    })?;
     Ok(StatusFetch {
         payload: Some(payload),
         latency,
     })
 }
 
-fn fetch_metrics(url: &str) -> Result<MetricsSnapshot> {
+fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/metrics") {
         return Ok(stub_metrics_snapshot(descriptor.peer_index));
     }
     let response = attohttpc::get(url)
         .timeout(METRICS_HTTP_TIMEOUT)
         .send()
-        .map_err(|err| eyre!("GET {url} failed: {err}"))?;
+        .map_err(|err| {
+            PeerNotice::warning(
+                NoticeKind::MetricsFetchFailed,
+                format!("GET {url} failed: {err}"),
+            )
+        })?;
     if !response.is_success() {
-        return Err(eyre!("GET {url} returned {}", response.status()));
+        return Err(PeerNotice::warning(
+            NoticeKind::MetricsFetchFailed,
+            format!("GET {url} returned {}", response.status()),
+        ));
     }
-    let (body, truncated) = read_body_with_limit(response, METRICS_BODY_LIMIT)
-        .map_err(|err| eyre!("failed to read metrics body from {url}: {err}"))?;
+    let (body, truncated) = read_body_with_limit(response, METRICS_BODY_LIMIT).map_err(|err| {
+        PeerNotice::warning(
+            NoticeKind::MetricsFetchFailed,
+            format!("failed to read metrics body from {url}: {err}"),
+        )
+    })?;
     if truncated {
-        return Err(eyre!("GET {url} body exceeds {} bytes", METRICS_BODY_LIMIT));
+        return Err(PeerNotice::warning(
+            NoticeKind::MetricsPayloadTooLarge,
+            format!("GET {url} body exceeds {METRICS_BODY_LIMIT} bytes"),
+        ));
     }
     let text = String::from_utf8_lossy(&body);
+    if text.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with('#') && line.split_once(' ').is_none()
+    }) {
+        return Err(PeerNotice::warning(
+            NoticeKind::MetricsParseFailed,
+            format!("metrics payload parse failed for {url}"),
+        ));
+    }
     Ok(parse_prometheus_metrics(&text))
 }
 

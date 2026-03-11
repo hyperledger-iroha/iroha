@@ -164,30 +164,37 @@ pub mod multisig {
     pub struct MultisigRegister {
         /// Account backing the multisig controller.
         ///
-        /// Must live in the same domain as the signatories. The supplied id anchors the
-        /// registration step, but the account is rekeyed to the canonical multisig controller
-        /// derived from the spec after registration, so the key is never used for signing.
+        /// The supplied id anchors the registration step, but the account is rekeyed to the
+        /// canonical multisig controller derived from the spec after registration, so the key is
+        /// never used for signing.
         pub account: AccountId,
+        /// Explicit home domain used for registration authorization, linking, and RBAC namespacing.
+        pub home_domain: DomainId,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
     }
 
     impl MultisigRegister {
         /// Construct a multisig registration using an explicit account id.
-        pub fn with_account(account: AccountId, spec: MultisigSpec) -> Self {
-            Self { account, spec }
+        pub fn with_account(account: AccountId, home_domain: DomainId, spec: MultisigSpec) -> Self {
+            Self {
+                account,
+                home_domain,
+                spec,
+            }
         }
 
-        /// Construct a multisig registration using a freshly generated account id that lives in
-        /// the signatory domain. The generated key is not meant for direct signing; it only
-        /// anchors the registration step before the account is rekeyed to the canonical controller
-        /// derived from the spec.
-        pub fn from_spec(spec: MultisigSpec) -> Self {
-            let domain = signatory_domain(&spec)
-                .expect("multisig spec must include at least one signatory to derive the domain");
+        /// Construct a multisig registration using a freshly generated domainless account id.
+        /// The generated key is not meant for direct signing; it only anchors the registration
+        /// step before the account is rekeyed to the canonical controller derived from the spec.
+        pub fn from_spec(home_domain: DomainId, spec: MultisigSpec) -> Self {
             let key_pair = KeyPair::random();
-            let account = AccountId::new(domain, key_pair.public_key().clone());
-            Self { account, spec }
+            let account = AccountId::new(key_pair.public_key().clone());
+            Self {
+                account,
+                home_domain,
+                spec,
+            }
         }
     }
 
@@ -195,6 +202,7 @@ pub mod multisig {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let mut visitor = json::MapVisitor::new(parser)?;
             let mut account: Option<AccountId> = None;
+            let mut home_domain: Option<DomainId> = None;
             let mut spec: Option<MultisigSpec> = None;
 
             while let Some(key) = visitor.next_key()? {
@@ -202,6 +210,10 @@ pub mod multisig {
                     "account" => {
                         let value = visitor.parse_value::<AccountId>()?;
                         account = Some(value);
+                    }
+                    "home_domain" => {
+                        let value = visitor.parse_value::<DomainId>()?;
+                        home_domain = Some(value);
                     }
                     "spec" => {
                         let value = visitor.parse_value::<MultisigSpec>()?;
@@ -217,16 +229,15 @@ pub mod multisig {
 
             let spec = spec.ok_or_else(|| json::Error::missing_field("spec"))?;
             let account = account.ok_or_else(|| json::Error::missing_field("account"))?;
+            let home_domain =
+                home_domain.ok_or_else(|| json::Error::missing_field("home_domain"))?;
 
-            Ok(Self { account, spec })
+            Ok(Self {
+                account,
+                home_domain,
+                spec,
+            })
         }
-    }
-
-    fn signatory_domain(spec: &MultisigSpec) -> Option<iroha_data_model::domain::DomainId> {
-        spec.signatories
-            .keys()
-            .next()
-            .map(|account| account.domain().clone())
     }
 
     /// Relative weight of responsibility for the multisig account.
@@ -543,29 +554,34 @@ pub mod multisig {
 
     #[cfg(test)]
     mod tests {
-        use std::collections::BTreeMap;
+        use std::{
+            collections::BTreeMap,
+            num::{NonZeroU16, NonZeroU64},
+        };
 
         use iroha_crypto::{Algorithm, KeyPair};
 
         use super::*;
 
-        fn sample_instruction_box() -> InstructionBox {
-            let domain: DomainId = "multisig".parse().expect("valid domain");
-            let registrar = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::new(domain.clone(), registrar.public_key().clone());
-            let alice_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-            let bob_key = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-            let alice = AccountId::new(domain.clone(), alice_key.public_key().clone());
-            let bob = AccountId::new(domain.clone(), bob_key.public_key().clone());
+        fn sample_spec() -> MultisigSpec {
+            let alice = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+            let bob = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
             let mut signatories = BTreeMap::new();
-            signatories.insert(alice, 1);
-            signatories.insert(bob, 1);
-            let spec = MultisigSpec::new(
+            signatories.insert(AccountId::of(alice.public_key().clone()), 1);
+            signatories.insert(AccountId::of(bob.public_key().clone()), 1);
+            MultisigSpec::new(
                 signatories,
                 NonZeroU16::new(2).expect("nonzero quorum"),
                 NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-            );
-            let register = MultisigRegister::with_account(multisig_account, spec);
+            )
+        }
+
+        fn sample_instruction_box() -> InstructionBox {
+            let domain: DomainId = "multisig".parse().expect("valid domain");
+            let registrar = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
+            let multisig_account = AccountId::of(registrar.public_key().clone());
+            let spec = sample_spec();
+            let register = MultisigRegister::with_account(multisig_account, domain, spec);
             InstructionBox::from(register)
         }
 
@@ -586,37 +602,24 @@ pub mod multisig {
         fn multisig_register_json_includes_account_field() {
             let domain: DomainId = "multisig".parse().expect("valid domain");
             let registrar = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
-            let multisig_account = AccountId::new(domain.clone(), registrar.public_key().clone());
-            let mut signatories = BTreeMap::new();
-            signatories.insert(multisig_account.clone(), 1);
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(1).expect("nonzero quorum"),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-            );
-            let register = MultisigRegister::with_account(multisig_account, spec);
+            let multisig_account = AccountId::of(registrar.public_key().clone());
+            let spec = sample_spec();
+            let register = MultisigRegister::with_account(multisig_account, domain, spec);
             let rendered =
                 norito::json::to_json(&register).expect("multisig register should serialize");
             assert!(
                 rendered.contains("\"account\""),
                 "account field missing from serialized json: {rendered}"
             );
+            assert!(
+                rendered.contains("\"home_domain\""),
+                "home_domain field missing from serialized json: {rendered}"
+            );
         }
 
         #[test]
-        fn multisig_register_json_requires_account_field() {
-            let domain: DomainId = "missing-account".parse().expect("valid domain");
-            let registrar = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-            let mut signatories = BTreeMap::new();
-            signatories.insert(
-                AccountId::new(domain.clone(), registrar.public_key().clone()),
-                1,
-            );
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(1).expect("nonzero quorum"),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-            );
+        fn multisig_register_json_requires_account_and_home_domain_fields() {
+            let spec = sample_spec();
             let spec_json = norito::json::to_json(&spec).expect("spec should serialize");
             let payload = format!(r#"{{"spec": {spec_json}}}"#);
             let err = norito::json::from_str::<MultisigRegister>(&payload)
@@ -626,29 +629,30 @@ pub mod multisig {
                 rendered.contains("account"),
                 "missing account error should mention account field: {rendered}"
             );
+
+            let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+            let account = AccountId::of(key.public_key().clone());
+            let account_json = norito::json::to_json(&account).expect("account json");
+            let payload = format!(r#"{{"account": {account_json}, "spec": {spec_json}}}"#);
+            let err = norito::json::from_str::<MultisigRegister>(&payload)
+                .expect_err("missing home_domain should be rejected");
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains("home_domain"),
+                "missing home_domain error should mention the field: {rendered}"
+            );
         }
 
         #[test]
         fn multisig_register_from_spec_randomizes_controller() {
             let domain: DomainId = "non-derived".parse().expect("valid domain");
-            let signer = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
-            let mut signatories = BTreeMap::new();
-            signatories.insert(
-                AccountId::new(domain.clone(), signer.public_key().clone()),
-                1,
-            );
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(1).expect("nonzero quorum"),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-            );
-            let first = MultisigRegister::from_spec(spec.clone());
-            let second = MultisigRegister::from_spec(spec.clone());
+            let spec = sample_spec();
+            let first = MultisigRegister::from_spec(domain.clone(), spec.clone());
+            let second = MultisigRegister::from_spec(domain.clone(), spec.clone());
 
             assert_eq!(
-                first.account.domain(),
-                &domain,
-                "generated controller must stay in the signatory domain"
+                &first.home_domain, &domain,
+                "generated controller must carry the explicit home domain"
             );
             assert_ne!(
                 first.account, second.account,

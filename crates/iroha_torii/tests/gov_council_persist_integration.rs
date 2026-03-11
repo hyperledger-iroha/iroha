@@ -94,9 +94,8 @@ async fn persist_vrf_council_and_get_current_matches() {
         .map(|h| *h.as_ref())
         .unwrap_or([0u8; 32]);
     let seed = parliament::compute_seed(&chain_id_value, epoch, &beacon_bytes);
-    let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
 
-    // Build 5 candidates (Normal variant)
+    // Build 5 candidates (Normal variant).
     let mut candidates = Vec::new();
     for i in 0..5u8 {
         let (pk, sk) =
@@ -108,7 +107,7 @@ async fn persist_vrf_council_and_get_current_matches() {
             .to_vec();
         let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk_bytes);
         let keypair = KeyPair::from_seed(vec![i; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain.clone(), keypair.public_key().clone());
+        let account = AccountId::new(keypair.public_key().clone());
         let account_id = account.to_string();
         let input = parliament::build_input(&seed, &account);
         let (_y, pi) =

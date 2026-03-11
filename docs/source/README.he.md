@@ -28,6 +28,7 @@ translator: manual
 - ממשק ZK App (צרופות, מוכיח, ספירת קולות): ‏`zk_app_api.md`
 - ספר ההפעלה של Torii עבור צרופות/מוכיח ZK: ‏`zk/prover_runbook.md`
 - מדריך תפעול Torii ZK App (צרופות/מוכיח; תיעוד הקרייט): ‏`../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - מחזור חיים של VK/הוכחות (רגיסטרי, אימות, טלמטריה): ‏`zk/lifecycle.md`
 - עזרי תפעול Torii (נקודות קצה לניראות): ‏`references/operator_aids.md`
 - מדריך מהיר וארכיטקטורת MOCHI: ‏`mochi/index.md`

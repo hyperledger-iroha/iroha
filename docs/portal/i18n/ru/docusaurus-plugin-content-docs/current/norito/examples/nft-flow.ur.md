@@ -19,7 +19,7 @@ NFT-файл может быть использован в качестве ос
 
 ## لیجر واک تھرو
 
-- Поддержка NFT-адаптера (с `n0#wonderland`) для получения дополнительной информации Встроенное программное обеспечение/программное обеспечение (`ih58...`, `ih58...`) ہوں۔
+- Поддержка NFT-адаптера (с `n0#wonderland`) для получения дополнительной информации Встроенное программное обеспечение/программное обеспечение (`i105...`, `i105...`) ہوں۔
 - `nft_issue_and_transfer` позволяет использовать NFT для игры с Алисой и Бобом, когда он работает. Если вы хотите, чтобы вы знали, как это сделать,
 - `iroha_cli ledger nfts list --account <id>` содержит SDK, обеспечивающий поддержку NFT-файлов и возможность использования NFT-файлов. Если вы хотите, чтобы вы выбрали лучший вариант для себя ہو جاتا ہے۔
 
@@ -35,11 +35,11 @@ NFT-файл может быть использован в качестве ос
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("ih58...");
+    let owner = account!("i105...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("ih58...");
+    let to = account!("i105...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

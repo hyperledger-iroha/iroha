@@ -97,7 +97,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080")
 
 draft = {
-    "controller": "ih58:...",
+    "controller": "i105:...",
     "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],

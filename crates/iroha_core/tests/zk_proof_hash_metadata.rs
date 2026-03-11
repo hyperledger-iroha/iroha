@@ -37,7 +37,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     let (owner, _owner_key) = gen_account_in("zkd");
     let init: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(

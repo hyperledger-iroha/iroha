@@ -124,7 +124,7 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
         return ",".join(str(entry).strip() for entry in sort_value if entry is not None)
     return str(sort_value)
 
-DEFAULT_IH58_PREFIX = 0x02F1
+DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
 DATA_MODEL_VERSION = 1
 
@@ -151,30 +151,6 @@ _PACS002_STATUS_CODES = frozenset({"ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT
 _DEFAULT_ISO_POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_ISO_WAIT_ATTEMPTS = 12
 _MIN_ISO_POLL_INTERVAL_SECONDS = 0.01
-
-
-def _normalize_address_format(value: Optional[str]) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError("address_format must be a string when provided")
-    trimmed = value.strip().lower()
-    if not trimmed:
-        return None
-    if trimmed in ("ih58", "compressed"):
-        return trimmed
-    allowed = ", ".join(["ih58", "compressed"])
-    raise ValueError(f"address_format must be one of {allowed}")
-
-
-def _apply_address_format_alias(params: Dict[str, Any], key: str = "address_format") -> None:
-    """Normalize ``address_format`` values in parameter dictionaries."""
-
-    if key not in params:
-        return
-    normalized = _normalize_address_format(params.pop(key))
-    if normalized is not None:
-        params[key] = normalized
 
 
 def _require_non_empty_string(value: Any, context: str) -> str:
@@ -740,21 +716,21 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if "@" in trimmed:
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     try:
-        address = AccountAddress.from_ih58(trimmed, expected_prefix=DEFAULT_IH58_PREFIX)
+        address = AccountAddress.parse_encoded(trimmed, expected_discriminant=DEFAULT_I105_DISCRIMINANT)
     except AccountAddressError as exc:
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id") from exc
-    canonical = address.to_ih58(DEFAULT_IH58_PREFIX)
+        raise ValueError(f"{context}.owner must be a canonical I105 account id") from exc
+    canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
     if canonical != owner:
-        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
 
 def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:
@@ -1285,7 +1261,6 @@ class ExplorerAccountQrSnapshot:
 
     canonical_id: str
     literal: str
-    address_format: str
     network_prefix: int
     error_correction: str
     modules: int
@@ -1330,16 +1305,9 @@ class ExplorerAccountQrSnapshot:
             "explorer_account_qr.qr_version",
         )
 
-        address_raw = payload.get("address_format")
-        if address_raw is None:
-            address_format = "ih58"
-        else:
-            address_format = _normalize_address_format(str(address_raw)) or "ih58"
-
         return cls(
             canonical_id=canonical_id,
             literal=literal,
-            address_format=address_format,
             network_prefix=network_prefix,
             error_correction=error_correction,
             modules=modules,
@@ -7282,19 +7250,12 @@ class ToriiClient(_BaseToriiClient):
     def get_explorer_account_qr(
         self,
         account_id: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> Mapping[str, Any]:
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
-        params: Dict[str, Any] = {}
-        normalized_format = _normalize_address_format(address_format)
-        if normalized_format is not None:
-            params["address_format"] = normalized_format
         payload = self.request_json(
             "GET",
             f"/v1/explorer/accounts/{account_id}/qr",
-            params=params or None,
             headers={"Accept": "application/json"},
             expected_status=(200,),
         )
@@ -7307,15 +7268,10 @@ class ToriiClient(_BaseToriiClient):
     def get_explorer_account_qr_typed(
         self,
         account_id: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> ExplorerAccountQrSnapshot:
         """Typed QR wrapper for :meth:`get_explorer_account_qr`."""
 
-        payload = self.get_explorer_account_qr(
-            account_id,
-            address_format=address_format,
-        )
+        payload = self.get_explorer_account_qr(account_id)
         return ExplorerAccountQrSnapshot.from_payload(payload)
 
     # -------------------------
@@ -7568,23 +7524,17 @@ class ToriiClient(_BaseToriiClient):
     def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
         """List offline allowances (`GET /v1/offline/allowances`)."""
 
-        normalized = dict(params)
-        _apply_address_format_alias(normalized)
-        return super().list_offline_allowances(**normalized)
+        return super().list_offline_allowances(**params)
 
     def list_offline_transfers(self, **params: Any) -> OfflineTransferListPage:
         """List offline transfers (`GET /v1/offline/transfers`)."""
 
-        normalized = dict(params)
-        _apply_address_format_alias(normalized)
-        return super().list_offline_transfers(**normalized)
+        return super().list_offline_transfers(**params)
 
     def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
         """List offline counter summaries (`GET /v1/offline/summaries`)."""
 
-        normalized = dict(params)
-        _apply_address_format_alias(normalized)
-        return super().list_offline_summaries(**normalized)
+        return super().list_offline_summaries(**params)
 
     def get_sorafs_pin_manifest(
         self,
@@ -8601,20 +8551,13 @@ class ToriiClient(_BaseToriiClient):
     def get_uaid_bindings(
         self,
         uaid: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch UAID dataspace bindings (`GET /v1/space-directory/uaids/{uaid}`)."""
 
         literal = _normalize_uaid_literal(uaid)
-        params: Dict[str, Any] = {}
-        normalized_format = _normalize_address_format(address_format)
-        if normalized_format is not None:
-            params["address_format"] = normalized_format
         response = self._request(
             "GET",
             f"/v1/space-directory/uaids/{literal}",
-            params=params or None,
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
@@ -8625,12 +8568,10 @@ class ToriiClient(_BaseToriiClient):
     def get_uaid_bindings_typed(
         self,
         uaid: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> UaidBindingsSnapshot:
         """Typed wrapper for :meth:`get_uaid_bindings`."""
 
-        payload = self.get_uaid_bindings(uaid, address_format=address_format)
+        payload = self.get_uaid_bindings(uaid)
         return UaidBindingsSnapshot.from_payload(payload)
 
     def list_space_directory_manifests(
@@ -8641,7 +8582,6 @@ class ToriiClient(_BaseToriiClient):
         status: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """List Space Directory manifests bound to a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
 
@@ -8664,9 +8604,6 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = _normalize_positive_int(limit, "limit", allow_zero=False)
         if offset is not None:
             params["offset"] = _normalize_positive_int(offset, "offset", allow_zero=True)
-        normalized_format = _normalize_address_format(address_format)
-        if normalized_format is not None:
-            params["address_format"] = normalized_format
         response = self._request(
             "GET",
             f"/v1/space-directory/uaids/{literal}/manifests",
@@ -8686,7 +8623,6 @@ class ToriiClient(_BaseToriiClient):
         status: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
     ) -> SpaceDirectoryManifestList:
         """Typed wrapper for :meth:`list_space_directory_manifests`."""
 
@@ -8696,7 +8632,6 @@ class ToriiClient(_BaseToriiClient):
             status=status,
             limit=limit,
             offset=offset,
-            address_format=address_format,
         )
         return SpaceDirectoryManifestList.from_payload(payload)
 
@@ -8989,11 +8924,9 @@ class ToriiClient(_BaseToriiClient):
         offset: int = 0,
         fetch_size: Optional[int] = None,
         query_name: Optional[str] = None,
-        address_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute POST `/v1/accounts/query` with a structured envelope."""
 
-        address_pref = _normalize_address_format(address_format)
         body = account_query_envelope(
             filter=filter,
             sort=sort,
@@ -9001,7 +8934,6 @@ class ToriiClient(_BaseToriiClient):
             offset=offset,
             fetch_size=fetch_size,
             query_name=query_name,
-            address_format=address_pref,
         )
         response = self._request(
             "POST",
@@ -9024,7 +8956,6 @@ class ToriiClient(_BaseToriiClient):
         offset: int = 0,
         fetch_size: Optional[int] = None,
         query_name: Optional[str] = None,
-        address_format: Optional[str] = None,
     ) -> AccountListPage:
         """Typed wrapper for :meth:`query_accounts`."""
 
@@ -9035,7 +8966,6 @@ class ToriiClient(_BaseToriiClient):
             offset=offset,
             fetch_size=fetch_size,
             query_name=query_name,
-            address_format=address_format,
         )
         return AccountListPage.from_payload(payload)
 
@@ -9046,7 +8976,6 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
     ) -> Optional[Any]:
         """List accounts via `GET /v1/accounts`."""
 
@@ -9061,9 +8990,6 @@ class ToriiClient(_BaseToriiClient):
         sort_arg = _encode_sort_arg(sort)
         if sort_arg is not None:
             params["sort"] = sort_arg
-        address_pref = _normalize_address_format(address_format)
-        if address_pref is not None:
-            params["address_format"] = address_pref
         return self.request_json(
             "GET",
             "/v1/accounts",
@@ -9078,7 +9004,6 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
     ) -> AccountListPage:
         """Typed wrapper for :meth:`list_accounts`."""
 
@@ -9087,7 +9012,6 @@ class ToriiClient(_BaseToriiClient):
             sort=sort,
             limit=limit,
             offset=offset,
-            address_format=address_format,
         )
         if payload is None:
             return AccountListPage(items=[], total=0)
@@ -9313,11 +9237,9 @@ class ToriiClient(_BaseToriiClient):
         offset: int = 0,
         fetch_size: Optional[int] = None,
         query_name: Optional[str] = None,
-        address_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST `/v1/assets/{definition}/holders/query` with a structured envelope."""
 
-        address_pref = _normalize_address_format(address_format)
         body = asset_holders_query_envelope(
             filter=filter,
             sort=sort,
@@ -9325,7 +9247,6 @@ class ToriiClient(_BaseToriiClient):
             offset=offset,
             fetch_size=fetch_size,
             query_name=query_name,
-            address_format=address_pref,
         )
         response = self._request(
             "POST",
@@ -9349,7 +9270,6 @@ class ToriiClient(_BaseToriiClient):
         offset: int = 0,
         fetch_size: Optional[int] = None,
         query_name: Optional[str] = None,
-        address_format: Optional[str] = None,
     ) -> AssetHolderListPage:
         """Typed wrapper for :meth:`query_asset_holders`."""
 
@@ -9361,7 +9281,6 @@ class ToriiClient(_BaseToriiClient):
             offset=offset,
             fetch_size=fetch_size,
             query_name=query_name,
-            address_format=address_format,
         )
         return AssetHolderListPage.from_payload(payload)
 
@@ -9371,7 +9290,6 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
         asset_id: Optional[str] = None,
     ) -> Optional[Any]:
         """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
@@ -9381,9 +9299,6 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
-        address_pref = _normalize_address_format(address_format)
-        if address_pref is not None:
-            params["address_format"] = address_pref
         asset_id_value = _normalize_optional_string(
             asset_id,
             "list_asset_holders.asset_id",
@@ -9403,7 +9318,6 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        address_format: Optional[str] = None,
         asset_id: Optional[str] = None,
     ) -> AssetHolderListPage:
         """Typed wrapper for :meth:`list_asset_holders`."""
@@ -9412,7 +9326,6 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             limit=limit,
             offset=offset,
-            address_format=address_format,
             asset_id=asset_id,
         )
         if payload is None:

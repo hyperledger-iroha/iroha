@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK መተግበሪያ API (አባሪዎች፣ prover፣ የድምጽ መጠን): `zk_app_api.md`
 - Torii ZK አባሪዎች/prover runbook: `zk/prover_runbook.md`
 - Torii ZK መተግበሪያ ኤፒአይ ኦፕሬተር መመሪያ (አባሪዎች/ፕሮቨር፣ crate doc)፡ `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - ቪኬ/ማስረጃ የሕይወት ዑደት (መዝገብ ፣ ማረጋገጫ ፣ ቴሌሜትሪ): `zk/lifecycle.md`
 - Torii ኦፕሬተር ኤድስ (የታይነት የመጨረሻ ነጥቦች)፡ `references/operator_aids.md`
 - Nexus ነባሪ መስመር ፈጣን ጅምር፡ `quickstart/default_lane.md`

@@ -29,21 +29,21 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "fenêtre": { "inférieur": 12345, "supérieur": 12400 },
-      "autorité": "ih58…?",
+      "autorité": "i105…?",
       "private_key": "...?"
     }
   - الرد (JSON) :
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Fonction : Utiliser la fonction `abi_hash` et `abi_version` et la version `abi_hash`. Pour `abi_version = "v1"`, la version actuelle est `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API العقود (déployer)
 - POSTE `/v1/contracts/deploy`
-  - Contenu : { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Contenu : { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Nom : `code_hash` pour IVM et `abi_hash` pour `abi_version`, pour `RegisterSmartContractCode` (manifeste) et `RegisterSmartContractBytes` (pour `.to`) ou `authority`.
   - الرد : { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - ذي صلة:
     - GET `/v1/contracts/code/{code_hash}` -> يعيد manifeste المخزن
     - OBTENIR `/v1/contracts/code-bytes/{code_hash}` -> ou `{ code_b64 }`
 - POSTE `/v1/contracts/instance`
-  - Contenu : { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Contenu : { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Élément : ينشر البايتات المقدمة ويُفعل فورا ربط `(namespace, contract_id)` ou `ActivateContractInstance`.
   - Définition : { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }خدمة الاسماء المستعارة
 - POSTE `/v1/aliases/voprf/evaluate`
@@ -54,11 +54,11 @@ translation_last_reviewed: 2026-02-07
   - Type : HTTP `400` est utilisé en hexadécimal. Utilisez Torii pour Norito `ValidationFail::QueryFailed::Conversion` pour votre décodeur.
 - POSTE `/v1/aliases/resolve`
   - Nom : { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Nom : { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Nom : { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Types : vous pouvez utiliser le pont ISO (`[iso_bridge.account_aliases]` et `iroha_config`). يقوم Torii بتطبيع الاسماء عبر ازالة الفراغات وتحويلها الى احرف كبيرة قبل البحث. يعيد 404 عندما يكون الاسم غير موجود و503 عندما يكون runtime الخاص بـ ISO bridge معطلا.
 - POSTE `/v1/aliases/resolve_index`
   - Nom : { "index": 0 }
-  - Contenu : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - Contenu : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - ملاحظات : مؤشرات الاسماء تعين بشكل حتمي حسب ترتيب التكوين (basé sur 0). يمكن للعملاء تخزين الردود hors ligne لبناء مسارات تدقيق لاحداث attestation الخاصة بالاسماء.حد حجم الكود
 - Fichier de référence : `max_contract_code_bytes` (JSON u64)
   - يتحكم في الحد الاقصى المسموح (بالبايت) لتخزين كود العقود على السلسلة.
@@ -66,23 +66,23 @@ translation_last_reviewed: 2026-02-07
   - يمكن للمشغلين التعديل عبر `SetParameter(Custom)` et `id = "max_contract_code_bytes"` وحمولة رقمية.
 
 - POSTE `/v1/gov/ballots/zk`
-  - Nom : { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Nom : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - ملاحظات :
     - عندما تتضمن المدخلات العامة للدائرة `owner` و`amount` و`duration_blocks`, وتتتحقق البرهان من VK Utilisez le verrou et le verrou pour `election_id` avec `owner`. تبقى الاتجاهات مخفية (`unknown`)؛ ويتم تحديث montant/expiration فقط. Les éléments monotones : montant et expiration sont tous deux (effets max(amount, prev.amount) et max(expiry, prev.expiry)).
     - اعادات التصويت ZK التي تحاول تقليل montant et expiration يتم رفضها من جهة الخادم مع تشخيصات `BallotRejected`.
     - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` pour `SubmitBallot` ; ويفرض المضيفون loquet لمرة واحدة.- POSTE `/v1/gov/ballots/plain`
-  - الطلب : { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
+  - الطلب : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
   - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - ملاحظات: اعادات التصويت تمتد فقط - لا يمكن لvote جديد تقليل montant et او expiration لقفل موجود. يجب ان يساوي `owner` سلطة المعاملة. Il s'agit d'un `conviction_step_blocks`.- POSTE `/v1/gov/finalize`
-  - Nom : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Nom : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Définition : { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - الاثر على السلسلة (الهيكل الحالي): تنفيذ اقتراح déployer معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة Adoptée. Il s'agit du manifeste correspondant à `code_hash` et à `abi_hash`.
   - ملاحظات :
     - لانتخابات ZK, يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection` ; ويفرض المضيفون loquet لمرة واحدة. يرفض `FinalizeReferendum` الاستفتاءات ZK حتى يتم انهاء tally للانتخابات.
     - الاغلاق التلقائي عند `h_end` يصدر Approuvé/Rejeté فقط للاستفتاءات Plain؛ تبقى استفتاءات ZK Closed حتى يتم ارسال tally منته ويجري تنفيذ `FinalizeReferendum`.
     - فحوصات participation تستخدم approuver+rejeter فقط؛ s'abstenir en cas de participation.- POSTE `/v1/gov/enact`
-  - Nom : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Nom : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Définition : { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - ملاحظات: يقدم Torii المعاملة الموقعة عندما توفر `authority`/`private_key` ; والا يعيد هيكلا لتوقيع العملاء وارساله. الـ preimage اختيارية وحاليا معلوماتية.
 
@@ -178,14 +178,14 @@ Point de terminaison
     - يوجد اقتراح حوكمة a été promulguée par `(namespace, contract_id, code_hash, abi_hash)` pour le hachage de l'ID de proposition dans le cadre de la procédure de hachage.
   - JSON utilise `results[]` pour les problèmes (problèmes, manifeste/code/proposition) pour votre projet. تعطيله (`--no-summary`).
   - Vous pouvez utiliser des espaces de noms pour déployer des espaces de noms.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - JSON utilise les métadonnées pour déployer des espaces de noms pour le quorum `gov_manifest_approvers` للmanifeste.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`, وأي مجموعة مقدمة يجب أن تضمن `owner` et `amount` et `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`, وأي مجموعة مقدمة يجب أن تضمن `owner` et `amount` et `duration_blocks`.
   - Valide les identifiants de compte canoniques, canonise les indices d'annulation de 32 octets et fusionne les indices dans `public_inputs_json` (avec `--public <path>` pour des remplacements supplémentaires).
   - L'annulateur est dérivé de l'engagement de preuve (entrée publique) plus `domain_tag`, `chain_id` et `election_id` ; `--nullifier` est validé par rapport à l'épreuve à la livraison.- الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع astuces المفككة (`owner`, `amount`, `duration_blocks`, `direction` ici).
   - ردود CLI تضع تعليقات على `tx_instructions[]` مع `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق الادوات Il s'agit d'un produit que vous pouvez utiliser comme Norito.
   - Astuces pour le verrouillage des bulletins de vote ZK pour les bulletins de vote `LockCreated`/`LockExtended` نفسها.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Les alias `--lock-amount`/`--lock-duration-blocks` sont des indicateurs de sécurité pour ZK.
   - ناتج الملخص يعكس `vote --mode zk` pour les empreintes digitales et les bulletins de vote (`owner`, `amount`, `duration_blocks`, `direction`) ، لتاكيد سريع قبل توقيع الهيكل.قائمة المثيلات
 - GET `/v1/gov/instances/{ns}` - يسرد مثيلات العقود النشطة لnamespace.
@@ -204,21 +204,21 @@ Point de terminaison
 - POSTE `/v1/gov/ballots/zk-v1`
   - الطلب (DTO version v1) :
     {
-      "autorité": "ih58...",
+      "autorité": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "enveloppe_b64": "AAECAwQ=",
       "root_hint": "0x...64hex ?",
-      "propriétaire": "ih58…?",
+      "propriétaire": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
   - JSON `BallotProof` est remplacé par `CastZkBallot`.
   - الطلب:
     {
-      "autorité": "ih58...",
+      "autorité": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

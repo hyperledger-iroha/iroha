@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (დანართები, პროვერტი, ხმების რაოდენობა): `zk_app_api.md`
 - Torii ZK დანართები/პროვერების ჩანართი: `zk/prover_runbook.md`
 - Torii ZK App API ოპერატორის სახელმძღვანელო (დანართები/პროვერტი; კრატის დოკუმენტი): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof სასიცოცხლო ციკლი (რეგისტრი, ვერიფიკაცია, ტელემეტრია): `zk/lifecycle.md`
 - Torii ოპერატორის დამხმარე საშუალებები (ხილვადობის ბოლო წერტილები): `references/operator_aids.md`
 - Nexus ნაგულისხმევი ხაზის სწრაფი დაწყება: `quickstart/default_lane.md`

@@ -272,10 +272,10 @@ fn parse_certificate_json(value: &JsonValue, label: &str) -> OfflineWalletCertif
 
 fn parse_account_literal_strict(account_literal: &str, label: &str, field: &str) -> AccountId {
     AccountId::parse_encoded(account_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .unwrap_or_else(|err| {
             panic!("parse {field} `{account_literal}` for `{label}` failed: {err}")
         })
+        .into_account_id()
 }
 
 fn parse_asset_literal_strict(asset_literal: &str, label: &str, field: &str) -> AssetId {

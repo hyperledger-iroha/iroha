@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Ротейру до Ливро Разау
 
-- Гарантия, что предназначение (например, `ih58...`) существует, необходимо выполнить этап настройки в каждом кратком руководстве по SDK.
+- Гарантия, что предназначение (например, `i105...`) существует, необходимо выполнить этап настройки в каждом кратком руководстве по SDK.
 - Вызовите точку входа `register_and_mint`, чтобы вызвать определенное действие ROSE и выполнить 250 операций для Алисы в уникальной транзакции.
-- Проверьте свои данные через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить, что это удалось сделать.
+- Проверьте свои данные через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account i105...`, чтобы подтвердить, что это удалось сделать.
 
 ## Рекомендации по использованию SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

@@ -142,15 +142,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -163,9 +162,9 @@ fn download_qr() -> eyre::Result<()> {
 гадаргуу: энэ нь каноник дансны id, кодоор илэрхийлэгдсэн үг хэллэгийг агуулдаг
 хүссэн формат, сүлжээний угтвар/алдаа засах мета өгөгдөл, QR хэмжээсүүд болон
 түрийвч/судлаачдын шууд оруулах боломжтой SVG ачаалал. Орхих
-`ExplorerAccountQrOptions` нь сонгосон IH58 гаралтыг өгөгдмөл болгож эсвэл тохируулна
-`address_format: Some(AddressFormat::Compressed)` хоёр дахь шилдэгийг нь татаж авна уу
-ADDR-6b ашигладаг `sora…` хувилбар.
+`ExplorerAccountQrOptions` нь сонгосон I105 гаралтыг өгөгдмөл болгож эсвэл тохируулна
+canonical I105 output хоёр дахь шилдэгийг нь татаж авна уу
+ADDR-6b ашигладаг `i105` хувилбар.
 
 ## 7. Үйл явдалд бүртгүүлэх
 

@@ -32,7 +32,7 @@ fn kotodama_revoke_role_denies_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -79,7 +79,7 @@ fn kotodama_delete_role_prevents_grant() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -123,7 +123,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -177,7 +177,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

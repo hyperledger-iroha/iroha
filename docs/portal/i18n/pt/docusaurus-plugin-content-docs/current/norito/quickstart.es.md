@@ -90,7 +90,7 @@ O executor imprime o log `info("Hello from Kotodama")` e executa o syscall `SET_
 
 Com o nodo aun corriendo, envie o bytecode compilado para Torii usando a CLI. A identidade de desenvolvimento por defeito é derivada da chave publicada em `defaults/client.toml`, por isso o ID da conta é
 ```
-ih58...
+i105...
 ```
 
 Use o arquivo de configuração para fornecer a URL de Torii, o ID da cadeia e a chave de empresa:
@@ -108,7 +108,7 @@ Use o mesmo perfil da CLI para obter os detalhes da conta que estão escritos no
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

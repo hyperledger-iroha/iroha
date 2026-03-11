@@ -85,7 +85,7 @@ Norito ტიპები დანერგილია `crates/iroha_data_mode
 
 - **რისკის მიღება** – `POST /v1/fraud/query` იღებს `RiskQuery` სქემას:
   - `query_id` (`[u8; 32]`, hex კოდირებული)
-  - `subject` (`AccountId`, კანონიკური IH58 ლიტერალი; სურვილისამებრ `@<domain>` მინიშნება ან მეტსახელი)
+  - `subject` (`AccountId`, კანონიკური I105 ლიტერალი; სურვილისამებრ `@<domain>` მინიშნება ან მეტსახელი)
   - `operation` (მონიშნული რიცხვი შეესაბამება `RiskOperation`; JSON `type`
     დისკრიმინატორი ასახავს enum ვარიანტს)
   - `related_asset` (`AssetId`, სურვილისამებრ)

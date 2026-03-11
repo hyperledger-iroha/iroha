@@ -845,10 +845,10 @@ fn now_unix(now: SystemTime) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha::data_model::account::AccountId;
     use iroha::data_model::oracle::{
         FeedEvent, FeedSuccess, ObservationBody, ObservationValue, ReportEntry,
     };
-    use iroha::data_model::{account::AccountId, domain::DomainId};
     use iroha_crypto::HashOf;
     use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
     use std::fmt::Display;
@@ -913,14 +913,10 @@ mod tests {
     }
 
     fn test_oracle_account_id() -> AccountId {
-        let domain: DomainId = iroha::account_address::default_domain_name()
-            .as_ref()
-            .parse()
-            .expect("default domain id");
         let signatory = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("oracle signatory");
-        AccountId::new(domain, signatory)
+        AccountId::new(signatory)
     }
 
     #[test]

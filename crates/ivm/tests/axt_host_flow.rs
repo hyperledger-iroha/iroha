@@ -1173,7 +1173,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
     let manifest_root = [9u8; 32];
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     )
     .with_axt_manifest_root(dsid, manifest_root);
@@ -1272,11 +1272,8 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1343,11 +1340,8 @@ fn wsv_host_rejects_handle_skew_above_config() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1414,11 +1408,8 @@ fn wsv_host_accepts_proof_within_skew() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1471,11 +1462,8 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
             current_slot: 0,
         },
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1528,7 +1516,7 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
     let dsid = DataSpaceId::new(125);
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     )
     .with_axt_manifest_root(dsid, [0; 32]);
@@ -1579,7 +1567,7 @@ fn wsv_host_rejects_missing_policy_binding() {
     let dsid = DataSpaceId::new(126);
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     );
     host.set_current_time_ms(5);
@@ -1629,7 +1617,7 @@ fn wsv_host_policy_checks_target_lane() {
     let manifest_root = [1u8; 32];
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     )
     .with_axt_target_lane(dsid, 7);
@@ -1714,7 +1702,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
     };
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller.clone()),
+        ivm::mock_wsv::AccountId::from(&caller.clone()),
         HashMap::new(),
     )
     .with_axt_policy_snapshot(policy_snapshot);
@@ -1783,11 +1771,8 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
             current_slot: 5,
         },
     );
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
-        HashMap::new(),
-    );
+    let mut host =
+        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1841,7 +1826,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     let manifest_root = [1u8; 32];
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     )
     .with_axt_min_handle_era(dsid, 3)
@@ -1969,7 +1954,7 @@ fn wsv_host_rejects_invalid_descriptor() {
     let caller = sample_wsv_caller();
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     );
 
@@ -1997,7 +1982,7 @@ fn wsv_host_applies_axt_policy() {
     let policy = Arc::new(DenyTouchPolicy { denied: dsid });
     let mut host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         HashMap::new(),
     )
     .with_axt_policy(policy);

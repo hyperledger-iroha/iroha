@@ -11,7 +11,7 @@ pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
         .parse()
         .expect("domain name should be valid");
 
-    let account_id = AccountId::new(domain, key_pair.public_key().clone());
+    let account_id = AccountId::new(key_pair.public_key().clone());
 
     (account_id, key_pair)
 }

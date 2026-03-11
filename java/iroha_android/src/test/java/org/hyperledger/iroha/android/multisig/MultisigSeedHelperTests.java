@@ -123,7 +123,7 @@ public final class MultisigSeedHelperTests {
   private static String accountIdForPublicKey(final String domain, final byte[] publicKey)
       throws Exception {
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
-    return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 
   private static String publicKeyLiteral(final byte[] publicKey) {

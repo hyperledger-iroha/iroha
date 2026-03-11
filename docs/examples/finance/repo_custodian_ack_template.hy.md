@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 | Դաշտային | Արժեք |
 |-------|-------|
 | Պայմանագրի նույնացուցիչ | `<repo-yyMMdd-XX>` |
-| Պահառուի հաշվի id | `<ih58...>` |
+| Պահառուի հաշվի id | `<i105...>` |
 | Պատրաստված է / ամսաթիվը | `<custodian ops lead>` |
 | Գրասեղանի կոնտակտները հաստատված են | `<desk lead + counterparty>` |
 | Ապացույցների տեղեկատու | «`artifacts/finance/repo/<slug>/`» |

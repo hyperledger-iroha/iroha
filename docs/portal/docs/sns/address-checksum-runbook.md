@@ -2,7 +2,7 @@
 id: address-checksum-runbook
 title: Account Address Checksum Incident Runbook
 sidebar_label: Checksum incidents
-description: Operational response for IH58 (preferred) / compressed (`sora`, second-best) checksum failures (ADDR-7).
+description: Operational response for I105 checksum failures (ADDR-7).
 ---
 
 :::note Canonical Source

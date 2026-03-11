@@ -41,6 +41,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 
 1. [Запустите прокси](./try-it.md#start-the-proxy-locally) и задайте `TRYIT_PROXY_PUBLIC_URL`, чтобы виджеты знали, куда отправлять трафик.
 2. Откройте карточку **Try it** на этой странице или панель `/reference/torii-swagger` и выберите endpoint, например `POST /v1/pipeline/submit`.
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. Переключите **Content-Type** на `application/x-norito`, выберите редактор **Binary** и загрузите `fixtures/norito_rpc/transfer_asset.norito` (или любой payload из `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Укажите bearer token через OAuth device-code widget или вручную (прокси принимает overrides `X-TryIt-Auth`, когда задан `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Отправьте запрос и убедитесь, что Torii возвращает `schema_hash`, указанный в `fixtures/norito_rpc/schema_hashes.json`. Совпадение хешей подтверждает, что заголовок Norito пережил прыжок браузер/прокси.

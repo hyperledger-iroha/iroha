@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (тіркемелер, дәлелдеу, дауыс саны): `zk_app_api.md`
 - Torii ZK тіркемелері/prover runbook: `zk/prover_runbook.md`
 - Torii ZK App API операторының нұсқаулығы (тіркемелер/провер; жәшік құжаты): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof өмірлік циклі (тізілім, тексеру, телеметрия): `zk/lifecycle.md`
 - Torii Операторға көмекші құралдар (көріну үшін соңғы нүктелер): `references/operator_aids.md`
 - Nexus әдепкі жолақты жылдам іске қосу: `quickstart/default_lane.md`

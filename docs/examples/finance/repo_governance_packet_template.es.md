@@ -57,7 +57,7 @@ sec 2.8 de `docs/source/finance/repo_ops.md`.
 
 | Custodio | Archivo | SHA-256 | Notas |
 |-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA firmado que cubre ventana de custodia, cuenta de ruteo y contacto de drill. |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA firmado que cubre ventana de custodia, cuenta de ruteo y contacto de drill. |
 
 > Guarda el acuse junto al resto de evidencia (`artifacts/finance/repo/<slug>/`)
 > para que `scripts/repo_evidence_manifest.py` registre el archivo en el mismo arbol que

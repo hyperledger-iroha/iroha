@@ -92,7 +92,8 @@ fn fixture_path() -> std::path::PathBuf {
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
-    AccountId::new(domain.clone(), keypair.public_key().clone())
+    let _ = domain;
+    AccountId::new(keypair.public_key().clone())
 }
 
 #[cfg(feature = "fastpq-gpu")]

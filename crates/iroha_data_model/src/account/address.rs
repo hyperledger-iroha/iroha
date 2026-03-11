@@ -15,10 +15,9 @@ use std::{
 };
 
 use blake2::{
-    Blake2bVar, Blake2sMac,
-    digest::{Mac, Update, VariableOutput, typenum::U32},
+    Blake2sMac,
+    digest::{Mac, typenum::U32},
 };
-use bs58;
 use hex;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
@@ -184,7 +183,7 @@ pub(crate) fn default_domain_guard(label: Option<&str>) -> DefaultDomainGuard {
     DefaultDomainGuard::enter(label)
 }
 
-/// Obtain the currently configured chain discriminant (IH58 network prefix),
+/// Obtain the currently configured chain discriminant for I105 sentinel derivation,
 /// honoring any thread-local override.
 #[must_use]
 pub fn chain_discriminant() -> u16 {
@@ -194,23 +193,27 @@ pub fn chain_discriminant() -> u16 {
     })
 }
 
-/// Set the global chain discriminant / IH58 prefix, returning the previous value.
+/// Set the global chain discriminant used by I105 addresses, returning the previous value.
 pub fn set_chain_discriminant(discriminant: u16) -> u16 {
     CHAIN_DISCRIMINANT.swap(discriminant, Ordering::Relaxed)
 }
 
 const LOCAL_DOMAIN_KEY: &[u8] = b"SORA-LOCAL-K:v1";
-const IH58_CHECKSUM_PREFIX: &[u8] = b"IH58PRE";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
-const COMPRESSED_SENTINEL: &str = "sora";
-const COMPRESSED_SENTINEL_FULLWIDTH: &str = "ｓｏｒａ";
-const COMPRESSED_CHECKSUM_LEN: usize = 6;
+const I105_SENTINEL_SORA: &str = "sora";
+const I105_SENTINEL_TEST: &str = "test";
+const I105_SENTINEL_DEV: &str = "dev";
+const I105_SENTINEL_FALLBACK_PREFIX: &str = "n";
+const I105_CHECKSUM_LEN: usize = 6;
 const BECH32M_CONST: u32 = 0x2bc8_30a3;
 
-const COMPRESSED_BASE_U8: u8 = 105;
-const COMPRESSED_BASE: u32 = COMPRESSED_BASE_U8 as u32;
-const DEFAULT_CHAIN_DISCRIMINANT: u16 = 0x02F1;
+const I105_BASE_U8: u8 = 105;
+const I105_BASE: u32 = I105_BASE_U8 as u32;
+const CHAIN_DISCRIMINANT_SORA: u16 = 0x02F1;
+const CHAIN_DISCRIMINANT_TEST: u16 = 0x0171;
+const CHAIN_DISCRIMINANT_DEV: u16 = 0x0000;
+const DEFAULT_CHAIN_DISCRIMINANT: u16 = CHAIN_DISCRIMINANT_SORA;
 
 static CHAIN_DISCRIMINANT: AtomicU16 = AtomicU16::new(DEFAULT_CHAIN_DISCRIMINANT);
 thread_local! {
@@ -247,18 +250,6 @@ pub struct AccountAddress {
     /// Canonical wire bytes always decode into [`DomainSelector::Default`].
     domain: DomainSelector,
     controller: ControllerPayload,
-}
-
-/// Supported textual encodings for an account address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccountAddressFormat {
-    /// IH58 string representation containing the network prefix.
-    IH58 {
-        #[doc = "Network prefix encoded in the IH58 string."]
-        network_prefix: u16,
-    },
-    /// Sora-only compressed alphabet using the `sora` (ASCII) or `ｓｏｒａ` (full-width) sentinel.
-    Compressed,
 }
 
 /// Classification of the domain selector embedded in an [`AccountAddress`].
@@ -353,7 +344,7 @@ impl AccountAddress {
     pub fn from_account_id(account: &AccountId) -> Result<Self, AccountAddressError> {
         let (class, controller) = ControllerPayload::from_account_controller(account.controller())?;
         let header = AddressHeader::new(HEADER_VERSION_V1, class, HEADER_NORM_VERSION_V1)?;
-        // Hard cut: IH58 payloads are globally scoped and no longer embed domain affinity.
+        // Hard cut: payloads are globally scoped and no longer embed domain affinity.
         let domain = DomainSelector::Default;
         Ok(Self {
             header,
@@ -362,32 +353,35 @@ impl AccountAddress {
         })
     }
 
-    /// Encode the payload as IH58 using the provided network prefix.
+    /// Encode the payload using the I105 alphabet and the sentinel derived from
+    /// the active chain discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or IH58
+    /// Returns [`AccountAddressError`] if canonical payload construction or I105
     /// encoding fails.
-    pub fn to_ih58(&self, network_prefix: u16) -> Result<String, AccountAddressError> {
-        let canonical = self.canonical_bytes()?;
-        encode_ih58(network_prefix, &canonical)
+    pub fn to_i105(&self) -> Result<String, AccountAddressError> {
+        self.to_i105_for_discriminant(chain_discriminant())
     }
 
-    /// Encode the payload using the Sora-only compressed alphabet.
+    /// Encode the payload using the I105 alphabet and a specific chain discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or compressed
+    /// Returns [`AccountAddressError`] if canonical payload construction or I105
     /// encoding fails.
-    pub fn to_compressed_sora(&self) -> Result<String, AccountAddressError> {
+    pub fn to_i105_for_discriminant(
+        &self,
+        discriminant: u16,
+    ) -> Result<String, AccountAddressError> {
         let canonical = self.canonical_bytes()?;
-        let digits = encode_base_n(&canonical, COMPRESSED_BASE)?;
-        let checksum_digits = compressed_checksum_digits(&canonical);
-        let alphabet = compressed_alphabet();
+        let digits = encode_base_n(&canonical, I105_BASE)?;
+        let checksum_digits = i105_checksum_digits(&canonical);
+        let alphabet = i105_alphabet();
+        let sentinel = i105_sentinel_for_discriminant(discriminant);
 
-        let mut out =
-            String::with_capacity(COMPRESSED_SENTINEL.len() + digits.len() + checksum_digits.len());
-        out.push_str(COMPRESSED_SENTINEL);
+        let mut out = String::with_capacity(sentinel.len() + digits.len() + checksum_digits.len());
+        out.push_str(&sentinel);
         for digit in digits.iter().copied() {
             out.push_str(alphabet[usize::from(digit)]);
         }
@@ -397,21 +391,35 @@ impl AccountAddress {
         Ok(out)
     }
 
-    /// Encode the payload using the Sora-only compressed alphabet with full-width kana.
+    /// Encode the payload using the I105 alphabet with a full-width sentinel.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or compressed
+    /// Returns [`AccountAddressError`] if canonical payload construction or I105
     /// encoding fails.
-    pub fn to_compressed_sora_fullwidth(&self) -> Result<String, AccountAddressError> {
-        let canonical = self.canonical_bytes()?;
-        let digits = encode_base_n(&canonical, COMPRESSED_BASE)?;
-        let checksum_digits = compressed_checksum_digits(&canonical);
-        let alphabet = compressed_alphabet_fullwidth();
+    pub fn to_i105_fullwidth(&self) -> Result<String, AccountAddressError> {
+        self.to_i105_fullwidth_for_discriminant(chain_discriminant())
+    }
 
-        let mut out =
-            String::with_capacity(COMPRESSED_SENTINEL.len() + digits.len() + checksum_digits.len());
-        out.push_str(COMPRESSED_SENTINEL);
+    /// Encode the payload using the I105 alphabet with full-width kana symbols
+    /// and the sentinel derived from a specific chain discriminant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] if canonical payload construction or I105
+    /// encoding fails.
+    pub fn to_i105_fullwidth_for_discriminant(
+        &self,
+        discriminant: u16,
+    ) -> Result<String, AccountAddressError> {
+        let canonical = self.canonical_bytes()?;
+        let digits = encode_base_n(&canonical, I105_BASE)?;
+        let checksum_digits = i105_checksum_digits(&canonical);
+        let alphabet = i105_alphabet_fullwidth();
+        let sentinel = i105_sentinel_fullwidth_for_discriminant(discriminant);
+
+        let mut out = String::with_capacity(sentinel.len() + digits.len() + checksum_digits.len());
+        out.push_str(&sentinel);
         for digit in digits.iter().copied() {
             out.push_str(alphabet[usize::from(digit)]);
         }
@@ -454,34 +462,13 @@ impl AccountAddress {
         }
     }
 
-    fn strip_compressed_sentinel(input: &str) -> Option<&str> {
-        input
-            .strip_prefix(COMPRESSED_SENTINEL)
-            .or_else(|| input.strip_prefix(COMPRESSED_SENTINEL_FULLWIDTH))
-    }
-
-    /// Decode an IH58 representation back into an address payload.
-    ///
-    /// If `expected_prefix` is provided, the decoded network prefix must match.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] if decoding fails or the network prefix does not
-    /// match the expected value (when provided).
-    pub fn from_ih58(
-        encoded: &str,
-        expected_prefix: Option<u16>,
-    ) -> Result<Self, AccountAddressError> {
-        let (prefix, canonical) = decode_ih58(encoded)?;
-        if let Some(expect) = expected_prefix
-            && prefix != expect
-        {
-            return Err(AccountAddressError::UnexpectedNetworkPrefix {
-                expected: expect,
-                found: prefix,
-            });
+    fn strip_i105_sentinel_for_discriminant(input: &str, discriminant: u16) -> Option<&str> {
+        let sentinel = i105_sentinel_for_discriminant(discriminant);
+        if let Some(payload) = input.strip_prefix(&sentinel) {
+            return Some(payload);
         }
-        Self::from_canonical_bytes(&canonical)
+        let fullwidth = i105_sentinel_fullwidth_for_discriminant(discriminant);
+        input.strip_prefix(&fullwidth)
     }
 
     /// Parse an address payload from its canonical byte representation.
@@ -507,76 +494,77 @@ impl AccountAddress {
         })
     }
 
-    /// Decode the compressed Sora-only representation.
+    /// Decode the I105-only representation.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string lacks the compressed sentinel,
+    /// Returns [`AccountAddressError`] if the string lacks the expected I105 sentinel,
     /// has an invalid alphabet symbol, or the checksum does not validate.
-    pub fn from_compressed_sora(encoded: &str) -> Result<Self, AccountAddressError> {
-        let payload = Self::strip_compressed_sentinel(encoded)
-            .ok_or(AccountAddressError::MissingCompressedSentinel)?;
-        let digits = compressed_to_digits(payload)?;
-        if digits.len() <= COMPRESSED_CHECKSUM_LEN {
-            return Err(AccountAddressError::CompressedTooShort);
+    pub fn from_i105(encoded: &str) -> Result<Self, AccountAddressError> {
+        Self::from_i105_for_discriminant(encoded, None)
+    }
+
+    /// Decode the I105 representation against an explicit expected chain
+    /// discriminant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] if the string lacks the expected I105
+    /// sentinel, carries a mismatching discriminant sentinel, has invalid alphabet
+    /// symbols, or fails checksum validation.
+    pub fn from_i105_for_discriminant(
+        encoded: &str,
+        expected_discriminant: Option<u16>,
+    ) -> Result<Self, AccountAddressError> {
+        let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
+        let payload =
+            Self::strip_i105_sentinel_for_discriminant(encoded, expected).ok_or_else(|| {
+                if let Some(found) = i105_discriminant_from_sentinel(encoded)
+                    && found != expected
+                {
+                    AccountAddressError::UnexpectedNetworkPrefix { expected, found }
+                } else {
+                    AccountAddressError::MissingI105Sentinel
+                }
+            })?;
+        let digits = i105_to_digits(payload)?;
+        if digits.len() <= I105_CHECKSUM_LEN {
+            return Err(AccountAddressError::I105TooShort);
         }
-        let digits_len = digits.len() - COMPRESSED_CHECKSUM_LEN;
+        let digits_len = digits.len() - I105_CHECKSUM_LEN;
         let data_digits = &digits[..digits_len];
         let checksum_digits = &digits[digits_len..];
 
-        let canonical = decode_base_n(data_digits, COMPRESSED_BASE)?;
-        let expected = compressed_checksum_digits(&canonical);
-        if expected.as_ref() != checksum_digits {
+        let canonical = decode_base_n(data_digits, I105_BASE)?;
+        let expected_checksum = i105_checksum_digits(&canonical);
+        if expected_checksum.as_ref() != checksum_digits {
             return Err(AccountAddressError::ChecksumMismatch);
         }
 
         Self::from_canonical_bytes(&canonical)
     }
 
-    /// Parse an address string in strict encoded form (IH58 or compressed only).
+    /// Parse an address string in strict encoded I105 form.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the input cannot be decoded as IH58 or
-    /// compressed (or if the IH58 prefix mismatches expectations).
+    /// Returns [`AccountAddressError`] if the input cannot be decoded as I105
+    /// (or if the discriminant sentinel mismatches expectations).
     pub fn parse_encoded(
         input: &str,
-        expected_prefix: Option<u16>,
-    ) -> Result<(Self, AccountAddressFormat), AccountAddressError> {
+        expected_discriminant: Option<u16>,
+    ) -> Result<Self, AccountAddressError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        if Self::strip_compressed_sentinel(trimmed).is_some() {
-            let address = Self::from_compressed_sora(trimmed)?;
-            return Ok((address, AccountAddressFormat::Compressed));
-        }
-        if trimmed.len() > 1 {
-            match decode_ih58(trimmed) {
-                Ok((prefix, canonical)) => {
-                    if let Some(expect) = expected_prefix
-                        && prefix != expect
-                    {
-                        return Err(AccountAddressError::UnexpectedNetworkPrefix {
-                            expected: expect,
-                            found: prefix,
-                        });
-                    }
-                    let address = Self::from_canonical_bytes(&canonical)?;
-                    return Ok((
-                        address,
-                        AccountAddressFormat::IH58 {
-                            network_prefix: prefix,
-                        },
-                    ));
-                }
-                Err(AccountAddressError::ChecksumMismatch) => {
-                    return Err(AccountAddressError::ChecksumMismatch);
-                }
-                Err(_) => {}
+        match Self::from_i105_for_discriminant(trimmed, expected_discriminant) {
+            Ok(address) => Ok(address),
+            Err(AccountAddressError::MissingI105Sentinel) => {
+                Err(AccountAddressError::UnsupportedAddressFormat)
             }
+            Err(err) => Err(err),
         }
-        Err(AccountAddressError::UnsupportedAddressFormat)
     }
 
     /// # Errors
@@ -602,19 +590,28 @@ impl AccountAddress {
         Ok(format!("0x{}", hex::encode(canonical)))
     }
 
-    /// Convert this address into an [`AccountId`] using the resolved domain.
+    /// Convert this address into a domainless [`AccountId`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the controller payload cannot be decoded.
+    pub fn to_account_id(&self) -> Result<AccountId, AccountAddressError> {
+        let controller = self.to_account_controller()?;
+        Ok(AccountId { controller })
+    }
+
+    /// Convert this address into a [`ScopedAccountId`] using an explicit domain.
     ///
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] when the provided domain does not match the selector
     /// embedded in the address or when the controller payload cannot be decoded.
-    pub fn to_account_id(&self, domain: &DomainId) -> Result<AccountId, AccountAddressError> {
+    pub fn to_scoped_account_id(
+        &self,
+        domain: &DomainId,
+    ) -> Result<super::ScopedAccountId, AccountAddressError> {
         self.ensure_domain_matches(domain)?;
-        let controller = self.to_account_controller()?;
-        Ok(AccountId {
-            domain: domain.clone(),
-            controller,
-        })
+        Ok(self.to_account_id()?.to_account_id(domain.clone()))
     }
 
     /// Check that the provided domain matches the selector embedded in this address.
@@ -639,7 +636,7 @@ impl FromStr for AccountAddress {
     type Err = AccountAddressError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_encoded(s, None).map(|(address, _)| address)
+        Self::parse_encoded(s, None)
     }
 }
 
@@ -703,14 +700,28 @@ impl JsonSerialize for AccountAddress {
 impl JsonDeserialize for AccountAddress {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let literal = parser.parse_string()?;
-        AccountAddress::from_str(&literal).map_err(|err| json::Error::Message(err.to_string()))
+        match AccountAddress::from_str(&literal) {
+            Ok(address) => Ok(address),
+            Err(AccountAddressError::UnsupportedAddressFormat) => {
+                let canonical_hex = literal
+                    .strip_prefix("0x")
+                    .or_else(|| literal.strip_prefix("0X"))
+                    .unwrap_or(&literal);
+                let canonical_bytes = hex::decode(canonical_hex).map_err(|_| {
+                    json::Error::Message(AccountAddressError::InvalidHexAddress.to_string())
+                })?;
+                AccountAddress::from_canonical_bytes(&canonical_bytes)
+                    .map_err(|err| json::Error::Message(err.to_string()))
+            }
+            Err(err) => Err(json::Error::Message(err.to_string())),
+        }
     }
 }
 
 const CONTROLLER_MAX_LEN: usize = 1024;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
-const CONTROLLER_MULTISIG_MEMBER_MAX: usize = 255;
+const CONTROLLER_MULTISIG_MEMBER_MAX: usize = u16::MAX as usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AddressHeader {
@@ -902,10 +913,10 @@ impl ControllerPayload {
                 out.push(CONTROLLER_MULTISIG_TAG);
                 out.push(payload.version);
                 out.extend_from_slice(&payload.threshold.to_be_bytes());
-                let member_count = u8::try_from(payload.members.len()).map_err(|_| {
+                let member_count = u16::try_from(payload.members.len()).map_err(|_| {
                     AccountAddressError::MultisigMemberOverflow(payload.members.len())
                 })?;
-                out.push(member_count);
+                out.extend_from_slice(&member_count.to_be_bytes());
                 for member in &payload.members {
                     out.push(member.curve.as_u8());
                     out.extend_from_slice(&member.weight.to_be_bytes());
@@ -954,11 +965,12 @@ impl ControllerPayload {
                     .ok_or(AccountAddressError::InvalidLength)?;
                 *cursor += 2;
                 let threshold = u16::from_be_bytes(threshold_bytes.try_into().unwrap());
-                let member_count = *bytes
-                    .get(*cursor)
-                    .ok_or(AccountAddressError::InvalidLength)?
-                    as usize;
-                *cursor += 1;
+                let member_count_bytes = bytes
+                    .get(*cursor..*cursor + 2)
+                    .ok_or(AccountAddressError::InvalidLength)?;
+                *cursor += 2;
+                let member_count = u16::from_be_bytes(member_count_bytes.try_into().unwrap());
+                let member_count = usize::from(member_count);
                 if member_count > CONTROLLER_MULTISIG_MEMBER_MAX {
                     return Err(AccountAddressError::MultisigMemberOverflow(member_count));
                 }
@@ -1031,87 +1043,97 @@ fn compute_local_digest(label: &str) -> [u8; 12] {
     digest
 }
 
-fn encode_ih58(prefix: u16, payload: &[u8]) -> Result<String, AccountAddressError> {
-    let mut body = encode_ih58_prefix(prefix)?;
-    body.extend_from_slice(payload);
-
-    let mut checksum_input = Vec::with_capacity(IH58_CHECKSUM_PREFIX.len() + body.len());
-    checksum_input.extend_from_slice(IH58_CHECKSUM_PREFIX);
-    checksum_input.extend_from_slice(&body);
-
-    let mut hasher = Blake2bVar::new(64).map_err(|_| AccountAddressError::HashError)?;
-    hasher.update(&checksum_input);
-    let mut checksum = [0u8; 64];
-    hasher
-        .finalize_variable(&mut checksum)
-        .map_err(|_| AccountAddressError::HashError)?;
-
-    body.extend_from_slice(&checksum[..2]);
-
-    Ok(bs58::encode(body).into_string())
-}
-
-fn decode_ih58(encoded: &str) -> Result<(u16, Vec<u8>), AccountAddressError> {
-    let decoded = bs58::decode(encoded)
-        .into_vec()
-        .map_err(|_| AccountAddressError::InvalidIh58Encoding)?;
-    if decoded.len() < 1 + IH58_CHECKSUM_BYTES {
-        return Err(AccountAddressError::InvalidLength);
-    }
-    let (body, checksum_bytes) = decoded.split_at(decoded.len() - IH58_CHECKSUM_BYTES);
-    let (prefix, prefix_len) = decode_ih58_prefix(body)?;
-    let mut checksum_input = Vec::with_capacity(IH58_CHECKSUM_PREFIX.len() + body.len());
-    checksum_input.extend_from_slice(IH58_CHECKSUM_PREFIX);
-    checksum_input.extend_from_slice(body);
-
-    let mut hasher = Blake2bVar::new(64).map_err(|_| AccountAddressError::HashError)?;
-    hasher.update(&checksum_input);
-    let mut expected = [0u8; 64];
-    hasher
-        .finalize_variable(&mut expected)
-        .map_err(|_| AccountAddressError::HashError)?;
-    if checksum_bytes != &expected[..IH58_CHECKSUM_BYTES] {
-        return Err(AccountAddressError::ChecksumMismatch);
-    }
-
-    let payload = body
-        .get(prefix_len..)
-        .ok_or(AccountAddressError::InvalidLength)?
-        .to_vec();
-    Ok((prefix, payload))
-}
-
-fn encode_ih58_prefix(prefix: u16) -> Result<Vec<u8>, AccountAddressError> {
-    if prefix <= 63 {
-        let byte =
-            u8::try_from(prefix).map_err(|_| AccountAddressError::InvalidIh58Prefix(prefix))?;
-        Ok(vec![byte])
-    } else if prefix <= 16_383 {
-        let lower_bits = (prefix & 0b0011_1111) | 0b0100_0000;
-        let lower =
-            u8::try_from(lower_bits).map_err(|_| AccountAddressError::InvalidIh58Prefix(prefix))?;
-        let upper = u8::try_from(prefix >> 6)
-            .map_err(|_| AccountAddressError::InvalidIh58Prefix(prefix))?;
-        Ok(vec![lower, upper])
-    } else {
-        Err(AccountAddressError::InvalidIh58Prefix(prefix))
+fn i105_sentinel_for_discriminant(discriminant: u16) -> String {
+    match discriminant {
+        CHAIN_DISCRIMINANT_SORA => I105_SENTINEL_SORA.to_owned(),
+        CHAIN_DISCRIMINANT_TEST => I105_SENTINEL_TEST.to_owned(),
+        CHAIN_DISCRIMINANT_DEV => I105_SENTINEL_DEV.to_owned(),
+        _ => format!("{I105_SENTINEL_FALLBACK_PREFIX}{discriminant}"),
     }
 }
 
-fn decode_ih58_prefix(body: &[u8]) -> Result<(u16, usize), AccountAddressError> {
-    let first = *body.first().ok_or(AccountAddressError::InvalidLength)?;
-    if first <= 63 {
-        Ok((u16::from(first), 1))
-    } else if first & 0b0100_0000 != 0 {
-        let second = *body.get(1).ok_or(AccountAddressError::InvalidLength)?;
-        let value = (u16::from(second) << 6) | (u16::from(first) & 0b0011_1111);
-        Ok((value, 2))
-    } else {
-        Err(AccountAddressError::InvalidIh58PrefixEncoding(first))
+fn i105_sentinel_fullwidth_for_discriminant(discriminant: u16) -> String {
+    let ascii = i105_sentinel_for_discriminant(discriminant);
+    ascii
+        .chars()
+        .map(|ch| ascii_char_to_fullwidth(ch).unwrap_or(ch))
+        .collect()
+}
+
+fn i105_discriminant_from_sentinel(input: &str) -> Option<u16> {
+    for (discriminant, sentinel) in [
+        (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
+        (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
+        (CHAIN_DISCRIMINANT_DEV, I105_SENTINEL_DEV),
+    ] {
+        if input.starts_with(sentinel) {
+            return Some(discriminant);
+        }
+        if let Some(fullwidth) = ascii_str_to_fullwidth(sentinel)
+            && input.starts_with(&fullwidth)
+        {
+            return Some(discriminant);
+        }
+    }
+    i105_discriminant_from_numeric_sentinel(input)
+}
+
+fn i105_discriminant_from_numeric_sentinel(input: &str) -> Option<u16> {
+    if let Some(rest) = input.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
+        return parse_i105_numeric_sentinel(rest, false);
+    }
+    if let Some(fullwidth_n) = ascii_char_to_fullwidth('n')
+        && let Some(rest) = input.strip_prefix(fullwidth_n)
+    {
+        return parse_i105_numeric_sentinel(rest, true);
+    }
+    None
+}
+
+fn parse_i105_numeric_sentinel(rest: &str, fullwidth: bool) -> Option<u16> {
+    let mut digits = String::new();
+    for ch in rest.chars().take(5) {
+        let ascii_digit = if fullwidth {
+            match fullwidth_digit_to_ascii(ch) {
+                Some(digit) => digit,
+                None => break,
+            }
+        } else if ch.is_ascii_digit() {
+            ch
+        } else {
+            break;
+        };
+        digits.push(ascii_digit);
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok()
+}
+
+fn ascii_char_to_fullwidth(ch: char) -> Option<char> {
+    match ch {
+        '0'..='9' => char::from_u32(ch as u32 - '0' as u32 + 0xFF10),
+        'A'..='Z' => char::from_u32(ch as u32 - 'A' as u32 + 0xFF21),
+        'a'..='z' => char::from_u32(ch as u32 - 'a' as u32 + 0xFF41),
+        _ => None,
     }
 }
 
-const IH58_CHECKSUM_BYTES: usize = 2;
+fn ascii_str_to_fullwidth(input: &str) -> Option<String> {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        output.push(ascii_char_to_fullwidth(ch)?);
+    }
+    Some(output)
+}
+
+fn fullwidth_digit_to_ascii(ch: char) -> Option<char> {
+    match ch {
+        '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32),
+        _ => None,
+    }
+}
 
 /// Stable error codes surfaced by address encoders/decoders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1124,15 +1146,9 @@ pub enum AccountAddressErrorCode {
     InvalidHeaderVersion,
     /// Normalisation version outside supported range.
     InvalidNormVersion,
-    /// Invalid IH58 prefix encountered.
-    InvalidIh58Prefix,
-    /// Failure while hashing canonical payload bytes.
-    HashFailure,
-    /// IH58 encoding failed to decode.
-    InvalidIh58Encoding,
     /// Payload length invalid for the requested operation.
     InvalidLength,
-    /// IH58 checksum validation failed.
+    /// I105 checksum validation failed.
     ChecksumMismatch,
     /// Canonical hexadecimal payload failed to decode.
     InvalidHexAddress,
@@ -1140,7 +1156,7 @@ pub enum AccountAddressErrorCode {
     DomainMismatch,
     /// Domain label failed normalisation.
     InvalidDomainLabel,
-    /// Network prefix did not match expectation.
+    /// Chain discriminant sentinel did not match expectation.
     UnexpectedNetworkPrefix,
     /// Unknown address class encountered.
     UnknownAddressClass,
@@ -1154,18 +1170,16 @@ pub enum AccountAddressErrorCode {
     UnknownCurve,
     /// Canonical payload contained trailing bytes.
     UnexpectedTrailingBytes,
-    /// IH58 prefix encoding was malformed.
-    InvalidIh58PrefixEncoding,
-    /// Compressed form missing `sora` or `ｓｏｒａ` sentinel.
-    MissingCompressedSentinel,
-    /// Compressed form shorter than minimal payload.
-    CompressedTooShort,
-    /// Invalid character in compressed alphabet.
-    InvalidCompressedChar,
-    /// Invalid compressed alphabet base requested.
-    InvalidCompressedBase,
-    /// Digit outside compressed alphabet bounds.
-    InvalidCompressedDigit,
+    /// I105 form missing the expected chain-discriminant sentinel.
+    MissingI105Sentinel,
+    /// I105 form shorter than minimal payload.
+    I105TooShort,
+    /// Invalid character in I105 alphabet.
+    InvalidI105Char,
+    /// Invalid I105 alphabet base requested.
+    InvalidI105Base,
+    /// Digit outside I105 alphabet bounds.
+    InvalidI105Digit,
     /// Address string format unsupported.
     UnsupportedAddressFormat,
     /// Multisig controller declares too many members.
@@ -1183,9 +1197,6 @@ impl AccountAddressErrorCode {
             Self::KeyPayloadTooLong => "ERR_KEY_PAYLOAD_TOO_LONG",
             Self::InvalidHeaderVersion => "ERR_INVALID_HEADER_VERSION",
             Self::InvalidNormVersion => "ERR_INVALID_NORM_VERSION",
-            Self::InvalidIh58Prefix => "ERR_INVALID_IH58_PREFIX",
-            Self::HashFailure => "ERR_CANONICAL_HASH_FAILURE",
-            Self::InvalidIh58Encoding => "ERR_INVALID_IH58_ENCODING",
             Self::InvalidLength => "ERR_INVALID_LENGTH",
             Self::ChecksumMismatch => "ERR_CHECKSUM_MISMATCH",
             Self::InvalidHexAddress => "ERR_INVALID_HEX_ADDRESS",
@@ -1198,12 +1209,11 @@ impl AccountAddressErrorCode {
             Self::InvalidPublicKey => "ERR_INVALID_PUBLIC_KEY",
             Self::UnknownCurve => "ERR_UNKNOWN_CURVE",
             Self::UnexpectedTrailingBytes => "ERR_UNEXPECTED_TRAILING_BYTES",
-            Self::InvalidIh58PrefixEncoding => "ERR_INVALID_IH58_PREFIX_ENCODING",
-            Self::MissingCompressedSentinel => "ERR_MISSING_COMPRESSED_SENTINEL",
-            Self::CompressedTooShort => "ERR_COMPRESSED_TOO_SHORT",
-            Self::InvalidCompressedChar => "ERR_INVALID_COMPRESSED_CHAR",
-            Self::InvalidCompressedBase => "ERR_INVALID_COMPRESSED_BASE",
-            Self::InvalidCompressedDigit => "ERR_INVALID_COMPRESSED_DIGIT",
+            Self::MissingI105Sentinel => "ERR_MISSING_I105_SENTINEL",
+            Self::I105TooShort => "ERR_I105_TOO_SHORT",
+            Self::InvalidI105Char => "ERR_INVALID_I105_CHAR",
+            Self::InvalidI105Base => "ERR_INVALID_I105_BASE",
+            Self::InvalidI105Digit => "ERR_INVALID_I105_DIGIT",
             Self::UnsupportedAddressFormat => "ERR_UNSUPPORTED_ADDRESS_FORMAT",
             Self::MultisigMemberOverflow => "ERR_MULTISIG_MEMBER_OVERFLOW",
             Self::InvalidMultisigPolicy => "ERR_INVALID_MULTISIG_POLICY",
@@ -1225,20 +1235,11 @@ pub enum AccountAddressError {
     /// Normalisation version flag is outside the supported range.
     #[error("invalid normalization version: {0}")]
     InvalidNormVersion(u8),
-    /// The provided Iroha Base58 network prefix cannot be encoded.
-    #[error("invalid IH58 prefix: {0}")]
-    InvalidIh58Prefix(u16),
-    /// Failure while hashing canonical payload bytes.
-    #[error("hashing error during canonicalisation")]
-    HashError,
-    /// The IH58 string could not be decoded from Base58.
-    #[error("invalid Iroha Base58 encoding")]
-    InvalidIh58Encoding,
     /// Data length is invalid for the requested operation.
     #[error("invalid length for address payload")]
     InvalidLength,
-    /// IH58 checksum validation failed.
-    #[error("Iroha Base58 checksum mismatch")]
+    /// I105 checksum validation failed.
+    #[error("I105 checksum mismatch")]
     ChecksumMismatch,
     /// Canonical hexadecimal payload could not be decoded.
     #[error("invalid canonical hex account address")]
@@ -1249,12 +1250,12 @@ pub enum AccountAddressError {
     /// Domain label failed normalization.
     #[error("domain label failed normalization: {0}")]
     InvalidDomainLabel(&'static str),
-    /// Network prefix did not match expectations.
-    #[error("unexpected Iroha Base58 network prefix: expected {expected}, found {found}")]
+    /// Chain discriminant sentinel did not match expectations.
+    #[error("unexpected I105 chain discriminant: expected {expected}, found {found}")]
     UnexpectedNetworkPrefix {
-        /// Network prefix we expected to decode.
+        /// Chain discriminant we expected to decode.
         expected: u16,
-        /// Network prefix actually decoded from the string.
+        /// Chain discriminant decoded from the sentinel.
         found: u16,
     },
     /// Encountered an unknown address class.
@@ -1275,26 +1276,21 @@ pub enum AccountAddressError {
     /// Address contains trailing bytes beyond the expected payload.
     #[error("unexpected trailing bytes in canonical payload")]
     UnexpectedTrailingBytes,
-    /// IH58 prefix encoding was malformed.
-    #[error("invalid IH58 prefix encoding: {0}")]
-    InvalidIh58PrefixEncoding(u8),
-    /// Compressed form is missing the required `sora` sentinel prefix.
-    #[error(
-        "compressed Sora address must start with \"{COMPRESSED_SENTINEL}\" or \"{COMPRESSED_SENTINEL_FULLWIDTH}\""
-    )]
-    MissingCompressedSentinel,
-    /// Compressed form is too short to contain payload and checksum.
-    #[error("compressed Sora address too short")]
-    CompressedTooShort,
-    /// Encountered a character outside of the compressed alphabet.
-    #[error("invalid character `{0}` in compressed Sora address")]
-    InvalidCompressedChar(char),
-    /// The compressed alphabet base is invalid or unsupported.
-    #[error("invalid compressed alphabet base")]
-    InvalidCompressedBase,
-    /// Encountered a digit value outside of the compressed alphabet size.
+    /// I105 form is missing the expected chain-discriminant sentinel.
+    #[error("I105 address is missing the expected chain-discriminant sentinel")]
+    MissingI105Sentinel,
+    /// I105 form is too short to contain payload and checksum.
+    #[error("I105 address too short")]
+    I105TooShort,
+    /// Encountered a character outside of the I105 alphabet.
+    #[error("invalid character `{0}` in I105 address")]
+    InvalidI105Char(char),
+    /// The I105 alphabet base is invalid or unsupported.
+    #[error("invalid I105 alphabet base")]
+    InvalidI105Base,
+    /// Encountered a digit value outside of the I105 alphabet size.
     #[error("invalid compressed digit value: {0}")]
-    InvalidCompressedDigit(u8),
+    InvalidI105Digit(u8),
     /// Address string is not in a recognised format.
     #[error("unsupported account address format")]
     UnsupportedAddressFormat,
@@ -1326,9 +1322,6 @@ impl AccountAddressError {
             Self::KeyPayloadTooLong(_) => AccountAddressErrorCode::KeyPayloadTooLong,
             Self::InvalidHeaderVersion(_) => AccountAddressErrorCode::InvalidHeaderVersion,
             Self::InvalidNormVersion(_) => AccountAddressErrorCode::InvalidNormVersion,
-            Self::InvalidIh58Prefix(_) => AccountAddressErrorCode::InvalidIh58Prefix,
-            Self::HashError => AccountAddressErrorCode::HashFailure,
-            Self::InvalidIh58Encoding => AccountAddressErrorCode::InvalidIh58Encoding,
             Self::InvalidLength => AccountAddressErrorCode::InvalidLength,
             Self::ChecksumMismatch => AccountAddressErrorCode::ChecksumMismatch,
             Self::InvalidHexAddress => AccountAddressErrorCode::InvalidHexAddress,
@@ -1343,14 +1336,11 @@ impl AccountAddressError {
             Self::InvalidPublicKey => AccountAddressErrorCode::InvalidPublicKey,
             Self::UnknownCurve(_) => AccountAddressErrorCode::UnknownCurve,
             Self::UnexpectedTrailingBytes => AccountAddressErrorCode::UnexpectedTrailingBytes,
-            Self::InvalidIh58PrefixEncoding(_) => {
-                AccountAddressErrorCode::InvalidIh58PrefixEncoding
-            }
-            Self::MissingCompressedSentinel => AccountAddressErrorCode::MissingCompressedSentinel,
-            Self::CompressedTooShort => AccountAddressErrorCode::CompressedTooShort,
-            Self::InvalidCompressedChar(_) => AccountAddressErrorCode::InvalidCompressedChar,
-            Self::InvalidCompressedBase => AccountAddressErrorCode::InvalidCompressedBase,
-            Self::InvalidCompressedDigit(_) => AccountAddressErrorCode::InvalidCompressedDigit,
+            Self::MissingI105Sentinel => AccountAddressErrorCode::MissingI105Sentinel,
+            Self::I105TooShort => AccountAddressErrorCode::I105TooShort,
+            Self::InvalidI105Char(_) => AccountAddressErrorCode::InvalidI105Char,
+            Self::InvalidI105Base => AccountAddressErrorCode::InvalidI105Base,
+            Self::InvalidI105Digit(_) => AccountAddressErrorCode::InvalidI105Digit,
             Self::UnsupportedAddressFormat => AccountAddressErrorCode::UnsupportedAddressFormat,
             Self::MultisigMemberOverflow(_) => AccountAddressErrorCode::MultisigMemberOverflow,
             Self::InvalidMultisigPolicy(_) => AccountAddressErrorCode::InvalidMultisigPolicy,
@@ -1373,7 +1363,7 @@ impl fmt::Display for AccountAddress {
 
 fn encode_base_n(bytes: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError> {
     if base < 2 {
-        return Err(AccountAddressError::InvalidCompressedBase);
+        return Err(AccountAddressError::InvalidI105Base);
     }
     if bytes.is_empty() {
         return Ok(vec![0]);
@@ -1408,7 +1398,7 @@ fn encode_base_n(bytes: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError
 
 fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError> {
     if base < 2 {
-        return Err(AccountAddressError::InvalidCompressedBase);
+        return Err(AccountAddressError::InvalidI105Base);
     }
     if digits.is_empty() {
         return Err(AccountAddressError::InvalidLength);
@@ -1421,7 +1411,7 @@ fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressErro
         let mut remainder = 0u32;
         for digit in &mut value[start..] {
             if u32::from(*digit) >= base {
-                return Err(AccountAddressError::InvalidCompressedDigit(*digit));
+                return Err(AccountAddressError::InvalidI105Digit(*digit));
             }
             let accumulator = remainder * base + u32::from(*digit);
             let quotient = u8::try_from(accumulator / 256)
@@ -1439,7 +1429,7 @@ fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressErro
     Ok(bytes)
 }
 
-fn compressed_checksum_digits(canonical: &[u8]) -> [u8; COMPRESSED_CHECKSUM_LEN] {
+fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
     let data = convert_to_base32(canonical);
     bech32m_checksum(&data)
 }
@@ -1464,14 +1454,14 @@ fn convert_to_base32(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn bech32m_checksum(data: &[u8]) -> [u8; COMPRESSED_CHECKSUM_LEN] {
+fn bech32m_checksum(data: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
     let mut values = expand_hrp("snx");
     values.extend_from_slice(data);
-    values.extend([0u8; COMPRESSED_CHECKSUM_LEN]);
+    values.extend([0u8; I105_CHECKSUM_LEN]);
     let polymod = bech32_polymod(values.iter().copied()) ^ BECH32M_CONST;
-    let mut result = [0u8; COMPRESSED_CHECKSUM_LEN];
+    let mut result = [0u8; I105_CHECKSUM_LEN];
     for (index, slot) in result.iter_mut().enumerate() {
-        let shift = 5 * (COMPRESSED_CHECKSUM_LEN - 1 - index);
+        let shift = 5 * (I105_CHECKSUM_LEN - 1 - index);
         let value = ((polymod >> shift) & 0x1f) as u32;
         *slot = u8::try_from(value).expect("bech32 checksum limb fits in u8");
     }
@@ -1512,7 +1502,7 @@ fn expand_hrp(hrp: &str) -> Vec<u8> {
     out
 }
 
-fn compressed_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
+fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
     let mut digits = Vec::new();
     let char_indices: Vec<(usize, char)> = payload.char_indices().collect();
     let mut i = 0;
@@ -1530,59 +1520,59 @@ fn compressed_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
                 payload.len()
             };
             let candidate = &payload[start..end];
-            if let Some(digit) = lookup_compressed_digit(candidate) {
+            if let Some(digit) = lookup_i105_digit(candidate) {
                 digits.push(digit);
                 i += 2;
                 continue;
             }
         }
         let slice = &payload[start..next_start];
-        if let Some(digit) = lookup_compressed_digit(slice) {
+        if let Some(digit) = lookup_i105_digit(slice) {
             digits.push(digit);
             i += 1;
         } else {
-            return Err(AccountAddressError::InvalidCompressedChar(ch));
+            return Err(AccountAddressError::InvalidI105Char(ch));
         }
     }
     Ok(digits)
 }
 
-fn compressed_alphabet() -> &'static [&'static str] {
+fn i105_alphabet() -> &'static [&'static str] {
     static ALPHABET: OnceLock<Vec<&'static str>> = OnceLock::new();
     ALPHABET.get_or_init(|| {
-        let mut table = Vec::with_capacity(IH58_ALPHABET.len() + SORA_KANA.len());
-        table.extend_from_slice(&IH58_ALPHABET);
+        let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + SORA_KANA.len());
+        table.extend_from_slice(&BASE58_ALPHABET);
         table.extend_from_slice(&SORA_KANA);
-        debug_assert_eq!(table.len(), COMPRESSED_BASE as usize);
+        debug_assert_eq!(table.len(), I105_BASE as usize);
         table
     })
 }
 
-fn compressed_alphabet_fullwidth() -> &'static [&'static str] {
+fn i105_alphabet_fullwidth() -> &'static [&'static str] {
     static ALPHABET: OnceLock<Vec<&'static str>> = OnceLock::new();
     ALPHABET.get_or_init(|| {
-        let mut table = Vec::with_capacity(IH58_ALPHABET.len() + SORA_KANA_FULLWIDTH.len());
-        table.extend_from_slice(&IH58_ALPHABET);
+        let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + SORA_KANA_FULLWIDTH.len());
+        table.extend_from_slice(&BASE58_ALPHABET);
         table.extend_from_slice(&SORA_KANA_FULLWIDTH);
-        debug_assert_eq!(table.len(), COMPRESSED_BASE as usize);
+        debug_assert_eq!(table.len(), I105_BASE as usize);
         table
     })
 }
 
-fn compressed_digit_table() -> &'static [(&'static str, u8)] {
+fn i105_digit_table() -> &'static [(&'static str, u8)] {
     static MAP: OnceLock<Vec<(&'static str, u8)>> = OnceLock::new();
     MAP.get_or_init(|| {
-        let mut table = Vec::with_capacity((COMPRESSED_BASE as usize) * 2);
-        for (idx, symbol) in compressed_alphabet().iter().enumerate() {
+        let mut table = Vec::with_capacity((I105_BASE as usize) * 2);
+        for (idx, symbol) in i105_alphabet().iter().enumerate() {
             table.push((
                 *symbol,
-                u8::try_from(idx).expect("compressed alphabet length fits within u8"),
+                u8::try_from(idx).expect("I105 alphabet length fits within u8"),
             ));
         }
-        for (idx, symbol) in compressed_alphabet_fullwidth().iter().enumerate() {
+        for (idx, symbol) in i105_alphabet_fullwidth().iter().enumerate() {
             table.push((
                 *symbol,
-                u8::try_from(idx).expect("compressed alphabet length fits within u8"),
+                u8::try_from(idx).expect("I105 alphabet length fits within u8"),
             ));
         }
         table.shrink_to_fit();
@@ -1590,13 +1580,13 @@ fn compressed_digit_table() -> &'static [(&'static str, u8)] {
     })
 }
 
-fn lookup_compressed_digit(symbol: &str) -> Option<u8> {
-    compressed_digit_table()
+fn lookup_i105_digit(symbol: &str) -> Option<u8> {
+    i105_digit_table()
         .iter()
         .find_map(|(s, value)| (*s == symbol).then_some(*value))
 }
 
-const IH58_ALPHABET: [&str; 58] = [
+const BASE58_ALPHABET: [&str; 58] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
     "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e",
     "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y",
@@ -1654,11 +1644,6 @@ mod tests {
         DomainId::new(Name::from_str(name).expect("valid domain name"))
     }
 
-    fn default_domain_id() -> DomainId {
-        let label = default_domain_name();
-        domain(label.as_ref())
-    }
-
     fn guard_default_label() -> DefaultDomainGuard {
         default_domain_guard(None)
     }
@@ -1672,18 +1657,33 @@ mod tests {
     }
 
     fn account_address_for_seed(seed: u8) -> AccountAddress {
-        let account = AccountId::new(default_domain_id(), ed25519_pk_with(seed));
+        let account = AccountId::new(ed25519_pk_with(seed));
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
     }
 
+    fn current_sentinel() -> String {
+        i105_sentinel_for_discriminant(chain_discriminant())
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn account_address_json_roundtrip_supports_canonical_hex_literals() {
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("account address");
+        let json_literal = norito::json::to_json(&address).expect("serialize account address");
+        let decoded: AccountAddress =
+            norito::json::from_str(&json_literal).expect("deserialize account address");
+        assert_eq!(decoded, address);
+    }
+
     fn nfkc_like_payload(compressed: &str) -> String {
-        assert!(compressed.starts_with(COMPRESSED_SENTINEL));
-        let payload = &compressed[COMPRESSED_SENTINEL.len()..];
-        let digits =
-            compressed_to_digits(payload).expect("compressed payload must decode into digits");
-        let alphabet = compressed_alphabet_fullwidth();
+        let sentinel = current_sentinel();
+        assert!(compressed.starts_with(&sentinel));
+        let payload = &compressed[sentinel.len()..];
+        let digits = i105_to_digits(payload).expect("I105 payload must decode into digits");
+        let alphabet = i105_alphabet_fullwidth();
         let mut output = String::with_capacity(compressed.len());
-        output.push_str(COMPRESSED_SENTINEL);
+        output.push_str(&sentinel);
         for digit in digits {
             output.push_str(alphabet[usize::from(digit)]);
         }
@@ -1702,13 +1702,15 @@ mod tests {
     }
 
     fn ascii_payload_to_fullwidth(compressed: &str) -> Option<String> {
-        assert!(compressed.starts_with(COMPRESSED_SENTINEL));
-        let payload = &compressed[COMPRESSED_SENTINEL.len()..];
+        let sentinel = current_sentinel();
+        assert!(compressed.starts_with(&sentinel));
+        let payload = &compressed[sentinel.len()..];
+        let fullwidth_sentinel = ascii_str_to_fullwidth(&sentinel)?;
         let mut output = String::with_capacity(compressed.len());
-        output.push_str(COMPRESSED_SENTINEL);
+        output.push_str(&fullwidth_sentinel);
         let mut changed = false;
         for ch in payload.chars() {
-            if let Some(fullwidth) = ascii_to_fullwidth_char(ch) {
+            if let Some(fullwidth) = ascii_char_to_fullwidth(ch) {
                 output.push(fullwidth);
                 changed = true;
             } else {
@@ -1721,19 +1723,10 @@ mod tests {
     fn ascii_str_to_fullwidth(input: &str) -> Option<String> {
         let mut output = String::with_capacity(input.len());
         for ch in input.chars() {
-            let converted = ascii_to_fullwidth_char(ch)?;
+            let converted = ascii_char_to_fullwidth(ch)?;
             output.push(converted);
         }
         Some(output)
-    }
-
-    fn ascii_to_fullwidth_char(ch: char) -> Option<char> {
-        match ch {
-            '0'..='9' => char::from_u32(ch as u32 - '0' as u32 + 0xFF10),
-            'A'..='Z' => char::from_u32(ch as u32 - 'A' as u32 + 0xFF21),
-            'a'..='z' => char::from_u32(ch as u32 - 'a' as u32 + 0xFF41),
-            _ => None,
-        }
     }
 
     fn digits_to_payload_string(digits: &[u8], alphabet: &[&str]) -> String {
@@ -1756,7 +1749,14 @@ mod tests {
             AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
-        assert_eq!(parse_err.reason(), err.code_str());
+        assert_eq!(
+            parse_err.reason(),
+            "AccountId must use a canonical I105 literal"
+        );
+        assert_eq!(
+            err.code_str(),
+            AccountAddressErrorCode::UnknownCurve.as_str()
+        );
     }
 
     #[test]
@@ -1770,7 +1770,14 @@ mod tests {
             AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
-        assert_eq!(parse_err.reason(), err.code_str());
+        assert_eq!(
+            parse_err.reason(),
+            "AccountId must use a canonical I105 literal"
+        );
+        assert_eq!(
+            err.code_str(),
+            AccountAddressErrorCode::UnknownCurve.as_str()
+        );
     }
 
     #[test]
@@ -1785,7 +1792,7 @@ mod tests {
 
     #[test]
     fn local12_digest_absent_for_default_domain() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         assert!(
             address.local12_digest().is_none(),
@@ -1804,10 +1811,10 @@ mod tests {
     }
 
     #[test]
-    fn compressed_alphabet_has_unique_symbols() {
+    fn i105_alphabet_has_unique_symbols() {
         let mut symbols = BTreeSet::new();
-        for symbol in IH58_ALPHABET {
-            assert!(symbols.insert(symbol), "duplicate IH58 symbol {symbol}");
+        for symbol in BASE58_ALPHABET {
+            assert!(symbols.insert(symbol), "duplicate Base58 symbol {symbol}");
         }
         for symbol in SORA_KANA {
             assert!(
@@ -1817,8 +1824,8 @@ mod tests {
         }
         assert_eq!(
             symbols.len(),
-            (IH58_ALPHABET.len() + SORA_KANA.len()),
-            "unexpected compressed alphabet length"
+            (BASE58_ALPHABET.len() + SORA_KANA.len()),
+            "unexpected I105 alphabet length"
         );
     }
 
@@ -1845,20 +1852,17 @@ mod tests {
         ];
 
         for (label, seed_byte) in vectors {
-            let account = AccountId::new(domain(label), ed25519_pk_with(seed_byte));
+            let account = AccountId::new(ed25519_pk_with(seed_byte));
             let address = AccountAddress::from_account_id(&account).expect("address encoding");
             let canonical = address
                 .canonical_hex()
                 .expect("canonical encoding must succeed");
-            let compressed = address
-                .to_compressed_sora()
-                .expect("compressed encoding must succeed");
+            let compressed = address.to_i105().expect("compressed encoding must succeed");
             assert!(
                 canonical.starts_with("0x020001"),
                 "canonical payloads must not include a domain selector byte: label={label} seed={seed_byte} canonical={canonical}"
             );
-            let decoded =
-                AccountAddress::from_compressed_sora(&compressed).expect("compressed decode");
+            let decoded = AccountAddress::from_i105(&compressed).expect("compressed decode");
             assert_eq!(
                 decoded.canonical_hex().expect("canonical"),
                 canonical,
@@ -1870,7 +1874,7 @@ mod tests {
     #[test]
     fn canonical_payload_omits_domain_selector_bytes() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical[0] >> 5, HEADER_VERSION_V1);
@@ -1885,8 +1889,8 @@ mod tests {
     fn non_default_domain_address_bytes_match_default_domain_bytes() {
         let _guard = guard_default_label();
         let key = ed25519_pk();
-        let default_account = AccountId::new(default_domain_id(), key.clone());
-        let local_account = AccountId::new(domain("treasury"), key);
+        let default_account = AccountId::new(key.clone());
+        let local_account = AccountId::new(key);
         let default_address = AccountAddress::from_account_id(&default_account).expect("encode");
         let local_address = AccountAddress::from_account_id(&local_account).expect("encode");
         assert_eq!(
@@ -1900,12 +1904,12 @@ mod tests {
     #[test]
     fn domain_kind_distinguishes_default_and_local_selectors() {
         let _guard = guard_default_label();
-        let default_account = AccountId::new(default_domain_id(), ed25519_pk_with(7));
+        let default_account = AccountId::new(ed25519_pk_with(7));
         let default_address =
             AccountAddress::from_account_id(&default_account).expect("encode default domain");
         assert_eq!(default_address.domain_kind(), AddressDomainKind::Default);
 
-        let local_account = AccountId::new(domain("treasury"), ed25519_pk_with(9));
+        let local_account = AccountId::new(ed25519_pk_with(9));
         let local_address =
             AccountAddress::from_account_id(&local_account).expect("encode local domain");
         assert_eq!(local_address.domain_kind(), AddressDomainKind::Default);
@@ -1937,8 +1941,8 @@ mod tests {
         let _guard = guard_default_label();
         let original = default_domain_name();
         let _reset = Reset(original.clone());
-        let canonical = set_default_domain_name("ledger").expect("set default label");
-        let account = AccountId::new(domain(canonical.as_ref()), ed25519_pk());
+        let _canonical = set_default_domain_name("ledger").expect("set default label");
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let canonical_bytes = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical_bytes[1], CONTROLLER_SINGLE_KEY_TAG);
@@ -1956,23 +1960,41 @@ mod tests {
     }
 
     #[test]
-    fn ih58_encoding_has_expected_structure() {
+    fn i105_encoding_uses_chain_discriminant_sentinel() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let _chain = ChainDiscriminantGuard::enter(42);
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let encoded = address.to_ih58(42).expect("ih58");
-        let raw = bs58::decode(encoded).into_vec().expect("base58");
-        assert_eq!(raw[0], 42);
-        assert_eq!(
-            raw.len(),
-            1 + address.canonical_bytes().unwrap().len() + IH58_CHECKSUM_BYTES
-        );
+        let encoded = address.to_i105().expect("i105");
+        assert!(encoded.starts_with("n42"));
+    }
+
+    #[test]
+    fn i105_known_discriminants_use_named_sentinels() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+
+        let sora = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+            .expect("sora");
+        assert!(sora.starts_with(I105_SENTINEL_SORA));
+
+        let testus = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_TEST)
+            .expect("test");
+        assert!(testus.starts_with(I105_SENTINEL_TEST));
+
+        let dev = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_DEV)
+            .expect("dev");
+        assert!(dev.starts_with(I105_SENTINEL_DEV));
     }
 
     #[test]
     fn account_address_encodes_secp256k1_controller() {
         let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::Secp256k1).into_parts();
-        let account = AccountId::new(domain("wonderland"), public_key.clone());
+        let account = AccountId::new(public_key.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode secp256k1");
         let controller = address
             .to_account_controller()
@@ -1982,29 +2004,27 @@ mod tests {
 
     #[test]
     fn account_address_to_account_id_roundtrip() {
-        let account = AccountId::new(domain("wonderland"), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode account id");
-        let roundtrip = address
-            .to_account_id(account.domain())
-            .expect("domain matches selector");
+        let roundtrip = address.to_account_id().expect("decode account id");
         assert_eq!(roundtrip, account);
 
         let other_domain = domain("garden");
         let projected = address
-            .to_account_id(&other_domain)
+            .to_scoped_account_id(&other_domain)
             .expect("global selector should project to arbitrary domain");
         assert_eq!(projected.domain(), &other_domain);
         assert_eq!(projected.signatory(), account.signatory());
     }
 
     #[test]
-    fn ih58_round_trip_recovers_canonical_payload() {
+    fn i105_round_trip_recovers_canonical_payload() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
-        let encoded = original.to_ih58(73).expect("ih58");
-        let decoded =
-            AccountAddress::from_ih58(&encoded, Some(73)).expect("decode succeeds with prefix");
+        let encoded = original.to_i105_for_discriminant(73).expect("i105");
+        let decoded = AccountAddress::from_i105_for_discriminant(&encoded, Some(73))
+            .expect("decode succeeds with discriminant");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             original.canonical_bytes().unwrap()
@@ -2012,12 +2032,13 @@ mod tests {
     }
 
     #[test]
-    fn ih58_prefix_mismatch_fails() {
+    fn i105_discriminant_mismatch_fails() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let encoded = address.to_ih58(10).expect("ih58");
-        let err = AccountAddress::from_ih58(&encoded, Some(11)).expect_err("prefix mismatch");
+        let encoded = address.to_i105_for_discriminant(10).expect("i105");
+        let err = AccountAddress::from_i105_for_discriminant(&encoded, Some(11))
+            .expect_err("discriminant mismatch");
         assert!(matches!(
             err,
             AccountAddressError::UnexpectedNetworkPrefix {
@@ -2028,28 +2049,14 @@ mod tests {
     }
 
     #[test]
-    fn ih58_invalid_checksum_rejected() {
+    fn i105_round_trip() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
-        let address = AccountAddress::from_account_id(&account).expect("encode");
-        let mut bytes = bs58::decode(address.to_ih58(0).unwrap())
-            .into_vec()
-            .expect("base58");
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xFF;
-        let tampered = bs58::encode(bytes).into_string();
-        let err = AccountAddress::from_ih58(&tampered, Some(0)).expect_err("checksum mismatch");
-        assert!(matches!(err, AccountAddressError::ChecksumMismatch));
-    }
-
-    #[test]
-    fn compressed_round_trip() {
-        let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
-        let compressed = original.to_compressed_sora().expect("compressed encode");
-        assert!(compressed.starts_with(COMPRESSED_SENTINEL));
-        let decoded = AccountAddress::from_compressed_sora(&compressed).expect("compressed decode");
+        let literal = original.to_i105().expect("i105 encode");
+        let sentinel = current_sentinel();
+        assert!(literal.starts_with(&sentinel));
+        let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             original.canonical_bytes().unwrap()
@@ -2057,15 +2064,12 @@ mod tests {
     }
 
     #[test]
-    fn compressed_fullwidth_round_trip() {
+    fn i105_fullwidth_round_trip() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
-        let compressed = original
-            .to_compressed_sora_fullwidth()
-            .expect("compressed encode");
-        assert!(compressed.starts_with(COMPRESSED_SENTINEL));
-        let decoded = AccountAddress::from_compressed_sora(&compressed).expect("compressed decode");
+        let literal = original.to_i105_fullwidth().expect("i105 encode");
+        let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             original.canonical_bytes().unwrap()
@@ -2074,82 +2078,74 @@ mod tests {
 
     proptest! {
         #[test]
-        fn compressed_nfkc_payload_round_trip(seed in any::<u8>()) {
+        fn i105_nfkc_payload_round_trip(seed in any::<u8>()) {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
             let canonical = address.canonical_bytes().expect("canonical bytes");
-            let compressed = address.to_compressed_sora().expect("compressed encode");
-            let nfkc_variant = nfkc_like_payload(&compressed);
-            let (decoded, format) = AccountAddress::parse_encoded(&nfkc_variant, None).expect("nfkc payload decodes");
-            prop_assert_eq!(format, AccountAddressFormat::Compressed);
+            let literal = address.to_i105().expect("i105 encode");
+            let nfkc_variant = nfkc_like_payload(&literal);
+            let decoded = AccountAddress::parse_encoded(&nfkc_variant, None).expect("nfkc payload decodes");
             prop_assert_eq!(decoded.canonical_bytes().unwrap(), canonical);
         }
     }
 
     #[test]
-    fn compressed_invalid_char_rejected() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
-        let mut compressed = AccountAddress::from_account_id(&account)
+    fn i105_invalid_char_rejected() {
+        let account = AccountId::new(ed25519_pk());
+        let mut literal = AccountAddress::from_account_id(&account)
             .expect("encode")
-            .to_compressed_sora()
-            .expect("compressed encode");
-        let idx = COMPRESSED_SENTINEL.len();
-        compressed.replace_range(idx..=idx, "!");
-        let err = AccountAddress::from_compressed_sora(&compressed)
-            .expect_err("invalid char should fail");
-        assert!(matches!(
-            err,
-            AccountAddressError::InvalidCompressedChar('!')
-        ));
+            .to_i105()
+            .expect("i105 encode");
+        let sentinel = current_sentinel();
+        let idx = sentinel.len();
+        literal.replace_range(idx..=idx, "!");
+        let err = AccountAddress::from_i105(&literal).expect_err("invalid char should fail");
+        assert!(matches!(err, AccountAddressError::InvalidI105Char('!')));
     }
 
     proptest! {
         #[test]
-        fn compressed_ascii_payload_fullwidth_is_rejected(seed in any::<u8>()) {
+        fn i105_ascii_payload_fullwidth_is_rejected(seed in any::<u8>()) {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
-            let compressed = address.to_compressed_sora().expect("compressed encode");
-            let mutated = ascii_payload_to_fullwidth(&compressed);
+            let literal = address.to_i105().expect("i105 encode");
+            let mutated = ascii_payload_to_fullwidth(&literal);
             prop_assume!(mutated.is_some());
             let mutated = mutated.expect("payload contains ascii characters");
-            let err = AccountAddress::from_compressed_sora(&mutated)
+            let err = AccountAddress::from_i105(&mutated)
                 .expect_err("IME full-width ascii must raise an error");
-            prop_assert!(matches!(err, AccountAddressError::InvalidCompressedChar(_)));
+            prop_assert!(matches!(err, AccountAddressError::InvalidI105Char(_)));
         }
     }
 
     #[test]
-    fn compressed_uppercase_sentinel_rejected() {
+    fn i105_uppercase_sentinel_rejected() {
         let _guard = guard_default_label();
         let address = account_address_for_seed(0);
-        let compressed = address.to_compressed_sora().expect("compressed encode");
-        let payload = &compressed[COMPRESSED_SENTINEL.len()..];
+        let literal = address.to_i105().expect("i105 encode");
+        let sentinel = current_sentinel();
+        let payload = &literal[sentinel.len()..];
         let tampered = format!("SORA{payload}");
-        let err = AccountAddress::from_compressed_sora(&tampered)
-            .expect_err("uppercase sentinel rejected");
-        assert!(matches!(
-            err,
-            AccountAddressError::MissingCompressedSentinel
-        ));
+        let err = AccountAddress::from_i105(&tampered).expect_err("uppercase sentinel rejected");
+        assert!(matches!(err, AccountAddressError::MissingI105Sentinel));
     }
 
     #[test]
-    fn compressed_fullwidth_sentinel_accepts() {
+    fn i105_fullwidth_sentinel_accepts() {
         let _guard = guard_default_label();
         let address = account_address_for_seed(1);
-        let compressed = address.to_compressed_sora().expect("compressed encode");
-        let payload = &compressed[COMPRESSED_SENTINEL.len()..];
-        let sentinel = ascii_str_to_fullwidth(COMPRESSED_SENTINEL).expect("sentinel converts");
+        let literal = address.to_i105().expect("i105 encode");
+        let sentinel = current_sentinel();
+        let payload = &literal[sentinel.len()..];
+        let sentinel = ascii_str_to_fullwidth(&sentinel).expect("sentinel converts");
         let fullwidth = format!("{sentinel}{payload}");
-        let decoded =
-            AccountAddress::from_compressed_sora(&fullwidth).expect("full-width sentinel accepted");
+        let decoded = AccountAddress::from_i105(&fullwidth).expect("full-width sentinel accepted");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             address.canonical_bytes().unwrap()
         );
-        let (parsed, format) =
+        let parsed =
             AccountAddress::parse_encoded(&fullwidth, None).expect("full-width sentinel parse");
-        assert_eq!(format, AccountAddressFormat::Compressed);
         assert_eq!(
             parsed.canonical_bytes().unwrap(),
             address.canonical_bytes().unwrap()
@@ -2157,39 +2153,41 @@ mod tests {
     }
 
     #[test]
-    fn compressed_checksum_mismatch_detected() {
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+    fn i105_checksum_mismatch_detected() {
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let compressed = address.to_compressed_sora().expect("compressed encode");
-        let payload = &compressed[COMPRESSED_SENTINEL.len()..];
-        let mut digits = compressed_to_digits(payload).expect("digits");
-        let last_data_index = digits.len() - COMPRESSED_CHECKSUM_LEN - 1;
-        digits[last_data_index] = (digits[last_data_index] + 1) % COMPRESSED_BASE_U8;
-        let mut tampered = String::from(COMPRESSED_SENTINEL);
+        let literal = address.to_i105().expect("i105 encode");
+        let sentinel = current_sentinel();
+        let payload = &literal[sentinel.len()..];
+        let mut digits = i105_to_digits(payload).expect("digits");
+        let last_data_index = digits.len() - I105_CHECKSUM_LEN - 1;
+        digits[last_data_index] = (digits[last_data_index] + 1) % I105_BASE_U8;
+        let mut tampered = sentinel;
         for &digit in &digits {
-            tampered.push_str(compressed_alphabet()[usize::from(digit)]);
+            tampered.push_str(i105_alphabet()[usize::from(digit)]);
         }
-        let err = AccountAddress::from_compressed_sora(&tampered).expect_err("checksum mismatch");
+        let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch");
         assert!(matches!(err, AccountAddressError::ChecksumMismatch));
     }
 
     proptest! {
         #[test]
-        fn compressed_checksum_corruption_detected(seed in any::<u8>(), offset in any::<u8>()) {
+        fn i105_checksum_corruption_detected(seed in any::<u8>(), offset in any::<u8>()) {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
-            let compressed = address.to_compressed_sora().expect("compressed encode");
-            let payload = &compressed[COMPRESSED_SENTINEL.len()..];
-            let mut digits = compressed_to_digits(payload).expect("digits");
-            let data_len = digits.len().saturating_sub(COMPRESSED_CHECKSUM_LEN);
+            let literal = address.to_i105().expect("i105 encode");
+            let sentinel = current_sentinel();
+            let payload = &literal[sentinel.len()..];
+            let mut digits = i105_to_digits(payload).expect("digits");
+            let data_len = digits.len().saturating_sub(I105_CHECKSUM_LEN);
             prop_assume!(data_len > 0);
             let index = usize::from(offset) % data_len;
             let current = digits[index];
-            digits[index] = (current + 1) % COMPRESSED_BASE_U8;
-            let alphabet = compressed_alphabet();
+            digits[index] = (current + 1) % I105_BASE_U8;
+            let alphabet = i105_alphabet();
             let tampered_payload = digits_to_payload_string(&digits, alphabet);
-            let tampered = format!("{COMPRESSED_SENTINEL}{tampered_payload}");
-            let err = AccountAddress::from_compressed_sora(&tampered)
+            let tampered = format!("{sentinel}{tampered_payload}");
+            let err = AccountAddress::from_i105(&tampered)
                 .expect_err("checksum mismatch");
             prop_assert!(matches!(err, AccountAddressError::ChecksumMismatch));
         }
@@ -2198,7 +2196,7 @@ mod tests {
     #[test]
     fn canonical_decode_rejects_small_order_public_key() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .canonical_bytes()
@@ -2213,7 +2211,7 @@ mod tests {
     #[test]
     fn canonical_decode_rejects_non_canonical_public_key() {
         let _guard = guard_default_label();
-        let account = AccountId::new(default_domain_id(), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let mut canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .canonical_bytes()
@@ -2226,41 +2224,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_encoded_accepts_ih58_and_compressed_formats() {
+    fn parse_encoded_accepts_i105_format() {
         let _guard = guard_default_label();
         let original = default_domain_name();
         let _reset = Reset(original.clone());
         set_default_domain_name(DEFAULT_DOMAIN_NAME).expect("reset default domain label");
-        let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let ih58 = address.to_ih58(42).expect("ih58");
-        let compressed = address.to_compressed_sora().expect("compressed");
+        let literal = address
+            .to_i105_for_discriminant(42)
+            .expect("i105 with explicit discriminant");
+        assert!(literal.starts_with("n42"));
 
-        assert!(compressed.starts_with(COMPRESSED_SENTINEL));
-        assert!(ih58.len() >= 10);
-
+        let decoded = AccountAddress::parse_encoded(&literal, Some(42)).expect("parse i105");
         assert_eq!(
-            ih58,
-            "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
-        );
-        assert_eq!(
-            compressed,
-            "sorauﾛ1NﾄヰTN8ﾘﾀGGKM6ｶsﾅ6ｻ8Zgｿﾂ3hﾔLUyｻypvｽU1ヰﾒｺUA526E"
-        );
-
-        let (decoded_ih58, fmt_ih58) =
-            AccountAddress::parse_encoded(&ih58, Some(42)).expect("parse ih58");
-        assert_eq!(fmt_ih58, AccountAddressFormat::IH58 { network_prefix: 42 });
-        assert_eq!(
-            decoded_ih58.canonical_bytes().unwrap(),
-            address.canonical_bytes().unwrap()
-        );
-
-        let (decoded_compressed, fmt_compressed) =
-            AccountAddress::parse_encoded(&compressed, None).expect("parse compressed");
-        assert_eq!(fmt_compressed, AccountAddressFormat::Compressed);
-        assert_eq!(
-            decoded_compressed.canonical_bytes().unwrap(),
+            decoded.canonical_bytes().unwrap(),
             address.canonical_bytes().unwrap()
         );
     }
@@ -2273,23 +2251,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_encoded_accepts_only_ih58_and_compressed() {
+    fn parse_encoded_accepts_only_i105() {
         let _guard = guard_default_label();
-        let account = AccountId::new(domain(DEFAULT_DOMAIN_NAME), ed25519_pk());
+        let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let ih58 = address.to_ih58(42).expect("ih58");
-        let compressed = address.to_compressed_sora().expect("compressed");
+        let i105 = address.to_i105_for_discriminant(42).expect("i105");
         let canonical = address.canonical_hex().expect("canonical");
 
-        let (_, ih58_format) = AccountAddress::parse_encoded(&ih58, Some(42)).expect("parse ih58");
-        assert_eq!(
-            ih58_format,
-            AccountAddressFormat::IH58 { network_prefix: 42 }
-        );
-
-        let (_, compressed_format) =
-            AccountAddress::parse_encoded(&compressed, None).expect("parse compressed");
-        assert_eq!(compressed_format, AccountAddressFormat::Compressed);
+        AccountAddress::parse_encoded(&i105, Some(42)).expect("parse i105");
 
         let err = AccountAddress::parse_encoded(&canonical, None)
             .expect_err("canonical must be rejected");
@@ -2304,7 +2273,7 @@ mod tests {
             MultisigMember::new(ed25519_pk_with(2), 2).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
-        let account = AccountId::new_multisig(domain.clone(), policy.clone());
+        let account = AccountId::new_multisig(policy.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode");
 
         address
@@ -2316,8 +2285,8 @@ mod tests {
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!((canonical[0] >> 3) & 0b11, 1, "multisig class tag");
 
-        let ih58 = address.to_ih58(42).expect("ih58");
-        let parsed = AccountAddress::from_str(&ih58).expect("parse ih58");
+        let i105 = address.to_i105_for_discriminant(42).expect("i105");
+        let parsed = AccountAddress::from_str(&i105).expect("parse i105");
         let decoded = parsed.to_account_controller().expect("controller");
         assert_eq!(decoded.multisig_policy().expect("multisig"), &policy);
     }
@@ -2352,21 +2321,6 @@ mod tests {
             AccountAddressError::InvalidNormVersion(3),
             InvalidNormVersion,
             "ERR_INVALID_NORM_VERSION"
-        );
-        assert_code!(
-            AccountAddressError::InvalidIh58Prefix(128),
-            InvalidIh58Prefix,
-            "ERR_INVALID_IH58_PREFIX"
-        );
-        assert_code!(
-            AccountAddressError::HashError,
-            HashFailure,
-            "ERR_CANONICAL_HASH_FAILURE"
-        );
-        assert_code!(
-            AccountAddressError::InvalidIh58Encoding,
-            InvalidIh58Encoding,
-            "ERR_INVALID_IH58_ENCODING"
         );
         assert_code!(
             AccountAddressError::InvalidLength,
@@ -2432,34 +2386,29 @@ mod tests {
             "ERR_UNEXPECTED_TRAILING_BYTES"
         );
         assert_code!(
-            AccountAddressError::InvalidIh58PrefixEncoding(0x80),
-            InvalidIh58PrefixEncoding,
-            "ERR_INVALID_IH58_PREFIX_ENCODING"
+            AccountAddressError::MissingI105Sentinel,
+            MissingI105Sentinel,
+            "ERR_MISSING_I105_SENTINEL"
         );
         assert_code!(
-            AccountAddressError::MissingCompressedSentinel,
-            MissingCompressedSentinel,
-            "ERR_MISSING_COMPRESSED_SENTINEL"
+            AccountAddressError::I105TooShort,
+            I105TooShort,
+            "ERR_I105_TOO_SHORT"
         );
         assert_code!(
-            AccountAddressError::CompressedTooShort,
-            CompressedTooShort,
-            "ERR_COMPRESSED_TOO_SHORT"
+            AccountAddressError::InvalidI105Char('!'),
+            InvalidI105Char,
+            "ERR_INVALID_I105_CHAR"
         );
         assert_code!(
-            AccountAddressError::InvalidCompressedChar('!'),
-            InvalidCompressedChar,
-            "ERR_INVALID_COMPRESSED_CHAR"
+            AccountAddressError::InvalidI105Base,
+            InvalidI105Base,
+            "ERR_INVALID_I105_BASE"
         );
         assert_code!(
-            AccountAddressError::InvalidCompressedBase,
-            InvalidCompressedBase,
-            "ERR_INVALID_COMPRESSED_BASE"
-        );
-        assert_code!(
-            AccountAddressError::InvalidCompressedDigit(123),
-            InvalidCompressedDigit,
-            "ERR_INVALID_COMPRESSED_DIGIT"
+            AccountAddressError::InvalidI105Digit(123),
+            InvalidI105Digit,
+            "ERR_INVALID_I105_DIGIT"
         );
         assert_code!(
             AccountAddressError::UnsupportedAddressFormat,

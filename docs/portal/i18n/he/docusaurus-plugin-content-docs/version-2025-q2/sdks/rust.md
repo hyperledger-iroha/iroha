@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 משטח: הוא כולל את מזהה החשבון הקנוני, המילולי המוצג עם
 פורמט מבוקש, מטא נתונים של קידומת רשת/תיקון שגיאות, ממדי QR ו
 מטען ה-SVG המוטבע שארנקים/חוקרים יכולים להטמיע ישירות. השמט
-`ExplorerAccountQrOptions` לברירת המחדל לפלט או לסט המועדפים של IH58
-`address_format: Some(AddressFormat::Compressed)` כדי לאחזר את השני הטוב ביותר
-גרסת `sora…` בשימוש על ידי ADDR-6b.
+`ExplorerAccountQrOptions` לברירת המחדל לפלט או לסט המועדפים של I105
+canonical I105 output כדי לאחזר את השני הטוב ביותר
+גרסת `i105` בשימוש על ידי ADDR-6b.
 
 ## 7. הירשם לאירועים
 

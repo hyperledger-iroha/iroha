@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 CLI を使用して、Torii を実行します。 dev-идентичность выводится из публичного ключа в `defaults/client.toml`, поэтому ID аккаунта:
 ```
-ih58...
+i105...
 ```
 
 Используйте конфигурационный файл、чтобы задать URL Torii、チェーン ID および ключ подписи:
@@ -110,7 +110,7 @@ CLI、アカウント詳細、который записал контракт:
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

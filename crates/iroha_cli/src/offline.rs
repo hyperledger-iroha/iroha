@@ -1438,7 +1438,6 @@ mod bundle_inspect_tests {
         use iroha_core::smartcontracts::isi::offline::{build_balance_proof, compute_commitment};
         use iroha_primitives::numeric::Numeric;
 
-        let domain: iroha::data_model::domain::DomainId = "wonderland".parse().unwrap();
         let controller_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1447,8 +1446,8 @@ mod bundle_inspect_tests {
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .unwrap();
-        let controller = AccountId::new(domain.clone(), controller_key);
-        let receiver = AccountId::new(domain, receiver_key);
+        let controller = AccountId::new(controller_key);
+        let receiver = AccountId::new(receiver_key);
         let deposit = receiver.clone();
         let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let asset = AssetId::new(asset_definition, controller.clone());
@@ -1475,10 +1474,7 @@ mod bundle_inspect_tests {
         let spend_keys = KeyPair::random();
         let operator_signature =
             Signature::new(operator_keys.private_key(), b"certificate payload");
-        let operator = AccountId::new(
-            controller.domain().clone(),
-            operator_keys.public_key().clone(),
-        );
+        let operator = AccountId::new(operator_keys.public_key().clone());
         let certificate = OfflineWalletCertificate {
             controller: controller.clone(),
             operator,
@@ -1935,12 +1931,12 @@ mod tests {
     }
 
     fn sample_account(tag: u8, domain: &str) -> AccountId {
-        let domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::from_str(domain).expect("domain id");
         let mut bytes = [0u8; 32];
         bytes.fill(tag);
         let encoded = format!("ed0120{}", hex::encode_upper(bytes));
         let public_key = PublicKey::from_str(&encoded).expect("public key");
-        AccountId::new(domain_id, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]

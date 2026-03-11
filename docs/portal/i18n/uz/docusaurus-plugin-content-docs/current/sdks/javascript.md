@@ -66,15 +66,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -222,7 +222,7 @@ Sizda allaqachon imzolangan sertifikat bor, `registerOfflineAllowance` (yoki
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -232,7 +232,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -274,7 +274,7 @@ Explorer telemetriyasi `/v1/explorer/metrics` va uchun yozilgan yordamchilarni t
 `/v1/explorer/accounts/{account_id}/qr` so'nggi nuqtalari, shuning uchun asboblar paneli qayta o'ynashi mumkin
 portalni quvvatlaydigan bir xil suratlar. `getExplorerMetrics()` normallashtiradi
 foydali yuk va marshrut o'chirilganida `null` ni qaytaradi. U bilan bog'lang
-`getExplorerAccountQr()` IH58 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
+`getExplorerAccountQr()` I105 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
 Ulashish tugmalari uchun SVG.
 
 ```ts
@@ -289,9 +289,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +297,8 @@ console.log(
 );
 ```
 
-`addressFormat: "compressed"` dan o'tish Explorerning standart siqilganini aks ettiradi
-selektorlar; afzal qilingan IH58 chiqishi yoki `ih58_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
+`I105` dan o'tish Explorerning standart siqilganini aks ettiradi
+selektorlar; afzal qilingan I105 chiqishi yoki `i105_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
 QR-xavfsiz variant kerak bo'lganda. Siqilgan literal ikkinchi eng yaxshisidir
 UX uchun faqat Sora varianti. Yordamchi har doim kanonik identifikatorni qaytaradi,
 tanlangan literal va metadata (tarmoq prefiksi, QR versiyasi/modullar, xato
@@ -518,8 +516,8 @@ so'rovlarni yuborishdan oldin ularni kanoniklashtiring:
 - `getUaidPortfolio(uaid, { assetId })` har bir ma'lumot maydoni uchun balanslarni birlashtiradi,
   aktivlarni kanonik hisob identifikatorlari bo'yicha guruhlash; filtrlash uchun `assetId` dan o'ting
   portfelni bitta aktiv misoliga tushiring.
-- `getUaidBindings(uaid, { addressFormat })` har bir maʼlumot maydoni ↔ hisobini sanab beradi
-  majburiy (`addressFormat: "compressed"` `sora…` harflarini qaytaradi).
+- `getUaidBindings(uaid)` har bir maʼlumot maydoni ↔ hisobini sanab beradi
+  majburiy (`I105` `i105` harflarini qaytaradi).
 - `getUaidManifests(uaid, { dataspaceId })` har bir qobiliyat manifestini qaytaradi,
   hayot aylanishi holati va audit uchun bog'langan hisoblar.Operator dalillar paketlari, manifest nashri/bekor qilish oqimlari va SDK migratsiyasi uchun
 yo'l-yo'riq, Universal Account Guide (`docs/source/universal_accounts_guide.md`) ga amal qiling
@@ -537,7 +535,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -562,7 +560,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +570,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -476,10 +476,7 @@ mod tests {
             expires_at_height: None,
             manifest: None,
         };
-        let authority = AccountId::new(
-            "wonderland".parse().unwrap(),
-            iroha_crypto::KeyPair::random().public_key().clone(),
-        );
+        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
         publish
             .execute(&authority, &mut tx)
             .expect("publish content");

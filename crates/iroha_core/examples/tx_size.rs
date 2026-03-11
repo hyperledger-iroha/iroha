@@ -1,9 +1,7 @@
 //! Compute the encoded size of a single Log instruction transaction with a custom payload.
 
-use std::str::FromStr;
-
 use iroha_crypto::KeyPair;
-use iroha_data_model::{Level, domain::DomainId, prelude::*};
+use iroha_data_model::{Level, prelude::*};
 use iroha_version::codec::EncodeVersioned;
 
 fn main() {
@@ -14,9 +12,8 @@ fn main() {
     let payload = "x".repeat(bytes);
 
     let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let domain = DomainId::from_str("wonderland").expect("static domain id");
     let key_pair = KeyPair::random();
-    let authority = AccountId::new(domain, key_pair.public_key().clone());
+    let authority = AccountId::new(key_pair.public_key().clone());
 
     let tx = TransactionBuilder::new(chain, authority)
         .with_instructions([Log::new(Level::INFO, payload)])

@@ -133,7 +133,7 @@ GET /v1/space-directory/uaids/{uaid}
 
 | Query | Description |
 |-------|-------------|
-| `address_format` (optional) | `ih58` (preferred/default) or `compressed` (second-best, Sora-only). Controls how the `accounts` arrays are rendered. |
+| Address output | Canonical I105 only. |
 
 Sample response:
 
@@ -182,7 +182,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 | `status` (optional) | `active`, `inactive`, or `all` (default). Inactive captures pending, expired, and revoked manifests. |
 | `limit` (optional) | Maximum number of manifests to return (default unlimited). |
 | `offset` (optional) | Number of manifests to skip before collecting results (default `0`). |
-| `address_format` (optional) | `ih58` (preferred/default) or `compressed` (second-best, Sora-only). Controls how the embedded `accounts` arrays are rendered. |
+| Address output | Canonical I105 only. |
 
 Sample response:
 
@@ -226,7 +226,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. Set
-  `address_format=compressed` only when you need the second-best `sora…` literals for
+  canonical I105 output for
   offline or QR workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the
@@ -260,7 +260,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -312,7 +312,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

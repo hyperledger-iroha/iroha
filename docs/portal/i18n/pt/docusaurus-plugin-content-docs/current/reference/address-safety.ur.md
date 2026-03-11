@@ -17,10 +17,10 @@ description: Endereços Iroha کو محفوظ انداز میں پیش کرنے 
 
 ## Fluxos de compartilhamento seguros
 
-- ہر ação de copiar/compartilhar کی padrão کو endereço IH58 بنائیں۔ domínio resolvido کو contexto de suporte کے طور پر دکھائیں تاکہ string com soma de verificação سامنے رہے۔
+- ہر ação de copiar/compartilhar کی padrão کو endereço I105 بنائیں۔ domínio resolvido کو contexto de suporte کے طور پر دکھائیں تاکہ string com soma de verificação سامنے رہے۔
 - ایک affordance “Compartilhar” فراہم کریں جو endereço completo em texto simples اور اسی carga útil سے بنے código QR کو pacote کرے۔ usuários کو commit کرنے سے پہلے دونوں inspecionar کرنے دیں۔
 - جب جگہ کم ہو (pequenos cartões, notificações), prefixo legível por humanos رکھیں, reticências دکھائیں, اور آخری 4–6 caracteres برقرار رکھیں تاکہ âncora de soma de verificação قائم رہے۔ truncamento کے بغیر cópia completa da string کرنے کیلئے toque/atalho de teclado دیں۔
-- dessincronização da área de transferência کو روکنے کیلئے brinde de confirmação دیں جو بالکل وہی Visualização de string IH58 کرے جو copiar ہوئی۔ جہاں telemetria دستیاب ہو، tentativas de cópia کو ações de compartilhamento کے مقابل contagem کریں تاکہ regressões UX جلد سامنے آئیں۔
+- dessincronização da área de transferência کو روکنے کیلئے brinde de confirmação دیں جو بالکل وہی Visualização de string I105 کرے جو copiar ہوئی۔ جہاں telemetria دستیاب ہو، tentativas de cópia کو ações de compartilhamento کے مقابل contagem کریں تاکہ regressões UX جلد سامنے آئیں۔
 
 ## IME e proteções de entrada
 
@@ -32,15 +32,15 @@ description: Endereços Iroha کو محفوظ انداز میں پیش کرنے 
 
 - ہر bloco de endereço کو `aria-label` یا `aria-describedby` سے anotar کریں جو feitiço de prefixo legível por humanos کرے اور carga útil کو 4–8 grupos de caracteres میں pedaço کرے (“ih traço b três dois…”). Existem leitores de tela بے معنی کرداروں کی لڑی نہیں بولتے۔
 - eventos de cópia/compartilhamento bem-sucedidos کو atualização educada da região ao vivo کے ذریعے anunciar کریں۔ destino (área de transferência, planilha de compartilhamento, QR) شامل کریں تاکہ usuário کو foco بدلے بغیر ação مکمل ہونے کا پتا ہو۔
-- Visualizações QR کیلئے texto descritivo `alt` دیں (exemplo: “Endereço IH58 para `<account>` na cadeia `0x1234`”). کم بصارت والے usuários کیلئے QR canvas کے ساتھ “Copiar endereço como texto” substituto دیں۔
+- Visualizações QR کیلئے texto descritivo `alt` دیں (exemplo: “Endereço I105 para `<account>` na cadeia `0x1234`”). کم بصارت والے usuários کیلئے QR canvas کے ساتھ “Copiar endereço como texto” substituto دیں۔
 
-## Endereços compactados somente Sora- Gating: string compactada `sora…` کو confirmação explícita کے پیچھے چھپائیں۔ confirmação میں دہرائیں کہ یہ formulário صرف Sora Nexus cadeias پر کام کرتی ہے۔
-- Rotulagem: ہر ocorrência میں واضح emblema “somente Sora” اور dica de ferramenta دیں جو بتائے کہ دوسری redes کو formulário IH58 کیوں چاہیے۔
-- Guardrails: اگر discriminante de cadeia ativa Nexus alocação نہ ہو تو endereço compactado gerar کرنے سے مکمل انکار کریں اور usuário کو IH58 پر واپس بھیجیں۔
+## Endereços compactados somente Sora- Gating: string compactada `i105` کو confirmação explícita کے پیچھے چھپائیں۔ confirmação میں دہرائیں کہ یہ formulário صرف Sora Nexus cadeias پر کام کرتی ہے۔
+- Rotulagem: ہر ocorrência میں واضح emblema “somente Sora” اور dica de ferramenta دیں جو بتائے کہ دوسری redes کو formulário I105 کیوں چاہیے۔
+- Guardrails: اگر discriminante de cadeia ativa Nexus alocação نہ ہو تو endereço compactado gerar کرنے سے مکمل انکار کریں اور usuário کو I105 پر واپس بھیجیں۔
 - Telemetria: formulário compactado کے solicitação / cópia کی frequência ریکارڈ کریں تاکہ manual de incidentes picos de compartilhamento acidental کو detectar کر سکے۔
 
 ## Portões de qualidade
 
 - testes automatizados de UI (یا storybook a11y suites) کو بڑھائیں تاکہ componentes de endereço مطلوبہ exposição de metadados ARIA کریں اور mensagens de rejeição de IME ظاہر ہوں۔
 - cenários de controle de qualidade manual میں entrada IME (kana, pinyin), passagem do leitor de tela (VoiceOver/NVDA), اور temas de alto contraste پر cópia QR شامل کریں, liberação سے پہلے۔
-- ان verificações کو listas de verificação de liberação میں testes de paridade IH58 کے ساتھ شامل کریں تاکہ regressões درست ہونے تک bloqueado رہیں۔
+- ان verificações کو listas de verificação de liberação میں testes de paridade I105 کے ساتھ شامل کریں تاکہ regressões درست ہونے تک bloqueado رہیں۔

@@ -37,6 +37,7 @@ const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 fn register_validator_instructions(
     asset_def: &AssetDefinitionId,
     validator: &AccountId,
+    domain: &DomainId,
     stake: u64,
     entity: Option<&str>,
 ) -> Vec<InstructionBox> {
@@ -48,7 +49,7 @@ fn register_validator_instructions(
         );
     }
     vec![
-        Register::account(Account::new(validator.clone())).into(),
+        Register::account(Account::new(validator.to_account_id(domain.clone()))).into(),
         Mint::asset_numeric(stake, AssetId::new(asset_def.clone(), validator.clone())).into(),
         RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -134,11 +135,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     let ineligible_peer = &peers[1];
     let other_peer_a = &peers[2];
     let other_peer_b = &peers[3];
-    let eligible_account = AccountId::new(domain.clone(), eligible_peer.id().public_key().clone());
-    let ineligible_account =
-        AccountId::new(domain.clone(), ineligible_peer.id().public_key().clone());
-    let other_account_a = AccountId::new(domain.clone(), other_peer_a.id().public_key().clone());
-    let other_account_b = AccountId::new(domain.clone(), other_peer_b.id().public_key().clone());
+    let eligible_account = AccountId::new(eligible_peer.id().public_key().clone());
+    let ineligible_account = AccountId::new(ineligible_peer.id().public_key().clone());
+    let other_account_a = AccountId::new(other_peer_a.id().public_key().clone());
+    let other_account_b = AccountId::new(other_peer_b.id().public_key().clone());
 
     // Register per-peer validators in an account domain sorted before `nexus`, so these records
     // drive candidate filtering instead of the default NPoS bootstrap records.
@@ -146,24 +146,28 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     instructions.extend(register_validator_instructions(
         &asset_def,
         &eligible_account,
+        &domain,
         ELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &ineligible_account,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &other_account_a,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &other_account_b,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
@@ -330,33 +334,37 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     let peer_b = &peers[1];
     let peer_c = &peers[2];
     let peer_d = &peers[3];
-    let account_a = AccountId::new(domain.clone(), peer_a.id().public_key().clone());
-    let account_b = AccountId::new(domain.clone(), peer_b.id().public_key().clone());
-    let account_c = AccountId::new(domain.clone(), peer_c.id().public_key().clone());
-    let account_d = AccountId::new(domain.clone(), peer_d.id().public_key().clone());
+    let account_a = AccountId::new(peer_a.id().public_key().clone());
+    let account_b = AccountId::new(peer_b.id().public_key().clone());
+    let account_c = AccountId::new(peer_c.id().public_key().clone());
+    let account_d = AccountId::new(peer_d.id().public_key().clone());
 
     let mut instructions = Vec::new();
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_a,
+        &domain,
         ELIGIBLE_STAKE,
         Some("acme"),
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_b,
+        &domain,
         ELIGIBLE_STAKE,
         Some("acme"),
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_c,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_d,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));

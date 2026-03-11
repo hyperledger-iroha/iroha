@@ -7,9 +7,8 @@ use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, instruction, sysc
 use norito::to_bytes;
 
 fn fixture_account(hex_public_key: &str) -> AccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain id");
     let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn program_scall(sys: u32) -> Vec<u8> {

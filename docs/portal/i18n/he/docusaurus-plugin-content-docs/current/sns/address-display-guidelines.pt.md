@@ -20,8 +20,8 @@ Carteiras, exploradores and exemplos de SDK devem tratar enderecos de conta como
 מטענים imutavis. O דוגמה ל-Android קמעונאי
 `examples/android/retail-wallet` הדגמה דוגמת UX:
 
-- **Dois alvos de copia.** Envie dois botoes de copia explicitos: IH58
-  (preferido) e a forma comprimida somente Sora (`sora...`, segunda melhor opcao). IH58 e semper seguro para
+- **Dois alvos de copia.** Envie dois botoes de copia explicitos: I105
+  (preferido) e a forma comprimida somente Sora (`sora...`, segunda melhor opcao). I105 e semper seguro para
   חיבור חיצוני ואוכל או מטען ל-QR. וריאנטה קומפרימידה
   deve כולל את aviso inline porque, אז פונקציונליות של אפליקציות compatveis com
   סורה. O דוגמה לקמעונאי אנדרואיד ליגה אמבוs os botoes חומר e seus
@@ -37,7 +37,7 @@ Carteiras, exploradores and exemplos de SDK devem tratar enderecos de conta como
   implicito `default`, mostre uma legenda lembrando os operadores de que nenhum
   סופיקס והכרחי. Exploradores tambem devem destacar או label de dominio
   canonico quando o seletor codifica um digest.
-- **QR IH58.** Codigos QR פיתחה קודי למחרוזת IH58. Se a geracao do QR
+- **QR I105.** Codigos QR פיתחה קודי למחרוזת I105. Se a geracao do QR
   falhar, mostre um erro explicito em vez de uma imagem em branco.
 - **Mensageria da area de transferencia.** Depois de copiar a forma comprimida,
   emita um toast ou snackbar lembrando os usuarios de que ela e somente Sora e
@@ -61,7 +61,7 @@ rotulos de botoes, טיפים כלים ומאפיינים אחרים של פלט
 
 ## Helpers de SDK
 
-Cada SDK expoe um helper de conveniencia que retorna as formas IH58 e comprimida
+Cada SDK expoe um helper de conveniencia que retorna as formas I105 e comprimida
 junto com a string de aviso para que כמו camadas UI fiquem consistentes:- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - מפקח JavaScript: `inspectAccountId(...)` חוזר על מחרוזת
@@ -86,7 +86,7 @@ Local-12 או מחזיר את הרישום לתיקון או מטען מטען.
 Exploradores devem espelhar o trabalho de telemetria e acessibilidade da
 carteira:
 
-- Aplique `data-copy-mode="ih58|compressed|qr"` aos botoes de copia para que
+- Aplique `data-copy-mode="i105|i105_default|qr"` aos botoes de copia para que
   חזיתות possam emitir contadores de uso junto com a metrica Torii
   `torii_address_format_total`. O componente demo acima dispara um evento
   `iroha:address-copy` com `{mode,timestamp}`; conecte isso ao seu pipeline de
@@ -97,7 +97,7 @@ carteira:
   que revisoes de aposentadoria Local-12 possam exportar uma prova de 30 dias
   `domain_kind="local12"` diretamente do painel `address_ingest` do Grafana.
 - Emparelhe cada control com pistas `aria-label`/`aria-describedby` הבדלים
-  que expliquem se um literal e seguro para compartilhar (IH58) ou somente Sora
+  que expliquem se um literal e seguro para compartilhar (I105) ou somente Sora
   (קומפרימידו). כולל א אגדה דומיניו מרומזת נה תיאור פארה א
   עזרת טכנולוגיה או גישה חזותית.
 - Exponha uma regiao viva (por exemplo, `<output aria-live="polite">...</output>`)
@@ -112,7 +112,7 @@ seletores Local sejam desativados.
 
 השתמש ב-[ערכת כלים מקומית -> גלובלי](local-to-global-toolkit.md) עבור אוטומטיזר א
 revisao e conversao de seletores אלטרנטיבות מקומיות. O helper emite tanto o relatorio
-JSON de auditoria quanto a list convertida IH58/comprimida que operators
+JSON de auditoria quanto a list convertida I105/comprimida que operators
 בחינת כרטיסים למוכנות, בדיקת לוחות מחוונים או ריבוק associado vincula
 Grafana e regras Alertmanager que controlam o cutover em modo estrito.
 
@@ -164,16 +164,16 @@ seletor/estado e `docs/account_structure.md` לדיאגרמה מלאה של בת
 
 ## Impor formas canonicas
 
-Operadores que convertem codificacoes חלופות מקומיות עבור IH58 canonico ou
+Operadores que convertem codificacoes חלופות מקומיות עבור I105 canonico ou
 מחרוזות מתאימות להפרדה ולתיעוד CLI של זרימת עבודה ב-ADDR-5:
 
-1. `iroha tools address inspect` agora emite um resumo JSON estruturado com IH58,
+1. `iroha tools address inspect` agora emite um resumo JSON estruturado com I105,
    קומפרימידו ומטעני hex canonicos. O resumo tambem inclui um objeto
    `domain` com campos `kind`/`warning` e ecoa qualquer dominio fornecido via o
    campo `input_domain`. Quando `kind` e `local12`, CLI imprime um aviso em
    stderr e o resumo JSON ecoa a mesma orientacao para que pipelines CI e SDKs
    possam exibi-la. Passe `legacy  suffix` semper que quiser reproduzir a
-   codificacao convertida como `<ih58>@<domain>`.
+   codificacao convertida como `<i105>@<domain>`.
 2. SDKs podem exibir o mesmo aviso/resumo באמצעות o Helper JavaScript:
 
    ```js
@@ -183,12 +183,12 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  O helper preserva o prefixo IH58 detectado do letteral a menos que voce forneca
+  O helper preserva o prefixo I105 detectado do letteral a menos que voce forneca
   מפורש `networkPrefix`, קורות חיים מפורטים עבור נאו פדראו נאו סאו
-  re-renderizados silenciosamente com o prefixo padrao.3. המרת מטען שימוש canonico reutilizando os campos `ih58.value` ou
-   `compressed` לעשות רזומה (אתה מבקש קוד קוד דרך `--format`). Essas
+  re-renderizados silenciosamente com o prefixo padrao.3. המרת מטען שימוש canonico reutilizando os campos `i105.value` ou
+   `i105_default` לעשות רזומה (אתה מבקש קוד קוד דרך `--format`). Essas
    מיתרים וסאו סגוראס עבור קומפרטילהמנטו חיצוני.
 4. אטואלי מניפסטים, רישום ומסמכים וולטאדוס ולקוחות com a forma
    canonica e notifique as contrapartes de que seletores Local serao rejeitados
@@ -197,7 +197,7 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
    `iroha tools address audit --input addresses.txt --network-prefix 753`. הו קומנדו
    le literais separados por nova linha (commentarios iniciados com `#` sao
    ignorados, e `--input -` ou nenhum flag usa STDIN), emite um relatorio JSON
-   com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
+   com resumos canonicos/I105/comprimidos para cada entrada e conta erros de
    לנתח e avisos de dominio מקומי. השתמש ב-`--allow-errors` ובנוסף אלטרנטיבות של אודיטר dumps
    com linhas lixo, e trave a automacao com `strict CI post-check` quando os
    operadores estiverem prontos para bloquear seletores Local no CI.
@@ -206,7 +206,7 @@ Operadores que convertem codificacoes חלופות מקומיות עבור IH58 
   para exportar um CSV `input,status,format,...` que destaca codificacoes
   canonicas, avisos e falhas de parse ema unica passada.
    O helper ignora linhas nao Local por padrao, converte cada entrada restante
-   para a codificacao solicitada (IH58/comprimido/hex/JSON), eserva o dominio
+   para a codificacao solicitada (I105/comprimido/hex/JSON), eserva o dominio
    quando מקורי `legacy  suffix` e definido. Combine com `--allow-errors`
    para continuar a varredura mesmo quando um dump contem literais malformados.
 7. מפעל CI/lint pode automacao `ci/check_address_normalize.sh`, que extrai
@@ -251,6 +251,6 @@ clusters dev/test או רגרסיות אבחנתיות. המשך espelhando
 > **Enderecos:** Adicionado o helper `iroha tools address normalize`
 > e conectado no CI (`ci/check_address_normalize.sh`) para que pipelines de
 > ממיר carteira/explorador possam מבחר חלופות מקומיות לפורמטים
-> canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na
+> canonicas I105/comprimidas antes de Local-8/Local-12 serem bloqueados na
 > רשת מרכזית. Atualize quaisquer exports personalizados para Rodar o comando e
 > הוספה לרשימת נורמליזדה או צרור הוכחות לשחרור.

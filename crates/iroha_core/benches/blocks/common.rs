@@ -86,6 +86,18 @@ pub fn populate_state(
     asset_definitions: &[AssetDefinitionId],
     owner_id: &AccountId,
 ) -> Vec<InstructionBox> {
+    fn domain_for_index<'a>(
+        domains: &'a [DomainId],
+        total_items: usize,
+        index: usize,
+    ) -> Option<&'a DomainId> {
+        if domains.is_empty() || total_items == 0 {
+            return None;
+        }
+        let domain_index = index.saturating_mul(domains.len()) / total_items;
+        domains.get(domain_index.min(domains.len() - 1))
+    }
+
     let mut instructions: Vec<InstructionBox> =
         vec![Grant::account_permission(CanRegisterDomain, owner_id.clone()).into()];
 
@@ -101,8 +113,11 @@ pub fn populate_state(
         instructions.push(can_unregister_domain.into());
     }
 
-    for account_id in accounts {
-        let account = Account::new(account_id.clone());
+    for (index, account_id) in accounts.iter().enumerate() {
+        let domain_id = domain_for_index(domains, accounts.len(), index)
+            .cloned()
+            .unwrap_or_else(|| "bench".parse().expect("valid bench domain id"));
+        let account = Account::new(account_id.to_account_id(domain_id));
         instructions.push(Register::account(account).into());
         let can_unregister_account = Grant::account_permission(
             CanUnregisterAccount {
@@ -134,6 +149,18 @@ pub fn delete_every_nth(
     asset_definitions: &[AssetDefinitionId],
     nth: usize,
 ) -> Vec<InstructionBox> {
+    fn domain_for_index<'a>(
+        domains: &'a [DomainId],
+        total_items: usize,
+        index: usize,
+    ) -> Option<&'a DomainId> {
+        if domains.is_empty() || total_items == 0 {
+            return None;
+        }
+        let domain_index = index.saturating_mul(domains.len()) / total_items;
+        domains.get(domain_index.min(domains.len() - 1))
+    }
+
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
         if i % nth == 0 {
@@ -141,7 +168,12 @@ pub fn delete_every_nth(
         } else {
             for (j, account_id) in accounts
                 .iter()
-                .filter(|account_id| account_id.domain() == domain_id)
+                .enumerate()
+                .filter(|(index, _)| {
+                    domain_for_index(domains, accounts.len(), *index)
+                        .is_some_and(|d| d == domain_id)
+                })
+                .map(|(_, account_id)| account_id)
                 .enumerate()
             {
                 if j % nth == 0 {
@@ -169,6 +201,18 @@ pub fn restore_every_nth(
     asset_definitions: &[AssetDefinitionId],
     nth: usize,
 ) -> Vec<InstructionBox> {
+    fn domain_for_index<'a>(
+        domains: &'a [DomainId],
+        total_items: usize,
+        index: usize,
+    ) -> Option<&'a DomainId> {
+        if domains.is_empty() || total_items == 0 {
+            return None;
+        }
+        let domain_index = index.saturating_mul(domains.len()) / total_items;
+        domains.get(domain_index.min(domains.len() - 1))
+    }
+
     let mut instructions: Vec<InstructionBox> = Vec::new();
     for (i, domain_id) in domains.iter().enumerate() {
         if i % nth == 0 {
@@ -177,11 +221,15 @@ pub fn restore_every_nth(
         }
         for (j, account_id) in accounts
             .iter()
-            .filter(|account_id| account_id.domain() == domain_id)
+            .enumerate()
+            .filter(|(index, _)| {
+                domain_for_index(domains, accounts.len(), *index).is_some_and(|d| d == domain_id)
+            })
+            .map(|(_, account_id)| account_id)
             .enumerate()
         {
             if j % nth == 0 || i % nth == 0 {
-                let account = Account::new(account_id.clone());
+                let account = Account::new(account_id.to_account_id(domain_id.clone()));
                 instructions.push(Register::account(account).into());
             }
         }
@@ -209,11 +257,12 @@ pub fn build_state(
         let _guard = rt.enter();
         LiveQueryStore::start_test()
     };
-    let domain = Domain::new(account_id.domain().clone()).build(account_id);
+    let domain_id: DomainId = "bench".parse().expect("valid bench domain id");
+    let domain = Domain::new(domain_id.clone()).build(account_id);
     let state = State::new(
         World::with(
             [domain],
-            [Account::new(account_id.clone()).build(account_id)],
+            [Account::new(account_id.to_account_id(domain_id)).build(account_id)],
             [],
         ),
         Arc::clone(&kura),
@@ -291,9 +340,9 @@ fn construct_domain_id(i: usize) -> DomainId {
     format!("non_inlinable_domain_name_{i}").parse().unwrap()
 }
 
-fn generate_account_id(domain_id: DomainId, seed: u128) -> AccountId {
+fn generate_account_id(seed: u128) -> AccountId {
     let keypair = KeyPair::from_seed(seed.to_le_bytes().to_vec(), Algorithm::Ed25519);
-    AccountId::new(domain_id, keypair.public_key().clone())
+    AccountId::new(keypair.public_key().clone())
 }
 
 #[cfg(test)]
@@ -312,10 +361,7 @@ mod tests {
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(
-            "test_domain".parse().expect("valid domain"),
-            keypair.public_key().clone(),
-        );
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         // Should not panic even if executor bytecode is missing or invalid
         let state = build_state(rt.handle(), &account_id, keypair.private_key());
@@ -349,7 +395,7 @@ pub fn generate_ids(
         domain_ids.push(domain_id.clone());
         for account_idx in 0..accounts_per_domain {
             let seed = (i as u128) * accounts_per_domain as u128 + account_idx as u128;
-            let account_id = generate_account_id(domain_id.clone(), seed);
+            let account_id = generate_account_id(seed);
             account_ids.push(account_id)
         }
         for k in 0..assets_per_domain {

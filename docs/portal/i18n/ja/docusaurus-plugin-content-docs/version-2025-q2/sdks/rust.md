@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 表面: 正規のアカウント ID、つまり、
 要求された形式、ネットワーク プレフィックス/エラー修正メタデータ、QR 寸法、および
 ウォレット/エクスプローラーが直接埋め込むことができるインライン SVG ペイロード。省略
-`ExplorerAccountQrOptions` をデフォルトで優先 IH58 出力に設定するか、設定します
-`address_format: Some(AddressFormat::Compressed)` で 2 番目に良いものを取得します
-ADDR-6b で使用される `sora…` バリアント。
+`ExplorerAccountQrOptions` をデフォルトで優先 I105 出力に設定するか、設定します
+canonical I105 output で 2 番目に良いものを取得します
+ADDR-6b で使用される `i105` バリアント。
 
 ## 7. イベントを購読する
 

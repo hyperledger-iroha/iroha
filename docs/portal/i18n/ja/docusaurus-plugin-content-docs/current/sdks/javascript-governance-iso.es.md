@@ -56,7 +56,7 @@ node javascript/iroha_js/recipes/governance.mjs
 
 # Submit + fetch using live credentials.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=ih58... \
+AUTHORITY=i105... \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \
@@ -174,7 +174,7 @@ console.log(proposal?.kind, proposal?.status);
 以下に示すすべての POST ヘルパーに対して、オプションの `{ signal }` オブジェクトを受け入れます。
 
 ```ts
-const authority = "ih58...";
+const authority = "i105...";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 // All governance writes accept optional `{ signal }` options for cancellation.
@@ -203,7 +203,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "ih58..."; // canonical IH58 account id for ZK public inputs
+const zkOwner = "i105..."; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -231,7 +231,7 @@ const derived = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "ih58...",
+      accountId: "i105...",
       variant: "Normal",
       pk: validatorPk,
       proof: validatorProof,
@@ -278,9 +278,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "ih58..." },
+  creditorAccount: { otherId: "i105..." },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "ih58...", leg: "delivery" },
+  supplementaryData: { account_id: "i105...", leg: "delivery" },
 });
 ```XML が作成される前に、すべての識別子 (BIC、LEI、IBAN、ISO 金額) が検証されます。
 生成された。 `buildPacs008Message` を `buildPacs009Message` に交換して PvP を発行します

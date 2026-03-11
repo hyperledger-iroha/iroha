@@ -67,7 +67,7 @@ const {publicKey, privateKey} = createKeyPairFromHex(process.env.IROHA_PRIVATE_K
 
 const tx = buildTransaction({
   chain: '00000000-0000-0000-0000-000000000000', // ChainId
-  authority: 'ih58...',
+  authority: 'i105...',
   instructions: [
     {Register: {domain: {name: 'research', logo: null}}},
   ],

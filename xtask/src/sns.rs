@@ -623,13 +623,13 @@ fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut
     }
     if trimmed.contains('@') {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an encoded account id (IH58 preferred, compressed `sora...` accepted) and must not include `@domain`"
+            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id and must not include `@domain`"
         ));
         return;
     }
     if let Err(err) = iroha_data_model::account::AccountId::parse_encoded(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an encoded account id (IH58 preferred, compressed `sora...` accepted): {err}"
+            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id: {err}"
         ));
     }
 }

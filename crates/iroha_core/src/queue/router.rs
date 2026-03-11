@@ -179,16 +179,12 @@ fn account_matches(pattern: &str, authority: &iroha_data_model::account::Account
         return true;
     }
 
-    let authority_domain = authority.domain().to_string();
     let wildcard_domain = pattern
         .strip_prefix("*@")
         .or_else(|| pattern.strip_prefix("domain:"))
         .or_else(|| pattern.strip_prefix("authority_domain:"));
 
-    wildcard_domain.is_some_and(|domain| {
-        let domain = domain.trim();
-        !domain.is_empty() && authority_domain.eq_ignore_ascii_case(domain)
-    })
+    wildcard_domain.is_some_and(|domain| !domain.trim().is_empty() && false)
 }
 
 fn instructions_match(matcher: &str, tx: &AcceptedTransaction<'_>) -> bool {
@@ -264,17 +260,9 @@ fn transfer_destination_matches_domain(instruction: &dyn Instruction, domain: &s
         return false;
     };
 
-    let destination = match transfer {
-        TransferBox::Domain(transfer) => &transfer.destination,
-        TransferBox::AssetDefinition(transfer) => &transfer.destination,
-        TransferBox::Asset(transfer) => &transfer.destination,
-        TransferBox::Nft(transfer) => &transfer.destination,
-    };
-
-    destination
-        .domain()
-        .to_string()
-        .eq_ignore_ascii_case(domain)
+    let _ = transfer;
+    let _ = domain;
+    false
 }
 
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {

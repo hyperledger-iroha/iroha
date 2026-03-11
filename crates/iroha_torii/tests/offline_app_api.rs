@@ -733,32 +733,18 @@ async fn assert_replay_final_settlement_status(
 }
 
 fn world_from_fixtures(fixtures: &Fixtures) -> World {
-    let mut domain_ids = Vec::new();
-    for domain_id in [
-        fixtures.controller.domain().clone(),
-        fixtures.receiver.domain().clone(),
-        fixtures.certificate.operator.domain().clone(),
-        fixtures
+    let domains = [Domain {
+        id: fixtures
             .certificate
             .allowance
             .asset
             .definition()
             .domain()
             .clone(),
-    ] {
-        if !domain_ids.contains(&domain_id) {
-            domain_ids.push(domain_id);
-        }
-    }
-    let domains: Vec<Domain> = domain_ids
-        .into_iter()
-        .map(|id| Domain {
-            id,
-            logo: None,
-            metadata: Metadata::default(),
-            owned_by: fixtures.controller.clone(),
-        })
-        .collect();
+        logo: None,
+        metadata: Metadata::default(),
+        owned_by: fixtures.controller.clone(),
+    }];
 
     let controller = Account {
         id: fixtures.controller.clone(),
@@ -797,6 +783,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         mintable: Default::default(),
         logo: None,
         metadata: asset_definition_metadata,
+        balance_scope_policy: Default::default(),
         owned_by: fixtures.controller.clone(),
         total_quantity: Numeric::zero(),
         confidential_policy: Default::default(),
@@ -810,14 +797,13 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
 }
 
 fn build_fixtures() -> Fixtures {
-    let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let chain_id = ChainId::from("test-chain");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
+    let operator = AccountId::of(operator_keys.public_key().clone());
     let controller_keys = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
-    let controller = AccountId::of(domain.clone(), controller_keys.public_key().clone());
+    let controller = AccountId::of(controller_keys.public_key().clone());
     let receiver_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let receiver = AccountId::of(domain.clone(), receiver_keys.public_key().clone());
+    let receiver = AccountId::of(receiver_keys.public_key().clone());
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     let asset_definition =
         AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");

@@ -47,7 +47,7 @@ Torii йәки CLI. Ярҙам һәр рәтте алдан раҫлай, ике
 |-------|----------|-------------|
 | I18NI000000030X | Эйе | Һораулы ярлыҡ (ҡатнаш осраҡ ҡабул ителә; инструмент нормалашалар бер Норма v1 һәм UTS-46). |
 | `suffix_id` | Эйе | Һанлы суффикс идентификаторы (ун йәки I18NI000000032X гекс). |
-| `owner` | Эйе | Иҫәп яҙмаһы стринг (IH58 тура килә; опциональ @domain кәңәше) теркәү хужаһы өсөн. |
+| `owner` | Эйе | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Эйе | Integer I18NI000000035X. |
 | `payment_asset_id` | Эйе | Ҡасаба активы (мәҫәлән, `xor#sora`). |
 | I18NI000000038X / I18NI000000039X X | Эйе | Актив-тыуған берәмектәрҙе күрһәткән ҡултамғаһыҙ бөтөн һандар. |
@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,

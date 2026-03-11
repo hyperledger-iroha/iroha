@@ -245,12 +245,13 @@ impl Root {
 
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
-        let account_id = AccountId::new(domain_id, public_key.clone());
-        let key_pair = KeyPair::new(public_key, private_key)
+        let _ = &domain_id;
+        let key_pair = KeyPair::new(public_key.clone(), private_key)
             .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
             .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
             .change_context(ParseError::KeyPair)
             .ok_or_emit(&mut emitter);
+        let account_id = AccountId::of(public_key);
 
         let (queue_root_path, queue_root_origin) = queue_root.into_tuple();
         if queue_root_path.as_os_str().is_empty() {

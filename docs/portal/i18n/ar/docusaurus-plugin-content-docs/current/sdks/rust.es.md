@@ -140,15 +140,14 @@ Las consultas siguen el patrón request/response: construye un tipo de consulta 
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -157,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` refleja el JSON `/v1/explorer/accounts/{id}/qr`: incluye el account id canónico, el literal con el formato solicitado, metadatos de prefijo/corrección de error, dimensiones del QR y el payload SVG en línea que wallets/explorers pueden incrustar. Omite `ExplorerAccountQrOptions` para usar la salida IH58 preferida o establece `address_format: Some(AddressFormat::Compressed)` para obtener la variante `sora…` usada por ADDR-6b.
+`ExplorerAccountQrSnapshot` refleja el JSON `/v1/explorer/accounts/{id}/qr`: incluye el account id canónico, el literal con el formato solicitado, metadatos de prefijo/corrección de error, dimensiones del QR y el payload SVG en línea que wallets/explorers pueden incrustar. Omite `ExplorerAccountQrOptions` para usar la salida I105 preferida o establece canonical I105 output para obtener salida canonica I105 usada por ADDR-6b.
 
 ## 7. Suscríbete a eventos
 

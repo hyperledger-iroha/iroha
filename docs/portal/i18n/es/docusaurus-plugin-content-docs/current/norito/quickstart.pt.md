@@ -86,7 +86,7 @@ El corredor imprime el registro `info("Hello from Kotodama")` y ejecuta la llama
 
 ## 4. Envíe el código de bytes a través de ToriiComo nodo todavía rodando, envie el código de bytes compilado para Torii usando la CLI. A identidade desenvolvimento padrao e derivada da chave publica em `defaults/client.toml`, portanto o ID de conta e
 ```
-ih58...
+i105...
 ```
 
 Utilice el archivo de configuración para fornecer una URL de Torii, el ID de cadena y una clave de configuración:
@@ -106,7 +106,7 @@ Utilice el mismo perfil de CLI para buscar el detalle de la cuenta que o contrat
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

@@ -142,15 +142,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -163,9 +162,9 @@ fn download_qr() -> eyre::Result<()> {
 မျက်နှာပြင်- ၎င်းတွင် canonical account id ပါ၀င်သည်၊ ပကတိနှင့်ပြန်ဆိုထားသော
 တောင်းဆိုထားသော ဖော်မတ်၊ ကွန်ရက်ရှေ့ဆက်/အမှား-ပြင်ပေးသည့် မက်တာဒေတာ၊ QR အတိုင်းအတာနှင့်
 ပိုက်ဆံအိတ်/ရှာဖွေသူများ တိုက်ရိုက်ထည့်သွင်းနိုင်သော အတွင်းလိုင်း SVG ပေးဆောင်မှု။ ချန်လှပ်ပါ။
-`ExplorerAccountQrOptions` ကို နှစ်သက်သော IH58 အထွက် သို့မဟုတ် သတ်မှတ်ရန် ပုံသေ
-`address_format: Some(AddressFormat::Compressed)` သည် ဒုတိယအကောင်းဆုံးကို ရယူရန်
-ADDR-6b အသုံးပြုသော `sora…` ဗားရှင်း။
+`ExplorerAccountQrOptions` ကို နှစ်သက်သော I105 အထွက် သို့မဟုတ် သတ်မှတ်ရန် ပုံသေ
+canonical I105 output သည် ဒုတိယအကောင်းဆုံးကို ရယူရန်
+ADDR-6b အသုံးပြုသော `i105` ဗားရှင်း။
 
 ## 7. ပွဲများကို စာရင်းသွင်းပါ။
 

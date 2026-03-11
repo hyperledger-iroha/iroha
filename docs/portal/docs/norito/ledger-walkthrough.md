@@ -25,8 +25,8 @@ account IDs you plan to use. The defaults bundle already includes two accounts
 derived from the demo keys:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirm the values by listing the first few accounts:

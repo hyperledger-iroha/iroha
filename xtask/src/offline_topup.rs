@@ -808,7 +808,7 @@ mod tests {
     use std::io::Write;
 
     use curve25519_dalek::ristretto::CompressedRistretto;
-    use iroha::data_model::{asset::AssetDefinitionId, domain::DomainId, name::Name};
+    use iroha::data_model::{asset::AssetDefinitionId, name::Name};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_primitives::json::Json;
     use tempfile::NamedTempFile;
@@ -950,10 +950,9 @@ mod tests {
     }
 
     fn sample_asset() -> AssetId {
-        let domain = DomainId::from_str("wonderland").expect("domain id");
         let definition = AssetDefinitionId::from_str("usd#wonderland").expect("definition id");
         let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let account = AccountId::new(key_pair.public_key().clone());
         AssetId::new(definition, account)
     }
 

@@ -33,6 +33,7 @@ translation_last_reviewed: 2025-11-14
 - ZK App API (اٹیچمنٹس، prover، ووٹ گنتی): ‎`zk_app_api.md`‎
 - Torii میں ZK اٹیچمنٹس/prover کے لیے رن بک: ‎`zk/prover_runbook.md`‎
 - Torii ZK App API آپریٹر گائیڈ (اٹیچمنٹس/prover؛ crate docs): ‎`../../crates/iroha_torii/docs/zk_app_api.md`‎
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proofs کا لائف سائیکل (رجسٹری، ویریفکیشن، ٹیلی میٹری):
   ‎`zk/lifecycle.md`‎
 - Torii آپریٹر ایڈز (visibility endpoints): ‎`references/operator_aids.md`‎

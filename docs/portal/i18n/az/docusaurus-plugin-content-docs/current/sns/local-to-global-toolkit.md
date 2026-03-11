@@ -16,7 +16,7 @@ mono-repodan. O, **ADDR-5c** yol xəritəsi elementi tərəfindən tələb oluna
 
 - `scripts/address_local_toolkit.sh`, istehsal etmək üçün `iroha` CLI-ni bağlayır:
   - `audit.json` — `iroha tools address audit --format json`-dən strukturlaşdırılmış çıxış.
-  - `normalized.txt` — hər Yerli domen seçicisi üçün çevrilmiş üstünlük verilən IH58 / ikinci ən yaxşı sıxılmış (`sora`) literalları.
+  - `normalized.txt` — hər Yerli domen seçicisi üçün çevrilmiş üstünlük verilən I105 / ikinci ən yaxşı sıxılmış (`sora`) literalları.
 - Skripti ünvan qəbulu tablosu ilə cütləşdirin (`dashboards/grafana/address_ingest.json`)
   və Yerli-8 / sübut etmək üçün Alertmanager qaydaları (`dashboards/alerts/address_ingest_rules.yml`)
   Yerli-12 kəsmə təhlükəsizdir. Yerli-8 və Yerli-12 toqquşma panellərinə və əlavə olaraq baxın
@@ -32,12 +32,12 @@ scripts/address_local_toolkit.sh \
   --input fixtures/address/local_digest_examples.txt \
   --output-dir artifacts/address_migration \
   --network-prefix 753 \
-  --format ih58
+  --format i105
 ```
 
 Seçimlər:
 
-- IH58 əvəzinə `sora…` çıxışı üçün `--format compressed`.
+- I105 əvəzinə `i105` çıxışı üçün `--format i105`.
 - `domainless output (default)` çılpaq hərflər yaymaq üçün.
 - Dönüşüm addımını atlamaq üçün `--audit-only`.
 - `--allow-errors` xətalı sətirlər görünəndə skan etməyə davam etmək üçün (CLI davranışına uyğundur).

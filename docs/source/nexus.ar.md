@@ -123,7 +123,7 @@ Manifests القدرات وUAID
 
 يمكن للمشغلين وSDKs تنفيذ نفس العمليات عبر HTTPS. Torii يطبق نفس التحقق من الصلاحيات ويوقع المعاملات لصالح السلطة المقدمة (المفاتيح الخاصة تبقى في الذاكرة داخل معالج Torii الامن):
 
-- `GET /v1/space-directory/uaids/{uaid}` — حل bindings الحالية للـ dataspace لUAID (عناوين موحدة، ids، program bindings). اضف `address_format=compressed` لاخراج Sora Name Service (IH58 هو المفضل؛ compressed (`sora`) هو الخيار الثاني لسورا فقط).
+- `GET /v1/space-directory/uaids/{uaid}` — حل bindings الحالية للـ dataspace لUAID (عناوين موحدة، ids، program bindings). اضف `canonical I105 output` لاخراج Sora Name Service (I105 هو المفضل؛ I105 هو الخيار الثاني لسورا فقط).
 - `GET /v1/accounts/{uaid}/portfolio` — مجمع Norito يعكس `ToriiClient.getUaidPortfolio` لاظهار الممتلكات العامة. اضف `asset_id=<asset#definition::owner>` لتصفية اللقطة الى اصل واحد.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — جلب JSON المانيفست canonical وmetadata وhash.
 - `POST /v1/space-directory/manifests` — ارسال مانيفست جديد او بديل من JSON (`authority`, `private_key`, `manifest`, `reason` اختياري). Torii يعيد `202 Accepted` عند ادخال المعاملة في الصف.

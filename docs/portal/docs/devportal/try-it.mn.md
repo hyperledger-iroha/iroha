@@ -95,6 +95,7 @@ npm run start
 Дараах бүрэлдэхүүн хэсгүүд нь `docusaurus.config.js`-ээс эдгээр утгыг уншина:
 
 - **Swagger UI** — `/reference/torii-swagger` дээр үзүүлсэн; урьдчилан зөвшөөрөл олгодог
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   Токен байгаа үед эзэмшигчийн схем, `X-TryIt-Client` бүхий хаягийн хүсэлт,
   `X-TryIt-Auth`-г тарьж, проксигоор дамжуулан дуудлагыг дахин бичдэг.
   `TRYIT_PROXY_PUBLIC_URL` тохируулагдсан.

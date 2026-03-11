@@ -8,6 +8,8 @@ source_hash: 9f708c9c597c0455761049a17989369498d318be348e28f71196bb82761dd36b
 source_last_modified: "2026-01-03T18:07:58.297179+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
+id: staging-manifest-playbook-ja
+slug: /sorafs/staging-manifest-playbook-ja
 ---
 
 :::note 正規ソース

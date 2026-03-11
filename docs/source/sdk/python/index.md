@@ -23,12 +23,11 @@ support_playbook
 The Torii client now exposes the `/v1/explorer/accounts/{account_id}/qr` route
 so wallets and explorers can render canonical account QR codes without re‑implementing
 the encoder. Call
-`ToriiClient.get_explorer_account_qr_typed(account_id, address_format="ih58")`
+`ToriiClient.get_explorer_account_qr_typed(account_id)`
 to receive an `ExplorerAccountQrSnapshot`, which includes the canonical account id,
 the Norito literal used for the QR payload, the network prefix, error‑correction
 setting, module count, QR version, and the inline SVG rendering emitted by Torii.
-Passing `address_format="compressed"` mirrors the second-best Sora-only toggle
-described in the ADDR‑6b roadmap item; omit it to keep the preferred IH58 output
+described in the ADDR‑6b roadmap item; omit it to keep the preferred I105 output
 while still matching the QR payloads used by the JS and Swift SDKs.
 
 ## ISO 20022 bridge helpers
@@ -91,7 +90,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("https://torii.sora.example")
 
 draft = {
-    "controller": "ih58:...",
+    "controller": "i105:...",
     "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],

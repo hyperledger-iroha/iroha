@@ -85,7 +85,7 @@ translator: machine-google-reviewed
 
 - **Тәуекелді қабылдау** – `POST /v1/fraud/query` `RiskQuery` схемасын қабылдайды:
   - `query_id` (`[u8; 32]`, он алтылық кодталған)
-  - `subject` (`AccountId`, канондық IH58 литералы; қосымша `@<domain>` анықтамасы немесе бүркеншік ат)
+  - `subject` (`AccountId`, канондық I105 литералы; қосымша `@<domain>` анықтамасы немесе бүркеншік ат)
   - `operation` (`RiskOperation` сәйкес таңбаланған нөмір; JSON `type`
     дискриминатор enum нұсқасын көрсетеді)
   - `related_asset` (`AssetId`, міндетті емес)

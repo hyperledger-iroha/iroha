@@ -35,7 +35,7 @@ translator: machine-google-reviewed
       "abi_hash": "blake2b32:…" | “…64十六進制”，
       “abi_版本”：“1”，
       “窗口”：{“下”：12345，“上”：12400}，
-      "authority": "ih58...?",
+      "authority": "i105...?",
       “私鑰”：“……？”
     }
   - 響應（JSON）：
@@ -44,14 +44,14 @@ translator: machine-google-reviewed
 
 合約 API（部署）
 - 後 `/v1/contracts/deploy`
-  - 請求：{ "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - 請求：{ "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 行為：從 IVM 程序體計算 `code_hash`，從標頭 `abi_version` 計算 `abi_hash`，然後提交 `RegisterSmartContractCode`（清單）和 `RegisterSmartContractBytes`（完整的 `.to`）字節）代表`authority`。
   - 響應：{“ok”：true，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
   - 相關：
     - GET `/v1/contracts/code/{code_hash}` → 返回存儲的清單
     - 獲取 `/v1/contracts/code-bytes/{code_hash}` → 返回 `{ code_b64 }`
 - 後 `/v1/contracts/instance`
-  - 請求：{ "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - 請求：{ "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 行為：部署提供的字節碼並立即通過 `ActivateContractInstance` 激活 `(namespace, contract_id)` 映射。
   - 響應：{“ok”：true，“namespace”：“apps”，“contract_id”：“calc.v1”，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
 
@@ -64,11 +64,11 @@ translator: machine-google-reviewed
   - 錯誤：十六進制輸入格式錯誤時出現 HTTP `400`。 Torii 返回包含解碼器錯誤消息的 Norito `ValidationFail::QueryFailed::Conversion` 信封。
 - 後 `/v1/aliases/resolve`
   - 請求: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - 響應: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - 響應: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - 注意：需要 ISO 橋運行時分段（`[iso_bridge.account_aliases]` 中的 `iroha_config`）。 Torii 通過在查找之前去除空格和大寫字母來標準化別名。當別名不存在時返回 404，當 ISO 橋接運行時被禁用時返回 503。
 - 後 `/v1/aliases/resolve_index`
   - 請求：{“索引”：0}
-  - 響應: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - 響應: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - 注意：別名索引是根據配置順序（從 0 開始）確定性分配的。客戶端可以離線緩存響應，以構建別名證明事件的審計跟踪。代碼 尺寸上限
 - 自定義參數：`max_contract_code_bytes` (JSON u64)
   - 控制鏈上合約代碼存儲的最大允許大小（以字節為單位）。
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
   - 運營商可以通過提交 `SetParameter(Custom)` 和 `id = "max_contract_code_bytes"` 以及數字有效負載來進行調整。
 
 - 後 `/v1/gov/ballots/zk`
-  - 請求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - 請求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 響應：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意事項：
     - 當電路的公共輸入包括 `owner`、`amount` 和 `duration_blocks`，並且證明根據配置的 VK 進行驗證時，節點使用 `owner` 創建或擴展 `election_id` 的治理鎖。除非有提示，否則方向保持隱藏（`unknown`）；僅更新金額/到期日。重新投票是單調的：金額和到期日僅增加（節點應用 max(amount, prev.amount) 和 max(expiry, prev.expiry)）。
@@ -85,10 +85,10 @@ translator: machine-google-reviewed
     - 合約執行必須在排隊 `SubmitBallot` 之前調用 `ZK_VOTE_VERIFY_BALLOT`；主機強制執行一次性鎖存。
 
 - 後 `/v1/gov/ballots/plain`
-  - 請求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - 請求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 響應：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意：重新投票只能延長——新的投票不能減少現有鎖定的數量或到期時間。 `owner`必須等於交易權限。最短持續時間為 `conviction_step_blocks`。- 後 `/v1/gov/finalize`
-  - 請求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“ih58…？”，“private_key”：“…？” }
+  - 請求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“i105…？”，“private_key”：“…？” }
   - 響應：{ "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - 鏈上效應（當前腳手架）：制定已批准的部署提案會插入由 `code_hash` 鍵入的最小 `ContractManifest` 和預期的 `abi_hash`，並將提案標記為已實施。如果 `code_hash` 的清單已存在且具有不同的 `abi_hash`，則頒布將被拒絕。
   - 注意事項：
@@ -97,7 +97,7 @@ translator: machine-google-reviewed
     - 投票率檢查僅使用批准+拒絕；棄權不計入投票率。
 
 - 後 `/v1/gov/enact`
-  - 請求: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "…?" }
+  - 請求: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
   - 響應：{ "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注：Torii在提供`authority`/`private_key`時提交簽名交易；否則，它會返回一個框架供客戶簽名和提交。原像是可選的並且當前是信息性的。
 
@@ -135,8 +135,8 @@ translator: machine-google-reviewed
   min_turnout = 0
   voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
-  bond_escrow_account = "ih58..."
-  slash_receiver_account = "ih58..."
+  bond_escrow_account = "i105..."
+  slash_receiver_account = "i105..."
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
@@ -153,8 +153,8 @@ GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
 GOV_VOTING_ASSET_ID=xor#sora
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=ih58...
-GOV_SLASH_RECEIVER_ACCOUNT=ih58...
+GOV_BOND_ESCROW_ACCOUNT=i105...
+GOV_SLASH_RECEIVER_ACCOUNT=i105...
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
@@ -189,8 +189,8 @@ RBAC
 - 客戶端必須包含事務元數據密鑰才能針對受保護的命名空間進行部署：
   - `gov_namespace`：目標命名空間（例如，`"apps"`）
   - `gov_contract_id`：命名空間內的邏輯合約ID
-- `gov_manifest_approvers`：ih58...帳戶 ID 的可選 JSON 數組。當通道清單聲明法定人數大於 1 時，准入需要交易權限加上列出的帳戶來滿足清單法定人數。
-- 遙測通過 `governance_manifest_admission_total{result}` 公開整體准入計數器，以便操作員可以區分 `missing_manifest`、`non_ih58..._authority`、`quorum_rejected`、`protected_namespace_rejected` 和 `runtime_hook_rejected` 路徑的成功准入。
+- `gov_manifest_approvers`：i105...帳戶 ID 的可選 JSON 數組。當通道清單聲明法定人數大於 1 時，准入需要交易權限加上列出的帳戶來滿足清單法定人數。
+- 遙測通過 `governance_manifest_admission_total{result}` 公開整體准入計數器，以便操作員可以區分 `missing_manifest`、`non_i105..._authority`、`quorum_rejected`、`protected_namespace_rejected` 和 `runtime_hook_rejected` 路徑的成功准入。
 - 遙測通過 `governance_manifest_quorum_total{outcome}`（值 `satisfied` / `rejected`）顯示執行路徑，以便操作員可以審核缺失的批准。
 - 通道強制執行在其清單中發布的命名空間允許列表。任何設置 `gov_namespace` 的事務都必須提供 `gov_contract_id`，並且命名空間必須出現在清單的 `protected_namespaces` 集中。啟用保護後，沒有此元數據的 `RegisterSmartContractCode` 提交將被拒絕。
 - 准入強制執行元組 `(namespace, contract_id, code_hash, abi_hash)` 存在已頒布的治理提案；否則驗證失敗並出現 NotPermissed 錯誤。
@@ -204,7 +204,7 @@ RBAC
   - `allowed_ids`（字符串數組）：可選的元數據值白名單（修剪後）。當提供的值未列出時拒絕。
 - 當掛鉤存在時，隊列准入會在事務進入隊列之前強制執行元數據策略。缺少元數據、空白值或白名單之外的值會產生確定性 `NotPermitted` 錯誤。
 - 遙測通過 `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` 跟踪執法結果。
-- 滿足掛鉤的交易必須包括元數據 `gov_upgrade_id=<value>`（或清單定義的密鑰）以及清單仲裁所需的任何 ih58... 批准。
+- 滿足掛鉤的交易必須包括元數據 `gov_upgrade_id=<value>`（或清單定義的密鑰）以及清單仲裁所需的任何 i105... 批准。
 
 便利端點
 - POST `/v1/gov/protected-namespaces` — 將 `gov_protected_namespaces` 直接應用於節點。
@@ -218,16 +218,16 @@ RBAC
     - `(namespace, contract_id, code_hash, abi_hash)` 存在已頒布的治理提案，該提案由節點使用的相同提案 ID 散列得出。
   - 輸出一份 JSON 報告，其中每個合同包含 `results[]`（問題、清單/代碼/提案摘要）以及一行摘要（除非被抑制）（`--no-summary`）。
   - 對於審核受保護的命名空間或驗證治理控制的部署工作流程很有用。
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - 發出將部署提交到受保護的命名空間時使用的 JSON 元數據框架，包括用於滿足清單仲裁規則的可選 `gov_manifest_approvers`。
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - 驗證規範帳戶 ID，規範化 32 字節無效提示，並將提示合併到 `public_inputs_json`（使用 `--public <path>` 進行額外覆蓋）。
   - 無效符源自證明承諾（公共輸入）加上 `domain_tag`、`chain_id` 和 `election_id`； `--nullifier` 已根據提供的證明進行驗證。
   - 單行摘要現在顯示從編碼的 `CastZkBallot` 派生的確定性 `fingerprint=<hex>` 以及任何解碼的提示（`owner`、`amount`、`duration_blocks`、`direction`（如果提供））。
   - CLI 響應使用 `payload_fingerprint_hex` 加上解碼字段來註釋 `tx_instructions[]`，以便下游工具可以驗證骨架，而無需重新實現 Norito 解碼。
   - 當提供任何鎖定提示時，ZK 選票必須提供 `owner`、`amount` 和 `duration_blocks`；部分提示被拒絕。當 `min_bond_amount > 0` 時，需要鎖定提示。方向仍然是可選的，並且僅被視為提示。
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` 接受規範的 IH58 文字；可選的 `@<domain>` 後綴僅是路由提示。
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` 接受規範的 I105 文字；可選的 `@<domain>` 後綴僅是路由提示。
   - 別名 `--lock-amount`/`--lock-duration-blocks` 鏡像 ZK 標誌名稱以實現腳本奇偶校驗。
   - 摘要輸出通過包含編碼的指令指紋和人類可讀的選票字段（`owner`、`amount`、`duration_blocks`、`direction`）來鏡像 `vote --mode zk`，在簽署框架之前提供快速確認。實例列表
 - GET `/v1/gov/instances/{ns}` — 列出命名空間的活動合約實例。
@@ -246,14 +246,14 @@ RBAC
 - 後 `/v1/gov/ballots/zk-v1`
   - 請求（v1 樣式 DTO）：
     {
-      "權威": "ih58...",
+      "權威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
       “後端”：“halo2/ipa”，
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex？",
-      "owner": "ih58…", // 規範 AccountId（IH58 文字；可選 @domain 提示）
+      "owner": "i105…", // 規範 AccountId（I105 文字；可選 @domain 提示）
       "金額": "100？",
       “duration_blocks”：6000？ ，
       "direction": "贊成|反對|棄權？",
@@ -263,7 +263,7 @@ RBAC
   - 直接接受 `BallotProof` JSON 並返回 `CastZkBallot` 骨架。
   - 要求：
     {
-      "權威": "ih58...",
+      "權威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -271,7 +271,7 @@ RBAC
         “後端”：“halo2/ipa”，
         "envelope_bytes": "AAECAwQ=", // ZK1 或 H2* 容器的 base64
         "root_hint": null, // 可選的 32 字節十六進製字符串（資格根）
-        "owner": null, // 可選規範 AccountId（IH58 文字；可選 @domain 提示）
+        "owner": null, // 可選規範 AccountId（I105 文字；可選 @domain 提示）
         "nullifier": null, // 可選的 32 字節十六進製字符串（nullifier 提示）
         "amount": "100", // 可選的鎖定金額提示（十進製字符串）
         "duration_blocks": 6000, // 可選的鎖定持續時間提示
@@ -304,7 +304,7 @@ CastZkBallot驗證路徑
 
 ## 驗證者的不當行為和聯合共識
 
-### 削減和監禁工作流程每當 ih58... 違反協議時，共識就會發出 Norito 編碼的 `Evidence`。每個有效負載都會落在內存中的 `EvidenceStore` 中，如果看不見，則會具體化到 WSV 支持的 `consensus_evidence` 映射中。早於 `sumeragi.npos.reconfig.evidence_horizon_blocks`（默認 `7200` 塊）的記錄將被拒​​絕，因此存檔仍受限制，但會為操作員記錄拒絕。範圍內的證據遵循聯合共識暫存規則（`mode_activation_height requires next_mode to be set in the same block`）、激活延遲（`sumeragi.npos.reconfig.activation_lag_blocks`，默認 `1`）和削減延遲（`sumeragi.npos.reconfig.slashing_delay_blocks`，默認 `259200`），因此治理可以在處罰之前取消處罰。
+### 削減和監禁工作流程每當 i105... 違反協議時，共識就會發出 Norito 編碼的 `Evidence`。每個有效負載都會落在內存中的 `EvidenceStore` 中，如果看不見，則會具體化到 WSV 支持的 `consensus_evidence` 映射中。早於 `sumeragi.npos.reconfig.evidence_horizon_blocks`（默認 `7200` 塊）的記錄將被拒​​絕，因此存檔仍受限制，但會為操作員記錄拒絕。範圍內的證據遵循聯合共識暫存規則（`mode_activation_height requires next_mode to be set in the same block`）、激活延遲（`sumeragi.npos.reconfig.activation_lag_blocks`，默認 `1`）和削減延遲（`sumeragi.npos.reconfig.slashing_delay_blocks`，默認 `259200`），因此治理可以在處罰之前取消處罰。
 
 公認的犯罪行為與 `EvidenceKind` 一對一映射；判別式是穩定的並且由數據模型強制執行：
 
@@ -324,7 +324,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — ih58...為相同的 `(phase,height,view,epoch)` 元組簽名了衝突的哈希值。
+- **DoublePrepare/DoubleCommit** — i105...為相同的 `(phase,height,view,epoch)` 元組簽名了衝突的哈希值。
 - **InvalidQc** — 聚合器傳播了其形狀未通過確定性檢查的提交 QC（例如，空簽名者位圖）。
 - **InvalidProposal** — 領導者提出了一個未通過結構驗證的區塊（例如，破壞了鎖鏈規則）。
 - **審查** - 簽名的提交收據顯示從未提議/提交的交易。
@@ -341,12 +341,12 @@ VRF 處罰在 `activation_lag_blocks` 後自動執行（違法者將被監禁）
 1. **在有效負載過期之前收集**。將原始 Norito 字節與高度/視圖元數據一起存檔。
 2. **如果需要取消**，在 `slashing_delay_blocks` 失效之前提交帶有證據負載的 `CancelConsensusEvidencePenalty`；該記錄標記為 `penalty_cancelled` 和 `penalty_cancelled_at_height`，並且不適用削減。
 3. **通過將有效負載嵌入公投或 sudo 指令（例如，`Unregister::peer`）來實施懲罰**。執行重新驗證有效負載；格式錯誤或過時的證據將被確定性地拒絕。
-4. **安排後續拓撲**，以便有問題的 ih58... 無法立即重新加入。具有更新名冊的典型流隊列 `SetParameter(Sumeragi::NextMode)` 和 `SetParameter(Sumeragi::ModeActivationHeight)`。
+4. **安排後續拓撲**，以便有問題的 i105... 無法立即重新加入。具有更新名冊的典型流隊列 `SetParameter(Sumeragi::NextMode)` 和 `SetParameter(Sumeragi::ModeActivationHeight)`。
 5. 通過 `/v1/sumeragi/evidence` 和 `/v1/sumeragi/status` 進行**審計結果**，以確保證據反駁取得進展並由治理部門實施刪除。
 
 ### 聯合共識測序
 
-聯合共識保證即將離任的 ih58... 集合在新集合開始提議之前最終確定邊界塊。運行時通過配對參數強制執行規則：- `SumeragiParameter::NextMode` 和 `SumeragiParameter::ModeActivationHeight` 必須在**同一塊**中提交。 `mode_activation_height` 必須嚴格大於進行更新的塊高度，提供至少一個塊的滯後。
+聯合共識保證即將離任的 i105... 集合在新集合開始提議之前最終確定邊界塊。運行時通過配對參數強制執行規則：- `SumeragiParameter::NextMode` 和 `SumeragiParameter::ModeActivationHeight` 必須在**同一塊**中提交。 `mode_activation_height` 必須嚴格大於進行更新的塊高度，提供至少一個塊的滯後。
 - `sumeragi.npos.reconfig.activation_lag_blocks`（默認 `1`）是防止零延遲切換的配置保護：
 - `sumeragi.npos.reconfig.slashing_delay_blocks`（默認 `259200`）延遲共識削減，以便治理可以在處罰實施之前取消處罰。
 
@@ -355,13 +355,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- 運行時和 CLI 通過 `/v1/sumeragi/params` 和 `iroha sumeragi params --summary` 公開分階段參數，因此操作員可以確認激活高度和 ih58...名冊。
+- 運行時和 CLI 通過 `/v1/sumeragi/params` 和 `iroha sumeragi params --summary` 公開分階段參數，因此操作員可以確認激活高度和 i105...名冊。
 - 治理自動化應始終：
   1. 最終確定有證據支持的移除（或恢復）決定。
   2. 使用 `mode_activation_height = h_current + activation_lag_blocks` 對後續重新配置進行排隊。
   3. 監視 `/v1/sumeragi/status`，直到 `effective_consensus_mode` 翻轉到預期高度。
 
-任何旋轉 ih58...s 或應用削減的腳本**不得**嘗試零延遲激活或省略切換參數；此類交易將被拒絕，並使網絡保持先前的模式。
+任何旋轉 i105...s 或應用削減的腳本**不得**嘗試零延遲激活或省略切換參數；此類交易將被拒絕，並使網絡保持先前的模式。
 
 ## 遙測表面
 

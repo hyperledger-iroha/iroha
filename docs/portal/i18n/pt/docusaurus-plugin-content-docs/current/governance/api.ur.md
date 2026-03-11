@@ -32,7 +32,7 @@ Pontos finais
       "abi_hash": "blake2b32:..." | "...64 hexadecimal",
       "abi_versão": "1",
       "janela": { "inferior": 12345, "superior": 12400 },
-      "autoridade": "ih58…?",
+      "autoridade": "i105…?",
       "chave_privada": "...?"
     }
   - Resposta (JSON):
@@ -41,14 +41,14 @@ Pontos finais
 
 API de contratos (implantação)
 -POSTO `/v1/contracts/deploy`
-  - Solicitação: { "autoridade": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Solicitação: { "autoridade": "i105...", "private_key": "...", "code_b64": "..." }
   - Behavior: IVM پروگرام باڈی سے `code_hash` اور header `abi_version` سے `abi_hash` نکالتا ہے، پھر `RegisterSmartContractCode` (manifesto) e `RegisterSmartContractBytes` (مکمل `.to` bytes) `authority` کی طرف سے سبمٹ کرتا ہے۔
   - Resposta: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Relacionado:
     - GET `/v1/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
     - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
 -POSTO `/v1/contracts/instance`
-  - Solicitação: { "autoridade": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Solicitação: { "autoridade": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportamento: فراہم کردہ bytecode deploy کرتا ہے اور `ActivateContractInstance` کے ذریعے Mapeamento `(namespace, contract_id)` فوراً فعال کرتا ہے۔
   - Resposta: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Serviço de alias
 -POSTO `/v1/aliases/voprf/evaluate`
@@ -59,11 +59,11 @@ API de contratos (implantação)
   - Erros: entrada hexadecimal malformada پر HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` envelope اور mensagem de erro do decodificador واپس کرتا ہے۔
 -POSTO `/v1/aliases/resolve`
   - Solicitação: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notas: teste de tempo de execução da ponte ISO درکار ہے (`[iso_bridge.account_aliases]` em `iroha_config`)۔ Torii espaço em branco ہٹا کر اور maiúsculo بنا کر pesquisa کرتا ہے۔ alias نہ ہو تو 404 Tempo de execução da ponte ISO بند ہو تو 503 دیتا ہے۔
 -POSTO `/v1/aliases/resolve_index`
   - Solicitação: { "índice": 0 }
-  - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notas: ordem de configuração dos índices de alias کے مطابق determinístico طریقے سے atribuir ہوتے ہیں (baseado em 0)۔ کلائنٹس cache offline کر کے eventos de atestado de alias کے trilhas de auditoria بنا سکتے ہیں۔
 
 Limite de tamanho do código
@@ -73,7 +73,7 @@ Limite de tamanho do código
   - Operadores `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور carga útil numérica دے کر ایڈجسٹ کر سکتے ہیں۔
 
 -POSTO `/v1/gov/ballots/zk`
-  - Solicitação: { "autoridade": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Solicitação: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas:
     - جب circuito کے entradas públicas میں `owner`, `amount`, `duration_blocks` شامل ہوں اور prova configurada VK کے خلاف verificar ہو جائے تو nó `election_id` کے لئے bloqueio de governança بناتا یا بڑھاتا ہے۔ direção چھپی رہتی ہے (`unknown`); صرف valor/validade اپڈیٹ ہوتے ہیں۔ re-votos monotônicos ہیں: quantidade اور expiração صرف بڑھتے ہیں (node ​​max(amount, prev.amount) اور max(expiry, prev.expiry) لگاتا ہے)۔
@@ -81,19 +81,19 @@ Limite de tamanho do código
     - Execução de contrato کو `SubmitBallot` enfileiramento کرنے سے پہلے `ZK_VOTE_VERIFY_BALLOT` کال کرنا لازم ہے؛ hospeda a trava one-shot impor کرتے ہیں۔
 
 -POSTO `/v1/gov/ballots/plain`
-  - Solicitação: { "autoridade": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim|Não|Abstenção" }
+  - Solicitação: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim|Não|Abstenção" }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas: revotações estendidas apenas ہیں - نیا cédula موجودہ bloqueio کا valor یا expiração کم نہیں کر سکتا۔ `owner` کو autoridade de transação کے برابر ہونا چاہئے۔ کم از کم مدت `conviction_step_blocks` ہے۔
 
 -POSTO `/v1/gov/finalize`
-  - Solicitação: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Solicitação: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efeito na cadeia (andaime atual): منظور شدہ proposta de implantação کو promulgar کرنے سے `code_hash` com chave mínima `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposta promulgada ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` e manifesto پہلے سے ہو تو rejeição de promulgação ہوتا ہے۔
   - Notas:
     - Eleições ZK کے لئے caminhos de contrato کو `FinalizeElection` سے پہلے `ZK_VOTE_VERIFY_TALLY` کال کرنا لازمی ہے؛ hospeda a trava one-shot impor کرتے ہیں۔ `FinalizeReferendum` Referendos ZK کو اس وقت تک rejeitar کرتا ہے جب تک contagem eleitoral finalizada نہ ہو جائے۔
     - Fechamento automático `h_end` پر صرف Referendos simples کے لئے Emissão aprovada/rejeitada کرتا ہے؛ Referendos ZK Fechados رہتے ہیں جب تک envio de contagem finalizado نہ ہو اور `FinalizeReferendum` executar نہ ہو۔
     - Verificações de participação صرف aprovar + rejeitar استعمال کرتی ہیں؛ abster-se de comparecer میں شمار نہیں ہوتا۔-POSTO `/v1/gov/enact`
-  - Solicitação: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Solicitação: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas: جب `authority`/`private_key` فراہم ہوں تو Torii transação assinada سبمٹ کرتا ہے؛ Um esqueleto e um esqueleto são um esqueleto que pode ser construído pré-imagem
 
@@ -195,15 +195,15 @@ Ajudantes CLI
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے proposta de governança promulgada موجود ہے جو اسی hashing de id de proposta سے deriva ہوتا ہے جو nó استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (problemas, manifesto/código/resumos de propostas) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ ہو)۔
   - Namespaces protegidos کے auditoria یا fluxos de trabalho de implantação controlados por governança کی تصدیق کے لئے مفید۔
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Namespaces protegidos میں implantação کے لئے esqueleto de metadados JSON دیتا ہے، جس میں opcional `gov_manifest_approvers` شامل ہیں تاکہ regras de quorum de manifesto پوری ہوں۔
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر dicas de bloqueio لازم ہیں, اور فراہم کیے گئے کسی بھی dicas سیٹ میں `owner`, `amount` e `duration_blocks` são de alta qualidade
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر dicas de bloqueio لازم ہیں, اور فراہم کیے گئے کسی بھی dicas سیٹ میں `owner`, `amount` e `duration_blocks` são de alta qualidade
   - Valida IDs de contas canônicas, canoniza dicas de nulificador de 32 bytes e mescla as dicas em `public_inputs_json` (com `--public <path>` para substituições adicionais).
   - O anulador é derivado do compromisso de prova (entrada pública) mais `domain_tag`, `chain_id` e `election_id`; `--nullifier` é validado em relação à prova quando fornecido.
   - ایک لائن خلاصہ اب `fingerprint=<hex>` determinístico دکھاتا ہے جو `CastZkBallot` codificado سے derivar ہوتا ہے, ساتھ dicas decodificadas (`owner`, `amount`, `duration_blocks`, `direction` جب فراہم ہوں)۔
   - Respostas CLI `tx_instructions[]` کو `payload_fingerprint_hex` اور campos decodificados کے ساتھ anotar کرتے ہیں تاکہ esqueleto de ferramentas downstream کو بغیر Norito decodificação کے verificar کر سکے۔
   - Dicas de bloqueio دینے سے cédulas ZK do nó کے لئے `LockCreated` / `LockExtended` eventos emitem کر سکتا ہے جب circuito وہی valores expõem کرے۔
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` aliases ZK flags کے ناموں کو espelho کرتے ہیں تاکہ paridade de script ہو۔
   - Saída de resumo `vote --mode zk` کی طرح impressão digital de instrução codificada e campos de votação legíveis (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے assinatura سے پہلے فوری تصدیق ہو جاتی ہے۔
 
@@ -222,14 +222,14 @@ Listagem de Instâncias
 -POSTO `/v1/gov/ballots/zk-v1`
   - Solicitação (DTO estilo v1):
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",
       "back-end": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "proprietário": "ih58…?",
+      "proprietário": "i105…?",
       "anulador": "blake2b32:...64hex?"
     }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
@@ -238,7 +238,7 @@ Listagem de Instâncias
   - `BallotProof` JSON براہ راست قبول کر کے Esqueleto `CastZkBallot` واپس کرتا ہے۔
   - Solicitação:
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",

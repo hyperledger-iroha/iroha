@@ -37,6 +37,17 @@ The router-backed extractor now emits the full Torii surface. If you see the
 placeholder stub, treat it as a build-time failure and inspect the Torii
 router startup logs.
 
+## MCP bridge
+
+Torii also exposes a native Model Context Protocol bridge at `/v1/mcp`.
+Unlike REST endpoints, MCP calls use JSON-RPC 2.0 (`initialize`, `tools/list`,
+`tools/call`, `tools/call_batch`, `tools/call_async`, `tools/jobs/get`) and
+are controlled by `torii.mcp` configuration.
+
+Use the dedicated MCP reference for agent integrations:
+
+- [`/reference/torii-mcp`](/reference/torii-mcp)
+
 ## Try it sandbox (DOCS-3)
 
 The developer portal embeds a small console that relays REST requests through a

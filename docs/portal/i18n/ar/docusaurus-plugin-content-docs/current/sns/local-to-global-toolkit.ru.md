@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` يدعم CLI `iroha` للحصول على:
   - `audit.json`--الهيكل الهيكلي `iroha tools address audit --format json`.
-  - `normalized.txt` - حرفية IH58 (مفترض) / مضغوطة (`sora`) (اختيار خارجي) لمحدد المجال المحلي.
+  - `normalized.txt` - حرفية I105 (مفترض) / مضغوطة (`sora`) (اختيار خارجي) لمحدد المجال المحلي.
 - استخدم البرنامج النصي مباشرة باستخدام عنوان استيعاب لوحة القيادة (`dashboards/grafana/address_ingest.json`)
   وضبط Alertmanager (`dashboards/alerts/address_ingest_rules.yml`)، للتأكيد على السلامة الشاملة Local-8 /
   محلي-12. لقطات لوحات التصادم Local-8 و Local-12 والتنبيهات
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ##الاستخدام
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 الخيارات:
 
-- `--format compressed (`sora`)` للبث `sora...` بدلاً من IH58.
+- `--format I105` للبث `sora...` بدلاً من I105.
 - `domainless output (default)` для вывода مجردة.
 - `--audit-only` لإجراء تحويلات جديدة.
 - `--allow-errors` لمواصلة المسح الضوئي باستخدام خراطيش الحبر (المرتبطة بـ CLI).يقوم البرنامج النصي بإدخال القطع الأثرية في نهاية الاستخدام. قم بتقديم ملف c

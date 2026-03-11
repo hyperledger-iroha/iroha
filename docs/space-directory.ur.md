@@ -165,7 +165,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -223,7 +223,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -244,7 +244,7 @@ revoked اسٹیٹ ظاہر کریں گے۔ CIDR اور fee‑policy gates، rea
 کنیکٹ ہونے سے پہلے ضرورت ہوتی ہے۔ `profile/cbdc_lane_profile.json` fixture درج ذیل
 باتیں دستاویزی شکل میں رکھتا ہے:
 
-- گورننس issuer/quorum (`ih58...` + evidence ticket ID)۔
+- گورننس issuer/quorum (`i105...` + evidence ticket ID)۔
 - validators کا سیٹ + quorum اور محفوظ namespaces (`cbdc`, `gov`)۔
 - DA پروفائل (کلاس A، attesters کی فہرست، rotation cadence)۔
 - composability group ID اور whitelist جو UAIDs کو capability manifests سے جوڑتی ہے۔

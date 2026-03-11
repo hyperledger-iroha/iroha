@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
   <rect x="10" y="10" width="700" height="340" rx="16" ry="16" fill="#f5f5f5" stroke="#c1c1c1" stroke-width="2" />
   <text x="40" y="50" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" font-weight="600" fill="#222">Android retail wallet — dual copy controls</text>
-  <text x="40" y="85" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">IH58 (preferred, prefix 753)</text>
+  <text x="40" y="85" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">I105 (preferred, prefix 753)</text>
   <rect x="40" y="95" width="640" height="40" rx="6" ry="6" fill="#fff" stroke="#d0d0d0" />
-  <text x="50" y="122" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">ih58:sora1hjwa8c6ppf2l0n5s3ex7dwcd4m93q2m7q5pc4l5ca8xx7sc</text>
-  <text x="40" y="150" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">Compressed (`sora`) Sora-only (second-best)</text>
+  <text x="50" y="122" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">i105:sora1hjwa8c6ppf2l0n5s3ex7dwcd4m93q2m7q5pc4l5ca8xx7sc</text>
+  <text x="40" y="150" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">i105-default (`sora`) Sora-only (second-best)</text>
   <rect x="40" y="160" width="640" height="40" rx="6" ry="6" fill="#fff" stroke="#d0d0d0" />
   <text x="50" y="187" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">sora ｲﾍ0t... (kana glyphs preserved)</text>
-  <text x="40" y="215" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#c55400">Compressed (`sora`) Sora addresses are second-best and rely on half-width kana; warn before sharing.</text>
+  <text x="40" y="215" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#c55400">i105-default (`sora`) Sora addresses are second-best and rely on half-width kana; warn before sharing.</text>
   <rect x="40" y="235" width="300" height="46" rx="8" ry="8" fill="#fafafa" stroke="#3f51b5" stroke-width="1.5" />
-  <text x="90" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy IH58 (preferred)</text>
+  <text x="90" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy I105 (preferred)</text>
   <rect x="380" y="235" width="300" height="46" rx="8" ry="8" fill="#fafafa" stroke="#3f51b5" stroke-width="1.5" />
-  <text x="410" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy compressed (`sora`, second-best)</text>
-  <text x="40" y="305" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#666">Tooltips: “Copy the preferred IH58 form” · “Compressed (`sora`) addresses are Sora-only (second-best)”.</text>
+  <text x="410" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy i105-default (`sora`, Sora-only)</text>
+  <text x="40" y="305" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#666">Tooltips: “Copy the preferred I105 form” · “i105-default (`sora`) addresses are Sora-only (second-best)”.</text>
 </svg>

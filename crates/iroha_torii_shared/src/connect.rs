@@ -635,7 +635,7 @@ pub enum ConnectControlV1 {
     Approve {
         /// Wallet ephemeral X25519 public key (32 bytes).
         wallet_pk: [u8; 32],
-        /// Wallet account identifier (IH58 string or sora compressed literal).
+        /// Wallet account identifier (canonical I105 string).
         account_id: String,
         /// Accepted (possibly narrowed) permissions/namespaces.
         permissions: Option<PermissionsV1>,
@@ -941,9 +941,10 @@ mod tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key parses");
-        let account_id = AccountId::new(domain, public_key).to_string();
+        let _ = domain;
+        let account_id = AccountId::new(public_key).to_string();
         ConnectControlV1::Approve {
-            wallet_pk: [7u8; 32],
+            wallet_pk: [0x42; 32],
             account_id,
             permissions: None,
             proof: Some(SignInProofV1 {

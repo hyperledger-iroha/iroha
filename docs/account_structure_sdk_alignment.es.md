@@ -1,8 +1,8 @@
-# Nota de despliegue de IH58 para responsables de SDK y códecs
+# Nota de despliegue de I105 para responsables de SDK y códecs
 
 Equipos: SDK de Rust, SDK de TypeScript/JavaScript, SDK de Python, SDK de Kotlin, tooling de códecs
 
-Contexto: `docs/account_structure.md` ahora refleja la implementación de AccountId IH58 en producción.
+Contexto: `docs/account_structure.md` ahora refleja la implementación de AccountId I105 en producción.
 Alineen el comportamiento y las pruebas de los SDK con la especificación canónica.
 
 Referencias clave:
@@ -12,18 +12,11 @@ Referencias clave:
 - Vectores de fixtures — `fixtures/account/address_vectors.json`
 
 Acciones:
-1. **Salida canónica:** `AccountId::to_string()`/Display DEBE emitir solo IH58
+1. **Salida canónica:** `AccountId::to_string()`/Display DEBE emitir solo I105
    (sin sufijo `@domain`). El hex canónico es solo para depuración (`0x...`).
-2. **Entradas aceptadas:** los parsers DEBEN aceptar IH58 (preferido), `sora`
-   comprimido y hex canónico (solo `0x...`; el hex sin prefijo se rechaza).
-   Las entradas PUEDEN incluir un sufijo `@<domain>` para hints de ruteo;
-   los alias `<label>@<domain>` (rejected legacy form) requieren un resolver. 
-   (hex multihash) sigue siendo compatible.
-3. **Resolvers:** el parseo IH58/sora sin dominio requiere un resolver de
-   selección de dominio, salvo que el selector sea el default implícito
-   (usar la etiqueta de dominio por defecto configurada). Los literales UAID
-   (`uaid:...`) y opaque (`opaque:...`) requieren resolvers.
-4. **Checksum IH58:** usar Blake2b-512 sobre `IH58PRE || prefix || payload` y
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **Checksum I105:** usar Blake2b-512 sobre `I105PRE || prefix || payload` y
    tomar los primeros 2 bytes. La base del alfabeto comprimido es **105**.
 5. **Habilitación de curvas:** los SDK usan Ed25519 por defecto. Proveer opt-in
    explícito para ML‑DSA/GOST/SM (flags de build en Swift; `configureCurveSupport`

@@ -535,10 +535,7 @@ mod tests {
         let action = LoadedAction {
             executable,
             repeats: Repeats::Exactly(3),
-            authority: AccountId::new(
-                "wonderland".parse().expect("valid domain"),
-                KeyPair::random().public_key().clone(),
-            ),
+            authority: AccountId::new(KeyPair::random().public_key().clone()),
             filter: DataEventFilter::Any,
             metadata: Metadata::default(),
         };
@@ -548,7 +545,10 @@ mod tests {
             norito::json::from_json(&json).expect("deserialize LoadedAction");
 
         assert_eq!(reparsed.repeats, action.repeats);
-        assert_eq!(reparsed.authority, action.authority);
+        assert_eq!(
+            reparsed.authority.subject_id(),
+            action.authority.subject_id()
+        );
         assert_eq!(reparsed.filter, action.filter);
         assert_eq!(reparsed.metadata, action.metadata);
 

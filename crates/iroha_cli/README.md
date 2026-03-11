@@ -18,6 +18,7 @@ Alternatively, check out the [documentation](https://docs.iroha.tech/get-started
 
 ## Usage
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
+For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
 See [Command-Line Help](CommandLineHelp.md).
 
@@ -156,7 +157,7 @@ iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
 For plain (non-ZK) referenda provide the required fields explicitly:
 
 ```bash
-iroha app gov vote --referendum-id r1 --mode plain --owner alice@domain \
+iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner> \
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
 
@@ -505,10 +506,12 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then define the value of the `id` argument using an account alias in the `alias@domain` format, where the alias is the account's public key in multihash representation:
+To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id` and the explicit account scope via `--domain`:
 
 ```bash
-iroha ledger account register --id "ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
+iroha ledger account register \
+  --id "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" \
+  --domain "Soramitsu"
 ```
 
 ### Mint Asset to Account
@@ -517,10 +520,10 @@ To add assets to the account, you must first register an Asset Definition. Speci
 
 ```bash
 iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
-iroha ledger asset mint --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu" --quantity 1010
+iroha ledger asset mint --id "XOR##6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" --quantity 1010
 ```
 
-With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu`.
+With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` within the `Soramitsu` domain scope.
 
 ### Query Account Assets Quantity
 

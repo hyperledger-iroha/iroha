@@ -14,7 +14,7 @@ public class SampleAddressTest {
 
     assertTrue(address.canonicalHex().startsWith("0x"));
     AccountAddress.DisplayFormats formats = address.displayFormats();
-    assertEquals(address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX), formats.ih58);
-    assertTrue(formats.compressed.startsWith("sora"));
+    assertEquals(address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT), formats.i105);
+    assertTrue(formats.i105Default.startsWith("sora"));
   }
 }

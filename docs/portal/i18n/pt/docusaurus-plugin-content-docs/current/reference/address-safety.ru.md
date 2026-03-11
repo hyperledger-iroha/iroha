@@ -17,10 +17,10 @@ Este é o documento físico ADDR-6c. Verifique a configuração do navegador, ex
 
 ## O cenário perfeito
 
-- Para usar o endereço IH58, use o endereço IH58. Ao configurar o domínio de controle para obter o contato, a linha de verificação com soma de verificação será exibida na tela.
+- Para usar o endereço I105, use o endereço I105. Ao configurar o domínio de controle para obter o contato, a linha de verificação com soma de verificação será exibida na tela.
 - Предлагайте действие “Compartilhar”, которое включает полный адрес e QR-code, полученный из того же payload. Deixe que o processo seja realizado antes de você poder usá-lo.
 - Если места мало (маленькие карточки, уведомления), сохраняйте читаемый префикс, показывайте многоточие и оставляйте последние 4–6 símbolos, чтобы сохранить якорь checksum. Pressione/Goryaчую chave para copiar um conjunto de dados sem uso.
-- Предотвращайте рассинхронизацию буфера обмена, показывая brinde подтверждения с точной IH58 строкой, которая была скопирована. Então, se você tiver telemetria, selecione a cópia e o destino “поделиться”, чтобы быстро выявлять registro UX.
+- Предотвращайте рассинхронизацию буфера обмена, показывая brinde подтверждения с точной I105 строкой, которая была скопирована. Então, se você tiver telemetria, selecione a cópia e o destino “поделиться”, чтобы быстро выявлять registro UX.
 
 ## IME e salve sua tela
 
@@ -32,15 +32,15 @@ Este é o documento físico ADDR-6c. Verifique a configuração do navegador, ex
 
 - Аннотируйте каждый блок адреса с `aria-label` ou `aria-describedby`, который проговаривает читаемый префикс и distribuir carga útil em grupos de 4 a 8 símbolos (“ih traço b três dois…”). Este não é um leitor de tela que contém símbolos.
 - Solicite uma cópia atualizada da região ao vivo educadamente. Указывайте пункт назначения (área de transferência, planilha de compartilhamento, QR), чтобы пользователь понимал, что действие завершено без переноса foco.
-- Crie o texto `alt` para o QR-превью (por exemplo, “Endereço IH58 para `<account>` na cadeia `0x1234`”). O ambiente do QR-Kanvas fornece o substituto “Copiar endereço como texto” para ser usado com segurança.
+- Crie o texto `alt` para o QR-превью (por exemplo, “Endereço I105 para `<account>` na cadeia `0x1234`”). O ambiente do QR-Kanvas fornece o substituto “Copiar endereço como texto” para ser usado com segurança.
 
-## Сжатые адреса только для Sora- Gating: скрывайте сжатую строку `sora…` para obter mais informações. Para obter mais informações, esta forma será executada no conjunto Sora Nexus.
-- Rotulagem: каждое появление должно включать видимый бейдж “somente Sora” e dica de ferramenta com объяснением, почему другим сетям требуется forma IH58.
-- Guardrails: если активный discriminante цепочки не соответствует выделению Nexus, полностью отказывайтесь генерировать сжатый адрес и направляйте пользователя обратно к IH58.
+## Сжатые адреса только для Sora- Gating: скрывайте сжатую строку `i105` para obter mais informações. Para obter mais informações, esta forma será executada no conjunto Sora Nexus.
+- Rotulagem: каждое появление должно включать видимый бейдж “somente Sora” e dica de ferramenta com объяснением, почему другим сетям требуется forma I105.
+- Guardrails: если активный discriminante цепочки не соответствует выделению Nexus, полностью отказывайтесь генерировать сжатый адрес и направляйте пользователя обратно к I105.
 - Telemetria: записывайте частоту запросов e копирования сжатой формы, чтобы playbook инцидентов мог обнаруживать всплески случайного шаринга.
 
 ##Caso
 
 - Расширьте автоматизированные UI-tests (ou storybook a11y suites), чтобы подтверждать наличие необходимых ARIA метаданных и появление сообщений об отказе IME.
 - Crie um cenário de controle de qualidade para seu IME (kana, pinyin), leitor de tela padrão (VoiceOver/NVDA) e cópia de QR no seu tema antes do lançamento.
-- Verifique este teste na lista de verificação de lançamento no teste de paridade IH58, чтобы регрессии оставались заблокированными до expansão.
+- Verifique este teste na lista de verificação de lançamento no teste de paridade I105, чтобы регрессии оставались заблокированными до expansão.

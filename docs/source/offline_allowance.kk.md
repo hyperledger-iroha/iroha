@@ -617,7 +617,7 @@ Key details:
 
 - `--spec` accepts a JSON file with `{ "operator": { "account": "<account id>", "private_key": "ed25519:…" }, "allowances": [...] }`.
   Each allowance entry supplies `label`, `controller`, `operator`, `allowance_asset`, and policy fields using the
-  canonical IH58 account syntax (no `@domain`; runtime parsers reject `@domain` suffixes). Spend keys can be specified as a multihash (`ed0120…`)
+  canonical I105 account syntax (no `@domain`; runtime parsers reject `@domain` suffixes). Spend keys can be specified as a multihash (`ed0120…`)
   or as `algo:hex`, metadata can be provided inline or via `metadata_file`, attestation bytes can be
   embedded with `attestation_report_{hex,base64}` (or loaded from `attestation_report_file`), and an
   optional `blinding_hex` override keeps regression fixtures deterministic.
@@ -834,8 +834,8 @@ POST /v1/offline/transfers/proof
 {
   "transfer": {
     "bundle_id": "11F7...C0DE",
-    "receiver": "ih58...",
-    "deposit_account": "ih58...",
+    "receiver": "i105...",
+    "deposit_account": "i105...",
     "receipts": [/* OfflineSpendReceipt */],
     "balance_proof": { /* OfflineBalanceProof */ }
   },
@@ -876,13 +876,13 @@ All GET surfaces accept the compact `ListFilterParams` struct via query paramete
 - `limit` / `offset` — pagination knobs (default `offset = 0`; `limit` falls back to the handler cap).
 - `sort` — comma-separated `field[:asc|:desc]` entries (default `registered_at_ms:desc` for
   allowances and `bundle_id_hex:asc` for transfers).
-- `address_format` — `ih58` (preferred/default) or `compressed` (`sora`, second-best, Sora-only); Torii rewrites controller/receiver IDs in the
+- Account literals are rendered as canonical I105; Torii no longer accepts an `canonical I105 rendering` selector on this endpoint.
   response accordingly.
 
 `/v1/offline/allowances` additionally exposes roadmap-driven convenience filters so dashboards and
 SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 
-- `controller_id` — filter allowances by controller account. Torii accepts IH58 (preferred), compressed (`sora`, second-best), or
+- `controller_id` — filter allowances by controller account. Torii accepts only canonical I105 account literals or
   raw public-key literals and canonicalises them to the Global form before evaluating the query, so
   operators can feed whichever encoding their tooling surfaces.
 - `asset_id` — filter allowances by asset identifier.
@@ -903,7 +903,7 @@ SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 the same certificate metadata without composing JSON:
 
 - `controller_id` / `receiver_id` / `deposit_account_id` — filter bundles by the originating
-  controller, receiver, or deposit account. Each parameter accepts IH58 (preferred), compressed (`sora`, second-best), or raw
+  controller, receiver, or deposit account. Each parameter accepts only canonical I105 account literals or raw
   public-key literals and Torii normalises the value to the canonical on-ledger form before matching.
 - `asset_id` — filter bundles by the asset identifier recorded in the transfer commitment.
 - `certificate_id_hex` — case-insensitive certificate identifier match.
@@ -957,7 +957,7 @@ Example GET query filtering allowances by controller:
 ```sh
 FILTER=$(python3 - <<'PY'
 import json, urllib.parse
-expr = {"op": "eq", "args": ["controller_id", "ih58..."]}
+expr = {"op": "eq", "args": ["controller_id", "i105..."]}
 print(urllib.parse.quote(json.dumps(expr)))
 PY
 )
@@ -977,7 +977,7 @@ richer controls:
 - `sort` — array of `{ "key": "registered_at_ms", "order": "desc" }` objects.
 - `pagination` — `{ "limit": 100, "offset": 0 }`.
 - `fetch_size` — optional iterator batch size (`null` = server default).
-- `address_format` — identical to the GET forms.
+- Request envelopes no longer accept an `canonical I105 rendering` field; canonical I105 output is always returned.
 
 Sample envelope and invocation:
 
@@ -987,13 +987,12 @@ Sample envelope and invocation:
   "filter": {
     "op": "and",
     "args": [
-      {"op": "eq", "args": ["controller_id", "ih58..."]},
+      {"op": "eq", "args": ["controller_id", "i105..."]},
       {"op": "gte", "args": ["registered_at_ms", 1733500000000]}
     ]
   },
   "sort": [{"key": "registered_at_ms", "order": "desc"}],
   "pagination": {"limit": 100, "offset": 0},
-  "address_format": "compressed"
 }
 ```
 

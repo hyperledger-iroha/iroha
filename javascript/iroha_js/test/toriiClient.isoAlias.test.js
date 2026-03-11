@@ -13,7 +13,7 @@ function ed25519PublicKeyBytes() {
 
 function demoAccountId(domain) {
   const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
-  return address.toIH58();
+  return address.toI105();
 }
 
 const VALID_ACCOUNT_ID = demoAccountId("wonderland");

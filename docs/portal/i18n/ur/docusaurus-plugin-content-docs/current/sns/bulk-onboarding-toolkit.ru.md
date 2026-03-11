@@ -35,7 +35,7 @@ JSON پے لوڈز یا CLI ریرنس پیمائش نہیں کرتے ہیں ، 
 | --------- | ------------ | ---------- |
 | `label` | ہاں | مطلوبہ لیبل (مخلوط کیس کی اجازت ہے the ٹول نورم V1 اور UTS-46 کے مطابق معمول بناتا ہے)۔ |
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
-| `owner` | ہاں | رجسٹرنٹ کے اکاؤنٹ آئڈ سٹرنگ (IH58 لفظی ؛ اختیاری @ڈومین اشارہ)۔ |
+| `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
 | `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `xor#sora`)۔ |
 | `payment_gross` / `payment_net` | ہاں | اثاثہ کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - ** میٹا ڈیٹا/گورننس پارسنگ: ** ان لائن JSON براہ راست تجزیہ کیا گیا ہے۔ فائلوں سے لنک
   CSV کے نسبت حل کیا جاتا ہے۔ میٹا ڈیٹا غیر آبجیکٹ کے نتیجے میں توثیق کی غلطی ہوتی ہے۔
 - ** کنٹرولرز: ** خالی خلیات `--default-controllers` کا احترام کرتے ہیں۔ براہ کرم اشارہ کریں
-  جب غیر مالک کو تفویض کرتے وقت کنٹرولرز کی واضح فہرستیں (مثال کے طور پر `ih58...;ih58...`)۔
+  جب غیر مالک کو تفویض کرتے وقت کنٹرولرز کی واضح فہرستیں (مثال کے طور پر `i105...;i105...`)۔
 
 غلطیوں کی اطلاع سیاق و سباق کے نمبروں کے ساتھ کی جاتی ہے (جیسے
 `error: row 12 term_years must be between 1 and 255`)۔ اسکرپٹ کوڈ `1` کے ساتھ باہر ہے

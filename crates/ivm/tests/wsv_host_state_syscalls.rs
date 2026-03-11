@@ -42,7 +42,7 @@ fn wsv_host_state_set_get_del_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&caller),
+        ivm::mock_wsv::AccountId::from(&caller),
         Default::default(),
     );
     vm.set_host(host);

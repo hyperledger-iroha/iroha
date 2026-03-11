@@ -52,7 +52,7 @@ file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
 
 > Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
 > so `scripts/repo_evidence_manifest.py` records the file in the same tree as

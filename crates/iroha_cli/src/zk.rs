@@ -1425,7 +1425,7 @@ pub struct ShieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Account identifier to debit (IH58 (preferred) or sora compressed literal)
+    /// Account identifier to debit (canonical I105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     from: String,
     /// Public amount to debit
@@ -1613,7 +1613,7 @@ pub struct UnshieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Recipient account identifier to credit (IH58 (preferred) or sora compressed literal)
+    /// Recipient account identifier to credit (canonical I105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     to: String,
     /// Public amount to credit

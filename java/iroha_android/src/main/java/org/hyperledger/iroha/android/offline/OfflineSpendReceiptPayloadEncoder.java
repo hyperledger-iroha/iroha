@@ -33,7 +33,7 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
    *
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
-   * @param fromAccountId sender AccountId (encoded IH58 or compressed)
+   * @param fromAccountId sender AccountId (canonical I105 encoded)
    * @param toAccountId receiver AccountId
    * @param assetId encoded asset ID (`norito:<hex>`)
    * @param amount decimal amount string
@@ -61,8 +61,8 @@ public final class OfflineSpendReceiptPayloadEncoder {
     if (txIdHex == null || txIdHex.length() != 64) {
       throw new IllegalArgumentException("txIdHex must be 64 hex characters");
     }
-    final String normalizedFromAccountId = AccountIdLiteral.extractIh58Address(fromAccountId);
-    final String normalizedToAccountId = AccountIdLiteral.extractIh58Address(toAccountId);
+    final String normalizedFromAccountId = AccountIdLiteral.extractI105Address(fromAccountId);
+    final String normalizedToAccountId = AccountIdLiteral.extractI105Address(toAccountId);
     final String normalizedAssetId = AssetIdLiteral.normalizeEncoded(assetId, "assetId");
     if (amount == null || amount.isEmpty()) {
       throw new IllegalArgumentException("amount must not be empty");

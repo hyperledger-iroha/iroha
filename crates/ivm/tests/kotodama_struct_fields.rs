@@ -40,11 +40,7 @@ fn struct_fields_lower_to_syscall_args() {
             .expect("public key"),
     );
     wsv.add_account_unchecked(bob.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&bob),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&bob), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

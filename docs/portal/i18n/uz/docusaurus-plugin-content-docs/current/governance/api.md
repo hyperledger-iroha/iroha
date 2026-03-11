@@ -33,7 +33,7 @@ Yakuniy nuqtalar
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "oyna": { "pastki": 12345, "yuqori": 12400},
-      "authority": "ih58...?",
+      "authority": "i105...?",
       "private_key": "...?"
     }
   - Javob (JSON):
@@ -42,14 +42,14 @@ Yakuniy nuqtalar
 
 Contracts API (joylashtirish)
 - POST `/v1/contracts/deploy`
-  - So'rov: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - So'rov: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Xulq-atvor: IVM dastur tanasidan `code_hash` va `abi_version` sarlavhasidan `abi_hash` ni hisoblaydi, so‘ngra `RegisterSmartContractCode` (manifest) va I10040l ni taqdim etadi `.to` bayt) `authority` nomidan.
   - Javob: { "ok": rost, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Tegishli:
     - GET `/v1/contracts/code/{code_hash}` → saqlangan manifestni qaytaradi
     - `/v1/contracts/code-bytes/{code_hash}` ni oling → `{ code_b64 }`ni qaytaradi
 - POST `/v1/contracts/instance`
-  - So'rov: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - So'rov: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Xulq-atvor: Taqdim etilgan baytekodni joylashtiradi va `(namespace, contract_id)` xaritalashni `ActivateContractInstance` orqali darhol faollashtiradi.
   - Javob: { "ok": rost, "nom maydoni": "ilovalar", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -62,11 +62,11 @@ Taxallus xizmati
   - Xatolar: noto'g'ri tuzilgan hex kiritishda HTTP `400`. Torii dekoder xato xabari bilan Norito `ValidationFail::QueryFailed::Conversion` konvertini qaytaradi.
 - POST `/v1/aliases/resolve`
   - So'rov: { "taxallus": "GB82 WEST 1234 5698 7654 32" }
-  - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "indeks": 0, "manba": "iso_bridge" }
+  - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "indeks": 0, "manba": "iso_bridge" }
   - Eslatmalar: ISO ko'prigining ish vaqti bosqichini talab qiladi (`[iso_bridge.account_aliases]`, `iroha_config`). Torii qidirishdan oldin bo'sh joy va katta harflarni olib tashlash orqali taxalluslarni normallashtiradi. Taxallus mavjud bo'lmaganda 404 va ISO ko'prigining ishlash vaqti o'chirilganda 503 qaytariladi.
 - POST `/v1/aliases/resolve_index`
   - So'rov: { "indeks": 0 }
-  - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "manba": "iso_bridge" }
+  - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "manba": "iso_bridge" }
   - Eslatmalar: taxallus indekslari konfiguratsiya tartibidan (0-asosli) deterministik tarzda tayinlanadi. Taxallus attestatsiya hodisalari uchun audit izlarini yaratish uchun mijozlar javoblarni oflayn rejimda keshlashi mumkin.
 
 Kod o'lchami qopqog'i
@@ -76,7 +76,7 @@ Kod o'lchami qopqog'i
   - Operatorlar `SetParameter(Custom)` ni `id = "max_contract_code_bytes"` va raqamli foydali yukni taqdim etish orqali sozlashlari mumkin.
 
 - POST `/v1/gov/ballots/zk`
-  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
+  - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar:
     - Sxemaning umumiy kirishlari `owner`, `amount` va `duration_blocks` ni oʻz ichiga olsa va isbot sozlangan VK ga qarshi tekshirilsa, tugun I18NI000001010101010101010 bilan I18NI0000010 bilan boshqaruv blokini yaratadi yoki kengaytiradi. Yo'nalish yashirin qoladi (`unknown`); faqat miqdor/muddati yangilanadi. Qayta ovoz berish monotondir: miqdor va amal qilish muddati faqat oshadi (tugun max(summa, oldingi miqdor) va max(muddati, oldingi. muddati) amal qiladi).
@@ -84,12 +84,12 @@ Kod o'lchami qopqog'i
     - Shartnomaning bajarilishi `SubmitBallot` navbati oldidan `ZK_VOTE_VERIFY_BALLOT` chaqirilishi kerak; xostlar bir martalik mandalni majbur qiladi.
 
 - POST `/v1/gov/ballots/plain`
-  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "ih58...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
+  - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "i105...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar: Qayta ovoz berish faqat uzaytiriladi - yangi byulleten mavjud blokirovka miqdorini yoki amal qilish muddatini kamaytira olmaydi. `owner` tranzaksiya vakolatiga teng bo'lishi kerak. Minimal davomiylik `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "ih58...?", "private_key": "...?" }
+  - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Zanjirdagi effekt (joriy iskala): tasdiqlangan joylashtirish taklifini amalga oshirish kutilgan `abi_hash` bilan `code_hash` tomonidan kalitlangan minimal `ContractManifest` kiritadi va taklifni Qabul qilingan deb belgilaydi. Agar boshqa `abi_hash` bilan `code_hash` uchun manifest allaqachon mavjud bo'lsa, qabul qilish rad etiladi.
   - Eslatmalar:
@@ -98,7 +98,7 @@ Kod o'lchami qopqog'i
     - Saylov ishtirokini tekshirishda faqat tasdiqlash+rad etishdan foydalaniladi; betaraf bo'lish saylovchilarning ishtirokini hisobga olmaydi.
 
 - POST `/v1/gov/enact`
-  - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "ih58...?", "private_key": "...?" }
+  - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Eslatmalar: Torii imzolangan bitimni `authority`/`private_key` taqdim etilganda taqdim etadi; aks holda u mijozlar imzolashi va topshirishi uchun skeletni qaytaradi. Preimage ixtiyoriy va hozirda ma'lumotlidir.
 
@@ -200,16 +200,16 @@ CLI yordamchilari
     - `(namespace, contract_id, code_hash, abi_hash)` uchun qabul qilingan boshqaruv taklifi tugun foydalanadigan bir xil taklif-identifikatori orqali olingan.
   - Har bir shartnoma bo'yicha `results[]` (muammolar, manifest/kod/takliflar xulosalari) va agar bostirilmasa, bir qatorli xulosa bilan JSON hisobotini chiqaradi (`--no-summary`).
   - Himoyalangan nom maydonlarini tekshirish yoki boshqaruv tomonidan boshqariladigan joylashtirish ish oqimlarini tekshirish uchun foydalidir.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Manifest kvorum qoidalarini qondirish uchun ixtiyoriy `gov_manifest_approvers`, jumladan, himoyalangan nomlar maydoniga joylashtirishni yuborishda foydalaniladigan JSON metamaʼlumotlar skeletini chiqaradi.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — qulflash boʻyicha maslahatlar `min_bond_amount > 0` da talab qilinadi va har qanday taqdim etilgan maslahatlar toʻplamiga `owner`, `amount` va `duration_blocks` kiradi.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — qulflash boʻyicha maslahatlar `min_bond_amount > 0` da talab qilinadi va har qanday taqdim etilgan maslahatlar toʻplamiga `owner`, `amount` va `duration_blocks` kiradi.
   - Kanonik hisob identifikatorlarini tasdiqlaydi, 32 baytlik bekor qiluvchi maslahatlarni kanoniklashtiradi va maslahatlarni `public_inputs_json` ga birlashtiradi (qo'shimcha bekor qilish uchun `--public <path>` bilan).
   - Nullifier tasdiqlovchi majburiyatdan (ommaviy kiritish) va `domain_tag`, `chain_id` va `election_id`dan olingan; `--nullifier` taqdim etilganda isbot bilan tasdiqlangan.
   - Bir qatorli xulosa endi kodlangan `CastZkBallot` dan olingan deterministik `fingerprint=<hex>` va har qanday dekodlangan maslahatlar bilan birga (`owner`, `amount`, I18NI0000018120 taqdim etilganda) yuzaga keladi.
   - CLI javoblari `tx_instructions[]` va `payload_fingerprint_hex` va dekodlangan maydonlar bilan izohlanadi, shuning uchun quyi oqim asboblari Norito dekodlashni qayta ishlatmasdan skeletni tekshirishi mumkin.
   - Qulflash bo'yicha ko'rsatmalar berish, kontaktlarning zanglashiga olib, bir xil qiymatlarni ko'rsatgandan so'ng, tugunga ZK byulletenlari uchun `LockCreated`/`LockExtended` hodisalarini chiqarish imkonini beradi.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` kanonik IH58 harflarini qabul qiladi; ixtiyoriy `@<domain>` qo'shimchalari faqat marshrutlash bo'yicha maslahatlardir.
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` kanonik I105 harflarini qabul qiladi; ixtiyoriy `@<domain>` qo'shimchalari faqat marshrutlash bo'yicha maslahatlardir.
   - `--lock-amount`/`--lock-duration-blocks` taxalluslari skript pariteti uchun ZK bayroq nomlarini aks ettiradi.
   - `vote --mode zk` qisqacha chiqish oynalari shifrlangan koʻrsatma barmoq izi va odam oʻqishi mumkin boʻlgan saylov byulletenlarini (`owner`, `amount`, `direction`, `direction` imzolashdan oldin) oʻz ichiga oladi.
 
@@ -230,14 +230,14 @@ Qulfni ochish (Operator/Audit)
 - POST `/v1/gov/ballots/zk-v1`
   - So'rov (v1 uslubidagi DTO):
     {
-      "hokimiyat": "ih58...",
+      "hokimiyat": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "ih58…?", // kanonik AccountId (IH58 literal)
+      "owner": "i105…?", // kanonik AccountId (I105 literal)
       "summa": "100?",
       "duration_blocks": 6000?,
       "direction": "Ha|Yo'q|Tixtash kerakmi?",
@@ -247,7 +247,7 @@ Qulfni ochish (Operator/Audit)
   - `BallotProof` JSON-ni bevosita qabul qiladi va `CastZkBallot` skeletini qaytaradi.
   - Talab:
     {
-      "hokimiyat": "ih58...",
+      "hokimiyat": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
@@ -255,7 +255,7 @@ Qulfni ochish (Operator/Audit)
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=", // ZK1 yoki H2* konteynerining 64 bazasi
         "root_hint": null, // ixtiyoriy 32 baytli hex string (muvofiqlik ildizi)
-        "egasi": null, // ixtiyoriy kanonik AccountId (IH58 literal)
+        "egasi": null, // ixtiyoriy kanonik AccountId (I105 literal)
         "nullifier": null, // ixtiyoriy 32 baytlik hex string (nollifier maslahati)
         "summa": "100", // ixtiyoriy blokirovka miqdori bo'yicha maslahat (o'nlik qator)
         "duration_blocks": 6000, // ixtiyoriy blokirovka muddati haqida maslahat

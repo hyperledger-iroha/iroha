@@ -93,18 +93,16 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
 fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
     let owner = value.trim();
     if owner.is_empty() {
-        return Err(eyre!(
-            "{field} must be an IH58 or sora compressed account id"
-        ));
+        return Err(eyre!("{field} must be a canonical I105 account id"));
     }
     if owner.contains('@') {
         return Err(eyre!(
-            "{field} must not include '@domain'; use IH58 or sora compressed only"
+            "{field} must not include '@domain'; use canonical I105 only"
         ));
     }
 
     let parsed = AccountId::parse_encoded(owner)
-        .map_err(|err| eyre!("{field} must be an IH58 or sora compressed account id: {err}"))?;
+        .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
     Ok(parsed.canonical().to_owned())
 }
 
@@ -117,7 +115,7 @@ fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| eyre!("owner must be an IH58 or sora compressed account id"))?
+        .ok_or_else(|| eyre!("owner must be a canonical I105 account id"))?
         .to_owned();
     let canonical = canonicalize_account_literal(&owner, "owner")?;
     map.insert("owner".to_owned(), json::Value::String(canonical));
@@ -173,7 +171,7 @@ pub struct VoteArgs {
     /// Optional JSON file containing public inputs for ZK voting mode.
     #[arg(long, value_name = "PATH")]
     pub public: Option<std::path::PathBuf>,
-    /// Owner account id for plain voting mode (IH58 (preferred) or sora compressed; must equal transaction authority).
+    /// Owner account id for plain voting mode (canonical I105 account literal; must equal transaction authority).
     #[arg(long)]
     pub owner: Option<String>,
     /// Locked amount for plain voting mode (string to preserve large integers).
@@ -267,7 +265,7 @@ pub struct VoteZkArgs {
     /// Path to a JSON file with additional public inputs (optional)
     #[arg(long)]
     pub public: Option<std::path::PathBuf>,
-    /// Optional owner hint mirrored into public inputs (IH58 (preferred) or sora compressed).
+    /// Optional owner hint mirrored into public inputs (canonical I105 account literal).
     #[arg(long)]
     pub owner: Option<String>,
     /// Optional lock amount hint mirrored into public inputs.
@@ -658,7 +656,7 @@ mod tests {
     fn public_inputs_reject_noncanonical_owner() {
         let owner = ALICE_ID.clone();
         let address_hex = owner.to_canonical_hex().expect("canonical hex");
-        let noncanonical = format!("{address_hex}@{}", owner.domain());
+        let noncanonical = format!("{address_hex}@wonderland");
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(noncanonical));
         let err = normalize_public_input_owner(&mut map).expect_err("noncanonical owner");
@@ -667,14 +665,10 @@ mod tests {
 
     #[test]
     fn public_inputs_allow_implicit_owner_without_selector_resolver() {
-        use std::str::FromStr;
-
-        use iroha::data_model::domain::DomainId;
         use iroha_crypto::{Algorithm, KeyPair};
 
-        let domain = DomainId::from_str("unresolved-owner-domain").expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x55; 32], Algorithm::Ed25519);
-        let owner = AccountId::new(domain, key_pair.public_key().clone()).to_string();
+        let owner = AccountId::new(key_pair.public_key().clone()).to_string();
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(owner));
         assert!(
@@ -684,21 +678,17 @@ mod tests {
     }
 
     #[test]
-    fn public_inputs_accept_compressed_owner_and_canonicalize() {
+    fn public_inputs_reject_compressed_owner() {
         let owner = ALICE_ID.clone();
         let compressed = owner
             .to_account_address()
             .expect("address")
-            .to_compressed_sora()
+            .to_i105()
             .expect("compressed");
-        let canonical = owner.to_string();
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(compressed));
-        normalize_public_input_owner(&mut map).expect("owner normalize");
-        assert_eq!(
-            map.get("owner").and_then(json::Value::as_str),
-            Some(canonical.as_str())
-        );
+        let err = normalize_public_input_owner(&mut map).expect_err("compressed owner");
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 }
 

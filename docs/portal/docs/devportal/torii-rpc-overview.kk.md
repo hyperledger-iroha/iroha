@@ -58,6 +58,7 @@ SDK-арнайы нұсқаулық:
 1. [Проксиді іске қосыңыз](./try-it.md#start-the-proxy-locally) және орнатыңыз
    `TRYIT_PROXY_PUBLIC_URL`, сондықтан виджеттер трафикті қайда жіберу керектігін біледі.
 2. Осы бетте **Байқап көру** картасын немесе `/reference/torii-swagger` ашыңыз.
+   For MCP/agent flows, use `/reference/torii-mcp`.
    панелін таңдап, `POST /v1/pipeline/submit` сияқты соңғы нүктені таңдаңыз.
 3. **Content-Type** параметрін `application/x-norito` күйіне ауыстырыңыз, **Екілік** параметрін таңдаңыз.
    өңдегішін орнатыңыз және `fixtures/norito_rpc/transfer_asset.norito` жүктеңіз

@@ -85,9 +85,8 @@ fn query_get_balance_returns_json_tlv() {
     );
     let caller_value = norito::json::to_value(&caller).expect("serialize caller");
     let caller_literal = caller_value.as_str().expect("caller id string");
-    let alice = ScopedAccountId::parse_encoded(caller_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("canonical account id must parse");
+    let alice =
+        ScopedAccountId::parse_encoded(caller_literal).expect("canonical account id must parse");
     let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), rose.clone()),
@@ -95,7 +94,7 @@ fn query_get_balance_returns_json_tlv() {
     )]);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         Default::default(),
     );
 
@@ -145,7 +144,7 @@ fn query_list_triggers_returns_all() {
     wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&alice.clone()),
+        ivm::mock_wsv::AccountId::from(&alice.clone()),
         Default::default(),
     );
 
@@ -251,7 +250,7 @@ fn query_list_domains_for_subject_returns_sorted_domains() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&admin),
+        ivm::mock_wsv::AccountId::from(&admin),
         Default::default(),
     );
     let mut vm = IVM::new(u64::MAX);
@@ -317,7 +316,7 @@ fn query_list_accounts_for_domain_returns_linked_subjects() {
 
     let host = WsvHost::new_with_subject(
         wsv,
-        ivm::mock_wsv::AccountSubjectId::from(&admin),
+        ivm::mock_wsv::AccountId::from(&admin),
         Default::default(),
     );
     let mut vm = IVM::new(u64::MAX);

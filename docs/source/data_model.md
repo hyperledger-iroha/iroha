@@ -25,7 +25,7 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical account identifier encoded via `AccountAddress`. Parser inputs are encoded-only: IH58 (preferred) and compressed `sora…` (accepted). Domain suffixes (`@domain`), alias literals, canonical hex parser input, and `uaid:`/`opaque:` account parser forms are rejected.
+- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
@@ -39,18 +39,19 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
-- `AccountId` identifies the account controller using canonical encoded account-address forms (single-key or multisig controller payloads).
-- `AccountSubjectId` provides domainless subject identity for account-facing aggregation flows.
+- `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
+- `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
-- Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
+- Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.
 
 ### Asset Definitions and Assets
 - `AssetDefinitionId { domain: DomainId, name: Name }`.
 - `AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; setters for `metadata`, `mintable`, `owned_by`.
-- `AssetId { account: AccountId, definition: AssetDefinitionId }`.
+- `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
 - `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
+- `AssetBalanceScope`: `Global` for unrestricted balances and `Dataspace(DataSpaceId)` for dataspace-restricted balances.
 - `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposed for summary APIs.
 
 ### NFTs
@@ -191,8 +192,9 @@ let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default(
 
 // Account
 let kp = KeyPair::random();
-let account_id = AccountId::new(domain_id.clone(), kp.public_key().clone());
-let new_account = Account::new(account_id.clone()).with_metadata(Metadata::default());
+let account_id = AccountId::new(kp.public_key().clone());
+let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+    .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
 let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();

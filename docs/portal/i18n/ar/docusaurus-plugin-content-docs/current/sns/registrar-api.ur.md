@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | `SuffixPolicyV1` موجود ومتاح (قابل للتخزين المؤقت). |
 | `/v1/sns/registrations/{selector}` | احصل على | -- | موجود `NameRecordV1` + أكثر حالة (نشط، Grace وغيره) واپس کرتا. |
 
-**ترميز المحدد:** `{selector}` مقطع المسار IH58، مضغوط (`sora`) أو سداسي عشري أساسي ADDR-5 کے مطابق مقبول کرتا ہے؛ Torii `NameSelectorV1` تطبيع الكرتا.**نموذج الخطأ:** نقاط النهاية الكاملة Norito JSON `code`, `message`, `details`. تتضمن الرموز `sns_err_reserved` و`sns_err_payment_mismatch` و`sns_err_policy_violation` و`sns_err_governance_missing`.
+**ترميز المحدد:** `{selector}` مقطع المسار I105، مضغوط (`sora`) أو سداسي عشري أساسي ADDR-5 کے مطابق مقبول کرتا ہے؛ Torii `NameSelectorV1` تطبيع الكرتا.**نموذج الخطأ:** نقاط النهاية الكاملة Norito JSON `code`, `message`, `details`. تتضمن الرموز `sns_err_reserved` و`sns_err_payment_mismatch` و`sns_err_policy_violation` و`sns_err_governance_missing`.
 
 ### 3.1 مساعدي CLI (N0 دستی المسجل ضروري)
 
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -215,7 +215,7 @@ Torii البراهين التي تم إنشاؤها من قبل:
 
 ### 6.1 التسجيل القياسي1. العميل `/v1/sns/policies/{suffix_id}` الذي يمكنه الاستعلام عن السعر والتسعير والنعمة ومستويات الأجهزة متاح.
 2. العميل `RegisterNameRequestV1` بناتا:
-   - `selector` ترجیحی IH58 أو ثاني أفضل تسمية مضغوطة (`sora`) سے مشتقة ہے۔
+   - `selector` ترجیحی I105 أو ثاني أفضل تسمية مضغوطة (`sora`) سے مشتقة ہے۔
    - `term_years` باليسى حدود میں۔
    - `payment` نقل الخزينة/المضيف المقسم للإشارة إلى کرتا ہے۔
 3. Torii التحقق من صحة البطاقة:

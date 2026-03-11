@@ -115,6 +115,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
@@ -409,9 +411,10 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse()?))
+        let wonderland: DomainId = "wonderland".parse()?;
+        Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::account(Account::new(ALICE_ID.clone()))
+        Register::account(Account::new(ALICE_ID.clone().to_account_id(wonderland)))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         let trigger_perm: permission::Permission = CanRegisterTrigger {
             authority: ALICE_ID.clone(),
@@ -928,11 +931,14 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
+        let wonderland: DomainId = "wonderland".parse()?;
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
 
         // register fake account
-        let register_account = Register::account(Account::new(fake_account_id.clone()));
+        let register_account = Register::account(Account::new(
+            fake_account_id.clone().to_account_id(wonderland),
+        ));
         register_account.execute(&account_id, &mut state_transaction)?;
 
         // register the trigger
@@ -1023,7 +1029,10 @@ mod tests {
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-        let register_account = Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()));
+        let wonderland: DomainId = "wonderland".parse()?;
+        let register_account = Register::account(Account::new(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone().to_account_id(wonderland),
+        ));
         assert!(matches!(
             register_account
                 .execute(&account_id, &mut state_transaction)

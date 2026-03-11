@@ -234,19 +234,19 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
   - `iroha app nexus lane-report --summary` mostra entradas do catalogo de lanes, readiness de manifests,
     e modos de validadores (stake-elected vs admin-managed) para que operadores confirmem se a admissao
     de staking esta habilitada para uma lane.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     apresenta marcadores de ciclo de vida/ativacao (epoca alvo pending, `activation_epoch` /
     `activation_height`, release de saida, slash id) junto com stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     espelha o endpoint `/stake` com hints de pending-unbond por par `(validator, staker)`.
   - Snapshots Torii para dashboards e SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoca/altura de ativacao,
       timers de release, stake bonded, ultima epoca de recompensa.
-      `address_format=ih58|compressed` controla o rendering literal (IH58 preferido; compressed (`sora`) e segunda melhor opcao Sora-only).
+      `canonical I105 literal rendering` controla o rendering literal (I105 preferido; I105 e segunda melhor opcao Sora-only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
-      `staker`, bonded amount) mais timers de pending unbond. `?validator=ih58...`
-      filtra a resposta para dashboards focados em um validador; `address_format` aplica-se
+      `staker`, bonded amount) mais timers de pending unbond. `?validator=i105...`
+      filtra a resposta para dashboards focados em um validador; `canonical I105 rendering` aplica-se
       a todos os literais.
   - ISIs de ciclo de vida usam o caminho de transacao padrao (Torii
     `/v1/transactions` ou o pipeline de instrucoes do CLI). Exemplos de payloads Norito JSON:

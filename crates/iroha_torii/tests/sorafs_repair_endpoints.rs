@@ -91,6 +91,7 @@ fn sign_worker_action(
 }
 
 fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id: [u8; 32]) {
+    let domain_id = DomainId::from_str("sora").expect("domain id");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("height should be non-zero"),
         None,
@@ -101,10 +102,10 @@ fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    Register::domain(Domain::new(worker_id.domain().clone()))
+    Register::domain(Domain::new(domain_id.clone()))
         .execute(worker_id, &mut tx)
         .expect("register domain");
-    Register::account(Account::new(worker_id.clone()))
+    Register::account(Account::new(worker_id.clone().to_account_id(domain_id)))
         .execute(worker_id, &mut tx)
         .expect("register account");
     let permission = Permission::from(CanOperateSorafsRepair {
@@ -263,10 +264,8 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
     let report_b = repair_report("REP-101", [0x33; 32], provider_id, 1_701_000_100);
 
     let worker_key = KeyPair::random();
-    let domain = DomainId::from_str("sora").expect("domain id");
-    let worker_id = AccountId::new(domain, worker_key.public_key().clone());
+    let worker_id = AccountId::new(worker_key.public_key().clone());
     let worker_id_str = worker_id.to_string();
-
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_repair.enabled = true;
     let temp_dir = tempdir().expect("sorafs temp dir");
@@ -488,10 +487,8 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
 
     let worker_key = KeyPair::random();
     let bogus_key = KeyPair::random();
-    let domain = DomainId::from_str("sora").expect("domain id");
-    let worker_id = AccountId::new(domain, worker_key.public_key().clone());
+    let worker_id = AccountId::new(worker_key.public_key().clone());
     let worker_id_str = worker_id.to_string();
-
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_repair.enabled = true;
     let temp_dir = tempdir().expect("sorafs temp dir");

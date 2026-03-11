@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 ---
 
 Каноник ADDR-2 багц (`fixtures/account/address_vectors.json`) зураг авдаг
-IH58 (давуу), шахсан (`sora`, хоёрдугаарт; хагас/бүрэн өргөн), олон гарын үсэг, сөрөг бэхэлгээ.
+I105 (давуу), шахсан (`sora`, хоёрдугаарт; хагас/бүрэн өргөн), олон гарын үсэг, сөрөг бэхэлгээ.
 SDK + Torii гадаргуу бүр ижил JSON дээр тулгуурладаг тул бид ямар ч кодлогчийг илрүүлэх боломжтой
 drift before it hits production. This page mirrors the internal status brief
 (`docs/source/account_address_status.md` эх репозитор) тиймээс портал
@@ -48,7 +48,7 @@ CI ажлын урсгал **Address Vector Drift** нь `cargo xtask address-ve
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Тус бүр нь хоёр талдаа каноник байт + IH58 + шахсан (`sora`, хоёрдугаарт) кодчилол ба
+Тус бүр нь хоёр талдаа каноник байт + I105 + шахсан (`sora`, хоёрдугаарт) кодчилол ба
 Norito загварын алдааны кодууд нь сөрөг тохиолдлуудад тохирох эсэхийг шалгадаг.
 
 ## Автоматжуулалт хэрэгтэй байна уу?

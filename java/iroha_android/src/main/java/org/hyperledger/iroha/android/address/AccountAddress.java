@@ -17,17 +17,17 @@ import org.hyperledger.iroha.android.crypto.Blake2b;
 public final class AccountAddress {
 
   public static final String DEFAULT_DOMAIN_NAME = "default";
-  public static final int DEFAULT_IH58_PREFIX = 753;
+  public static final int DEFAULT_I105_DISCRIMINANT = 753;
 
-  private static final byte[] IH58_CHECKSUM_PREFIX = "IH58PRE".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] I105_CHECKSUM_PREFIX = "I105PRE".getBytes(StandardCharsets.UTF_8);
   private static final String COMPRESSED_SENTINEL = "sora";
   private static final int COMPRESSED_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
-  private static final String COMPRESSED_WARNING =
-      "Compressed Sora addresses rely on half-width kana and are only interoperable inside "
-          + "Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes.";
+  private static final String I105_WARNING =
+      "I105 addresses are the canonical account literal encoding. "
+          + "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753).";
 
-  private static final String[] IH58_ALPHABET = {
+  private static final String[] I105_ALPHABET = {
       "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H",
       "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b",
       "c", "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t",
@@ -49,7 +49,7 @@ public final class AccountAddress {
   private static final String[] COMPRESSED_ALPHABET;
   private static final String[] COMPRESSED_ALPHABET_FULLWIDTH;
   private static final Map<String, Integer> COMPRESSED_INDEX;
-  private static final Map<String, Integer> IH58_INDEX;
+  private static final Map<String, Integer> I105_INDEX;
   private static final int COMPRESSED_BASE;
   private static final BigInteger BASE_58 = BigInteger.valueOf(58L);
 
@@ -59,13 +59,13 @@ public final class AccountAddress {
 
   static {
     configureCurveSupport(CurveSupportConfig.ed25519Only());
-    COMPRESSED_ALPHABET = new String[IH58_ALPHABET.length + SORA_KANA.length];
-    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET, 0, IH58_ALPHABET.length);
-    System.arraycopy(SORA_KANA, 0, COMPRESSED_ALPHABET, IH58_ALPHABET.length, SORA_KANA.length);
-    COMPRESSED_ALPHABET_FULLWIDTH = new String[IH58_ALPHABET.length + SORA_KANA_FULLWIDTH.length];
-    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET_FULLWIDTH, 0, IH58_ALPHABET.length);
+    COMPRESSED_ALPHABET = new String[I105_ALPHABET.length + SORA_KANA.length];
+    System.arraycopy(I105_ALPHABET, 0, COMPRESSED_ALPHABET, 0, I105_ALPHABET.length);
+    System.arraycopy(SORA_KANA, 0, COMPRESSED_ALPHABET, I105_ALPHABET.length, SORA_KANA.length);
+    COMPRESSED_ALPHABET_FULLWIDTH = new String[I105_ALPHABET.length + SORA_KANA_FULLWIDTH.length];
+    System.arraycopy(I105_ALPHABET, 0, COMPRESSED_ALPHABET_FULLWIDTH, 0, I105_ALPHABET.length);
     System.arraycopy(
-        SORA_KANA_FULLWIDTH, 0, COMPRESSED_ALPHABET_FULLWIDTH, IH58_ALPHABET.length, SORA_KANA_FULLWIDTH.length);
+        SORA_KANA_FULLWIDTH, 0, COMPRESSED_ALPHABET_FULLWIDTH, I105_ALPHABET.length, SORA_KANA_FULLWIDTH.length);
     COMPRESSED_BASE = COMPRESSED_ALPHABET.length;
 
     COMPRESSED_INDEX = new HashMap<>();
@@ -76,9 +76,9 @@ public final class AccountAddress {
       COMPRESSED_INDEX.put(COMPRESSED_ALPHABET_FULLWIDTH[i], i);
     }
 
-    IH58_INDEX = new HashMap<>();
-    for (int i = 0; i < IH58_ALPHABET.length; i++) {
-      IH58_INDEX.put(IH58_ALPHABET[i], i);
+    I105_INDEX = new HashMap<>();
+    for (int i = 0; i < I105_ALPHABET.length; i++) {
+      I105_INDEX.put(I105_ALPHABET[i], i);
     }
   }
 
@@ -96,34 +96,34 @@ public final class AccountAddress {
     return "0x" + bytesToHex(canonicalBytes);
   }
 
-  public String toIH58(final int networkPrefix) throws AccountAddressException {
-    return encodeIh58(networkPrefix, canonicalBytes);
+  public String toI105(final int networkPrefix) throws AccountAddressException {
+    return encodeI105(networkPrefix, canonicalBytes);
   }
 
-  public String toCompressedSora() throws AccountAddressException {
+  public String toI105Default() throws AccountAddressException {
     return encodeCompressed(canonicalBytes, COMPRESSED_ALPHABET);
   }
 
-  public String toCompressedSoraFullWidth() throws AccountAddressException {
+  public String toI105DefaultFullWidth() throws AccountAddressException {
     return encodeCompressed(canonicalBytes, COMPRESSED_ALPHABET_FULLWIDTH);
   }
 
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 output alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
-    return displayFormats(DEFAULT_IH58_PREFIX);
+    return displayFormats(DEFAULT_I105_DISCRIMINANT);
   }
 
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 output alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int networkPrefix) throws AccountAddressException {
-    final String ih58 = toIH58(networkPrefix);
-    final String compressed = toCompressedSora();
-    return new DisplayFormats(ih58, compressed, networkPrefix, COMPRESSED_WARNING);
+    final String i105 = toI105(networkPrefix);
+    final String i105Default = toI105Default();
+    return new DisplayFormats(i105, i105Default, networkPrefix, I105_WARNING);
   }
 
   /**
@@ -146,8 +146,8 @@ public final class AccountAddress {
     return extractMultisigPayload(canonicalBytes);
   }
 
-  public static String compressedWarningMessage() {
-    return COMPRESSED_WARNING;
+  public static String i105WarningMessage() {
+    return I105_WARNING;
   }
 
   public static AccountAddress fromAccount(
@@ -253,23 +253,23 @@ public final class AccountAddress {
     return new AccountAddress(copy);
   }
 
-  public static AccountAddress fromIH58(final String encoded, final Integer expectedPrefix)
+  public static AccountAddress fromI105(final String encoded, final Integer expectedPrefix)
       throws AccountAddressException {
-    final DecodeResult decode = decodeIh58(encoded);
+    final DecodeResult decode = decodeI105(encoded);
     if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-          "unexpected IH58 network prefix: expected " + expectedPrefix + ", found " + decode.networkPrefix);
+          "unexpected I105 network prefix: expected " + expectedPrefix + ", found " + decode.networkPrefix);
     }
     final AccountAddress address = fromCanonicalBytes(decode.canonical);
-    final String reencoded = address.toIH58(decode.networkPrefix);
+    final String reencoded = address.toI105(decode.networkPrefix);
     if (!reencoded.equals(encoded)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
     }
     return address;
   }
 
-  public static AccountAddress fromCompressedSora(final String encoded) throws AccountAddressException {
+  public static AccountAddress fromI105Default(final String encoded) throws AccountAddressException {
     final byte[] canonical = decodeCompressed(encoded);
     return fromCanonicalBytes(canonical);
   }
@@ -277,8 +277,7 @@ public final class AccountAddress {
   /**
    * Parses encoded account addresses only.
    *
-   * <p>Accepted formats are IH58 (preferred) and compressed sora. Canonical hex is intentionally
-   * excluded from this parser.
+   * <p>Canonical hex is intentionally excluded from this parser.
    */
   public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
       throws AccountAddressException {
@@ -292,19 +291,19 @@ public final class AccountAddress {
           "account address must not include @domain suffix");
     }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
-      return new ParseResult(fromCompressedSora(trimmed), Format.COMPRESSED);
+      return new ParseResult(fromI105Default(trimmed), Format.I105_DEFAULT);
     }
     if (containsCompressedGlyph(trimmed)) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
+          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "i105-default address must start with sora sentinel");
     }
     try {
-      return new ParseResult(fromIH58(trimmed, expectedPrefix), Format.IH58);
+      return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
     } catch (final AccountAddressException ex) {
       final String message = ex.getMessage();
       if (message != null
-          && (message.startsWith("unexpected IH58 network prefix")
-              || message.contains("IH58"))) {
+          && (message.startsWith("unexpected I105 network prefix")
+              || message.contains("I105"))) {
         throw ex;
       }
     }
@@ -315,7 +314,7 @@ public final class AccountAddress {
   private static boolean containsCompressedGlyph(final String value) {
     for (int i = 0; i < value.length(); i++) {
       final String symbol = String.valueOf(value.charAt(i));
-      if (COMPRESSED_INDEX.containsKey(symbol) && !IH58_INDEX.containsKey(symbol)) {
+      if (COMPRESSED_INDEX.containsKey(symbol) && !I105_INDEX.containsKey(symbol)) {
         return true;
       }
     }
@@ -323,8 +322,8 @@ public final class AccountAddress {
   }
 
   public enum Format {
-    IH58,
-    COMPRESSED
+    I105,
+    I105_DEFAULT
   }
 
   public enum AccountAddressErrorCode {
@@ -332,9 +331,9 @@ public final class AccountAddress {
     KEY_PAYLOAD_TOO_LONG("ERR_KEY_PAYLOAD_TOO_LONG"),
     INVALID_HEADER_VERSION("ERR_INVALID_HEADER_VERSION"),
     INVALID_NORM_VERSION("ERR_INVALID_NORM_VERSION"),
-    INVALID_IH58_PREFIX("ERR_INVALID_IH58_PREFIX"),
-    INVALID_IH58_ENCODING("ERR_INVALID_IH58_ENCODING"),
-    INVALID_IH58_PREFIX_ENCODING("ERR_INVALID_IH58_PREFIX_ENCODING"),
+    INVALID_I105_DISCRIMINANT("ERR_INVALID_I105_DISCRIMINANT"),
+    INVALID_I105_ENCODING("ERR_INVALID_I105_ENCODING"),
+    INVALID_I105_DISCRIMINANT_ENCODING("ERR_INVALID_I105_DISCRIMINANT_ENCODING"),
     INVALID_LENGTH("ERR_INVALID_LENGTH"),
     CHECKSUM_MISMATCH("ERR_CHECKSUM_MISMATCH"),
     INVALID_HEX_ADDRESS("ERR_INVALID_HEX_ADDRESS"),
@@ -375,20 +374,20 @@ public final class AccountAddress {
   }
 
   public static final class DisplayFormats {
-    public final String ih58;
-    public final String compressed;
+    public final String i105;
+    public final String i105Default;
     public final int networkPrefix;
-    public final String compressedWarning;
+    public final String i105Warning;
 
     private DisplayFormats(
-        final String ih58,
-        final String compressed,
+        final String i105,
+        final String i105Default,
         final int networkPrefix,
-        final String compressedWarning) {
-      this.ih58 = ih58;
-      this.compressed = compressed;
+        final String i105Warning) {
+      this.i105 = i105;
+      this.i105Default = i105Default;
       this.networkPrefix = networkPrefix;
-      this.compressedWarning = compressedWarning;
+      this.i105Warning = i105Warning;
     }
   }
 
@@ -812,15 +811,15 @@ public final class AccountAddress {
     }
   }
 
-  private static String encodeIh58(final int prefix, final byte[] canonical) throws AccountAddressException {
-    final byte[] prefixBytes = encodeIh58Prefix(prefix);
+  private static String encodeI105(final int prefix, final byte[] canonical) throws AccountAddressException {
+    final byte[] prefixBytes = encodeI105Prefix(prefix);
     final byte[] body = new byte[prefixBytes.length + canonical.length];
     System.arraycopy(prefixBytes, 0, body, 0, prefixBytes.length);
     System.arraycopy(canonical, 0, body, prefixBytes.length, canonical.length);
 
-    final byte[] checksumInput = new byte[IH58_CHECKSUM_PREFIX.length + body.length];
-    System.arraycopy(IH58_CHECKSUM_PREFIX, 0, checksumInput, 0, IH58_CHECKSUM_PREFIX.length);
-    System.arraycopy(body, 0, checksumInput, IH58_CHECKSUM_PREFIX.length, body.length);
+    final byte[] checksumInput = new byte[I105_CHECKSUM_PREFIX.length + body.length];
+    System.arraycopy(I105_CHECKSUM_PREFIX, 0, checksumInput, 0, I105_CHECKSUM_PREFIX.length);
+    System.arraycopy(body, 0, checksumInput, I105_CHECKSUM_PREFIX.length, body.length);
 
     final byte[] checksum = Blake2b.digest512(checksumInput);
     final byte[] payload = new byte[body.length + 2];
@@ -831,21 +830,21 @@ public final class AccountAddress {
     return encodeBase58(payload);
   }
 
-  private static DecodeResult decodeIh58(final String encoded) throws AccountAddressException {
+  private static DecodeResult decodeI105(final String encoded) throws AccountAddressException {
     final byte[] body = decodeBase58(encoded);
     if (body.length < 3) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
     }
     final byte[] payload = Arrays.copyOf(body, body.length - 2);
     final byte[] checksumBytes = Arrays.copyOfRange(body, body.length - 2, body.length);
-    final PrefixResult prefixResult = decodeIh58Prefix(payload);
+    final PrefixResult prefixResult = decodeI105Prefix(payload);
 
-    final byte[] checksumInput = new byte[IH58_CHECKSUM_PREFIX.length + payload.length];
-    System.arraycopy(IH58_CHECKSUM_PREFIX, 0, checksumInput, 0, IH58_CHECKSUM_PREFIX.length);
-    System.arraycopy(payload, 0, checksumInput, IH58_CHECKSUM_PREFIX.length, payload.length);
+    final byte[] checksumInput = new byte[I105_CHECKSUM_PREFIX.length + payload.length];
+    System.arraycopy(I105_CHECKSUM_PREFIX, 0, checksumInput, 0, I105_CHECKSUM_PREFIX.length);
+    System.arraycopy(payload, 0, checksumInput, I105_CHECKSUM_PREFIX.length, payload.length);
     final byte[] expected = Arrays.copyOf(Blake2b.digest512(checksumInput), 2);
     if (!Arrays.equals(checksumBytes, expected)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
     }
 
     final byte[] canonical = Arrays.copyOfRange(payload, prefixResult.prefixLength, payload.length);
@@ -862,9 +861,9 @@ public final class AccountAddress {
     }
   }
 
-  private static byte[] encodeIh58Prefix(final int prefix) throws AccountAddressException {
+  private static byte[] encodeI105Prefix(final int prefix) throws AccountAddressException {
     if (prefix < 0 || prefix > 0x3FFF) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_PREFIX, "invalid IH58 prefix: " + prefix);
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_DISCRIMINANT, "invalid I105 prefix: " + prefix);
     }
     if (prefix <= 63) {
       return new byte[] { (byte) prefix };
@@ -874,9 +873,9 @@ public final class AccountAddress {
     return new byte[] { (byte) lower, (byte) upper };
   }
 
-  private static PrefixResult decodeIh58Prefix(final byte[] payload) throws AccountAddressException {
+  private static PrefixResult decodeI105Prefix(final byte[] payload) throws AccountAddressException {
     if (payload.length == 0) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
     }
     final int first = payload[0] & 0xFF;
     if (first <= 63) {
@@ -884,12 +883,12 @@ public final class AccountAddress {
     }
     if ((first & 0b0100_0000) != 0) {
       if (payload.length < 2) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
       }
       final int value = ((payload[1] & 0xFF) << 6) | (first & 0x3F);
       return new PrefixResult(value, 2);
     }
-    throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_PREFIX_ENCODING, "invalid IH58 prefix encoding: " + first);
+    throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_DISCRIMINANT_ENCODING, "invalid I105 prefix encoding: " + first);
   }
 
   private static final class PrefixResult {
@@ -919,18 +918,18 @@ public final class AccountAddress {
 
   private static byte[] decodeCompressed(final String encoded) throws AccountAddressException {
     if (!encoded.startsWith(COMPRESSED_SENTINEL)) {
-      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
+      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "i105-default address must start with sora sentinel");
     }
     final String payload = encoded.substring(COMPRESSED_SENTINEL.length());
     if (payload.length() <= COMPRESSED_CHECKSUM_LEN) {
-      throw new AccountAddressException(AccountAddressErrorCode.COMPRESSED_TOO_SHORT, "compressed address is too short");
+      throw new AccountAddressException(AccountAddressErrorCode.COMPRESSED_TOO_SHORT, "i105-default address is too short");
     }
     final int[] digits = new int[payload.length()];
     for (int i = 0; i < payload.length(); i++) {
       final String symbol = String.valueOf(payload.charAt(i));
       final Integer value = COMPRESSED_INDEX.get(symbol);
       if (value == null) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_CHAR, "invalid compressed alphabet symbol: " + symbol);
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_CHAR, "invalid i105-default alphabet symbol: " + symbol);
       }
       digits[i] = value;
     }
@@ -939,7 +938,7 @@ public final class AccountAddress {
     final byte[] canonical = decodeBaseN(dataDigits, COMPRESSED_BASE);
     final int[] expected = compressedChecksumDigits(canonical);
     if (!Arrays.equals(checksumDigits, expected)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "compressed checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105-default checksum mismatch");
     }
     return canonical;
   }
@@ -989,16 +988,16 @@ public final class AccountAddress {
 
   private static String encodeBase58(final byte[] input) throws AccountAddressException {
     if (input.length == 0) {
-      return IH58_ALPHABET[0];
+      return I105_ALPHABET[0];
     }
     BigInteger value = new BigInteger(1, input);
     final StringBuilder builder = new StringBuilder();
     while (value.compareTo(BigInteger.ZERO) > 0) {
       final BigInteger[] divRem = value.divideAndRemainder(BASE_58);
-      builder.append(IH58_ALPHABET[divRem[1].intValue()]);
+      builder.append(I105_ALPHABET[divRem[1].intValue()]);
       value = divRem[0];
     }
-    final String zeroSymbol = IH58_ALPHABET[0];
+    final String zeroSymbol = I105_ALPHABET[0];
     for (int i = 0; i < input.length && input[i] == 0; i++) {
       builder.append(zeroSymbol);
     }
@@ -1010,14 +1009,14 @@ public final class AccountAddress {
 
   private static byte[] decodeBase58(final String encoded) throws AccountAddressException {
     if (encoded == null || encoded.isEmpty()) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid IH58 payload length");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid I105 payload length");
     }
     BigInteger value = BigInteger.ZERO;
     for (int index = 0; index < encoded.length(); index++) {
       final String symbol = String.valueOf(encoded.charAt(index));
-      final Integer digit = IH58_INDEX.get(symbol);
+      final Integer digit = I105_INDEX.get(symbol);
       if (digit == null) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_ENCODING, "invalid IH58 base58 encoding");
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_ENCODING, "invalid I105 base58 encoding");
       }
       value = value.multiply(BASE_58).add(BigInteger.valueOf(digit));
     }
@@ -1025,7 +1024,7 @@ public final class AccountAddress {
     if (decoded.length > 0 && decoded[0] == 0) {
       decoded = Arrays.copyOfRange(decoded, 1, decoded.length);
     }
-    final char zeroChar = IH58_ALPHABET[0].charAt(0);
+    final char zeroChar = I105_ALPHABET[0].charAt(0);
     int leadingZeros = 0;
     while (leadingZeros < encoded.length() && encoded.charAt(leadingZeros) == zeroChar) {
       leadingZeros++;

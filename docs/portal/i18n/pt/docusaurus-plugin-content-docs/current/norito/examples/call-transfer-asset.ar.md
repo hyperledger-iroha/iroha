@@ -19,9 +19,9 @@ Você pode usar o Kotodama para obter mais informações sobre `transfer_asset` 
 
 ## جولة دفتر الأستاذ
 
-- O código de barras (`ih58...`) está disponível para uso em `CanTransfer` ou `CanTransfer`. Então.
-- Use o `call_transfer_asset` para 5 e coloque-o no `ih58...`. Verifique se o produto está funcionando corretamente.
-- Você pode usar `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` para obter mais informações. التعريف سجل سياق النقل.
+- O código de barras (`i105...`) está disponível para uso em `CanTransfer` ou `CanTransfer`. Então.
+- Use o `call_transfer_asset` para 5 e coloque-o no `i105...`. Verifique se o produto está funcionando corretamente.
+- Você pode usar `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` para obter mais informações. التعريف سجل سياق النقل.
 
 ## O SDK está disponível
 
@@ -36,8 +36,8 @@ Você pode usar o Kotodama para obter mais informações sobre `transfer_asset` 
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

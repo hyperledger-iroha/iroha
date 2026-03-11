@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. አጠቃላይ እይታ
 
-- ቋሚ: `fixtures/account/address_vectors.json` (IH58 (ተመራጭ) + የታመቀ (`sora`, ሁለተኛ-ምርጥ) + multisig አዎንታዊ / አሉታዊ ጉዳዮች).
+- ቋሚ: `fixtures/account/address_vectors.json` (I105 (ተመራጭ) + የታመቀ (`sora`, ሁለተኛ-ምርጥ) + multisig አዎንታዊ / አሉታዊ ጉዳዮች).
 - ወሰን፡ ወሳኙ V1 ሸክሞች ስውር-ነባሪ፣ አካባቢያዊ-12፣ ዓለም አቀፍ መዝገብ ቤት እና ባለብዙ ሲግ ተቆጣጣሪዎች ከሙሉ የስህተት ታክሶኖሚ ጋር።
 ስርጭት፡ በ Rust data-model፣ Torii፣ JS/TS፣ Swift እና Android SDKs ላይ ተጋርቷል፤ ማንኛውም ሸማች ከተለያየ CI አይሳካም።
 - የእውነት ምንጭ፡ ጀነሬተሩ በ`crates/iroha_data_model/src/account/address/compliance_vectors.rs` ውስጥ ይኖራል እና በ`cargo xtask address-vectors` በኩል ተጋልጧል።
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | ወለል | ማስፈጸም | ማስታወሻ |
 |--------|------------|----|
-| ዝገት ውሂብ-ሞዴል | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON ን ይመረምራል፣ ቀኖናዊ ክፍያዎችን እንደገና ይገነባል፣ እና IH58 (የተመረጡ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)/ ቀኖናዊ ልወጣዎች + የተዋቀሩ ስህተቶችን ይፈትሻል። |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | የአገልጋይ ጎን ኮዴኮችን ያረጋግጣል ስለዚህ Torii የተበላሸ IH58 (የተሻለ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ) በቆራጥነት ይጭናል። |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | መስተዋቶች V1 ቋሚዎች (IH58 ተመራጭ/የተጨመቀ (`sora`) ሁለተኛ-ምርጥ/ሙሉ ስፋት) እና ለእያንዳንዱ አሉታዊ ጉዳይ የNorito-ቅጥ የስህተት ኮዶችን ያስረግጣል። |
-| ስዊፍት ኤስዲኬ | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | መልመጃዎች IH58 (ተመራጭ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ) ዲኮዲንግ፣ ባለብዙ ሲግ ጭነቶች እና በአፕል መድረኮች ላይ የስህተት መጋለጥ። |
+| ዝገት ውሂብ-ሞዴል | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON ን ይመረምራል፣ ቀኖናዊ ክፍያዎችን እንደገና ይገነባል፣ እና I105 (የተመረጡ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)/ ቀኖናዊ ልወጣዎች + የተዋቀሩ ስህተቶችን ይፈትሻል። |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | የአገልጋይ ጎን ኮዴኮችን ያረጋግጣል ስለዚህ Torii የተበላሸ I105 (የተሻለ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ) በቆራጥነት ይጭናል። |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | መስተዋቶች V1 ቋሚዎች (I105 ተመራጭ/የተጨመቀ (`sora`) ሁለተኛ-ምርጥ/ሙሉ ስፋት) እና ለእያንዳንዱ አሉታዊ ጉዳይ የNorito-ቅጥ የስህተት ኮዶችን ያስረግጣል። |
+| ስዊፍት ኤስዲኬ | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | መልመጃዎች I105 (ተመራጭ)/የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ) ዲኮዲንግ፣ ባለብዙ ሲግ ጭነቶች እና በአፕል መድረኮች ላይ የስህተት መጋለጥ። |
 | አንድሮይድ ኤስዲኬ | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | የKotlin/Java ማሰሪያዎች ከቀኖናዊው አካል ጋር እንደተጣመሩ መቆየታቸውን ያረጋግጣል። |
 
 ### 4. ክትትል እና የላቀ ስራ- ሁኔታን ሪፖርት ማድረግ፡ ይህ ሰነድ ከ`status.md` እና ከመንገድ ካርታው ጋር የተገናኘ ስለሆነ ሳምንታዊ ግምገማዎች የቋሚ ጤናን ማረጋገጥ ይችላሉ።

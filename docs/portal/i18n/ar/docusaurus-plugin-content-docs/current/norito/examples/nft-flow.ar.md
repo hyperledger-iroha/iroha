@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## جولة أستاذ الأستاذ
 
-- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب الحسابات التجارية/المستعملة المستلمة في المقتطف (`ih58...`, `ih58...`).
+- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب الحسابات التجارية/المستعملة المستلمة في المقتطف (`i105...`, `i105...`).
 - المؤكد نقطة الدخول `nft_issue_and_transfer` لسك NFT متوقعه من Alice إلى Bob ويرافق علامة تعريف بيانات تعريف تصف الإصدار.
 - فحص حالة الكمبيوتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK مؤكدًا على التغيير، ثم شدد على إزالة الأصل بعد تنفيذ تعليمة الحرق.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("ih58...");
+    let owner = account!("i105...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("ih58...");
+    let to = account!("i105...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

@@ -1026,9 +1026,7 @@ mod tests {
     fn sample_block(chain_id: &ChainId, signer: &KeyPair) -> GenesisBlock {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             chain_id.clone(),
-            AccountId::new(
-                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-                signer.public_key().clone(),
+            AccountId::new(signer.public_key().clone(),
             ),
         )
         .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
@@ -1353,9 +1351,7 @@ mod tests {
         bootstrapper.spawn_listener().await;
         bootstrapper.set_payload(&block).await.expect("payload set");
 
-        let genesis_account = AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            kp.public_key().clone(),
+        let genesis_account = AccountId::new(kp.public_key().clone(),
         );
         let peers = [peer.id().clone()];
         let fetch = bootstrapper.fetch_genesis(&peers, &genesis_account, None);

@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 |---------|------------|----------|
 | `label` | نعم | Запрозенная метка (يوفر حالة مختلطة ؛ تم ضبط الأداة على Norm v1 وUTS-46). |
 | `suffix_id` | نعم | لاحقة المعرف تشيسلوفي (ست عشرية أو `0x`). |
-| `owner` | نعم | معرف الحساب (IH58 حرفي؛ اختياري @ تلميح المجال) владельца regистрации. |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | سيلوي تشيسلو `1..=255`. |
 | `payment_asset_id` | نعم | التسوية النشطة (على سبيل المثال `xor#sora`). |
 | `payment_gross` / `payment_net` | نعم | مجموعة رائعة من الوحدات النشطة. |
@@ -72,9 +72,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -231,7 +231,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **تحليل البيانات الوصفية/الحوكمة:** inline JSON parсится напямую; خيارات الملفات
   قم بإعادة تعيين ملف CSV. البيانات الوصفية هي جزء من كائن ما للتحقق من صحة البيانات.
 - **وحدات التحكم:** يتم الاشتراك في `--default-controllers`. تحدث
-  وحدات التحكم في القوائم الرسمية (على سبيل المثال `ih58...;ih58...`) للمفوضين من غير المالك.
+  وحدات التحكم في القوائم الرسمية (على سبيل المثال `i105...;i105...`) للمفوضين من غير المالك.
 
 يتم إرسال الرسائل النصية من خلال أرقام الأرقام (على سبيل المثال
 `error: row 12 term_years must be between 1 and 255`). قم بإنشاء البرنامج النصي باستخدام الكود `1`

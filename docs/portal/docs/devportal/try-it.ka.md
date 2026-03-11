@@ -95,6 +95,7 @@ npm run start
 შემდეგი კომპონენტები კითხულობენ ამ მნიშვნელობებს `docusaurus.config.js`-დან:
 
 - **Swagger UI** — გაფორმებულია `/reference/torii-swagger`-ზე; წინასწარ იძლევა ნებართვას
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   მატარებლის სქემა, როდესაც ჟეტონი არსებობს, მოთხოვნებს თეგივს `X-TryIt-Client`-ით,
   ინექციებს `X-TryIt-Auth` და ხელახლა წერს ზარებს პროქსის მეშვეობით, როდესაც
   დაყენებულია `TRYIT_PROXY_PUBLIC_URL`.

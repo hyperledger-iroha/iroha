@@ -58,6 +58,7 @@ SDK特定指南：
 1. [启动代理](./try-it.md#start-the-proxy-locally)并设置
    `TRYIT_PROXY_PUBLIC_URL` 因此小部件知道将流量发送到哪里。
 2. 打开此页面上的**尝试**卡或 `/reference/torii-swagger`
+   For MCP/agent flows, use `/reference/torii-mcp`.
    面板并选择一个端点，例如 `POST /v1/pipeline/submit`。
 3.将**Content-Type**切换为`application/x-norito`，选择**Binary**
    编辑器，并上传`fixtures/norito_rpc/transfer_asset.norito`

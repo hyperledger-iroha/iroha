@@ -132,15 +132,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -149,7 +148,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` の JSON を反映します。標準アカウント ID、指定フォーマットでレンダリングされたリテラル、ネットワーク接頭辞/誤り訂正メタデータ、QR 寸法、ウォレットが直接埋め込める inline SVG を含みます。`ExplorerAccountQrOptions` を省略すると IH58 が既定になり、`address_format: Some(AddressFormat::Compressed)` を指定すると ADDR-6b の `sora…` 変種を取得します。
+`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` の JSON を反映します。標準アカウント ID、指定フォーマットでレンダリングされたリテラル、ネットワーク接頭辞/誤り訂正メタデータ、QR 寸法、ウォレットが直接埋め込める inline SVG を含みます。`ExplorerAccountQrOptions` を省略すると I105 が既定になり、canonical I105 output を指定すると ADDR-6b の `i105` 変種を取得します。
 
 ## 7. イベントに購読
 

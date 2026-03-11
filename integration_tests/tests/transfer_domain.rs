@@ -3,14 +3,11 @@
 
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{
-    crypto::KeyPair,
-    data_model::{prelude::*, transaction::error::TransactionRejectionReason},
-};
+use iroha::{crypto::KeyPair, data_model::prelude::*};
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount,
     asset::CanTransferAsset,
-    asset_definition::{CanRegisterAssetDefinition, CanUnregisterAssetDefinition},
+    asset_definition::CanUnregisterAssetDefinition,
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
     trigger::{CanExecuteTrigger, CanUnregisterTrigger},
@@ -18,10 +15,6 @@ use iroha_executor_data_model::permission::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use tokio::runtime::Runtime;
-
-fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
-    err.chain().any(|cause| cause.to_string().contains(needle))
-}
 
 fn start_network(
     builder: NetworkBuilder,
@@ -40,7 +33,7 @@ fn domain_owner_domain_permissions() -> Result<()> {
     let test_client = network.client();
 
     let kingdom_id: DomainId = "kingdom".parse()?;
-    let (bob_id, bob_keypair) = gen_account_in("kingdom");
+    let (bob_id, _bob_keypair) = gen_account_in("kingdom");
     let coin_id: AssetDefinitionId = "coin#kingdom".parse()?;
     let coin = AssetDefinition::numeric(coin_id.clone());
 
@@ -48,54 +41,12 @@ fn domain_owner_domain_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id(kingdom_id.clone()));
     test_client.submit_blocking(Register::account(bob))?;
 
-    // Asset definitions can't be registered by "bob@kingdom" by default
-    let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
-        .with_instructions([Register::asset_definition(coin.clone())])
-        .sign(bob_keypair.private_key());
-    let err = test_client
-        .submit_transaction_blocking(&transaction)
-        .expect_err("Tx should fail due to permissions");
-
-    if let Some(rejection_reason) = err.downcast_ref::<TransactionRejectionReason>() {
-        assert!(matches!(
-            rejection_reason,
-            &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
-        ));
-    } else {
-        assert!(
-            err_chain_contains(&err, "Not permitted")
-                || err_chain_contains(&err, "NotPermitted")
-                || err_chain_contains(
-                    &err,
-                    "Can't register asset definition in a domain owned by another account"
-                ),
-            "expected NotPermitted validation error, got: {err:?}"
-        );
-    }
-
-    // "alice@wonderland" owns the domain and can register AssetDefinitions by default as domain owner
+    // Asset-definition registration is issuer-owned in first-release semantics.
     test_client.submit_blocking(Register::asset_definition(coin.clone()))?;
     test_client.submit_blocking(Unregister::asset_definition(coin_id))?;
-
-    // Granting a respective permission also allows "bob@kingdom" to do so
-    let permission = CanRegisterAssetDefinition {
-        domain: kingdom_id.clone(),
-    };
-    test_client.submit_blocking(Grant::account_permission(
-        permission.clone(),
-        bob_id.clone(),
-    ))?;
-    let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
-        .with_instructions([Register::asset_definition(coin)])
-        .sign(bob_keypair.private_key());
-    test_client.submit_transaction_blocking(&transaction)?;
-    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
-        permission,
-        bob_id.clone(),
-    )))?;
 
     // check that "alice@wonderland" as owner of domain can edit metadata in her domain
     let key: Name = "key".parse()?;
@@ -138,7 +89,7 @@ fn domain_owner_account_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id);
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let mad_hatter = Account::new(mad_hatter_id.clone());
+    let mad_hatter = Account::new(mad_hatter_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(mad_hatter))?;
 
     // check that "alice@wonderland" as owner of domain can edit metadata of account in her domain
@@ -191,17 +142,13 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
-    let rabbit = Account::new(rabbit_id.clone());
+    let rabbit = Account::new(rabbit_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(rabbit))?;
 
-    // Grant permission to register asset definitions to "bob@kingdom"
-    let permission = CanRegisterAssetDefinition { domain: kingdom_id };
-    test_client.submit_blocking(Grant::account_permission(permission, bob_id.clone()))?;
-
-    // register asset definitions by "bob@kingdom" so he is owner of it
+    // Register asset definition by "bob@kingdom" so he is owner of it.
     let coin = AssetDefinition::numeric(coin_id.clone());
     let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
         .with_instructions([Register::asset_definition(coin)])
@@ -261,14 +208,10 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
-    // Grant permission to register asset definitions to "bob@kingdom"
-    let permission = CanRegisterAssetDefinition { domain: kingdom_id };
-    test_client.submit_blocking(Grant::account_permission(permission, bob_id.clone()))?;
-
-    // register asset definitions by "bob@kingdom" so he is owner of it
+    // Register asset definition by "bob@kingdom" so he is owner of it.
     let coin = AssetDefinition::numeric(coin_id.clone());
     let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
         .with_instructions([Register::asset_definition(coin)])
@@ -311,7 +254,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
     // Grant permission to register NFT to "bob@kingdom"
@@ -367,7 +310,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id);
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -440,7 +383,7 @@ fn domain_owner_transfer() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.clone());
+    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
     let domain = test_client
@@ -475,14 +418,18 @@ fn domain_owner_transfer() -> Result<()> {
 fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let users_domain: DomainId = "users".parse()?;
     let foo_domain: DomainId = "foo".parse()?;
-    let user1 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
-    let user2 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
+    let user1 = AccountId::new(KeyPair::random().into_parts().0);
+    let user2 = AccountId::new(KeyPair::random().into_parts().0);
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
     let builder = NetworkBuilder::new()
         .with_genesis_instruction(Register::domain(Domain::new(users_domain.clone())))
-        .with_genesis_instruction(Register::account(Account::new(user1.clone())))
-        .with_genesis_instruction(Register::account(Account::new(user2.clone())))
+        .with_genesis_instruction(Register::account(Account::new(
+            user1.to_account_id(users_domain.clone()),
+        )))
+        .with_genesis_instruction(Register::account(Account::new(
+            user2.to_account_id(users_domain.clone()),
+        )))
         .with_genesis_instruction(Register::domain(Domain::new(foo_domain.clone())))
         .next_genesis_transaction()
         .with_genesis_instruction(Transfer::domain(

@@ -57,7 +57,7 @@ Dans le mode de fermeture des piles (N0), de mise hors tension publique (N1) et 
 | Charte + KPI | `docs/source/sns/governance_addenda/` | Nous proposons une charte avec la version de contrôle, les clauses KPI et la mise en œuvre des résolutions, selon la CLI-Gолоса. |
 | Schéma de restauration | [`registry-schema.md`](./registry-schema.md) | Structures canoniques Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Registre des contrats | [`registrar-api.md`](./registrar-api.md) | Charges utiles REST/gRPC, mesures `sns_registrar_status_total` et hook de gouvernance. |
-| Adresses UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Les canons IH58 (avant) et les véhicules (vers l'extérieur) utilisent des cadres/appareils électriques. |
+| Adresses UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Les canons I105 (avant) et les véhicules (vers l'extérieur) utilisent des cadres/appareils électriques. |
 | Documents SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Déterminez l'hôte, les robots de transparence et les alertes. |
 | Mémo de régulation | `docs/source/sns/regulatory/` | Заметки приема по юрисдикциям (par exemple, EU DSA), responsable des remerciements, шаблонные приложения. |
 | Journal de forage | `ops/drill-log.md` | Les réponses au problème et à la résolution IR ont été effectuées avant votre arrivée. |
@@ -97,7 +97,7 @@ Oui, les auditeurs peuvent prendre une décision technique pendant 24 heures.## 
    состояния GAR/zone (см. 4.5).
 6. **Taille client :** Ouvrir le grand livre client (portefeuille/explorateur) ici
    общие luminaires в [`address-display-guidelines.md`](./address-display-guidelines.md),
-   Il s'agit également de l'IH58 et de la suppression de la copie/QR.### 4.3 Procédures, facturation et gestion des factures- **Produits du workflow :** le registraire prévoit un délai de grâce de 30 jours + un rachat bien sûr
+   Il s'agit également de l'I105 et de la suppression de la copie/QR.### 4.3 Procédures, facturation et gestion des factures- **Produits du workflow :** le registraire prévoit un délai de grâce de 30 jours + un rachat bien sûr
   60 jours, acheté dans `SuffixPolicyV1`. Через 60 дней автоматически запускается
   L'Allemagne va rouvrir après (7 jours, commission 10x avec une réduction de 15%/jour)
   ici `sns governance reopen`.
@@ -123,11 +123,11 @@ Oui, les auditeurs peuvent prendre une décision technique pendant 24 heures.## 
 | Faza | Владелец | Projets et documentation | ANS |
 |------|----------|----------------------------|-----|
 | Après le gel doux | Steward / поддержка | Achetez le billet `SNS-DF-<id>` sur la plate-forme de documentation, en contact avec la société obligataire et les sélectionneurs. | <=4 heures après la mise en service. |
-| Billet de gardien | Conseil des gardiens | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` correspond à `GuardianFreezeTicketV1`. Téléchargez JSON dans `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
+| Billet de gardien | Conseil des gardiens | `sns governance freeze --selector <I105> --reason <text> --until <ts>` correspond à `GuardianFreezeTicketV1`. Téléchargez JSON dans `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
 | Ratification de la résolution | Conseil de gouvernance | En changeant ou en ouvrant les portes, j'ai décidé de résoudre le problème du billet de tuteur et de digérer la relation obligataire. | Следующее заседание совета или асинхронное голосование. |
 | Panneau d'arbitrage | Комплаенс + steward | Installez le panneau de 7 étapes (feuille de route correspondante) avec les bulletins suivants `sns governance dispute ballot`. Приложить анонимные квитанции голосов к пакету инцидента. | Вердикт <=7 дней после внесения caution. |
 | Appellation | Gardien + совет | Les appels à la création de liens et au processus de prise de pouvoir; записать manifeste Norito `DisputeAppealV1` и сослаться на первичный тикет. | <=10 jours. |
-| Réparation et réparation | Opérations de registraire + résolveur | Sélectionnez `sns governance unfreeze --selector <IH58> --ticket <id>`, ouvrez le statut du registraire et diffusez le diff GAR/résolveur. | Сразу после вердикта. |Экстренные каноны (заморозки, инициированные gardien <=72 h) следуют тому же
+| Réparation et réparation | Opérations de registraire + résolveur | Sélectionnez `sns governance unfreeze --selector <I105> --ticket <id>`, ouvrez le statut du registraire et diffusez le diff GAR/résolveur. | Сразу после вердикта. |Экстренные каноны (заморозки, инициированные gardien <=72 h) следуют тому же
 Cependant, vous ne pouvez pas vous préoccuper rétrospectivement de la situation et des mesures de sécurité dans
 `docs/source/sns/regulatory/`.
 

@@ -18,7 +18,6 @@ use crate::{
 const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
 const INVARIANT_ACCOUNT_UNIQUE: &str = "account.unique_id";
-const INVARIANT_ACCOUNT_DOMAIN: &str = "account.domain_exists";
 const INVARIANT_ASSET_DEF_UNIQUE: &str = "asset_definition.unique_id";
 const INVARIANT_ASSET_DEF_DOMAIN: &str = "asset_definition.domain_exists";
 const INVARIANT_ASSET_DEF_OWNER_EXISTS: &str = "asset_definition.owner_exists";
@@ -149,7 +148,7 @@ fn index_domains<'a>(domains: &'a [Domain], report: &mut VerificationReport) -> 
 
 fn index_accounts<'a>(
     accounts: &'a [Account],
-    domains: &DomainIndex<'a>,
+    _domains: &DomainIndex<'a>,
     report: &mut VerificationReport,
 ) -> AccountIndex<'a> {
     let mut index = AccountIndex::new();
@@ -167,19 +166,6 @@ fn index_accounts<'a>(
                     format!("duplicate account identifier `{id}`"),
                 );
             }
-        }
-
-        if domains.contains_key(account.id.domain()) {
-            report.ok(INVARIANT_ACCOUNT_DOMAIN);
-        } else {
-            report.violation(
-                INVARIANT_ACCOUNT_DOMAIN,
-                format!(
-                    "account `{}` references unknown domain `{}`",
-                    id,
-                    account.id.domain()
-                ),
-            );
         }
     }
 
@@ -366,7 +352,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        asset::{Mintable, definition::AssetConfidentialPolicy},
+        asset::{
+            Mintable,
+            definition::{AssetBalancePolicy, AssetConfidentialPolicy},
+        },
         metadata::Metadata,
     };
 
@@ -374,7 +363,7 @@ mod tests {
     fn valid_snapshot_passes_formal_verification() {
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
         let keypair = KeyPair::random();
-        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let account_id = AccountId::new(keypair.public_key().clone());
 
         let domain = Domain {
             id: domain_id.clone(),
@@ -400,6 +389,7 @@ mod tests {
             mintable: Mintable::Infinitely,
             logo: None,
             metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: account_id.clone(),
             total_quantity: Numeric::new(10, 0),
             confidential_policy: AssetConfidentialPolicy::default(),
@@ -432,8 +422,7 @@ mod tests {
     fn snapshot_with_inconsistencies_reports_violations() {
         let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
         let missing_owner_key = KeyPair::random();
-        let missing_owner =
-            AccountId::new(domain_id.clone(), missing_owner_key.public_key().clone());
+        let missing_owner = AccountId::new(missing_owner_key.public_key().clone());
         let domain = Domain {
             id: domain_id.clone(),
             logo: None,
@@ -441,9 +430,9 @@ mod tests {
             owned_by: missing_owner.clone(),
         };
 
-        let foreign_domain: DomainId = "elsewhere".parse().expect("valid domain id");
+        let _foreign_domain: DomainId = "elsewhere".parse().expect("valid domain id");
         let account_key = KeyPair::random();
-        let account_id = AccountId::new(foreign_domain.clone(), account_key.public_key().clone());
+        let account_id = AccountId::new(account_key.public_key().clone());
         let account = Account {
             id: account_id.clone(),
             metadata: Metadata::default(),
@@ -461,6 +450,7 @@ mod tests {
             mintable: Mintable::Once,
             logo: None,
             metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: missing_owner,
             total_quantity: Numeric::new(5, 0),
             confidential_policy: AssetConfidentialPolicy::default(),
@@ -493,7 +483,6 @@ mod tests {
             .collect();
 
         assert!(invariants.contains(&INVARIANT_DOMAIN_OWNER_EXISTS));
-        assert!(invariants.contains(&INVARIANT_ACCOUNT_DOMAIN));
         assert!(invariants.contains(&INVARIANT_ASSET_VALUE_SPEC));
         assert!(invariants.contains(&INVARIANT_ASSET_DEF_TOTAL_MATCH));
     }
@@ -504,8 +493,7 @@ mod tests {
         let owner_domain: DomainId = "owners".parse().expect("valid domain id");
 
         let owner_keypair = KeyPair::random();
-        let owner_account_id =
-            AccountId::new(owner_domain.clone(), owner_keypair.public_key().clone());
+        let owner_account_id = AccountId::new(owner_keypair.public_key().clone());
         let owner_domain_record = Domain {
             id: owner_domain.clone(),
             logo: None,
@@ -514,10 +502,7 @@ mod tests {
         };
 
         let business_keypair = KeyPair::random();
-        let business_account_id = AccountId::new(
-            business_domain.clone(),
-            business_keypair.public_key().clone(),
-        );
+        let business_account_id = AccountId::new(business_keypair.public_key().clone());
         let business_domain_record = Domain {
             id: business_domain.clone(),
             logo: None,
@@ -547,6 +532,7 @@ mod tests {
             mintable: Mintable::Infinitely,
             logo: None,
             metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: owner_account_id,
             total_quantity: Numeric::zero(),
             confidential_policy: AssetConfidentialPolicy::default(),

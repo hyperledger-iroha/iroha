@@ -34,7 +34,7 @@ CLI для запуска SN-3b builder в формате CSV Norito для за
 |--------|-------|-------|
 | `label` | نعم | Приложение для проверки (в стандартном исполнении; стандартная версия Norm v1 и UTS-46). |
 | `suffix_id` | نعم | Введите код (код `0x` hex). |
-| `owner` | نعم | Введите AccountId (домен-независимый encoded AccountId (IH58 предпочтительно; compressed допускается; без @domain)). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | Это приложение (код `xor#sora`). |
 | `payment_gross` / `payment_net` | نعم | Это было сделано для того, чтобы покончить с собой. |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -233,7 +233,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **Метаданные управления:** встроенный формат JSON. ويتم حل
   Создайте файл CSV. метаданные доступны для скачивания.
 - **Контроллеры:** Установите флажок `--default-controllers`. قدم قوائم
-  Контроллер установлен (тип `ih58...;ih58...`).
+  Контроллер установлен (тип `i105...;i105...`).
 
 Он был показан в 2007 году и в 2007 году в Сейме (Миссисипи).
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`

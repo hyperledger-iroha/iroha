@@ -2055,12 +2055,11 @@ mod tests {
             proof: vec![0xAB, 0xCD, 0xEF],
         };
 
-        let domain: DomainId = "sora".parse().expect("domain");
         let public_key: PublicKey =
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                 .parse()
                 .expect("public key");
-        let submitter = AccountId::new(domain, public_key);
+        let submitter = AccountId::new(public_key);
         let mut record = PinManifestRecord::new(
             digest,
             chunker,
@@ -2113,12 +2112,11 @@ mod tests {
             policy_hash: [0x44; 32],
         };
         let canonical = norito::to_bytes(&order_payload).expect("encode order");
-        let domain: DomainId = "sora".parse().expect("domain");
         let public_key: PublicKey =
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
                 .parse()
                 .expect("public key");
-        let issuer = AccountId::new(domain, public_key);
+        let issuer = AccountId::new(public_key);
         let record = ReplicationOrderRecord {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),

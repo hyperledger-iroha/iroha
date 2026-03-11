@@ -13,7 +13,7 @@ Straightforward asset transfer workflow that mirrors SDK quickstarts and ledger 
 
 - Pre-fund Alice with the target asset (for example via the “register and mint” snippet or SDK quickstart flows).
 - Execute the `do_transfer` entrypoint to move 10 units from Alice to Bob, satisfying the `AssetTransferRole` permission.
-- Query balances (`FindAccountAssets`, `iroha_cli ledger assets list`) or subscribe to pipeline events to observe the transfer outcome.
+- Query balances (`FindAccountAssets`, `iroha_cli ledger asset list`) or subscribe to pipeline events to observe the transfer outcome.
 
 ## Related SDK guides
 
@@ -30,8 +30,8 @@ seiyaku TransferDemo {
   // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B"),
+      account!("6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY"),
       asset_definition!("rose#wonderland"),
       10
     );

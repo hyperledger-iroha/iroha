@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 الوصف: تعمل أداة ADDR-2 الثابتة على الخلاصة وSDK على حل المشكلة.
 ---
 
-حزمة ADDR-2 الأساسية (`fixtures/account/address_vectors.json`) IH58 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيعات المتعددة، والتركيبات السلبية التي تلتقط كرتا. تم تطوير SDK + Torii لسطح JSON لمنع الاختناق وإصدار برنامج الترميز الانجراف إلى أقصى حد. ملخص حالة صفحة الاندرويد (`docs/source/account_address_status.md` جهاز التوجيه) يعكس المفاتيح وقارئات البوابة التي يمكن من خلالها استخدام الريبو الأحادي لسير العمل بشكل رائع.
+حزمة ADDR-2 الأساسية (`fixtures/account/address_vectors.json`) I105 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيعات المتعددة، والتركيبات السلبية التي تلتقط كرتا. تم تطوير SDK + Torii لسطح JSON لمنع الاختناق وإصدار برنامج الترميز الانجراف إلى أقصى حد. ملخص حالة صفحة الاندرويد (`docs/source/account_address_status.md` جهاز التوجيه) يعكس المفاتيح وقارئات البوابة التي يمكن من خلالها استخدام الريبو الأحادي لسير العمل بشكل رائع.
 
 ## الحزمة کو تجدد أو تحقق من کریں
 
@@ -43,7 +43,7 @@ cargo xtask address-vectors --verify
 | Torii (الخادم) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | جافا سكريبت SDK | `javascript/iroha_js/test/address.test.js` |
 | سويفت SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |يتم تسخير البايتات الأساسية + IH58 + الترميزات المضغوطة (`sora`، ثاني أفضل) كرتا ذهابًا وإيابًا والحالات السلبية لرموز الخطأ على النمط Norito التي تتطابق مع الكرتا.
+| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |يتم تسخير البايتات الأساسية + I105 + الترميزات المضغوطة (`sora`، ثاني أفضل) كرتا ذهابًا وإيابًا والحالات السلبية لرموز الخطأ على النمط Norito التي تتطابق مع الكرتا.
 
 ## الأتمتة چہئے؟
 

@@ -301,7 +301,7 @@ mod tests {
             GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
         let manifest = crate::genesis::generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             consensus_mode,
             None,
@@ -399,7 +399,7 @@ mod tests {
             GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
         let manifest = crate::genesis::generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             None,
@@ -433,7 +433,7 @@ mod tests {
             GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
         let manifest = crate::genesis::generate_default(
             builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
             Some(SumeragiConsensusMode::Npos),

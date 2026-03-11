@@ -53,9 +53,7 @@ use iroha_data_model::query::{
     parameters::{FetchSize, Pagination},
     transaction::prelude::FindTransactions,
 };
-use iroha_executor_data_model::permission::{
-    asset::CanTransferAssetWithDefinition, asset_definition::CanRegisterAssetDefinition,
-};
+use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::json::Value as JsonValue;
@@ -117,12 +115,11 @@ fn soak_iterations() -> usize {
 }
 
 fn cross_dataspace_gas_account_id() -> AccountId {
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
     let gas_keypair = KeyPair::from_seed(
         b"integration_tests::nexus::cross_dataspace_localnet::gas_account".to_vec(),
         Algorithm::Ed25519,
     );
-    AccountId::new(ivm_domain, gas_keypair.public_key().clone())
+    AccountId::new(gas_keypair.public_key().clone())
 }
 
 fn localnet_builder() -> NetworkBuilder {
@@ -330,12 +327,15 @@ fn npos_multilane_genesis_post_topology_transactions(
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
     let gas_account_id = cross_dataspace_gas_account_id();
-    let ivm_domain = gas_account_id.domain().clone();
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain)).into(),
-        Register::account(Account::new(gas_account_id)).into(),
+        Register::domain(Domain::new(ivm_domain.clone())).into(),
+        Register::account(Account::new(
+            gas_account_id.to_account_id(ivm_domain.clone()),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
     ];
 
@@ -349,8 +349,13 @@ fn npos_multilane_genesis_post_topology_transactions(
             DS2_LANE_INDEX
         };
         let lane_id = LaneId::new(lane_index);
-        let validator_id = AccountId::new(nexus_domain.clone(), peer.public_key().clone());
-        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        let validator_id = AccountId::new(peer.public_key().clone());
+        bootstrap_tx.push(
+            Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            ))
+            .into(),
+        );
         bootstrap_tx.push(
             Mint::asset_numeric(
                 VALIDATOR_STAKE,
@@ -821,7 +826,7 @@ fn wait_for_active_lane_validators(
     let mut last_active = BTreeSet::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let snapshot = client
-            .get_public_lane_validators(lane_id, None)
+            .get_public_lane_validators(lane_id)
             .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
         last_total = total;
@@ -1171,23 +1176,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
             peers.len()
         );
-        let validator_domain: DomainId = "nexus".parse().expect("validator domain");
         let nexus_lane_validators: Vec<AccountId> = peers
             .iter()
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let ds1_lane_validators: Vec<AccountId> = peers
             .iter()
             .skip(VALIDATORS_PER_LANE)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let ds2_lane_validators: Vec<AccountId> = peers
             .iter()
             .skip(VALIDATORS_PER_LANE * 2)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(validator_domain.clone(), peer.id().public_key().clone()))
+            .map(|peer| AccountId::new(peer.id().public_key().clone()))
             .collect();
         let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
         all_validators.extend(nexus_lane_validators.iter().cloned());
@@ -1328,11 +1332,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     }
     let ds1_asset_def: AssetDefinitionId = "ds1coin#wonderland".parse().expect("asset definition");
     let ds2_asset_def: AssetDefinitionId = "ds2coin#wonderland".parse().expect("asset definition");
-    let wonderland_domain: DomainId = "wonderland".parse().expect("domain id");
-    let bob_register_asset_definition_permission: Permission = CanRegisterAssetDefinition {
-        domain: wonderland_domain.clone(),
-    }
-    .into();
     let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
         asset_definition: ds1_asset_def.clone(),
     }
@@ -1356,20 +1355,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             .commit_qc
             .height;
         let setup_grants_tx = submitter.build_transaction(
-            vec![
-                InstructionBox::from(Grant::account_permission(
-                    CanRegisterAssetDefinition {
-                        domain: wonderland_domain.clone(),
-                    },
-                    BOB_ID.clone(),
-                )),
-                InstructionBox::from(Grant::account_permission(
-                    CanTransferAssetWithDefinition {
-                        asset_definition: ds1_asset_def.clone(),
-                    },
-                    BOB_ID.clone(),
-                )),
-            ],
+            vec![InstructionBox::from(Grant::account_permission(
+                CanTransferAssetWithDefinition {
+                    asset_definition: ds1_asset_def.clone(),
+                },
+                BOB_ID.clone(),
+            ))],
             Metadata::default(),
         );
         submitter.submit_transaction(&setup_grants_tx)?;
@@ -1392,10 +1383,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             &bob,
             &alice,
             &BOB_ID,
-            &[
-                bob_register_asset_definition_permission.clone(),
-                bob_transfer_ds1_permission.clone(),
-            ],
+            &[bob_transfer_ds1_permission.clone()],
             "grant setup permissions visible on bob",
         )?;
     }

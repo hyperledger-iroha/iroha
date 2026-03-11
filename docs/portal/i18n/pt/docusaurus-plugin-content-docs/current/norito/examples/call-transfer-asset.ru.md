@@ -19,9 +19,9 @@ Verifique se o Kotodama pode ser usado para obter instruções sobre o `transfer
 
 ## Пошаговый обход реестра
 
-- Abra o contrato de política (por exemplo `ih58...`) ativo, feche o orçamento e выдайте use o papel `CanTransfer` ou a configuração atual.
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц аккаунта контракта на `ih58...`, отражая то, Como o aplicativo on-line pode ser usado para você.
-- Verifique os saldos de `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e instale a proteção, чтобы подтвердить, что guarda O metadanных записал контекст перевода.
+- Abra o contrato de política (por exemplo `i105...`) ativo, feche o orçamento e выдайте use o papel `CanTransfer` ou a configuração atual.
+- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц аккаунта контракта на `i105...`, отражая то, Como o aplicativo on-line pode ser usado para você.
+- Verifique os saldos de `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` e instale a proteção, чтобы подтвердить, что guarda O metadanных записал контекст перевода.
 
 ## Como usar o SDK
 
@@ -36,8 +36,8 @@ Verifique se o Kotodama pode ser usado para obter instruções sobre o `transfer
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

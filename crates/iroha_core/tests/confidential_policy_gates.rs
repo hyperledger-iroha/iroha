@@ -49,7 +49,7 @@ fn init_state() -> (
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let domain_id: DomainId = "zkdomain".parse().expect("domain id");
     let asset_def_id: AssetDefinitionId = "shielded#zkdomain".parse().expect("asset id");
-    let owner = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+    let owner = AccountId::new(KeyPair::random().public_key().clone());
 
     (state, header, owner, domain_id, asset_def_id)
 }
@@ -63,7 +63,7 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     // Seed domain, account, and asset definition.
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -114,12 +114,16 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let recipient = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+    let recipient = AccountId::new(KeyPair::random().public_key().clone());
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::account(NewAccount::new(recipient.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new_in_domain(
+            recipient.clone(),
+            domain_id.clone(),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -197,7 +201,7 @@ fn schedule_shielded_only_requires_window() {
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -257,12 +261,16 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let recipient = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+    let recipient = AccountId::new(KeyPair::random().public_key().clone());
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::account(NewAccount::new(recipient.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new_in_domain(
+            recipient.clone(),
+            domain_id.clone(),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world
@@ -366,7 +374,7 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     let mut stx = block.transaction();
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
     ] {
         stx.world

@@ -447,9 +447,8 @@ fn sample_lane_relay_envelope_with_bitmap(
     LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
 }
 
-fn account_id_for_keypair(domain: &str, keypair: &KeyPair) -> AccountId {
-    let domain_id: DomainId = domain.parse().expect("domain id");
-    AccountId::new(domain_id, keypair.public_key().clone())
+fn account_id_for_keypair(keypair: &KeyPair) -> AccountId {
+    AccountId::new(keypair.public_key().clone())
 }
 
 fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)]) {
@@ -1322,6 +1321,9 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
             validation_result_queue_cap:
                 iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+            validation_queue_full_inline_cutover_divisor:
+                iroha_config::parameters::defaults::sumeragi::
+                    VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR,
             qc_verify_worker_threads:
                 iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
             qc_verify_work_queue_cap:
@@ -2230,8 +2232,12 @@ async fn test_actor_harness_with_config_and_height_and_kura(
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account =
-        iroha_data_model::prelude::Account::new(genesis_id.clone()).build(&genesis_id);
+    let genesis_account = iroha_data_model::prelude::Account::new(
+        genesis_id
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
         let mut block = world.block();
@@ -2703,7 +2709,7 @@ async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
 
     let key_pair = KeyPair::random();
     let (public_key, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key);
+    let authority = AccountId::new(public_key);
     let domain_id: DomainId = "queue".parse().expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
     let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
@@ -3384,8 +3390,12 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account =
-        iroha_data_model::prelude::Account::new(genesis_id.clone()).build(&genesis_id);
+    let genesis_account = iroha_data_model::prelude::Account::new(
+        genesis_id
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     state.chain_id = chain_id.clone();
@@ -3510,10 +3520,8 @@ async fn merge_committee_signatures_commit_merge_entry() {
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
     ];
-    let lane_validators: Vec<AccountId> = lane_keypairs
-        .iter()
-        .map(|keypair| account_id_for_keypair("validators", keypair))
-        .collect();
+    let lane_validators: Vec<AccountId> =
+        lane_keypairs.iter().map(account_id_for_keypair).collect();
     install_lane_manifest_registry(
         &actor.state,
         &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
@@ -3579,10 +3587,8 @@ async fn merge_committee_accepts_remote_signature() {
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
     ];
-    let lane_validators: Vec<AccountId> = lane_keypairs
-        .iter()
-        .map(|keypair| account_id_for_keypair("validators", keypair))
-        .collect();
+    let lane_validators: Vec<AccountId> =
+        lane_keypairs.iter().map(account_id_for_keypair).collect();
     install_lane_manifest_registry(
         &actor.state,
         &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
@@ -17702,7 +17708,6 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
     let commit_topology = actor.effective_commit_topology();
     assert!(commit_topology.len() >= 4, "test requires 4 trusted peers");
 
-    let domain: DomainId = "validators".parse().expect("domain id");
     {
         let mut block = actor.state.world.public_lane_validators.block();
         let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
@@ -17710,7 +17715,7 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             block.remove(key);
         }
         for (idx, peer) in commit_topology.iter().take(2).enumerate() {
-            let account_id = AccountId::new(domain.clone(), peer.public_key().clone());
+            let account_id = AccountId::new(peer.public_key().clone());
             let lane_id = LaneId::new(u32::try_from(idx + 1).expect("lane index fits u32"));
             let record = PublicLaneValidatorRecord {
                 lane_id,
@@ -30219,8 +30224,12 @@ async fn stale_pending_block_requeues_transactions() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account =
-        iroha_data_model::prelude::Account::new(genesis_id.clone()).build(&genesis_id);
+    let genesis_account = iroha_data_model::prelude::Account::new(
+        genesis_id
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
         let mut block = world.block();
@@ -35365,7 +35374,6 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
-    let domain: DomainId = "validators".parse().expect("domain id");
     let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -35377,7 +35385,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
-            let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let account_id = AccountId::new(keypair.public_key().clone());
             let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
@@ -35480,7 +35488,6 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
-    let domain: DomainId = "validators".parse().expect("domain id");
     let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -35492,7 +35499,7 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
     {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
-            let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let account_id = AccountId::new(keypair.public_key().clone());
             let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
@@ -47367,10 +47374,7 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     let chain: ChainId = "rbc-alloc".parse().expect("chain id");
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new(
-        "alloc".parse().expect("domain id"),
-        key_pair.public_key().clone(),
-    );
+    let authority = AccountId::new(key_pair.public_key().clone());
     let build_tx = |count: u32| {
         let instructions = (0..count).map(|idx| {
             let domain_id: DomainId = format!("alloc{idx}").parse().expect("domain id");
@@ -58544,6 +58548,8 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
 async fn new_view_tracker_counts_local_with_rotated_indices() {
     let _history_guard = status::commit_history_test_guard();
     status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_precommit_signer_history_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -58622,6 +58628,8 @@ async fn new_view_tracker_counts_local_with_rotated_indices() {
         "local peer should count toward quorum even when signer index matches local index"
     );
 
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
@@ -58762,6 +58770,10 @@ async fn new_view_vote_rejects_mismatched_highest_height() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn new_view_vote_accepts_prepare_highest_next_height() {
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_precommit_signer_history_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -58817,6 +58829,9 @@ async fn new_view_vote_accepts_prepare_highest_next_height() {
         "prepare highest should advance NEW_VIEW tracking"
     );
 
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
 
@@ -62338,7 +62353,7 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
     let payload_len = actor.consensus_payload_frame_cap.saturating_mul(2);
     let key_pair = KeyPair::random();
     let (public_key, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key.clone());
+    let authority = AccountId::new(public_key.clone());
     let key = "payload".parse().expect("metadata key");
     let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
@@ -62395,7 +62410,7 @@ async fn proposal_defers_when_all_txs_exceed_payload_budget() {
     let payload_len = 2048;
     let key_pair = KeyPair::random();
     let (public_key, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key.clone());
+    let authority = AccountId::new(public_key.clone());
     let key = "payload".parse().expect("metadata key");
     let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
@@ -66031,9 +66046,11 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
-            .expect("register account");
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+        .expect("register account");
         let trigger = Trigger::new(
             "precommit_probe".parse().expect("trigger name"),
             Action::new(
@@ -77308,8 +77325,12 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account =
-        iroha_data_model::prelude::Account::new(genesis_id.clone()).build(&genesis_id);
+    let genesis_account = iroha_data_model::prelude::Account::new(
+        genesis_id
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
         let mut block = world.block();
@@ -77589,7 +77610,7 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
         .expect("chain id parses");
     let kp_tx = KeyPair::random();
     let domain: DomainId = "wonderland".parse().expect("domain id parses");
-    let authority = AccountId::new(domain.clone(), kp_tx.public_key().clone());
+    let authority = AccountId::new(kp_tx.public_key().clone());
     let register = Register::domain(Domain::new(domain));
     let tx = TransactionBuilder::new(chain, authority)
         .with_instructions([InstructionBox::from(register)])
@@ -78287,13 +78308,12 @@ async fn stake_quorum_timeout_reschedules_and_records_view_change() {
     let actor = &mut harness.actor;
     super::status::reset_view_change_cause_counters_for_tests();
 
-    let domain: DomainId = "validators".parse().expect("domain id");
     let stakes = [10_u64, 1_u64, 1_u64, 1_u64];
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in harness.key_pairs.iter().zip(stakes).enumerate() {
-            let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let account_id = AccountId::new(keypair.public_key().clone());
             let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
@@ -80368,6 +80388,289 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_inlines_validation_at_queue_full_cutover() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let inline_cutover = (fast_timeout
+        / actor
+            .config
+            .worker
+            .validation_queue_full_inline_cutover_divisor)
+        .max(Duration::from_millis(1));
+    assert!(
+        inline_cutover < fast_timeout,
+        "test requires inline cutover to be below fast timeout"
+    );
+
+    let (_work_tx, _work_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
+    actor.subsystems.validation.work_txs = vec![_work_tx];
+    actor.subsystems.validation.result_rx = None;
+    actor.subsystems.validation.inflight.clear();
+
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "block should validate inline before testing queue-full cutover fallback: {outcome:?}"
+    );
+    let mut pending = actor
+        .pending
+        .pending_blocks
+        .remove(&block_hash)
+        .expect("pending retained after inline validation");
+    pending.validation_status = ValidationStatus::Pending;
+    pending.parent_state_root = None;
+    pending.post_state_root = None;
+    pending.inserted_at = Instant::now() - inline_cutover - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Valid,
+        "queue-full fallback should validate inline once pending age reaches cutover"
+    );
+    assert!(
+        pending_after.parent_state_root.is_some(),
+        "inline cutover fallback should capture parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_some(),
+        "inline cutover fallback should capture post state root"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_keeps_deferred_validation_before_queue_full_cutover() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let inline_cutover = (fast_timeout
+        / actor
+            .config
+            .worker
+            .validation_queue_full_inline_cutover_divisor)
+        .max(Duration::from_millis(1));
+    assert!(
+        inline_cutover > Duration::from_millis(1),
+        "test requires enough room below cutover"
+    );
+    let early_age = (inline_cutover / 2).max(Duration::from_millis(1));
+    assert!(
+        early_age < inline_cutover,
+        "test requires early age to stay below inline cutover"
+    );
+
+    let (_work_tx, _work_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
+    actor.subsystems.validation.work_txs = vec![_work_tx];
+    actor.subsystems.validation.result_rx = None;
+    actor.subsystems.validation.inflight.clear();
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.inserted_at = Instant::now() - early_age;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Pending,
+        "fresh queue-full pending block should stay deferred before cutover"
+    );
+    assert!(
+        pending_after.parent_state_root.is_none(),
+        "deferred validation should not set parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_none(),
+        "deferred validation should not set post state root"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "queue-full defer path should not register inflight work"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_uses_configured_queue_full_inline_cutover_divisor() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+    actor
+        .config
+        .worker
+        .validation_queue_full_inline_cutover_divisor = 4;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let default_cutover = (fast_timeout
+        / iroha_config::parameters::defaults::sumeragi::
+            VALIDATION_QUEUE_FULL_INLINE_CUTOVER_DIVISOR)
+        .max(Duration::from_millis(1));
+    let configured_cutover = (fast_timeout
+        / actor
+            .config
+            .worker
+            .validation_queue_full_inline_cutover_divisor)
+        .max(Duration::from_millis(1));
+    assert!(
+        configured_cutover < default_cutover,
+        "configured divisor should move cutover earlier than default"
+    );
+    let gap = default_cutover.saturating_sub(configured_cutover);
+    assert!(
+        gap > Duration::from_millis(1),
+        "test requires enough spacing between configured and default cutovers"
+    );
+    let pending_age = configured_cutover + (gap / 2);
+    assert!(pending_age < default_cutover);
+
+    let (_work_tx, _work_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
+    actor.subsystems.validation.work_txs = vec![_work_tx];
+    actor.subsystems.validation.result_rx = None;
+    actor.subsystems.validation.inflight.clear();
+
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "block should validate inline before testing configured queue-full cutover: {outcome:?}"
+    );
+    let mut pending = actor
+        .pending
+        .pending_blocks
+        .remove(&block_hash)
+        .expect("pending retained after inline validation");
+    pending.validation_status = ValidationStatus::Pending;
+    pending.parent_state_root = None;
+    pending.post_state_root = None;
+    pending.inserted_at = Instant::now() - pending_age;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Valid,
+        "queue-full fallback should inline once configured cutover is reached"
+    );
+    assert!(
+        pending_after.parent_state_root.is_some(),
+        "inline fallback should capture parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_some(),
+        "inline fallback should capture post state root"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -81697,10 +82000,7 @@ fn sample_transaction() -> SignedTransaction {
     let chain: ChainId = "test-chain".parse().expect("chain id");
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.clone().into_parts();
-    let authority = AccountId::new(
-        "wonderland".parse().expect("domain id"),
-        key_pair.public_key().clone(),
-    );
+    let authority = AccountId::new(key_pair.public_key().clone());
     let domain = Domain::new("wonderland".parse().expect("domain id"));
     let register: InstructionBox = Register::domain(domain).into();
 
@@ -83282,8 +83582,7 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     );
     let chain_id = ChainId::from("requeue");
     let kp = KeyPair::random();
-    let domain: DomainId = "wonderland".parse().expect("domain id");
-    let account = AccountId::new(domain, kp.public_key().clone());
+    let account = AccountId::new(kp.public_key().clone());
 
     let mut tx_a_builder = TransactionBuilder::new(chain_id.clone(), account.clone());
     tx_a_builder.set_nonce(NonZeroU32::new(1).expect("nonce must be non-zero"));

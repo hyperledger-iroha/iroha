@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Capture iroha_monitor demo frames and export SVG snapshots.
 
-This helper automates the roadmap walkthrough by running the monitor in
+This helper automates the monitor docs walkthrough by running the monitor in
 spawn-lite mode and capturing two frames:
-  * overview deck (default flags)
-  * pipeline-focused overlay (toggles pipeline + VRF panels)
+  * overview layout
+  * focused/search view
 
 It executes the binary via a pseudo-terminal so the TUI renders normally,
 collects the ANSI stream, reduces it to a character grid, and writes SVG
@@ -60,51 +60,59 @@ PADDING = 12
 
 FALLBACK_OVERVIEW = [
     "+----------------------------------------------------------------------------------------------------+",
-    "| IROHA MONITOR :: Overview                               uptime 00:00:08   refresh 500 ms       |",
-    "| Peers: 03 online   Focus: p0   CRT: off   Auto-rotate: off                                     |",
+    "| Iroha Monitor                                                                   refresh 500 ms   |",
+    "| Peers 3/3 online  Healthy 3  Degraded 0  Down 0  Reported 3                                        |",
+    "| Blocks 129 total / 123 non-empty  Tx 972 ok / 3 rej                                                |",
+    "| Queue 3  Gas 351  Avg latency 29 ms  Refresh 500 ms                                                |",
+    "| Sort health  Filter all  search off                                                                 |",
+    "| Focus 祭りノード  healthy  commit 95 ms                                                              |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| PEER  | ROLE    | HEIGHT | FINAL | TX OK/REJ | LAT | GAS LIM | NOTES                            |",
-    "| p0    | leader  | #042   | ✓     | 112 / 0   |128ms| 2.00 M  | healthy                          |",
-    "| p1    | backup  | #042   | ✓     | 110 / 0   |134ms| 2.00 M  | healthy                          |",
-    "| p2    | backup  | #042   | ✓     | 111 / 0   |139ms| 2.00 M  | healthy                          |",
+    "| Peers 1-3/3  sort health                                                                            |",
+    "| Peer         Height   Tx        Queue   Gas   Latency   Status                                      |",
+    "| 祭りノード     44       328/2     2       134   34ms      healthy commit 95 ms                      |",
+    "| 祭りノード     43       324/1     1       117   29ms      healthy commit 95 ms                      |",
+    "| 祭りノード     42       320/0     0       100   24ms      healthy commit 95 ms                      |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| PIPELINE SNAPSHOT                         | ALERTS (0 active)                                   |",
-    "| Layer width: 04   DAG depth: 02           | - no alerts                                          |",
-    "| Tx queue: 03     Verified: 03             |                                                      |",
-    "| Finality lag: 0 blocks                    |                                                      |",
+    "| Selected Peer                                                                                       |",
+    "| Peer 祭りノード  healthy  (1/3)                                                                     |",
+    "| Endpoint stub://peer/2/3                                                                            |",
+    "| Height 44  Tx 328 / 2  Queue 2                                                                      |",
+    "| Latency 34 ms  Commit 95 ms  Views 0                                                                |",
+    "| Uptime 1 s  Gas 134  Fees 64                                                                         |",
+    "| Note commit 95 ms                                                                                   |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| THROUGHPUT (per 5s)   | PARTITIONS | GAS (recent)      | SPARKLINES                             |",
-    "| blocks: 4             | active: 1  | avg: 1.30 M       | p0 ▄▆█▇▇▅▂                             |",
-    "| tx: 56                | lagged: 0 | max: 1.95 M       | p1 ▃▅▇██▆▄                             |",
-    "| rejected: 0           | stalled: 0| trend: steady      | p2 ▂▄▆██▇▄                             |",
-    "|----------------------------------------------------------------------------------------------------|",
-    "| QUICK ACTIONS (Tab)  auto-rotate [ ]   beep [ ]   CRT [ ]   CRT★ [ ]   help [?]                   |",
+    "| Alerts & Activity                                                                                   |",
+    "| [OK] 祭りノード: telemetry online                                                                   |",
+    "| [OK] stub://peer/1/3: telemetry online                                                              |",
+    "| [OK] stub://peer/2/3: telemetry online                                                              |",
     "+----------------------------------------------------------------------------------------------------+",
 ]
 
 FALLBACK_PIPELINE = [
     "+----------------------------------------------------------------------------------------------------+",
-    "| IROHA MONITOR :: Pipeline Deck                        uptime 00:00:12   refresh 500 ms       |",
-    "| Focus: p0 (leader)   CRT: on   VRF: on   Auto-rotate: on                                        |",
+    "| Iroha Monitor                                                                   refresh 500 ms   |",
+    "| Peers 3/3 online  Healthy 3  Degraded 0  Down 0  Reported 3                                        |",
+    "| Blocks 129 total / 123 non-empty  Tx 972 ok / 3 rej                                                |",
+    "| Queue 3  Gas 351  Avg latency 29 ms  Refresh 500 ms                                                |",
+    "| Sort height  Filter all  search /2                                                                  |",
+    "| Focus 祭りノード  healthy  commit 95 ms                                                              |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| NETWORK COUNTERS                            | DAG / LAYERS                                       |",
-    "| gossip sent      : 128                      | Layer 0  ▒▒▒▒▒▒▒▒▒▒▒▒ (12 tx)                      |",
-    "| gossip received  : 120                      | Layer 1  ▒▒▒▒▒▒▒▒▒ (8 tx)                           |",
-    "| dropped posts    : 0                        | Layer 2  ▒▒▒▒▒ (4 tx)                               |",
-    "| retries          : 1                        | Layer 3  ▒▒ (2 tx)                                  |",
+    "| Peers 1-1/1  sort height                                                                            |",
+    "| Peer         Height   Tx        Queue   Gas   Latency   Status                                      |",
+    "| 祭りノード     44       328/2     2       134   34ms      healthy commit 95 ms                      |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| VRF / NPoS SUMMARY                                                                                |",
-    "| Slot winners: p0  p2  p1  p0                | penalties: none                                    |",
-    "| Next slots:  p1 → p2 → p0 → p1              | randomness: 0x41ec…                                |",
+    "| Selected Peer                                                                                       |",
+    "| Peer 祭りノード  healthy  (3/3)                                                                     |",
+    "| Endpoint stub://peer/2/3                                                                            |",
+    "| Height 44  Tx 328 / 2  Queue 2                                                                      |",
+    "| Latency 34 ms  Commit 95 ms  Views 0                                                                |",
+    "| Uptime 1 s  Gas 134  Fees 64                                                                         |",
+    "| Note commit 95 ms                                                                                   |",
     "|----------------------------------------------------------------------------------------------------|",
-    "| GAS + FINALITY                                                                                     |",
-    "| recent gas avg: 1.32 M    | max 1.98 M     | commit latency p0: 128 ms                           |",
-    "| finality depth: 2 blocks  | notarised     | commit latency p1: 134 ms                           |",
-    "|----------------------------------------------------------------------------------------------------|",
-    "| ALERT TICKER                                                                                      |",
-    "| ▲ info    CRT mode enabled for overview deck                                                       |",
-    "|----------------------------------------------------------------------------------------------------|",
-    "| QUICK ACTIONS: auto-rotate [✓]  beep [ ]  CRT [✓]  CRT★ [ ]  pipeline overlay [✓]  VRF [✓]        |",
+    "| Alerts & Activity                                                                                   |",
+    "| [OK] 祭りノード: telemetry online                                                                   |",
+    "| [OK] stub://peer/1/3: telemetry online                                                              |",
+    "| [OK] stub://peer/2/3: telemetry online                                                              |",
     "+----------------------------------------------------------------------------------------------------+",
 ]
 
@@ -115,14 +123,14 @@ FALLBACK_FRAMES = {
 
 EXPECTED_MARKERS = {
     "iroha_monitor_demo_overview": [
-        "IROHA MONITOR :: Overview",
-        "Peers:",
-        "PIPELINE SNAPSHOT",
+        "Iroha Monitor",
+        "Selected Peer",
+        "Alerts & Activity",
     ],
     "iroha_monitor_demo_pipeline": [
-        "IROHA MONITOR :: Pipeline",
-        "VRF",
-        "GAS + FINALITY",
+        "Iroha Monitor",
+        "search /2",
+        "Peers 1-1/1",
     ],
 }
 
@@ -580,7 +588,7 @@ def decode_ansi(data: bytes, rows: int, cols: int) -> List[str]:
         if any(line.strip() for line in lines):
             last_nonempty = list(lines)
             joined = "\n".join(lines)
-            if "IROHA MONITOR" in joined:
+            if "iroha monitor" in joined.casefold():
                 header_snapshot = list(lines)
     while i < len(text):
         ch = text[i]
@@ -672,13 +680,13 @@ def decode_ansi(data: bytes, rows: int, cols: int) -> List[str]:
 
     lines = screen.as_lines()
     if any(line.strip() for line in lines):
-        if "IROHA MONITOR" in "\n".join(lines):
+        if "iroha monitor" in "\n".join(lines).casefold():
             return lines
         if header_snapshot:
             return header_snapshot
         return lines
     if last_nonempty:
-        if "IROHA MONITOR" in "\n".join(last_nonempty) and header_snapshot:
+        if "iroha monitor" in "\n".join(last_nonempty).casefold() and header_snapshot:
             return header_snapshot
         return last_nonempty
     return lines
@@ -835,16 +843,13 @@ def main() -> int:
     captures = [
         CaptureSpec(
             name="iroha_monitor_demo_overview",
-            actions=[
-                Action(at_s=0.5, keys=b"c"),
-            ],
+            actions=[],
         ),
         CaptureSpec(
             name="iroha_monitor_demo_pipeline",
             actions=[
-                Action(at_s=0.5, keys=b"c"),
-                Action(at_s=1.0, keys=b"l"),
-                Action(at_s=1.1, keys=b"v"),
+                Action(at_s=0.9, keys=b"s"),
+                Action(at_s=1.2, keys=b"/2\r"),
             ],
         ),
     ]
@@ -900,36 +905,36 @@ class DecodeAnsiTests(unittest.TestCase):
     def test_header_snapshot_restored_after_clear(self) -> None:
         transcript = (
             "\x1b[2J\x1b[H"
-            "IROHA MONITOR :: Overview\n"
-            "Peers: 03 online\n"
+            "Iroha Monitor\n"
+            "Peers 3/3 online\n"
             "\x1b[2J"
         ).encode("utf-8")
 
         lines = decode_ansi(transcript, rows=6, cols=80)
         joined = "\n".join(lines)
-        self.assertIn("IROHA MONITOR :: Overview", joined)
-        self.assertIn("Peers: 03 online", joined)
+        self.assertIn("Iroha Monitor", joined)
+        self.assertIn("Peers 3/3 online", joined)
 
     def test_header_snapshot_used_after_trailing_logs(self) -> None:
         transcript = (
             "\x1b[2J\x1b[H"
-            "IROHA MONITOR :: Overview\n"
-            "Peers: 03 online\n"
+            "Iroha Monitor\n"
+            "Peers 3/3 online\n"
             "\x1b[2J\x1b[H"
             "[INFO] rebuilding widgets\n"
         ).encode("utf-8")
 
         lines = decode_ansi(transcript, rows=6, cols=80)
         joined = "\n".join(lines)
-        self.assertIn("IROHA MONITOR :: Overview", joined)
+        self.assertIn("Iroha Monitor", joined)
         self.assertNotIn("[INFO] rebuilding widgets", joined)
 
     def test_validate_capture_passes_for_expected_markers(self) -> None:
-        lines = ["IROHA MONITOR :: Overview", "Peers: 03 online", "PIPELINE SNAPSHOT"]
+        lines = ["Iroha Monitor", "Selected Peer", "Alerts & Activity"]
         validate_capture(lines, "iroha_monitor_demo_overview")
 
     def test_validate_capture_raises_on_missing_marker(self) -> None:
-        lines = ["IROHA MONITOR :: Overview", "Peers: 03 online"]
+        lines = ["Iroha Monitor", "Selected Peer"]
         with self.assertRaises(RuntimeError):
             validate_capture(lines, "iroha_monitor_demo_overview")
 
@@ -955,13 +960,13 @@ class DecodeAnsiTests(unittest.TestCase):
             lines, used_fallback = normalize_capture(
                 "iroha_monitor_demo_overview",
                 transcript=transcript,
-                lines=["IROHA MONITOR :: Overview", "Peers:", "PIPELINE SNAPSHOT"],
+                lines=["Iroha Monitor", "Selected Peer", "Alerts & Activity"],
                 ans_path=ans_path,
                 allow_fallback=False,
             )
             self.assertFalse(used_fallback)
             self.assertEqual(
-                lines, ["IROHA MONITOR :: Overview", "Peers:", "PIPELINE SNAPSHOT"]
+                lines, ["Iroha Monitor", "Selected Peer", "Alerts & Activity"]
             )
             self.assertEqual(ans_path.read_bytes(), transcript)
 

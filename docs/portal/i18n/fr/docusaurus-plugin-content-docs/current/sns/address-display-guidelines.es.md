@@ -18,9 +18,9 @@ traduction.
 
 Les billeteras, explorateurs et exemples de SDK doivent traiter les directions de
 compte comme charges utiles inmuables. L'exemple de billetera retail de Android fr
-`examples/android/retail-wallet` présente maintenant le client UX requis :- **Dos objetsivos de copia.** Envia dos botones de copia explicitos: IH58
+`examples/android/retail-wallet` présente maintenant le client UX requis :- **Dos objetsivos de copia.** Envia dos botones de copia explicitos: I105
   (de préférence) et la forme compressée seul Sora (`sora...`, deuxième meilleure option).
-  IH58 est toujours sûr de partager extérieurement et d'alimenter la charge utile du QR. La variante
+  I105 est toujours sûr de partager extérieurement et d'alimenter la charge utile du QR. La variante
   comprimida doit inclure une publicité en ligne pour une seule fonction à l'intérieur
   des applications avec le support de Sora. Un exemple de billetera retail pour Android
   connectez-vous aux boutons Material et à vos info-bulles fr
@@ -35,7 +35,7 @@ compte comme charges utiles inmuables. L'exemple de billetera retail de Android 
   domaine implicite `default`, doit enregistrer une légende pour les opérateurs
   que no se requiere sufijo. Les explorateurs doivent également resaltar l'étiquette
   de dominio canonica lorsque le sélecteur codifie un résumé.
-- **QR IH58.** Les codes QR doivent codifier la chaîne IH58. Si la génération
+- **QR I105.** Les codes QR doivent codifier la chaîne I105. Si la génération
   En cas d'erreur QR, il y a une erreur explicite à la place d'une image en blanc.
 - **Mensajeria del portapapeles.** Après avoir copié la forme compressée, émettezun toast ou un snack-bar enregistré aux utilisateurs qui sont seuls Sora et propensa à la
   distorsion par IME.
@@ -59,7 +59,7 @@ entre les plates-formes :
 
 ## Aides du SDK
 
-Chaque SDK présente une aide pratique qui permet de développer les formats IH58 et
+Chaque SDK présente une aide pratique qui permet de développer les formats I105 et
 comprimida junto con la cadena de advertencia para que las capas UI se mantengan
 cohérents :
 
@@ -84,7 +84,7 @@ en brut.
 
 
 Les explorateurs doivent réfléchir au travail de télémétrie et à l'accessibilité de la
-billetera:- Appliquer `data-copy-mode="ih58|compressed|qr"` aux boutons de copie pour cela
+billetera:- Appliquer `data-copy-mode="i105|i105_default|qr"` aux boutons de copie pour cela
   Les frontaux peuvent émettre des contadores d'utilisation avec la métrique Torii
   `torii_address_format_total`. La démo du composant avant d'envoyer un événement
   `iroha:address-copy` avec `{mode,timestamp}` : connectez-le à votre pipeline de
@@ -96,7 +96,7 @@ billetera:- Appliquer `data-copy-mode="ih58|compressed|qr"` aux boutons de copie
   une étude de 30 jours `domain_kind="local12"` directement à partir du tableau
   `address_ingest` de Grafana.
 - Empareja cada control con pistas `aria-label`/`aria-describedby` distinctes que
-  explique si un littéral est sûr de partager (IH58) ou seul Sora
+  explique si un littéral est sûr de partager (I105) ou seul Sora
   (compressé). Incluez implicitement la légende du domaine dans la description pour
   que la technologie asistiva doit être le même contexte visuel.
 - Exposer une région vivante (par exemple, `<output aria-live="polite">...</output>`)
@@ -109,7 +109,7 @@ que se deshabiliten los selectores Local.
 
 Utilisez le [toolkit Local -> Global](local-to-global-toolkit.md) pour automatiser le
 révision et conversion des sélecteurs locaux. L'assistant émet tanto el
-rapport d'auditoire JSON comme la liste convertie IH58/comprimée que les
+rapport d'auditoire JSON comme la liste convertie I105/comprimée que les
 opérateurs adjoints aux tickets de préparation, pendant que le runbook
 accompagnant les tableaux de bord de Grafana et les règles d'Alertmanager que
 contrôler le basculement de manière stricte.
@@ -162,14 +162,14 @@ sélecteur/état et `docs/account_structure.md` pour le diagramme d'octets compl
 
 ## Forzar formas canonicas
 
-Les opérateurs qui convertissent les codifications locales héréditaires au canon IH58 ou
-Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1. `iroha tools address inspect` émet maintenant un CV JSON structuré avec IH58,
+Les opérateurs qui convertissent les codifications locales héréditaires au canon I105 ou
+Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1. `iroha tools address inspect` émet maintenant un CV JSON structuré avec I105,
    compressé et charges utiles hex canonicos. Le CV inclut également un objet
    `domain` avec champs `kind`/`warning` et réflexion sur n'importe quel domaine fourni
    via le campo `input_domain`. Lorsque `kind` et `local12`, la CLI imprime un
    l'annonce à stderr et le CV JSON reflètent le même guide pour les
    Les pipelines de CI et les SDK peuvent être affichés. Pasa `legacy  suffix` quand
-   souhaitez que la codification convertie soit reproduite comme `<ih58>@<domain>`.
+   souhaitez que la codification convertie soit reproduite comme `<i105>@<domain>`.
 2. Les SDK peuvent afficher la même annonce/résumé via l'assistant de
    Javascript :
 
@@ -180,13 +180,13 @@ Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1.
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  L'assistant conserve le préfixe IH58 détecté du littéral à moins que
+  L'assistant conserve le préfixe I105 détecté du littéral à moins que
   proportions explicitamente `networkPrefix`, pour que les résumés para
   redes no default ne se restitue silencieusement avec le préfixe por
-  défaut.3. Convertir la charge utile canonique en réutilisant les champs `ih58.value` ou
-   `compressed` du CV (ou solliciter une autre codification via `--format`). Estas
+  défaut.3. Convertir la charge utile canonique en réutilisant les champs `i105.value` ou
+   `i105_default` du CV (ou solliciter une autre codification via `--format`). Estas
    cadenas ya son seguras para partager externamente.
 4. Actualiser les manifestes, registres et documents de cara al cliente con la
    forme canonique et notification aux partenaires que les sélecteurs locaux seront
@@ -195,7 +195,7 @@ Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1.
    `iroha tools address audit --input addresses.txt --network-prefix 753`. Le commandant
    lee literales séparés par nouvelle ligne (commentaires qui empiezan avec `#` se
    ignorant, y `--input -` o ningun flag usa STDIN), émet un rapport JSON avec
-   curriculum vitae canonicos/IH58/comprimidos para cada entrada, y cuenta errores de
+   curriculum vitae canonicos/I105/comprimidos para cada entrada, y cuenta errores de
    analyser et publicités de dominio Local. États-Unis `--allow-errors` pour les décharges auditaires
    hérités qui contiennent des fils basura, et bloquent l'automatisation avec
    `strict CI post-check` lorsque les opérateurs sont dans une liste de blocage
@@ -205,7 +205,7 @@ Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1.
   pour exporter un CSV `input,status,format,...` qui renvoie les codifications
   canoniques, publicités et erreurs d'analyse en une seule étape.
    El helper omite filas no Local por defecto, convierte cada entrada restante
-   à la codification sollicitée (IH58/comprimido/hex/JSON), et préserve le domaineoriginal cuando se usa `legacy  suffix`. Combiné avec `--allow-errors` pour
+   à la codification sollicitée (I105/comprimido/hex/JSON), et préserve le domaineoriginal cuando se usa `legacy  suffix`. Combiné avec `--allow-errors` pour
    Ensuite, vous pouvez également télécharger lorsqu'un dump contient des informations littérales mal formées.
 7. L'automatisation de CI/lint peut être exécutée `ci/check_address_normalize.sh`,
    que extrae los selectores Local de `fixtures/account/address_vectors.json`,
@@ -248,6 +248,6 @@ Incluez la puce suivante dans les notes de lancement du billetera/explorador
 au public le basculement :> **Directions :** Inscrivez-vous à l'assistant `iroha tools address normalize`
 > et se connecte au CI (`ci/check_address_normalize.sh`) pour que les pipelines de
 > billetera/explorador puedan convertir selectores Local heredados a formas
-> canoniques IH58/comprimées avant que Local-8/Local-12 soit bloqué sur le réseau principal.
+> canoniques I105/comprimées avant que Local-8/Local-12 soit bloqué sur le réseau principal.
 > Actualiser toute exportation personnalisée pour exécuter la commande et
 > ajouter la liste normalisée au paquet de preuves de libération.

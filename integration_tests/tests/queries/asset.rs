@@ -39,13 +39,22 @@ fn find_asset_total_quantity() -> Result<()> {
             gen_account_in("wonderland").0,
             gen_account_in("looking_glass").0,
         ];
+        let wonderland_domain: DomainId = "wonderland".parse()?;
+        let looking_glass_domain: DomainId = "looking_glass".parse()?;
 
         // Registering accounts
         let register_accounts = accounts
             .iter()
+            .enumerate()
             .skip(1) // Alice has already been registered in genesis
-            .cloned()
-            .map(|account_id| Register::account(Account::new(account_id)))
+            .map(|(index, account_id)| {
+                let domain = if index == accounts.len() - 1 {
+                    looking_glass_domain.clone()
+                } else {
+                    wonderland_domain.clone()
+                };
+                Register::account(Account::new(account_id.to_account_id(domain)))
+            })
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;
 

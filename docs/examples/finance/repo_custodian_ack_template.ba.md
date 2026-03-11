@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 | Ялан | Ҡиммәте |
 |------|-------|
 | Килешеү идентификаторы | `<repo-yyMMdd-XX>` |
-| Һаҡлаусы иҫәп id | `<ih58...>` |
+| Һаҡлаусы иҫәп id | `<i105...>` |
 | / дата менән әҙерләнгән | I18NI0000007X |
 | Өҫтәл контакттар танылған | `<desk lead + counterparty>` |
 | Дәлилдәр каталогы | ``artifacts/finance/repo/<slug>/`` |

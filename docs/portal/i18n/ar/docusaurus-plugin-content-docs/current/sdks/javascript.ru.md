@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -221,7 +221,7 @@ for (const entry of allowances) {
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -231,7 +231,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -271,7 +271,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 نقاط النهاية `/v1/explorer/accounts/{account_id}/qr` حتى تتمكن لوحات المعلومات من إعادة تشغيل
 نفس اللقطات التي تعمل على تشغيل البوابة. `getExplorerMetrics()` يقوم بتطبيع ملف
 الحمولة وإرجاع `null` عند تعطيل المسار. إقرانها مع
-`getExplorerAccountQr()` عندما تحتاج إلى IH58 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
+`getExplorerAccountQr()` عندما تحتاج إلى I105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
 SVG لأزرار المشاركة.
 
 ```ts
@@ -286,9 +286,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -296,8 +294,8 @@ console.log(
 );
 ```
 
-يؤدي تمرير `addressFormat: "compressed"` إلى عكس ضغط Explorer الافتراضي
-محددات. حذف التجاوز لمخرج IH58 المفضل أو طلب `ih58_qr`
+يؤدي تمرير `I105` إلى عكس ضغط Explorer الافتراضي
+محددات. حذف التجاوز لمخرج I105 المفضل أو طلب `i105_qr`
 عندما تحتاج إلى متغير QR الآمن. الحرفي المضغوط هو ثاني أفضل
 خيار Sora فقط لـ UX. يقوم المساعد دائمًا بإرجاع المعرف الأساسي،
 البيانات الحرفية والبيانات التعريفية المحددة (بادئة الشبكة، إصدار/وحدات QR، الخطأ
@@ -507,8 +505,8 @@ for await (const event of torii.streamEvents({
 قم بتحديدها بشكل أساسي قبل تقديم الطلبات:- يقوم `getUaidPortfolio(uaid, { assetId })` بتجميع الأرصدة لكل مساحة بيانات،
   تجميع ممتلكات الأصول حسب معرفات الحساب الأساسية؛ قم بتمرير `assetId` لتصفية ملف
   المحفظة وصولاً إلى مثيل أصل واحد.
-- يقوم `getUaidBindings(uaid, { addressFormat })` بتعداد كل حساب ↔ لمساحة البيانات
-  الربط (`addressFormat: "compressed"` يُرجع القيم الحرفية `sora…`).
+- يقوم `getUaidBindings(uaid)` بتعداد كل حساب ↔ لمساحة البيانات
+  الربط (`I105` يُرجع القيم الحرفية `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` يُرجع كل بيان قدرة،
   حالة دورة الحياة، والحسابات المقيدة للتدقيق.
 
@@ -528,7 +526,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -553,7 +551,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -563,7 +561,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

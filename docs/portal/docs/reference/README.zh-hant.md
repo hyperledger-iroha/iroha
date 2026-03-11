@@ -20,6 +20,7 @@ translator: machine-google-reviewed
 - **Norito編解碼器概述** – `reference/norito-codec.md`直接鏈接到權威
   填充入口表時的 `norito.md` 規範。
 - **Torii OpenAPI** – `/reference/torii-openapi` 使用以下方式呈現最新的 Torii REST 規範
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   重新記錄。使用 `npm run sync-openapi -- --version=current --latest` 重新生成規範（添加
   `--mirror=<label>` 將快照複製到其他歷史版本中）。
 - **配置表** – 完整的參數目錄保存在

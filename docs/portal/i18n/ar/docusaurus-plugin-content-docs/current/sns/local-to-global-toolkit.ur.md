@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI لالتفاف الكرتا والتقاطها:
   - `audit.json` -- `iroha tools address audit --format json` كإخراج منظم ۔
-  - `normalized.txt` -- ہر محدد المجال المحلي کے لیے IH58 (ترجیحی) / مضغوط (`sora`، ثاني أفضل) حرفي۔
+  - `normalized.txt` -- ہر محدد المجال المحلي کے لیے I105 (ترجیحی) / مضغوط (`sora`، ثاني أفضل) حرفي۔
 - اسکرپٹ کو عنوان لوحة التحكم (`dashboards/grafana/address_ingest.json`)
   ويتم استخدام قواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`)
   Local-8 / Local-12 قطع ثابت ثابت. لوحات تصادم محلية 8 و محلية 12 و
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ##استخدام
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 اختیارات:
 
-- `--format compressed` IH58 بجائے `sora...` إخراج .
+- `--format i105` I105 بجائے `sora...` إخراج .
 - `domainless output (default)` هذه مجرد كلمات حرفية.
 - تم تحديد خطوة التحويل `--audit-only`.
 - `--allow-errors` يقوم بفحص الصفوف المشوهة ويتم فحصها (سلوك CLI).

@@ -8,6 +8,8 @@ source_hash: 0dc64bb4067d734250852a74a65a2100bd68e5ff35f9e8e9dbf3bd2b86f00cfa
 source_last_modified: "2026-01-22T15:38:30.656337+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
+id: pin-registry-ops-he
+slug: /sorafs/pin-registry-ops-he
 ---
 
 :::הערה מקור קנוני

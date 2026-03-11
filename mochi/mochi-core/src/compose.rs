@@ -18,7 +18,8 @@ use iroha_data_model::{
     ChainId,
     account::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
+        AccountAdmissionPolicy, AccountId, ScopedAccountId,
+        admission::ImplicitAccountFeeDestination,
     },
     asset::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition},
@@ -644,7 +645,7 @@ pub enum InstructionDraft {
     /// Register a new account.
     RegisterAccount {
         /// Identifier of the account to register.
-        account: AccountId,
+        account: ScopedAccountId,
     },
     /// Register a numeric asset definition.
     RegisterAssetDefinition {
@@ -754,7 +755,7 @@ impl InstructionDraft {
     ///
     /// Returns a [`ComposeError`] if the account identifier fails to parse.
     pub fn register_account_from_input(account: &str) -> Result<Self, ComposeError> {
-        let account = parse_account_id(account)?;
+        let account = parse_scoped_account_id(account)?;
         Ok(Self::RegisterAccount { account })
     }
 
@@ -1074,10 +1075,7 @@ impl InstructionDraft {
                     "kind".to_owned(),
                     Value::String("register_account".to_owned()),
                 );
-                object.insert(
-                    "account".to_owned(),
-                    Value::String(account_literal(account)),
-                );
+                object.insert("account".to_owned(), Value::String(account.to_string()));
             }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
@@ -1343,12 +1341,7 @@ fn account_literal(account_id: &AccountId) -> String {
 }
 
 fn asset_literal(asset_id: &AssetId) -> String {
-    let account_literal = account_literal(asset_id.account());
-    if asset_id.definition().domain() == asset_id.account().domain() {
-        format!("{}##{account_literal}", asset_id.definition().name())
-    } else {
-        format!("{}#{account_literal}", asset_id.definition())
-    }
+    asset_id.to_string()
 }
 
 fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
@@ -1365,6 +1358,13 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
             account: value.to_owned(),
             reason: err.to_string(),
         })
+}
+
+fn parse_scoped_account_id(value: &str) -> Result<ScopedAccountId, ComposeError> {
+    ScopedAccountId::from_str(value).map_err(|err| ComposeError::InvalidAccountId {
+        account: value.to_owned(),
+        reason: err.to_string(),
+    })
 }
 
 fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {

@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Recupere le `SuffixPolicyV1` クーラント (キャッシュ可能)。 |
 | `/v1/sns/registrations/{selector}` |入手 | -- | Retourne le `NameRecordV1` courant + etat 効果 (アクティブ、グレースなど)。 |
 
-**セレクターのエンコード:** ファイル セグメント `{selector}` は IH58 を受け入れ、圧縮し、16 進数の正規セロン ADDR-5 を受け入れます。 Torii ファイルは、`NameSelectorV1` によって正規化されます。
+**セレクターのエンコード:** ファイル セグメント `{selector}` は I105 を受け入れ、圧縮し、16 進数の正規セロン ADDR-5 を受け入れます。 Torii ファイルは、`NameSelectorV1` によって正規化されます。
 
 **エラーのモデル:** エンドポイントの戻り値 Norito JSON 平均 `code`、`message`、`details`。コードには `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing` が含まれます。
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -224,7 +224,7 @@ Les controles en echec renvoient `sns_err_governance_missing`。
 
 1. クライアントの質問 `/v1/sns/policies/{suffix_id}` は、優先順位の高い回復者と、責任のあるレベルの回復者を求めます。
 2. クライアントは `RegisterNameRequestV1` を構成します:
-   - `selector` は、ラベル IH58 (優先) または圧縮 (2 番目の選択) を取得します。
+   - `selector` は、ラベル I105 (優先) または圧縮 (2 番目の選択) を取得します。
    - `term_years` 政治の限界。
    - `payment` スプリッタ トレゾレリー/スチュワードの転送参照。
 3. Torii 有効:

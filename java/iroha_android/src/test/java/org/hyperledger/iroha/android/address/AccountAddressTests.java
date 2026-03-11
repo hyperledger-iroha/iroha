@@ -20,7 +20,7 @@ public final class AccountAddressTests {
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
-    ih58PrefixMismatchThrows();
+    i105PrefixMismatchThrows();
     compressedRequiresSentinel();
     parseEncodedRejectsLegacyForms();
     curveSupportDefaults();
@@ -57,63 +57,65 @@ public final class AccountAddressTests {
 
     final Map<String, Object> encodings = asMap(vector.get("encodings"), caseId + ".encodings", caseId);
     final String canonicalHex = asString(encodings.get("canonical_hex"), caseId + ".encodings.canonical_hex", caseId);
-    final Map<String, Object> ih58 = asMap(encodings.get("ih58"), caseId + ".encodings.ih58", caseId);
-    final int prefix = asNumber(ih58.get("prefix"), caseId + ".encodings.ih58.prefix", caseId).intValue();
-    final String ih58String = asString(ih58.get("string"), caseId + ".encodings.ih58.string", caseId);
-    final String compressedHalf = asString(encodings.get("compressed"), caseId + ".encodings.compressed", caseId);
-    final String compressedFull =
-        asString(encodings.get("compressed_fullwidth"), caseId + ".encodings.compressed_fullwidth", caseId);
+    final Map<String, Object> i105 = asMap(encodings.get("i105"), caseId + ".encodings.i105", caseId);
+    final int prefix = asNumber(i105.get("prefix"), caseId + ".encodings.i105.prefix", caseId).intValue();
+    final String i105String = asString(i105.get("string"), caseId + ".encodings.i105.string", caseId);
+    final String i105DefaultHalf =
+        asString(encodings.get("i105_default"), caseId + ".encodings.i105_default", caseId);
+    final String i105DefaultFull =
+        asString(encodings.get("i105_default_fullwidth"), caseId + ".encodings.i105_default_fullwidth", caseId);
 
     final AccountAddress canonical = parseCanonicalHexFixture(canonicalHex);
     final byte[] canonicalBytes = canonical.canonicalBytes();
 
-    final AccountAddress ih58Address = AccountAddress.fromIH58(ih58String, prefix);
-    assert Arrays.equals(ih58Address.canonicalBytes(), canonicalBytes)
-        : caseId + ": IH58 canonical mismatch";
+    final AccountAddress i105Address = AccountAddress.fromI105(i105String, prefix);
+    assert Arrays.equals(i105Address.canonicalBytes(), canonicalBytes)
+        : caseId + ": I105 canonical mismatch";
 
-    final AccountAddress.ParseResult ih58Parsed = AccountAddress.parseEncoded(ih58String, prefix);
-    assert ih58Parsed.format == AccountAddress.Format.IH58 : caseId + ": IH58 parse format mismatch";
-    assert Arrays.equals(ih58Parsed.address.canonicalBytes(), canonicalBytes)
-        : caseId + ": IH58 parse canonical mismatch";
+    final AccountAddress.ParseResult i105Parsed = AccountAddress.parseEncoded(i105String, prefix);
+    assert i105Parsed.format == AccountAddress.Format.I105 : caseId + ": I105 parse format mismatch";
+    assert Arrays.equals(i105Parsed.address.canonicalBytes(), canonicalBytes)
+        : caseId + ": I105 parse canonical mismatch";
 
     for (String encodingLabel : List.of("half-width", "full-width")) {
-      final String encoding = "half-width".equals(encodingLabel) ? compressedHalf : compressedFull;
-      final AccountAddress decoded = AccountAddress.fromCompressedSora(encoding);
+      final String encoding = "half-width".equals(encodingLabel) ? i105DefaultHalf : i105DefaultFull;
+      final AccountAddress decoded = AccountAddress.fromI105Default(encoding);
       assert Arrays.equals(decoded.canonicalBytes(), canonicalBytes)
-          : caseId + ": compressed " + encodingLabel + " canonical mismatch";
+          : caseId + ": i105-default " + encodingLabel + " canonical mismatch";
 
       final AccountAddress.ParseResult parsed = AccountAddress.parseEncoded(encoding, null);
-      assert parsed.format == AccountAddress.Format.COMPRESSED
-          : caseId + ": compressed " + encodingLabel + " parse format mismatch";
+      assert parsed.format == AccountAddress.Format.I105_DEFAULT
+          : caseId + ": i105-default " + encodingLabel + " parse format mismatch";
       assert Arrays.equals(parsed.address.canonicalBytes(), canonicalBytes)
-          : caseId + ": compressed " + encodingLabel + " parse canonical mismatch";
+          : caseId + ": i105-default " + encodingLabel + " parse canonical mismatch";
     }
 
-    final String reencodedIh58 = canonical.toIH58(prefix);
-    assert reencodedIh58.equals(ih58String) : caseId + ": IH58 re-encode mismatch";
-    final String reencodedHalf = canonical.toCompressedSora();
-    assert reencodedHalf.equals(compressedHalf) : caseId + ": compressed re-encode mismatch";
-    final String reencodedFull = canonical.toCompressedSoraFullWidth();
-    assert reencodedFull.equals(compressedFull) : caseId + ": compressed full-width re-encode mismatch";
+    final String reencodedI105 = canonical.toI105(prefix);
+    assert reencodedI105.equals(i105String) : caseId + ": I105 re-encode mismatch";
+    final String reencodedHalf = canonical.toI105Default();
+    assert reencodedHalf.equals(i105DefaultHalf) : caseId + ": i105-default re-encode mismatch";
+    final String reencodedFull = canonical.toI105DefaultFullWidth();
+    assert reencodedFull.equals(i105DefaultFull) : caseId + ": i105-default full-width re-encode mismatch";
     assert canonical.canonicalHex().equalsIgnoreCase(canonicalHex)
         : caseId + ": canonical hex re-encode mismatch";
 
     final AccountAddress.DisplayFormats formats = canonical.displayFormats(prefix);
-    assert formats.ih58.equals(ih58String) : caseId + ": displayFormats IH58 mismatch";
-    assert formats.compressed.equals(compressedHalf) : caseId + ": displayFormats compressed mismatch";
+    assert formats.i105.equals(i105String) : caseId + ": displayFormats I105 mismatch";
+    assert formats.i105Default.equals(i105DefaultHalf)
+        : caseId + ": displayFormats i105-default mismatch";
     assert formats.networkPrefix == prefix : caseId + ": displayFormats prefix mismatch";
-    assert formats.compressedWarning.equals(AccountAddress.compressedWarningMessage())
+    assert formats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": displayFormats warning mismatch";
 
     final AccountAddress.DisplayFormats defaultFormats = canonical.displayFormats();
-    assert defaultFormats.networkPrefix == AccountAddress.DEFAULT_IH58_PREFIX
+    assert defaultFormats.networkPrefix == AccountAddress.DEFAULT_I105_DISCRIMINANT
         : caseId + ": default displayFormats prefix mismatch";
-    final String expectedDefaultIh58 = canonical.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
-    assert defaultFormats.ih58.equals(expectedDefaultIh58)
-        : caseId + ": default displayFormats IH58 mismatch";
-    assert defaultFormats.compressed.equals(compressedHalf)
-        : caseId + ": default displayFormats compressed mismatch";
-    assert defaultFormats.compressedWarning.equals(AccountAddress.compressedWarningMessage())
+    final String expectedDefaultI105 = canonical.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    assert defaultFormats.i105.equals(expectedDefaultI105)
+        : caseId + ": default displayFormats I105 mismatch";
+    assert defaultFormats.i105Default.equals(i105DefaultHalf)
+        : caseId + ": default displayFormats i105-default mismatch";
+    assert defaultFormats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": default displayFormats warning mismatch";
   }
 
@@ -131,12 +133,12 @@ public final class AccountAddressTests {
             : defaultPrefix;
 
     switch (format) {
-      case "ih58":
-        expectError(caseId, expected, () -> AccountAddress.fromIH58(input, expectedPrefix));
+      case "i105":
+        expectError(caseId, expected, () -> AccountAddress.fromI105(input, expectedPrefix));
         expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, expectedPrefix));
         break;
-      case "compressed":
-        expectError(caseId, expected, () -> AccountAddress.fromCompressedSora(input));
+      case "i105_default":
+        expectError(caseId, expected, () -> AccountAddress.fromI105Default(input));
         expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
         break;
       case "canonical_hex":
@@ -152,34 +154,34 @@ public final class AccountAddressTests {
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 
     final String canonical = address.canonicalHex();
-    final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
-    final String compressed = address.toCompressedSora();
+    final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final String i105Default = address.toI105Default();
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert !ih58.isEmpty() : "IH58 encoding mismatch";
-    assert compressed.startsWith("sora") : "compressed encoding mismatch";
+    assert !i105.isEmpty() : "I105 encoding mismatch";
+    assert i105Default.startsWith("sora") : "i105-default encoding mismatch";
 
-    final AccountAddress.ParseResult ih58Parsed =
-        AccountAddress.parseEncoded(ih58, AccountAddress.DEFAULT_IH58_PREFIX);
-    assert ih58Parsed.format == AccountAddress.Format.IH58 : "expected IH58 format";
-    assert Arrays.equals(address.canonicalBytes(), ih58Parsed.address.canonicalBytes())
-        : "IH58 round-trip mismatch";
+    final AccountAddress.ParseResult i105Parsed =
+        AccountAddress.parseEncoded(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    assert i105Parsed.format == AccountAddress.Format.I105 : "expected I105 format";
+    assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
+        : "I105 round-trip mismatch";
 
-    final AccountAddress.ParseResult compressedParsed = AccountAddress.parseEncoded(compressed, null);
-    assert compressedParsed.format == AccountAddress.Format.COMPRESSED : "expected compressed format";
-    assert Arrays.equals(address.canonicalBytes(), compressedParsed.address.canonicalBytes())
-        : "compressed round-trip mismatch";
+    final AccountAddress.ParseResult i105DefaultParsed = AccountAddress.parseEncoded(i105Default, null);
+    assert i105DefaultParsed.format == AccountAddress.Format.I105_DEFAULT : "expected i105-default format";
+    assert Arrays.equals(address.canonicalBytes(), i105DefaultParsed.address.canonicalBytes())
+        : "i105-default round-trip mismatch";
   }
 
-  private static void ih58PrefixMismatchThrows() throws Exception {
+  private static void i105PrefixMismatchThrows() throws Exception {
     final byte[] key = new byte[32];
     Arrays.fill(key, (byte) 1);
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
-    final String ih58 = address.toIH58(5);
+    final String i105 = address.toI105(5);
     boolean threw = false;
     try {
-      AccountAddress.parseEncoded(ih58, 9);
+      AccountAddress.parseEncoded(i105, 9);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX;
     }
@@ -190,11 +192,11 @@ public final class AccountAddressTests {
     final byte[] key = new byte[32];
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String canonical = address.canonicalHex();
-    final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
     expectAnyAddressError(() -> AccountAddress.parseEncoded(canonical, null));
     expectAnyAddressError(() -> AccountAddress.parseEncoded(canonical.substring(2), null));
-    expectAnyAddressError(() -> AccountAddress.parseEncoded(ih58 + "@wonderland", null));
+    expectAnyAddressError(() -> AccountAddress.parseEncoded(i105 + "@wonderland", null));
   }
 
   private static void singleKeyPayloadExtraction() throws Exception {
@@ -213,11 +215,11 @@ public final class AccountAddressTests {
   private static void compressedRequiresSentinel() {
     boolean threw = false;
     try {
-      AccountAddress.fromCompressedSora("invalid");
+      AccountAddress.fromI105Default("invalid");
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL;
     }
-    assert threw : "compressed parsing should reject invalid sentinel";
+    assert threw : "i105-default parsing should reject invalid sentinel";
   }
 
   private static void curveSupportDefaults() {
@@ -237,7 +239,7 @@ public final class AccountAddressTests {
     AccountAddress.configureCurveSupport(
         AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
     final AccountAddress address = AccountAddress.fromAccount(key, "ml-dsa");
-    final AccountAddress roundTripped = AccountAddress.fromIH58(address.toIH58(1), 1);
+    final AccountAddress roundTripped = AccountAddress.fromI105(address.toI105(1), 1);
     assert Arrays.equals(address.canonicalBytes(), roundTripped.canonicalBytes())
         : "ML-DSA enablement round-trip mismatch";
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
@@ -369,7 +371,7 @@ public final class AccountAddressTests {
       case "UnexpectedNetworkPrefix":
         final Object expectedPrefix = expected.get("expected");
         final Object foundPrefix = expected.get("found");
-        return message.contains("unexpected IH58 network prefix")
+        return message.contains("unexpected I105 network prefix")
             && (expectedPrefix == null || message.contains(expectedPrefix.toString()))
             && (foundPrefix == null || message.contains(foundPrefix.toString()));
       case "InvalidCompressedChar":

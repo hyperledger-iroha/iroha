@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON `"perms"` немесе `"permissions"` кілттерін қабылдайды, олардың әрқайсысы рұқсат атауларының жол жиымы.
     - Мысалдар:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - Жасанды түрде қолдау көрсетілетін рұқсат атауының префикстері:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

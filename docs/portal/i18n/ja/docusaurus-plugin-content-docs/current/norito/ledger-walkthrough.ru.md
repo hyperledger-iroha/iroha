@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 ID は。バンドルを使用して、デモ版をバンドルします:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Подтвердите значения, выведя первые аккаунты:

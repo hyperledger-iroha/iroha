@@ -41,6 +41,10 @@ fn spec_key() -> Name {
     format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
 }
 
+fn home_domain_key() -> Name {
+    format!("{MULTISIG}{DELIMITER}home_domain").parse().unwrap()
+}
+
 fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {
     format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}{hash}")
         .parse()
@@ -101,28 +105,35 @@ pub(super) fn load_account_metadata<V: Execute + Visit + ?Sized>(
         })
 }
 
-fn multisig_role_for(account: &AccountId) -> RoleId {
-    format!(
-        "{MULTISIG_SIGNATORY}{DELIMITER}{}{DELIMITER}{}",
-        account.domain(),
-        account.signatory(),
-    )
-    .parse()
-    .unwrap()
+pub(super) fn multisig_home_domain<V: Execute + Visit + ?Sized>(
+    multisig_account: &AccountId,
+    executor: &V,
+) -> Result<DomainId, ValidationFail> {
+    load_account_metadata(multisig_account, &home_domain_key(), executor)?
+        .try_into_any_norito()
+        .map_err(metadata_conversion_error)
+}
+
+fn multisig_role_for(home_domain: &DomainId, account: &AccountId) -> RoleId {
+    let suffix = account
+        .canonical_i105()
+        .unwrap_or_else(|_| HashOf::new(account).to_string());
+    format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}")
+        .parse()
+        .unwrap()
 }
 
 pub(super) fn is_multisig<V: Execute + Visit + ?Sized>(
     account: &AccountId,
     executor: &V,
 ) -> Result<bool, ValidationFail> {
-    let expected_role = multisig_role_for(account);
-
-    let roles = executor
-        .host()
-        .query(FindRolesByAccountId::new(account.clone()))
-        .execute_all()?;
-
-    Ok(roles.into_iter().any(|role| role == expected_role))
+    match load_account_metadata(account, &spec_key(), executor) {
+        Ok(_) => Ok(true),
+        Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Account(_) | FindError::MetadataKey(_),
+        ))) => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 pub(super) fn multisig_spec<V: Execute + Visit + ?Sized>(

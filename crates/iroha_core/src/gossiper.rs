@@ -93,8 +93,8 @@ fn tx_gossip_frame_payload_cap(
         return 0;
     }
     let dummy_keypair = KeyPair::random();
-    let dummy_domain = DomainId::from_str("dummy").expect("static domain id should parse");
-    let dummy_authority = AccountId::new(dummy_domain, dummy_keypair.public_key().clone());
+    let _dummy_domain = DomainId::from_str("dummy").expect("static domain id should parse");
+    let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
     let dummy_signed =
         iroha_data_model::transaction::TransactionBuilder::new(chain_id.clone(), dummy_authority)
             .with_instructions(std::iter::empty::<InstructionBox>())

@@ -14,7 +14,7 @@ título: Соответствие адресов аккаунтов
 descripción: Сводка рабочего процесса ADDR-2 aparato y sincronización del comando SDK.
 ---
 
-Канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) incluye accesorios IH58 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativo. Si utiliza SDK + Torii para operar en Odín y en JSON, podrá instalar un códec en el producto. Esta página contiene un bloque de estado actual (`docs/source/account_address_status.md` en el repositorio principal), cuáles son los principales portales de citas обратиться к flujo de trabajo без необходимости копаться в mono-repo.
+Канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) incluye accesorios I105 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple y negativo. Si utiliza SDK + Torii para operar en Odín y en JSON, podrá instalar un códec en el producto. Esta página contiene un bloque de estado actual (`docs/source/account_address_status.md` en el repositorio principal), cuáles son los principales portales de citas обратиться к flujo de trabajo без необходимости копаться в mono-repo.
 
 ## Перегенерация или проверка пакета
 
@@ -43,7 +43,7 @@ Flujo de trabajo de CI **Deriva del vector de dirección** запускает `c
 | Torii (servidor) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK de JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Каждый arnés выполняет канонических байт + IH58 + сжатых кодировок and проверяет, что коды ошибок в стиле Norito совпадают с accesorio для negativo кейсов.
+| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Каждый arnés выполняет канонических байт + I105 + сжатых кодировок and проверяет, что коды ошибок в стиле Norito совпадают с accesorio для negativo кейсов.
 
 ## ¿No hay automatización?
 
