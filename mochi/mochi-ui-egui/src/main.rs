@@ -4922,10 +4922,6 @@ impl MochiApp {
         }
     }
 
-    fn apply_settings_changes(&mut self) -> Result<(), String> {
-        self.apply_settings_changes_with_restart(false)
-    }
-
     fn apply_settings_changes_with_restart(
         &mut self,
         force_start_after_rebuild: bool,
@@ -5969,21 +5965,17 @@ impl MochiApp {
                         ui.add_space(10.0);
                         ui.label(RichText::new("Basic devnet setup").strong());
                         ui.horizontal_wrapped(|ui| {
+                            let selected_profile = if self.settings_profile_input.trim().is_empty()
+                            {
+                                supervisor
+                                    .and_then(|runtime| runtime.profile().preset)
+                                    .unwrap_or(ProfilePreset::SinglePeer)
+                            } else {
+                                parse_profile_preset(&self.settings_profile_input)
+                                    .unwrap_or(ProfilePreset::SinglePeer)
+                            };
                             for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
-                                let selected = self
-                                    .settings_profile_input
-                                    .trim()
-                                    .is_empty()
-                                    .then_some(
-                                        supervisor
-                                            .and_then(|runtime| runtime.profile().preset)
-                                            .unwrap_or(ProfilePreset::SinglePeer),
-                                    )
-                                    .unwrap_or_else(|| {
-                                        parse_profile_preset(&self.settings_profile_input)
-                                            .unwrap_or(ProfilePreset::SinglePeer)
-                                    })
-                                    == preset;
+                                let selected = selected_profile == preset;
                                 if ui
                                     .add(Button::selectable(selected, preset.label()))
                                     .clicked()
@@ -14941,7 +14933,7 @@ mod tests {
         let state_export_dir = temp.path().join("state-export");
         app.settings_state_export_dir_input = state_export_dir.display().to_string();
 
-        app.apply_settings_changes()
+        app.apply_settings_changes_with_restart(false)
             .expect("settings persistence should succeed");
 
         let bundle = app

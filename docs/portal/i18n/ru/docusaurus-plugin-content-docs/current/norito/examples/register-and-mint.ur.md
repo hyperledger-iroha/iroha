@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر واک تھرو
 
-- Получите доступ к быстрому запуску SDK (например, `ih58...`) и ознакомьтесь с кратким руководством по SDK. مرحلے کی عکاسی کرتا ہے۔
+- Получите доступ к быстрому запуску SDK (например, `i105...`) и ознакомьтесь с кратким руководством по SDK. مرحلے کی عکاسی کرتا ہے۔
 - `register_and_mint` پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی Имя Алисы: 250 лет назад
-- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں تاکہ کی کامیابی کی تصدیق ہو۔
+- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account i105...` کے ذریعے بیلنس چیک کریں تاکہ کی کامیابی کی تصدیق ہو۔
 
 ## Использование SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

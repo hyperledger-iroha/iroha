@@ -1,5 +1,4 @@
 //! Query struct constructor sanity checks
-use std::str::FromStr;
 
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;

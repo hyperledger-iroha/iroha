@@ -44,18 +44,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wsv.grant_permission(&alice, PermissionToken::TransferAsset(asset_b.clone()));
     wsv.grant_permission(
         &alice,
-        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&alice)),
+        PermissionToken::ReadAccountAssets(AccountId::from(&alice)),
     );
     wsv.grant_permission(
         &alice,
-        PermissionToken::ReadAccountAssets(AccountId::from_account_id(&pool)),
+        PermissionToken::ReadAccountAssets(AccountId::from(&pool)),
     );
-    let alice_subject = AccountId::from_account_id(&alice);
+    let alice_subject = AccountId::from(&alice);
 
     // 3) Map small integers used by the program to account subjects in the host
     let mut account_map = HashMap::new();
     account_map.insert(1u64, alice_subject.clone());
-    account_map.insert(2u64, AccountId::from_account_id(&pool));
+    account_map.insert(2u64, AccountId::from(&pool));
     let mut asset_map = HashMap::new();
     asset_map.insert(1u64, asset_a.clone()); // input
     asset_map.insert(2u64, asset_b.clone()); // output

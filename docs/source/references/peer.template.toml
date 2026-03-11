@@ -13,7 +13,7 @@
 # public_key =
 # private_key =
 # default_account_domain_label = "default"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
-# chain_discriminant = 0x02F1              # IH58 prefix / chain discriminant; override for dev/test networks.
+# chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
 telemetry_enabled = true
 telemetry_profile = "operator"  # {disabled, operator, extended, developer, full}

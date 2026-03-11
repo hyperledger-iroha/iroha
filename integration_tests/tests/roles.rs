@@ -78,9 +78,11 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
 
     let alice_id = ALICE_ID.clone();
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
+    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse = Register::account(Account::new(mouse_id.clone()));
+    let register_mouse =
+        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role
@@ -145,9 +147,11 @@ fn unregistered_role_removed_from_account() -> Result<()> {
     let role_id: RoleId = "root".parse().expect("Valid");
     let alice_id = ALICE_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
+    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse = Register::account(Account::new(mouse_id.clone()));
+    let register_mouse =
+        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
     test_client.submit_blocking(register_mouse)?;
 
     // Register root role
@@ -221,7 +225,8 @@ fn role_permissions_are_deduplicated() {
         return;
     };
     let test_client = network.client();
-    let rose_definition: AssetDefinitionId = format!("rose#{}", ALICE_ID.domain())
+    let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+    let rose_definition: AssetDefinitionId = format!("rose#{wonderland}")
         .parse()
         .expect("valid rose definition");
     let rose_asset = AssetId::new(rose_definition, ALICE_ID.clone());
@@ -285,9 +290,11 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     let alice_id = ALICE_ID.clone();
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
+    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse = Register::account(Account::new(mouse_id.clone()));
+    let register_mouse =
+        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role

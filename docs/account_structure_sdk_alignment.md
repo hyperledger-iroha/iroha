@@ -7,12 +7,12 @@ path for legacy account/asset literals.
 
 ## Required behavior
 1. **Account parser contract (strict):**
-   - Accept only canonical IH58 account literals.
+   - Accept only canonical I105 account literals.
    - Reject all of:
      - any `@domain` suffix
      - alias literals
      - canonical hex account literals in parser input
-     - compressed `sora…` literals
+    - non-canonical/legacy I105 literals
      - legacy `norito:<hex>` account literals
      - `uaid:` / `opaque:` account parser forms
 2. **Account identity surface:**
@@ -22,7 +22,7 @@ path for legacy account/asset literals.
    - Accept only encoded asset IDs: `norito:<hex>`.
    - Reject legacy textual forms (`asset#domain#account`, `asset##account`, etc.).
 4. **Canonical output:**
-   - Render account IDs as canonical IH58 in user-facing output.
+   - Render account IDs as canonical I105 in user-facing output.
    - Canonical hex remains debug/render-only and is not accepted as parser input.
 5. **Compatibility policy:**
    - No parser fallback branches.

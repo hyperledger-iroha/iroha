@@ -54,4 +54,8 @@ let router = builder.finish();
 
 פרויקטים המש嵌Torii צריכים לעבור מכל מניפולציה ישירה ב-Router למתודות `RouterBuilder`. התבנית ההיסטורית של החזרת Router מעודכן מתוך `add_*_routes` הוצאה משימוש ואינה נתמכת עוד בתוך הקרייט.
 
+## קריאה נוספת
+
+- `crates/iroha_torii/docs/mcp_api.md` — חוזה ה־MCP JSON-RPC הקנוני של Torii עבור אינטגרציות agent/tool (`/v1/mcp`).
+
 </div>

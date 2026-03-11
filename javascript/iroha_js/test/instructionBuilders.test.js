@@ -154,7 +154,7 @@ const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
   domain: DOMAIN_ID,
   publicKey: ACCOUNT_PUBLIC_KEY,
 });
-const ACCOUNT_ID = ACCOUNT_ADDRESS.toIH58();
+const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105();
 const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
@@ -175,9 +175,9 @@ const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
   domain: DOMAIN_ID,
   publicKey: SAMPLE_PUBLIC_KEY,
 });
-const SAMPLE_ACCOUNT_IH58_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toIH58();
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toCompressedSora();
-const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_IH58_LITERAL);
+const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105Default();
+const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
 function toByteArray(bytes) {
@@ -263,9 +263,9 @@ test("normalizeAccountId exported accepts encoded account IDs", () => {
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
 
-test("normalizeAccountId canonicalizes IH58 and compressed (`sora`) encodings", () => {
-  const canonicalIh58 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_IH58_LITERAL);
-  assert.equal(canonicalIh58, SAMPLE_ACCOUNT_CANONICAL);
+test("normalizeAccountId canonicalizes I105 and i105Default (`sora`) encodings", () => {
+  const canonicalI105 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
+  assert.equal(canonicalI105, SAMPLE_ACCOUNT_CANONICAL);
   const canonicalCompressed = exportedNormalizeAccountId(SAMPLE_ACCOUNT_COMPRESSED_LITERAL);
   assert.equal(canonicalCompressed, SAMPLE_ACCOUNT_CANONICAL);
 });
@@ -959,7 +959,7 @@ test("buildCastZkBallotInstruction rejects deprecated public input keys", () => 
         electionId: "ref-3",
         proof: Buffer.from([0x04]),
         publicInputs: {
-          owner: SAMPLE_ACCOUNT_IH58_LITERAL,
+          owner: SAMPLE_ACCOUNT_I105_LITERAL,
           amount: "250",
           durationBlocks: 12,
         },
@@ -977,7 +977,7 @@ test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
     electionId: "ref-3",
     proof: Buffer.from([0x04]),
     publicInputs: {
-      owner: SAMPLE_ACCOUNT_IH58_LITERAL,
+      owner: SAMPLE_ACCOUNT_I105_LITERAL,
       amount: "250",
       duration_blocks: 12,
       root_hint: `0x${"Aa".repeat(32)}`,
@@ -1027,7 +1027,7 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
-        publicInputs: { owner: SAMPLE_ACCOUNT_IH58_LITERAL },
+        publicInputs: { owner: SAMPLE_ACCOUNT_I105_LITERAL },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
@@ -1051,7 +1051,7 @@ test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
+      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
       return true;
     },
   );

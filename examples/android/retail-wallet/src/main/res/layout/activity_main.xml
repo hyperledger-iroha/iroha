@@ -65,15 +65,15 @@
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Caption" />
 
                 <TextView
-                    android:id="@+id/address_ih58_label"
+                    android:id="@+id/address_i105_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="@string/wallet_address_ih58_label"
+                    android:text="@string/wallet_address_i105_label"
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
 
                 <TextView
-                    android:id="@+id/address_ih58_value"
+                    android:id="@+id/address_i105_value"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:fontFamily="monospace"
@@ -81,7 +81,7 @@
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
 
                 <TextView
-                    android:id="@+id/address_compressed_label"
+                    android:id="@+id/address_i105_default_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
@@ -89,7 +89,7 @@
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
 
                 <TextView
-                    android:id="@+id/address_compressed_value"
+                    android:id="@+id/address_i105_default_value"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:fontFamily="monospace"
@@ -97,7 +97,7 @@
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
 
                 <TextView
-                    android:id="@+id/address_compressed_warning"
+                    android:id="@+id/address_i105_default_warning"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -114,18 +114,18 @@
                     android:weightSum="2">
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/address_copy_ih58"
+                        android:id="@+id/address_copy_i105"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginEnd="8dp"
                         android:layout_weight="1"
-                        android:text="@string/wallet_copy_ih58"
-                        android:tooltipText="@string/wallet_copy_ih58_tooltip"
-                        android:contentDescription="@string/wallet_copy_ih58_content_description" />
+                        android:text="@string/wallet_copy_i105"
+                        android:tooltipText="@string/wallet_copy_i105_tooltip"
+                        android:contentDescription="@string/wallet_copy_i105_content_description" />
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/address_copy_compressed"
+                        android:id="@+id/address_copy_i105_default"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"

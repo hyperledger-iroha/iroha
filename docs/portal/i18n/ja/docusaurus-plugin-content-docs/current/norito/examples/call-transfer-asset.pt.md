@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## ロテイロ・ド・リヴロ・ラザオ
 
-- 資金調達と契約 (例 `ih58...`) は、`CanTransfer` と同等の権限を譲渡するための契約を締結します。
-- エントリポイント `call_transfer_asset` を転送し、`ih58...` からの 5 つのデータを転送し、自動オンチェーン ポード エンボルバー チャマダをホストに反映します。
-- `FindAccountAssets` または `iroha_cli ledger assets list --account ih58...` を介して、メタデータ登録の確認と転送の状況を確認するイベントを検査してください。
+- 資金調達と契約 (例 `i105...`) は、`CanTransfer` と同等の権限を譲渡するための契約を締結します。
+- エントリポイント `call_transfer_asset` を転送し、`i105...` からの 5 つのデータを転送し、自動オンチェーン ポード エンボルバー チャマダをホストに反映します。
+- `FindAccountAssets` または `iroha_cli ledger assets list --account i105...` を介して、メタデータ登録の確認と転送の状況を確認するイベントを検査してください。
 
 ## SDK 関係に関する情報
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

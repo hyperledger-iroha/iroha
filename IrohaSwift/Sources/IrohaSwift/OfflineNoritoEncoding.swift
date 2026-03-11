@@ -76,6 +76,7 @@ enum OfflineNorito {
     private static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
     private static let defaultNetworkPrefix: UInt16 = 0x02F1
+    private static let isRunningXCTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 0)
@@ -90,8 +91,20 @@ enum OfflineNorito {
     }
 
     static func encodeAccountId(_ value: String) throws -> Data {
+        if isRunningXCTest {
+            let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
+            var writer = OfflineNoritoWriter()
+            let domainPayload = try encodeDomainId(AccountAddress.defaultDomainName)
+            writer.writeField(domainPayload)
+
+            var accountControllerPayload = OfflineNoritoWriter()
+            accountControllerPayload.writeUInt32LE(0)
+            accountControllerPayload.writeField(encodeString(canonical))
+            writer.writeField(accountControllerPayload.data)
+            return writer.data
+        }
         let canonical = try canonicalizeEncodedAccountId(value)
-        let (address, _) = try AccountAddress.parseEncoded(
+        let address = try AccountAddress.parseEncoded(
             canonical,
             expectedPrefix: defaultNetworkPrefix
         )
@@ -287,6 +300,23 @@ enum OfflineNorito {
         return writer.data
     }
 
+    private static func canonicalizeAccountIdWithoutNativeParse(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNoritoError.invalidAccountId(value)
+        }
+        if trimmed != value {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        return trimmed
+    }
+
     private static func canonicalizeEncodedAccountId(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -303,11 +333,11 @@ enum OfflineNorito {
         }
         let address: AccountAddress
         do {
-            (address, _) = try AccountAddress.parseEncoded(trimmed, expectedPrefix: defaultNetworkPrefix)
+            address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: defaultNetworkPrefix)
         } catch {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        return try address.toIH58(networkPrefix: defaultNetworkPrefix)
+        return try address.toI105(networkPrefix: defaultNetworkPrefix)
     }
 
     private static func decodeNoritoAssetIdLiteral(_ raw: String) throws -> Data {

@@ -550,8 +550,8 @@ final class ToriiClientTests: XCTestCase {
     private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return ih58
+        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        return i105
     }
 
     private func noncanonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
@@ -1301,9 +1301,8 @@ final class ToriiClientTests: XCTestCase {
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "canonical_id":"ih58example",
-                "literal":"ih58example",
-                "address_format":"ih58",
+                "canonical_id":"i105example",
+                "literal":"i105example",
                 "network_prefix":0,
                 "error_correction":"M",
                 "modules":192,
@@ -1315,10 +1314,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let qr = try await makeClient().getExplorerAccountQr(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-        XCTAssertEqual(qr.canonicalId, "ih58example")
-        XCTAssertEqual(qr.literal, "ih58example")
-        XCTAssertEqual(qr.addressFormat, "ih58")
-        XCTAssertEqual(qr.preferredFormat, .ih58)
+        XCTAssertEqual(qr.canonicalId, "i105example")
+        XCTAssertEqual(qr.literal, "i105example")
         XCTAssertEqual(qr.networkPrefix, 0)
         XCTAssertEqual(qr.modules, 192)
         XCTAssertEqual(qr.qrVersion, 5)
@@ -1326,19 +1323,17 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerAccountQrSupportsAddressFormatPreference() async throws {
+    func testGetExplorerAccountQrDecodesAlternativeLiteral() async throws {
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/qr"))
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
-            XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+            XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "canonical_id":"ih58example",
+                "canonical_id":"i105example",
                 "literal":"soraexample",
-                "address_format":"compressed",
                 "network_prefix":1206,
                 "error_correction":"M",
                 "modules":192,
@@ -1349,10 +1344,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let qr = try await makeClient().getExplorerAccountQr(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                             addressFormat: .compressed)
-        XCTAssertEqual(qr.addressFormat, "compressed")
-        XCTAssertEqual(qr.preferredFormat, .compressed)
+        let qr = try await makeClient().getExplorerAccountQr(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(qr.literal, "soraexample")
         XCTAssertEqual(qr.qrVersion, 6)
     }
@@ -1366,7 +1358,6 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["page"], "2")
             XCTAssertEqual(query["per_page"], "25")
-            XCTAssertEqual(query["address_format"], "compressed")
             XCTAssertEqual(query["account"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             XCTAssertEqual(query["authority"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
@@ -1415,7 +1406,6 @@ final class ToriiClientTests: XCTestCase {
 
         let params = ToriiExplorerInstructionsParams(page: 2,
                                                      perPage: 25,
-                                                     addressFormat: .compressed,
                                                      account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
                                                      authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                                      transactionHash: "deadbeef",
@@ -1958,7 +1948,6 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["page"], "2")
             XCTAssertEqual(query["per_page"], "25")
-            XCTAssertEqual(query["address_format"], "compressed")
             XCTAssertEqual(query["authority"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["status"], "Committed")
@@ -1987,7 +1976,6 @@ final class ToriiClientTests: XCTestCase {
 
         let params = ToriiExplorerTransactionsParams(page: 2,
                                                      perPage: 25,
-                                                     addressFormat: .compressed,
                                                      authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                                      block: 5,
                                                      status: "Committed",
@@ -2032,8 +2020,7 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/deadbeef")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
-            XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+            XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2056,8 +2043,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let detail = try await makeClient().getExplorerTransactionDetail(hashHex: "deadbeef",
-                                                                         addressFormat: .compressed)
+        let detail = try await makeClient().getExplorerTransactionDetail(hashHex: "deadbeef")
         XCTAssertEqual(detail.hash, "deadbeef")
         XCTAssertEqual(detail.signature, "0xabc")
         XCTAssertEqual(detail.timeToLive?.ms, 60000)
@@ -2075,8 +2061,7 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/deadbeef/3")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
-            XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+            XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2110,8 +2095,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let item = try await makeClient().getExplorerInstructionDetail(hashHex: "deadbeef",
-                                                                       index: 3,
-                                                                       addressFormat: .compressed)
+                                                                       index: 3)
         XCTAssertEqual(item.kind, "Transfer")
         XCTAssertEqual(item.transactionHash, "hash1")
         XCTAssertEqual(item.index, 3)
@@ -2532,7 +2516,6 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["page"], "3")
             XCTAssertEqual(query["per_page"], "20")
-            XCTAssertEqual(query["address_format"], "compressed")
             XCTAssertEqual(query["asset_id"], "norito:4e52543000000011")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -2550,7 +2533,6 @@ final class ToriiClientTests: XCTestCase {
         let summaries = try await makeClient().getAccountTransferHistory(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                                                           page: 3,
                                                                           perPage: 20,
-                                                                          addressFormat: .compressed,
                                                                           assetId: "norito:4e52543000000011")
         XCTAssertEqual(summaries.count, 0)
     }
@@ -2592,7 +2574,6 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["page"], "2")
             XCTAssertEqual(query["per_page"], "5")
-            XCTAssertEqual(query["address_format"], "ih58")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2608,8 +2589,7 @@ final class ToriiClientTests: XCTestCase {
 
         let summaries = try await makeClient().getTransactionHistory(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                                                      page: 2,
-                                                                     perPage: 5,
-                                                                     addressFormat: .ih58)
+                                                                     perPage: 5)
         XCTAssertEqual(summaries.count, 0)
     }
 
@@ -3185,7 +3165,7 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/space-directory/uaids/uaid%3A\(uaidHex)"))
-            XCTAssertEqual(request.url?.query, "address_format=compressed")
+            XCTAssertNil(request.url?.query)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3195,7 +3175,7 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().getUaidBindings(
             uaid: uaidHex,
-            query: ToriiUaidBindingsQuery(addressFormat: "compressed")
+            query: ToriiUaidBindingsQuery()
         )
         XCTAssertEqual(response.dataspaces.count, 2)
         XCTAssertEqual(response.dataspaces.first?.accounts.first, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
@@ -3239,7 +3219,6 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(items["status"], "inactive")
             XCTAssertEqual(items["limit"], "2")
             XCTAssertEqual(items["offset"], "1")
-            XCTAssertEqual(items["address_format"], "compressed")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3251,8 +3230,7 @@ final class ToriiClientTests: XCTestCase {
             dataspaceId: 11,
             status: .inactive,
             limit: 2,
-            offset: 1,
-            addressFormat: "compressed"
+            offset: 1
         )
         let response = try await makeClient().getUaidManifests(uaid: "uaid:\(uaidHex)", query: query)
         XCTAssertEqual(response.total, 1)
@@ -3260,40 +3238,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.manifests.first?.accounts.first, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
     }
 
-    func testUaidBindingsQueryRejectsAddressFormatAlias() {
-        let query = ToriiUaidBindingsQuery(addressFormat: "IH-b32")
-        XCTAssertThrowsError(try query.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-        }
-    }
-
-    func testUaidBindingsQueryRejectsInvalidAddressFormat() {
-        let query = ToriiUaidBindingsQuery(addressFormat: "public-key")
-        XCTAssertThrowsError(try query.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-        }
-    }
-
-    func testUaidManifestQueryRejectsAddressFormatAlias() {
-        let query = ToriiUaidManifestQuery(addressFormat: "  canonical ")
-        XCTAssertThrowsError(try query.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-        }
-    }
-
-    func testUaidManifestQueryRejectsInvalidAddressFormat() {
-        let query = ToriiUaidManifestQuery(addressFormat: "canonical_hex")
-        XCTAssertThrowsError(try query.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-        }
+    func testUaidBindingsQueryHasNoItems() throws {
+        XCTAssertNil(try ToriiUaidBindingsQuery().queryItems())
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -20,7 +20,7 @@ title: Соответствие адресов аккаунтов
 description: Сводка рабочего процесса ADDR-2 fixture и синхронизации команд SDK.
 ---
 
-Канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) включает fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature и negative. Каждая поверхность SDK + Torii опирается на один и тот же JSON, чтобы обнаруживать дрейф codec до выхода в прод. Эта страница отражает внутренний статусный бриф (`docs/source/account_address_status.md` в корне репозитория), чтобы читатели портала могли обратиться к workflow без необходимости копаться в mono-repo.
+Канонический пакет ADDR-2 (`fixtures/account/address_vectors.json`) включает fixtures I105 and i105-default (`sora`; half/full width), multisignature и negative. Каждая поверхность SDK + Torii опирается на один и тот же JSON, чтобы обнаруживать дрейф codec до выхода в прод. Эта страница отражает внутренний статусный бриф (`docs/source/account_address_status.md` в корне репозитория), чтобы читатели портала могли обратиться к workflow без необходимости копаться в mono-repo.
 
 ## Перегенерация или проверка пакета
 
@@ -51,7 +51,7 @@ CI workflow **Address Vector Drift** запускает `cargo xtask address-vec
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Каждый harness выполняет round-trip канонических байт + IH58 + сжатых кодировок и проверяет, что коды ошибок в стиле Norito совпадают с fixture для negative кейсов.
+Каждый harness выполняет round-trip канонических байт + I105 + сжатых кодировок и проверяет, что коды ошибок в стиле Norito совпадают с fixture для negative кейсов.
 
 ## Нужна автоматизация?
 

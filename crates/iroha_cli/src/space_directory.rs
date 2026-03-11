@@ -299,13 +299,6 @@ pub struct ManifestFetchArgs {
     /// Offset for pagination.
     #[arg(long, value_name = "N")]
     pub offset: Option<u64>,
-    /// Preferred account literal encoding (`ih58` or `compressed`).
-    #[arg(
-        long = "address-format",
-        value_enum,
-        default_value_t = AddressFormatArg::Ih58
-    )]
-    pub address_format: AddressFormatArg,
     /// Optional path where the JSON response will be stored.
     #[arg(long = "json-out", value_name = "PATH")]
     pub json_out: Option<PathBuf>,
@@ -851,13 +844,6 @@ pub struct BindingsFetchArgs {
     /// UAID literal whose bindings should be fetched.
     #[arg(long, value_name = "UAID")]
     pub uaid: String,
-    /// Preferred account literal encoding (`ih58` or `compressed`).
-    #[arg(
-        long = "address-format",
-        value_enum,
-        default_value_t = AddressFormatArg::Ih58
-    )]
-    pub address_format: AddressFormatArg,
     /// Optional path where the JSON response will be stored.
     #[arg(long = "json-out", value_name = "PATH")]
     pub json_out: Option<PathBuf>,
@@ -871,24 +857,6 @@ impl Run for BindingsFetchArgs {
             write_json_response(path, &payload)?;
         }
         context.print_data(&payload)
-    }
-}
-
-#[derive(Default, clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AddressFormatArg {
-    #[default]
-    #[value(name = "ih58", alias = "ih-b32", alias = "canonical")]
-    Ih58,
-    #[value(name = "compressed", alias = "sora")]
-    Compressed,
-}
-
-impl AddressFormatArg {
-    fn as_query_value(self) -> &'static str {
-        match self {
-            Self::Ih58 => "ih58",
-            Self::Compressed => "compressed",
-        }
     }
 }
 
@@ -1049,7 +1017,6 @@ impl SpaceDirectoryRestClient {
         )?;
         {
             let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("address_format", args.address_format.as_query_value());
             if let Some(dataspace) = args.dataspace {
                 pairs.append_pair("dataspace", &dataspace.to_string());
             }
@@ -1067,14 +1034,10 @@ impl SpaceDirectoryRestClient {
     }
 
     fn fetch_bindings(&self, args: &BindingsFetchArgs) -> Result<JsonValue> {
-        let mut url = build_space_directory_url(
+        let url = build_space_directory_url(
             &self.base_url,
             &["v1", "space-directory", "uaids", args.uaid.as_str()],
         )?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("address_format", args.address_format.as_query_value());
-        }
         self.get_json(&url)
     }
 
@@ -1617,12 +1580,6 @@ mod tests {
             url.as_str(),
             "https://example.test/torii/v1/space-directory/uaids/uaid:abc/manifests"
         );
-    }
-
-    #[test]
-    fn address_format_arg_serializes_expected_labels() {
-        assert_eq!(AddressFormatArg::Ih58.as_query_value(), "ih58");
-        assert_eq!(AddressFormatArg::Compressed.as_query_value(), "compressed");
     }
 
     #[test]

@@ -15,6 +15,7 @@
 - ZK アプリ API（添付ファイル／プローバ／投票集計）: `zk_app_api.md`
 - Torii ZK 添付／プローバ運用手順: `zk/prover_runbook.md`
 - Torii ZK アプリ API オペレータガイド: `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK／プルーフのライフサイクル: `zk/lifecycle.md`
 - Torii オペレータ向け補助資料: `references/operator_aids.md`
 - MOCHI クイックスタート／アーキテクチャ: `mochi/index.md`

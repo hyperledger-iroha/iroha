@@ -95,6 +95,7 @@ npm run start
 以下組件從 `docusaurus.config.js` 讀取這些值：
 
 - **Swagger UI** — 在 `/reference/torii-swagger` 處渲染；預授權
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   持有者方案當存在令牌時，用 `X-TryIt-Client` 標記請求，
   注入 `X-TryIt-Auth`，並在以下情況下通過代理重寫調用
   `TRYIT_PROXY_PUBLIC_URL` 已設置。

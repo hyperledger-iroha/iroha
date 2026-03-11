@@ -222,7 +222,6 @@ use sorafs_manifest::{
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
 #[cfg(feature = "app_api")]
-use crate::address_format::AddressFormatPreference;
 use crate::{
     explorer::{
         ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
@@ -1363,9 +1362,8 @@ pub struct KaigiRelayDomainMetricsDto {
 )]
 /// Optional query parameters shared by Kaigi relay endpoints.
 pub struct KaigiRelayFormatParams {
-    /// Preferred textual encoding for relay/account identifiers.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub address_format: Option<String>,
+    #[norito(default)]
+    pub reserved: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14185,7 +14183,7 @@ const CONTEXT_NEXUS_PUBLIC_LANE_REWARDS: &str = ENDPOINT_NEXUS_PUBLIC_LANE_REWAR
 )]
 pub struct PublicLaneValidatorsQueryParams {
     #[norito(default)]
-    pub address_format: Option<String>,
+    pub reserved: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14193,8 +14191,6 @@ pub struct PublicLaneValidatorsQueryParams {
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneStakeQueryParams {
-    #[norito(default)]
-    pub address_format: Option<String>,
     #[norito(default)]
     pub validator: Option<String>,
 }
@@ -14204,8 +14200,6 @@ pub struct PublicLaneStakeQueryParams {
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneRewardsQueryParams {
-    #[norito(default)]
-    pub address_format: Option<String>,
     #[norito(default)]
     pub account: Option<String>,
     /// Optional asset identifier filter.
@@ -14221,7 +14215,7 @@ pub struct PublicLaneRewardsQueryParams {
 )]
 pub struct NexusDataspacesAccountSummaryQueryParams {
     #[norito(default)]
-    pub address_format: Option<String>,
+    pub reserved: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14706,25 +14700,25 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn address_format_metric_tracks_selection() {
+    async fn account_literal_metric_tracks_selection() {
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY;
 
         let before = {
             let metrics = telemetry.metrics().await;
             metrics
-                .torii_address_format_total
-                .with_label_values(&[endpoint, "compressed"])
+                .torii_account_literal_total
+                .with_label_values(&[endpoint, "i105"])
                 .get()
         };
 
-        record_address_format_selection(&telemetry, endpoint, AddressFormatPreference::Compressed);
+        record_account_literal_selection(&telemetry, endpoint);
 
         let after = {
             let metrics = telemetry.metrics().await;
             metrics
-                .torii_address_format_total
-                .with_label_values(&[endpoint, "compressed"])
+                .torii_account_literal_total
+                .with_label_values(&[endpoint, "i105"])
                 .get()
         };
         assert_eq!(after, before + 1);
@@ -14780,7 +14774,7 @@ mod address_metrics_tests {
         }
     }
 
-    fn ih58_literal(domain_label: &str) -> String {
+    fn i105_literal(domain_label: &str) -> String {
         let domain: DomainId = domain_label.parse().expect("domain parses");
         let kp = KeyPair::random();
         let account = ScopedAccountId::new(domain, kp.public_key().clone());
@@ -14792,7 +14786,7 @@ mod address_metrics_tests {
         let _guard = DefaultDomainGuard::set("wonderland");
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
-        let literal = ih58_literal("wonderland");
+        let literal = i105_literal("wonderland");
         let label = AddressDomainKind::Default.as_str();
 
         let before = {
@@ -14817,12 +14811,12 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn kaigi_sse_accepts_ih58_literal() {
+    async fn kaigi_sse_accepts_i105_literal() {
         let telemetry = MaybeTelemetry::for_tests();
         let literal = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
-            .expect("ih58 literal should parse");
+            .expect("i105 literal should parse");
         assert_eq!(parsed.canonical(), parsed.account_id().to_string());
     }
 }
@@ -14993,12 +14987,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY);
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
     let committed_txs = committed_transactions_snapshot(state.as_ref());
@@ -15250,7 +15239,7 @@ pub async fn handle_v1_account_transactions_with_policy(
             .observe(items.len() as f64);
     }
     // Build Norito JSON response: { items: [...], total: N }
-    let items_json = tx_projections_to_json(&items, address_format);
+    let items_json = tx_projections_to_json(&items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     top.insert("total".into(), norito::json::Value::from(total as u64));
@@ -15301,8 +15290,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
 
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS);
     let (account_id, _) = parse_account_path_segment_with_state(
         state.as_ref(),
         &account_id,
@@ -15379,7 +15367,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .observe(items.len() as f64);
     }
     // Norito JSON response
-    let items_json = tx_projections_to_json(&items, address_format);
+    let items_json = tx_projections_to_json(&items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     top.insert("total".into(), norito::json::Value::from(total as u64));
@@ -16491,7 +16479,6 @@ mod explorer_lookup_tests {
             &filters,
             2,
             2,
-            AddressFormatPreference::Ih58,
         )
         .expect("instruction collection should succeed");
 
@@ -16521,7 +16508,6 @@ mod explorer_lookup_tests {
             state.committed_height() as u64,
             &filters,
             2,
-            AddressFormatPreference::Ih58,
         )
         .expect("latest transaction collection should succeed");
 
@@ -16557,7 +16543,6 @@ mod explorer_lookup_tests {
             state.committed_height() as u64,
             &filters,
             2,
-            AddressFormatPreference::Ih58,
         )
         .expect("latest instruction collection should succeed");
 
@@ -16577,32 +16562,17 @@ mod explorer_lookup_tests {
         let (state, target_hash) = build_state_with_single_transaction(instructions);
         let max_height = state.committed_height() as u64;
 
-        let tx = find_transaction_detail(
-            state.as_ref(),
-            max_height,
-            target_hash.to_string(),
-            AddressFormatPreference::Ih58,
-        )
-        .expect("transaction detail should resolve");
+        let tx = find_transaction_detail(state.as_ref(), max_height, target_hash.to_string())
+            .expect("transaction detail should resolve");
         assert_eq!(tx.hash, target_hash.to_string());
 
-        let instruction = find_instruction_detail(
-            state.as_ref(),
-            max_height,
-            target_hash.to_string(),
-            1,
-            AddressFormatPreference::Ih58,
-        )
-        .expect("instruction detail should resolve");
+        let instruction =
+            find_instruction_detail(state.as_ref(), max_height, target_hash.to_string(), 1)
+                .expect("instruction detail should resolve");
         assert_eq!(instruction.index, 1);
 
-        let missing = find_instruction_detail(
-            state.as_ref(),
-            max_height,
-            target_hash.to_string(),
-            42,
-            AddressFormatPreference::Ih58,
-        );
+        let missing =
+            find_instruction_detail(state.as_ref(), max_height, target_hash.to_string(), 42);
         assert!(
             missing.is_err(),
             "invalid instruction index should return not found"
@@ -16652,7 +16622,6 @@ mod explorer_endpoint_telemetry_tests {
             crate::explorer::ExplorerPaginationQuery {
                 page: 1,
                 per_page: 1,
-                address_format: None,
             },
             None,
             None,
@@ -16704,7 +16673,6 @@ mod explorer_endpoint_telemetry_tests {
             state,
             telemetry.clone(),
             "not-a-valid-hash".to_owned(),
-            AddressFormatPreference::Ih58,
         )
         .await;
         assert!(response.is_err(), "invalid hash should return an error");
@@ -16825,7 +16793,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let resp = handle_v1_account_transactions(
@@ -16879,7 +16846,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_account_transactions(
@@ -16915,7 +16881,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_account_transactions(
@@ -16942,7 +16907,6 @@ mod tx_query_integration_smoke {
         let params = AccountTransactionsGetParams {
             limit: Some(cap + 1),
             offset: 0,
-            address_format: None,
             asset_id: None,
         };
 
@@ -17037,7 +17001,6 @@ mod tx_query_integration_smoke {
         let params = AccountTransactionsGetParams {
             limit: Some(10),
             offset: 0,
-            address_format: None,
             asset_id: Some(asset_id.to_string()),
         };
         let resp = handle_v1_account_transactions_get(
@@ -17184,7 +17147,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -17226,7 +17188,6 @@ mod tx_query_integration_smoke {
                 offset: 1,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp2 = handle_v1_account_transactions(
             state.clone(),
@@ -17334,7 +17295,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: Some(2),
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state,
@@ -17479,7 +17439,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -17543,13 +17502,11 @@ mod tx_query_integration_smoke {
         let committed = valid.clone().commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
-        let compressed_literal = {
+        let i105_literal = {
             let address = account
                 .to_account_address()
                 .expect("account address constructs");
-            address
-                .to_compressed_sora()
-                .expect("compressed encoding succeeds")
+            address.to_i105().expect("i105 encoding succeeds")
         };
 
         let env = crate::filter::QueryEnvelope {
@@ -17562,7 +17519,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: Some("compressed".into()),
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -17580,7 +17536,7 @@ mod tx_query_integration_smoke {
         assert_eq!(items.len(), 1);
         let raw = items[0]["authority"].as_str().unwrap();
         let normalized = decode_latin1_utf8(raw).unwrap_or_else(|| raw.to_string());
-        assert_eq!(normalized, compressed_literal);
+        assert_eq!(normalized, i105_literal);
         assert_ne!(normalized, account.to_string());
     }
 
@@ -17673,7 +17629,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -17767,7 +17722,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -17869,7 +17823,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -18008,7 +17961,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -18116,7 +18068,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
@@ -18147,7 +18098,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
@@ -18181,7 +18131,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_in = handle_v1_account_transactions(
             state.clone(),
@@ -18212,7 +18161,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
@@ -18301,7 +18249,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
@@ -18331,7 +18278,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
@@ -18361,7 +18307,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_in_one = handle_v1_account_transactions(
             state.clone(),
@@ -18394,7 +18339,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_in_two = handle_v1_account_transactions(
             state.clone(),
@@ -18424,7 +18368,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
@@ -18515,7 +18458,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_exists_entry = handle_v1_account_transactions(
             state.clone(),
@@ -18550,7 +18492,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_null_entry = handle_v1_account_transactions(
             state.clone(),
@@ -18585,7 +18526,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_exists_result = handle_v1_account_transactions(
             state.clone(),
@@ -18620,7 +18560,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp_null_result = handle_v1_account_transactions(
             state.clone(),
@@ -18782,7 +18721,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let resp = handle_v1_account_transactions(
@@ -18948,7 +18886,6 @@ mod tx_query_integration_smoke {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -19198,7 +19135,6 @@ mod app_api_integration_tests {
                 offset: 1,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
@@ -19995,7 +19931,7 @@ mod app_api_integration_tests {
             }),
         );
 
-        // Preserve the account literal textual representation (IH58 by default)
+        // Preserve the account literal textual representation (I105 by default)
         let req = http::Request::builder()
             .method("GET")
             .uri(format!("/v1/accounts/{}/assets?limit=1", alice_id))
@@ -20227,7 +20163,6 @@ mod app_api_integration_tests {
         let params = AssetHolderGetParams {
             limit: Some(cap + 1),
             offset: 0,
-            address_format: None,
             asset_id: None,
         };
 
@@ -20247,7 +20182,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_get_supports_compressed_address_format() {
+    async fn asset_holders_get_uses_canonical_i105_literals() {
         let _guard = app_query_limits_guard();
         use axum::routing::get;
 
@@ -20277,7 +20212,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23wonderland/holders?limit=4&address_format=compressed")
+            .uri("/v1/assets/rose%23wonderland/holders?limit=4")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20291,7 +20226,7 @@ mod app_api_integration_tests {
         assert_eq!(parsed["total"].as_u64(), Some(2));
         assert_eq!(items.len(), 2);
 
-        let expected = [compressed_literal(&alice_id), compressed_literal(&bob_id)];
+        let expected = [i105_literal(&alice_id), i105_literal(&bob_id)];
         for literal in expected {
             assert!(
                 items.iter().any(|item| item
@@ -20300,7 +20235,7 @@ mod app_api_integration_tests {
                     .and_then(norito::json::Value::as_str)
                     .map(|value| value == literal)
                     .unwrap_or(false)),
-                "compressed literal {literal} missing from holders response"
+                "i105 literal {literal} missing from holders response"
             );
         }
     }
@@ -20472,7 +20407,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_query_supports_compressed_address_format() {
+    async fn asset_holders_query_uses_canonical_i105_literals() {
         let _guard = app_query_limits_guard();
         use axum::routing::post;
 
@@ -20502,13 +20437,10 @@ mod app_api_integration_tests {
             }),
         );
 
-        let body = json_string(obj(vec![
-            ("address_format", val("compressed")),
-            (
-                "pagination",
-                obj(vec![("limit", val(&8u64)), ("offset", val(&0u64))]),
-            ),
-        ]));
+        let body = json_string(obj(vec![(
+            "pagination",
+            obj(vec![("limit", val(&8u64)), ("offset", val(&0u64))]),
+        )]));
         let req = http::Request::builder()
             .method("POST")
             .uri("/v1/assets/rose%23wonderland/holders/query")
@@ -20527,7 +20459,7 @@ mod app_api_integration_tests {
         assert_eq!(parsed["total"].as_u64(), Some(2));
         assert_eq!(items.len(), 2);
 
-        let expected = [compressed_literal(&alice_id), compressed_literal(&bob_id)];
+        let expected = [i105_literal(&alice_id), i105_literal(&bob_id)];
         for literal in expected {
             assert!(
                 items.iter().any(|item| item
@@ -20536,7 +20468,7 @@ mod app_api_integration_tests {
                     .and_then(norito::json::Value::as_str)
                     .map(|value| value == literal)
                     .unwrap_or(false)),
-                "compressed literal {literal} missing from holders query response"
+                "i105 literal {literal} missing from holders query response"
             );
         }
     }
@@ -20570,12 +20502,12 @@ mod app_api_integration_tests {
         (state, alice_id, bob_id)
     }
 
-    fn compressed_literal(account_id: &AccountId) -> String {
-        let compressed = account_id
+    fn i105_literal(account_id: &AccountId) -> String {
+        let i105 = account_id
             .to_account_address()
-            .and_then(|address| address.to_compressed_sora())
-            .expect("compressed encoding should succeed");
-        compressed
+            .and_then(|address| address.to_i105())
+            .expect("i105 encoding should succeed");
+        i105
     }
 }
 
@@ -21149,12 +21081,7 @@ fn populate_explorer_queue(
                 block: Some(height),
                 asset_id: None,
             };
-            match collect_transaction_summaries_from_kura(
-                kura,
-                height,
-                &filters,
-                AddressFormatPreference::Ih58,
-            ) {
+            match collect_transaction_summaries_from_kura(kura, height, &filters) {
                 Ok(items) => {
                     for dto in items {
                         if let Ok(body) = norito::json::to_json(&dto) {
@@ -21182,12 +21109,7 @@ fn populate_explorer_queue(
                 kind: None,
                 asset_id: None,
             };
-            match collect_instruction_history_from_kura(
-                kura,
-                height,
-                &filters,
-                AddressFormatPreference::Ih58,
-            ) {
+            match collect_instruction_history_from_kura(kura, height, &filters) {
                 Ok(items) => {
                     for dto in items {
                         if let Ok(body) = norito::json::to_json(&dto) {
@@ -21786,7 +21708,7 @@ mod governance_stream_tests {
 pub async fn handle_v1_kaigi_relays(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    crate::NoritoQuery(_params): crate::NoritoQuery<KaigiRelayFormatParams>,
     format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
@@ -21796,8 +21718,7 @@ pub async fn handle_v1_kaigi_relays(
         ));
     }
 
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_KAIGI_RELAYS, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_KAIGI_RELAYS);
 
     let relays = collect_kaigi_relays(&state)?;
     let metrics = telemetry.metrics().await;
@@ -21815,7 +21736,7 @@ pub async fn handle_v1_kaigi_relays(
         let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
         let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
         items.push(KaigiRelaySummaryDto {
-            relay_id: address_format.display_literal(&snapshot.registration.relay_id),
+            relay_id: crate::account_literal::display_literal(&snapshot.registration.relay_id),
             domain: domain_label,
             bandwidth_class: snapshot.registration.bandwidth_class,
             hpke_fingerprint_hex: hex::encode(<[u8; 32]>::from(fingerprint)),
@@ -21865,7 +21786,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     axum::extract::Path(relay_id_str): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    crate::NoritoQuery(_params): crate::NoritoQuery<KaigiRelayFormatParams>,
     format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
@@ -21875,8 +21796,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         ));
     }
 
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_KAIGI_RELAY_DETAIL, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_KAIGI_RELAY_DETAIL);
 
     let (relay_id, _) = parse_account_path_segment_with_state(
         state.as_ref(),
@@ -21910,7 +21830,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
     let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
     let relay_summary = KaigiRelaySummaryDto {
-        relay_id: address_format.display_literal(&snapshot.registration.relay_id),
+        relay_id: crate::account_literal::display_literal(&snapshot.registration.relay_id),
         domain: domain_label.clone(),
         bandwidth_class: snapshot.registration.bandwidth_class,
         hpke_fingerprint_hex: hex::encode(<[u8; 32]>::from(fingerprint)),
@@ -21924,7 +21844,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         snapshot.feedback.as_ref().map_or((None, None, None), |fb| {
             (
                 Some(fb.call.clone()),
-                Some(address_format.display_literal(&fb.reported_by)),
+                Some(crate::account_literal::display_literal(&fb.reported_by)),
                 fb.notes.clone(),
             )
         });
@@ -27890,8 +27810,7 @@ mod lane_admission_metrics_tests {
         let telemetry = MaybeTelemetry::for_tests();
 
         let key_pair = iroha_crypto::KeyPair::random();
-        let domain: DomainId = "wonderland".parse().expect("valid domain id");
-        let account_id = ScopedAccountId::new(domain, key_pair.public_key().clone());
+        let account_id = AccountId::new(key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
         let tx = TransactionBuilder::new(chain_id.as_ref().clone(), account_id)
             .with_instructions([InstructionBox::from(instruction)])
@@ -27975,8 +27894,6 @@ pub struct ListFilterParams {
     pub offset: u64,
     /// Optional compact sort string: e.g., "metadata.display_name:asc,id:desc".
     pub sort: Option<String>,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
 }
 
 /// GET parameters for `/v1/offline/allowances`.
@@ -27997,9 +27914,7 @@ pub struct OfflineAllowanceListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
-    /// Filter allowances by controller account literal (canonical IH58 only).
+    /// Filter allowances by controller account literal (canonical I105 only).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -28048,13 +27963,11 @@ pub struct OfflineTransferListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
-    /// Filter transfers by originating controller (canonical IH58 only).
+    /// Filter transfers by originating controller (canonical I105 only).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (canonical IH58 only).
+    /// Filter transfers by receiver account literal (canonical I105 only).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (canonical IH58 only).
+    /// Filter transfers by deposit account literal (canonical I105 only).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -28377,8 +28290,8 @@ pub struct OfflineSpendReceiptsSubmitResponse {
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
 pub struct OfflineTransferGetParams {
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
+    #[norito(default)]
+    pub reserved: Option<String>,
 }
 
 /// GET parameters for `/v1/offline/bundle/proof_status`.
@@ -28387,9 +28300,6 @@ pub struct OfflineTransferGetParams {
 pub struct OfflineBundleProofStatusParams {
     /// Bundle identifier (hex, case-insensitive).
     pub bundle_id_hex: String,
-    /// Optional response address format (`ih58` or `compressed`).
-    #[norito(default)]
-    pub address_format: Option<String>,
 }
 
 /// Summary of the optional aggregate proof payload attached to offline bundles.
@@ -28473,8 +28383,6 @@ pub struct OfflineReceiptListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
     /// Filter receipts by sender/controller account literal.
     pub controller_id: Option<String>,
     /// Filter receipts by receiver account literal.
@@ -28501,11 +28409,11 @@ pub struct OfflineReceiptListItem {
     pub certificate_id_hex: String,
     /// Sender/controller account literal.
     pub controller_id: String,
-    /// Sender/controller display literal (address_format applied).
+    /// Sender/controller display literal (canonical i105 rendering).
     pub controller_display: String,
     /// Receiver account literal.
     pub receiver_id: String,
-    /// Receiver display literal (address_format applied).
+    /// Receiver display literal (canonical i105 rendering).
     pub receiver_display: String,
     /// Asset identifier being transferred.
     pub asset_id: String,
@@ -28571,8 +28479,6 @@ pub struct AccountTransactionsGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
     /// Filter transactions by asset identifier.
     pub asset_id: Option<String>,
 }
@@ -28587,8 +28493,6 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Optional response address format (`ih58` or `compressed`).
-    pub address_format: Option<String>,
     /// Filter holders by asset identifier.
     pub asset_id: Option<String>,
 }
@@ -28639,10 +28543,7 @@ struct RepoAgreementProjection {
 
 #[cfg(feature = "app_api")]
 impl RepoAgreementProjection {
-    fn from_agreement(
-        agreement: &RepoAgreement,
-        address_format: AddressFormatPreference,
-    ) -> RepoAgreementProjection {
+    fn from_agreement(agreement: &RepoAgreement) -> RepoAgreementProjection {
         let canonical_id = agreement.id().to_string();
         let initiator_canonical = agreement.initiator().to_string();
         let counterparty_canonical = agreement.counterparty().to_string();
@@ -28664,12 +28565,12 @@ impl RepoAgreementProjection {
         };
         let dto = RepoAgreementDto {
             id: canonical_id.clone(),
-            initiator: address_format.display_literal(agreement.initiator()),
-            counterparty: address_format.display_literal(agreement.counterparty()),
+            initiator: crate::account_literal::display_literal(agreement.initiator()),
+            counterparty: crate::account_literal::display_literal(agreement.counterparty()),
             custodian: agreement
                 .custodian()
                 .as_ref()
-                .map(|id| address_format.display_literal(id)),
+                .map(|id| crate::account_literal::display_literal(id)),
             cash_leg,
             collateral_leg,
             rate_bps: *agreement.rate_bps(),
@@ -28907,13 +28808,9 @@ fn validate_repo_filter(expr: &FilterExpr) -> Result<(), Error> {
 }
 
 #[cfg(feature = "app_api")]
-fn record_address_format_selection(
-    telemetry: &MaybeTelemetry,
-    endpoint: &'static str,
-    preference: AddressFormatPreference,
-) {
+fn record_account_literal_selection(telemetry: &MaybeTelemetry, endpoint: &'static str) {
     telemetry.with_metrics(|metrics| {
-        metrics.inc_torii_address_format(endpoint, preference.metric_label());
+        metrics.inc_torii_account_literal(endpoint, crate::account_literal::metric_label());
     });
 }
 
@@ -28931,16 +28828,13 @@ fn record_explorer_endpoint_result<T>(
 }
 
 #[cfg(feature = "app_api")]
-fn tx_projections_to_json(
-    items: &[TxProjection],
-    address_format: AddressFormatPreference,
-) -> Vec<norito::json::Value> {
+fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
     items
         .iter()
         .map(|it| {
             let mut m = norito::json::Map::new();
             if let Some(ref authority_literal) = it.authority {
-                let display = address_format.display_from_literal(authority_literal);
+                let display = crate::account_literal::display_from_literal(authority_literal);
                 m.insert("authority".into(), norito::json::Value::from(display));
             }
             if let Some(ts) = it.timestamp_ms {
@@ -28964,20 +28858,20 @@ mod tx_projection_display_tests {
     use super::*;
 
     #[test]
-    fn projections_emit_compressed_authority_when_requested() {
+    fn projections_emit_i105_authority_when_requested() {
         let account: AccountId = ALICE_ID.clone();
-        let compressed = account
+        let i105 = account
             .to_account_address()
-            .and_then(|addr| addr.to_compressed_sora())
-            .expect("compressed literal");
-        let expected = compressed;
+            .and_then(|addr| addr.to_i105())
+            .expect("i105 literal");
+        let expected = i105;
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
             result_ok: true,
         };
-        let items = tx_projections_to_json(&[projection], AddressFormatPreference::Compressed);
+        let items = tx_projections_to_json(&[projection]);
         let authority = items[0]
             .get("authority")
             .and_then(norito::json::Value::as_str)
@@ -28986,7 +28880,7 @@ mod tx_projection_display_tests {
     }
 
     #[test]
-    fn projections_preserve_ih58_literals_by_default() {
+    fn projections_preserve_i105_literals_by_default() {
         let account: AccountId = BOB_ID.clone();
         let projection = TxProjection {
             authority: Some(account.to_string()),
@@ -28994,7 +28888,7 @@ mod tx_projection_display_tests {
             entrypoint_hash: "cafebabe".into(),
             result_ok: false,
         };
-        let items = tx_projections_to_json(&[projection], AddressFormatPreference::Ih58);
+        let items = tx_projections_to_json(&[projection]);
         let authority = items[0]
             .get("authority")
             .and_then(norito::json::Value::as_str)
@@ -29408,15 +29302,14 @@ pub async fn handle_v1_repo_agreements(
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_repo_sort_spec(&sort_spec);
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_REPO_AGREEMENTS_LIST)?;
 
     let mapped_iter = agreements.into_iter().filter_map({
         let selectors = selectors.clone();
         move |agreement| {
-            let projection = RepoAgreementProjection::from_agreement(&agreement, address_format);
+            let projection = RepoAgreementProjection::from_agreement(&agreement);
             if let Some(expr) = filter_ref {
                 if !repo_filter_projection(expr, &projection) {
                     return None;
@@ -29470,8 +29363,7 @@ pub async fn handle_v1_repo_agreements_query(
     let filter_ref = envelope.filter.as_ref();
 
     let selectors = compile_repo_sort_spec(&envelope.sort);
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -29487,7 +29379,7 @@ pub async fn handle_v1_repo_agreements_query(
     let mapped_iter = agreements.into_iter().filter_map({
         let selectors = selectors.clone();
         move |agreement| {
-            let projection = RepoAgreementProjection::from_agreement(&agreement, address_format);
+            let projection = RepoAgreementProjection::from_agreement(&agreement);
             if let Some(expr) = filter_ref {
                 if !repo_filter_projection(expr, &projection) {
                     return None;
@@ -29658,7 +29550,6 @@ async fn repo_agreements_list_filters_by_id() {
     let params = ListFilterParams {
         filter: Some(filter_json),
         limit: Some(5),
-        address_format: Some("compressed".to_owned()),
         ..Default::default()
     };
     let resp = handle_v1_repo_agreements(
@@ -29713,39 +29604,31 @@ async fn repo_agreements_query_supports_sorting() {
 
 #[cfg(all(test, feature = "app_api"))]
 #[tokio::test]
-async fn repo_agreements_list_rejects_unknown_address_format() {
+async fn repo_agreements_list_accepts_i105_only_literals() {
     let fixture = build_repo_state_for_tests();
     let params = ListFilterParams {
-        address_format: Some("unexpected".to_owned()),
         limit: Some(1),
         ..Default::default()
     };
-    let result = handle_v1_repo_agreements(
+    let response = handle_v1_repo_agreements(
         fixture.state,
         NoritoQuery(params),
         MaybeTelemetry::disabled(),
     )
-    .await;
-    let err = match result {
-        Ok(resp) => panic!(
-            "expected address_format validation to fail, but request succeeded with status {}",
-            resp.into_response().status()
-        ),
-        Err(err) => err,
-    };
-    let response = err.into_response();
-    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    .await
+    .expect("repo agreements list should succeed without legacy format hints")
+    .into_response();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
 }
 
 #[cfg(all(test, feature = "app_api"))]
 #[tokio::test]
-async fn repo_agreements_list_respects_compressed_address_format() {
+async fn repo_agreements_list_uses_canonical_i105_literals() {
     use axum::body::to_bytes;
 
     let fixture = build_repo_state_for_tests();
     let params = ListFilterParams {
         limit: Some(2),
-        address_format: Some("compressed".to_owned()),
         ..Default::default()
     };
     let resp = handle_v1_repo_agreements(
@@ -29764,11 +29647,10 @@ async fn repo_agreements_list_respects_compressed_address_format() {
         .get("initiator")
         .and_then(norito::json::Value::as_str)
         .expect("initiator literal field");
-    let expected = crate::address_format::AddressFormatPreference::Compressed
-        .display_literal(&fixture.initiator_id);
+    let expected = crate::account_literal::display_literal(&fixture.initiator_id);
     assert_eq!(
         first, expected,
-        "initiator literal should honour address_format"
+        "initiator literal should be rendered as canonical i105"
     );
 }
 
@@ -30097,7 +29979,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_domains_query(state, NoritoJson(envelope)).await;
@@ -30117,7 +29998,6 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
-            address_format: None,
         };
 
         let err = handle_v1_assets_definitions(state, crate::NoritoQuery(params)).await;
@@ -30142,7 +30022,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_assets_definitions_query(state, NoritoJson(envelope)).await;
@@ -30162,7 +30041,6 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
-            address_format: None,
         };
 
         let err = handle_v1_repo_agreements(
@@ -30192,7 +30070,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_repo_agreements_query(
@@ -30217,7 +30094,6 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
-            address_format: None,
         };
 
         let err = handle_v1_nfts(state, crate::NoritoQuery(params)).await;
@@ -30242,7 +30118,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_nfts_query(state, NoritoJson(envelope)).await;
@@ -30289,7 +30164,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_offline_allowances_query(
@@ -30341,7 +30215,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_offline_revocations_query(
@@ -30393,7 +30266,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_offline_transfers_query(
@@ -30445,7 +30317,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_offline_receipts_query(
@@ -30497,7 +30368,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err = handle_v1_offline_summaries_query(
@@ -30522,7 +30392,6 @@ mod pagination_enforcement_tests {
             limit: Some(0),
             offset: 0,
             sort: None,
-            address_format: None,
         };
 
         let err = handle_v1_accounts(
@@ -30552,7 +30421,6 @@ mod pagination_enforcement_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
 
         let err =
@@ -31136,8 +31004,7 @@ pub async fn handle_v1_accounts(
     drop(world);
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_account_sort_spec(&sort_spec);
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_LIST)?;
 
@@ -31155,7 +31022,6 @@ pub async fn handle_v1_accounts(
     let filter_ref = filter_expr.as_ref();
     let mapped_iter = accounts.into_iter().filter_map({
         let selectors = selectors;
-        let address_format = address_format;
         move |account| {
             if let Some(expr) = filter_ref {
                 if !account_filter_object(expr, &account) {
@@ -31164,7 +31030,7 @@ pub async fn handle_v1_accounts(
             }
             let key = account_sort_key(&account, &selectors);
             let canonical_id = account.id().to_string();
-            let display_id = address_format.display_literal(account.id());
+            let display_id = crate::account_literal::display_literal(account.id());
             Some((
                 key,
                 AccountListItem {
@@ -31233,8 +31099,7 @@ pub async fn handle_v1_accounts_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_QUERY);
 
     let filter_clone = envelope.filter.clone();
     let filter_ref = filter_clone.as_ref();
@@ -31253,7 +31118,6 @@ pub async fn handle_v1_accounts_query(
     drop(world);
 
     let (items, total) = if sort_spec.is_empty() {
-        let address_format = address_format;
         let filtered_iter = accounts.into_iter().filter_map(move |account| {
             if let Some(expr) = filter_ref {
                 if !account_filter_object(expr, &account) {
@@ -31262,7 +31126,7 @@ pub async fn handle_v1_accounts_query(
             }
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
-                display_id: address_format.display_literal(account.id()),
+                display_id: crate::account_literal::display_literal(account.id()),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -31279,7 +31143,6 @@ pub async fn handle_v1_accounts_query(
         )
     } else {
         let selectors = compile_account_sort_spec(&sort_spec);
-        let address_format = address_format;
         let mapped_iter = accounts.into_iter().filter_map(move |account| {
             if let Some(expr) = filter_ref {
                 if !account_filter_object(expr, &account) {
@@ -31288,7 +31151,7 @@ pub async fn handle_v1_accounts_query(
             }
             let projected = AccountListItem {
                 canonical_id: account.id().to_string(),
-                display_id: address_format.display_literal(account.id()),
+                display_id: crate::account_literal::display_literal(account.id()),
             };
             if let Some(expr) = filter_projection_ref {
                 if !account_filter_projection(expr, &projected) {
@@ -31541,7 +31404,7 @@ fn commitments_summary_json(
 pub async fn handle_v1_nexus_dataspaces_account_summary(
     state: Arc<CoreState>,
     axum::extract::Path(raw_literal): axum::extract::Path<String>,
-    crate::NoritoQuery(query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
+    crate::NoritoQuery(_query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let literal = raw_literal.trim();
@@ -31563,12 +31426,7 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
         ))
     })?;
     let (account_id, canonical_account_id, _) = parsed.into_parts();
-    let address_format = AddressFormatPreference::from_param(query.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY);
 
     let world = state.world_view();
     let resolved_account_id = if world.account(&account_id).is_ok() {
@@ -31701,7 +31559,7 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
             let account_values = summary
                 .accounts
                 .iter()
-                .map(|account_id| Value::from(address_format.display_literal(account_id)))
+                .map(|account_id| Value::from(crate::account_literal::display_literal(account_id)))
                 .collect();
             let mut row = Map::new();
             row.insert(
@@ -31778,7 +31636,9 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     let mut root = Map::new();
     root.insert(
         "account".into(),
-        Value::from(address_format.display_literal(&resolved_account_id)),
+        Value::from(crate::account_literal::display_literal(
+            &resolved_account_id,
+        )),
     );
     root.insert("account_id".into(), Value::from(canonical_account_id));
     root.insert("uaid".into(), uaid_value);
@@ -31891,8 +31751,6 @@ pub struct SpaceDirectoryManifestQuery {
     pub limit: Option<u64>,
     #[norito(default)]
     pub offset: Option<u64>,
-    #[norito(default)]
-    pub address_format: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -31901,7 +31759,7 @@ pub struct SpaceDirectoryManifestQuery {
 )]
 pub struct SpaceDirectoryBindingsQuery {
     #[norito(default)]
-    pub address_format: Option<String>,
+    pub reserved: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31957,16 +31815,11 @@ impl DataspaceAliasLookup {
 pub async fn handle_v1_space_directory_bindings(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    crate::NoritoQuery(query): crate::NoritoQuery<SpaceDirectoryBindingsQuery>,
+    crate::NoritoQuery(_query): crate::NoritoQuery<SpaceDirectoryBindingsQuery>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
-    let address_format = AddressFormatPreference::from_param(query.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_SPACE_DIRECTORY_BINDINGS,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_SPACE_DIRECTORY_BINDINGS);
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
     let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
@@ -31982,7 +31835,7 @@ pub async fn handle_v1_space_directory_bindings(
             };
             let account_values: Vec<_> = accounts
                 .iter()
-                .map(|account_id| Value::from(address_format.display_literal(account_id)))
+                .map(|account_id| Value::from(crate::account_literal::display_literal(account_id)))
                 .collect();
             entry.insert("accounts".into(), Value::Array(account_values));
             dataspaces.push(Value::Object(entry));
@@ -32022,12 +31875,7 @@ pub async fn handle_v1_space_directory_manifests(
     let nexus = state.nexus_snapshot();
     let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
     let bindings = world.uaid_dataspaces().get(&uaid);
-    let address_format = AddressFormatPreference::from_param(query.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_SPACE_DIRECTORY_MANIFESTS);
     let mut manifests = Vec::new();
     let status_filter = match query.status.as_deref() {
         Some(raw) => raw.parse().map_err(|_| {
@@ -32080,7 +31928,6 @@ pub async fn handle_v1_space_directory_manifests(
             projection.record,
             &alias_lookup,
             bindings,
-            address_format,
         )?;
         manifests.push(entry);
     }
@@ -32203,7 +32050,6 @@ fn manifest_entry_to_json(
     record: &SpaceDirectoryManifestRecord,
     alias_lookup: &DataspaceAliasLookup,
     bindings: Option<&UaidDataspaceBindings>,
-    address_format: AddressFormatPreference,
 ) -> Result<Value> {
     let mut entry = Map::new();
     entry.insert("dataspace_id".into(), Value::from(dataspace_id.as_u64()));
@@ -32231,7 +32077,7 @@ fn manifest_entry_to_json(
     );
     entry.insert(
         "accounts".into(),
-        bindings_for_dataspace(bindings, dataspace_id, address_format),
+        bindings_for_dataspace(bindings, dataspace_id),
     );
 
     Ok(Value::Object(entry))
@@ -32294,7 +32140,6 @@ fn manifest_lifecycle_json(lifecycle: &SpaceDirectoryManifestLifecycle) -> Value
 fn bindings_for_dataspace(
     bindings: Option<&UaidDataspaceBindings>,
     dataspace_id: DataSpaceId,
-    address_format: AddressFormatPreference,
 ) -> Value {
     if let Some(directory) = bindings {
         if let Some(accounts) = directory.iter().find_map(|(id, accounts)| {
@@ -32306,7 +32151,7 @@ fn bindings_for_dataspace(
         }) {
             let list: Vec<Value> = accounts
                 .iter()
-                .map(|account_id| Value::from(address_format.display_literal(account_id)))
+                .map(|account_id| Value::from(crate::account_literal::display_literal(account_id)))
                 .collect();
             return Value::Array(list);
         }
@@ -32387,7 +32232,6 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: Some(2),
-            address_format: None,
         };
         let resp = handle_v1_accounts_query(
             state,
@@ -32405,7 +32249,8 @@ mod accounts_query_tests {
     }
 
     #[tokio::test]
-    async fn accounts_query_filter_accepts_canonical_and_rejects_alias_and_compressed_literals() {
+    async fn accounts_query_filter_accepts_canonical_and_rejects_alias_and_non_canonical_i105_literals()
+     {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -32453,12 +32298,12 @@ mod accounts_query_tests {
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         let expected = account_id.account().to_string();
-        let compressed_literal = account_id
+        let non_canonical_i105_literal = account_id
             .account()
             .to_account_address()
             .expect("account address")
-            .to_compressed_sora()
-            .expect("compressed encoding");
+            .to_i105()
+            .expect("i105 encoding");
 
         let alias_literal = format!("{}@{}", label.label, domain_id);
         let alias_env = crate::filter::QueryEnvelope {
@@ -32474,7 +32319,6 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let alias_result = handle_v1_accounts_query(
             state.clone(),
@@ -32500,7 +32344,6 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
         let resp = handle_v1_accounts_query(
             state.clone(),
@@ -32543,11 +32386,11 @@ mod accounts_query_tests {
             "response should expose canonical ids, got {ids:?}"
         );
 
-        let compressed_env = crate::filter::QueryEnvelope {
+        let i105_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("id".to_string()),
-                Value::String(compressed_literal.clone()),
+                Value::String(non_canonical_i105_literal.clone()),
             )),
             select: None,
             sort: Vec::new(),
@@ -32556,17 +32399,16 @@ mod accounts_query_tests {
                 offset: 0,
             },
             fetch_size: None,
-            address_format: None,
         };
-        let compressed_result = handle_v1_accounts_query(
+        let i105_result = handle_v1_accounts_query(
             state.clone(),
-            crate::utils::extractors::NoritoJson(compressed_env),
+            crate::utils::extractors::NoritoJson(i105_env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
         .await;
         assert!(
-            compressed_result.is_err(),
-            "compressed literal `{compressed_literal}` must be rejected"
+            i105_result.is_err(),
+            "non-canonical I105 literal `{non_canonical_i105_literal}` must be rejected"
         );
     }
 }
@@ -33004,8 +32846,7 @@ pub async fn handle_v1_explorer_transactions(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        let address_format = pagination.address_format_pref()?;
-        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS, address_format);
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS);
         if let Some(block_height) = block {
             if block_height > max_height {
                 let (items, pagination_meta) = crate::explorer::paginate(
@@ -33032,7 +32873,6 @@ pub async fn handle_v1_explorer_transactions(
             &filters,
             pagination.page,
             pagination.per_page,
-            address_format,
         )?;
         let page = crate::explorer::ExplorerTransactionsPage {
             pagination: pagination_meta,
@@ -33062,12 +32902,7 @@ pub async fn handle_v1_explorer_transactions_latest(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        let address_format = pagination.address_format_pref()?;
-        record_address_format_selection(
-            &telemetry,
-            ENDPOINT_EXPLORER_TRANSACTIONS_LATEST,
-            address_format,
-        );
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTIONS_LATEST);
         if let Some(block_height) = block {
             if block_height > max_height {
                 let body = crate::explorer::ExplorerLatestTransactionsResponse {
@@ -33088,7 +32923,6 @@ pub async fn handle_v1_explorer_transactions_latest(
             max_height,
             &filters,
             pagination.per_page.max(1),
-            address_format,
         )?;
         let body = crate::explorer::ExplorerLatestTransactionsResponse {
             sampled_at: crate::explorer::now_rfc3339(),
@@ -33127,8 +32961,7 @@ pub async fn handle_v1_explorer_instructions(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        let address_format = pagination.address_format_pref()?;
-        record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS, address_format);
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS);
         let ExplorerInstructionQuery {
             account,
             authority,
@@ -33167,7 +33000,6 @@ pub async fn handle_v1_explorer_instructions(
             &filters,
             pagination.page,
             pagination.per_page,
-            address_format,
         )?;
         let page = ExplorerInstructionsPage {
             pagination: pagination_meta,
@@ -33194,12 +33026,7 @@ pub async fn handle_v1_explorer_instructions_latest(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        let address_format = pagination.address_format_pref()?;
-        record_address_format_selection(
-            &telemetry,
-            ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST,
-            address_format,
-        );
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST);
         let ExplorerInstructionQuery {
             account,
             authority,
@@ -33232,7 +33059,6 @@ pub async fn handle_v1_explorer_instructions_latest(
             max_height,
             &filters,
             pagination.per_page.max(1),
-            address_format,
         )?;
         let body = crate::explorer::ExplorerLatestInstructionsResponse {
             sampled_at: crate::explorer::now_rfc3339(),
@@ -33254,17 +33080,12 @@ pub async fn handle_v1_explorer_transaction_detail(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     identifier: String,
-    address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        record_address_format_selection(
-            &telemetry,
-            ENDPOINT_EXPLORER_TRANSACTION_DETAIL,
-            address_format,
-        );
-        let dto = find_transaction_detail(state.as_ref(), max_height, identifier, address_format)?;
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_TRANSACTION_DETAIL);
+        let dto = find_transaction_detail(state.as_ref(), max_height, identifier)?;
         Ok(JsonBody(dto).into_response())
     })();
     record_explorer_endpoint_result(
@@ -33282,17 +33103,12 @@ pub async fn handle_v1_explorer_instruction_detail(
     telemetry: MaybeTelemetry,
     hash: String,
     index: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let max_height = state.committed_height() as u64;
-        record_address_format_selection(
-            &telemetry,
-            ENDPOINT_EXPLORER_INSTRUCTION_DETAIL,
-            address_format,
-        );
-        let dto = find_instruction_detail(state.as_ref(), max_height, hash, index, address_format)?;
+        record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_INSTRUCTION_DETAIL);
+        let dto = find_instruction_detail(state.as_ref(), max_height, hash, index)?;
         Ok(JsonBody(dto).into_response())
     })();
     record_explorer_endpoint_result(
@@ -33309,7 +33125,6 @@ fn collect_transaction_summaries_from_kura(
     kura: &Kura,
     start_height: u64,
     filters: &ExplorerTransactionFilters,
-    address_format: AddressFormatPreference,
 ) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
     let mut out = Vec::new();
     if start_height == 0 {
@@ -33333,12 +33148,7 @@ fn collect_transaction_summaries_from_kura(
             .zip(block_ref.results().take(external_total))
         {
             if filters.matches(tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto(
-                    tx,
-                    height,
-                    result,
-                    address_format,
-                ));
+                out.push(crate::explorer::transaction_summary_dto(tx, height, result));
             }
         }
         if height == lower_bound || height == 1 {
@@ -33355,7 +33165,6 @@ fn collect_latest_transaction_summaries(
     start_height: u64,
     filters: &ExplorerTransactionFilters,
     limit: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
     let limit = limit.max(1);
     let mut out = Vec::new();
@@ -33382,12 +33191,7 @@ fn collect_latest_transaction_summaries(
             if !filters.matches(tx, height, result) {
                 continue;
             }
-            out.push(crate::explorer::transaction_summary_dto(
-                tx,
-                height,
-                result,
-                address_format,
-            ));
+            out.push(crate::explorer::transaction_summary_dto(tx, height, result));
             if (out.len() as u64) >= limit {
                 return Ok(out);
             }
@@ -33429,7 +33233,6 @@ fn collect_transaction_summaries(
     filters: &ExplorerTransactionFilters,
     page: u64,
     per_page: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<
     (
         Vec<crate::explorer::ExplorerTransactionDto>,
@@ -33462,12 +33265,7 @@ fn collect_transaction_summaries(
         {
             if filters.matches(tx, height, result) {
                 if total_items >= start_index && total_items < end_index {
-                    out.push(crate::explorer::transaction_summary_dto(
-                        tx,
-                        height,
-                        result,
-                        address_format,
-                    ));
+                    out.push(crate::explorer::transaction_summary_dto(tx, height, result));
                 }
                 total_items = total_items.saturating_add(1);
             }
@@ -33485,7 +33283,6 @@ fn collect_instruction_history_from_kura(
     kura: &Kura,
     start_height: u64,
     filters: &ExplorerInstructionFilters,
-    address_format: AddressFormatPreference,
 ) -> Result<Vec<ExplorerInstructionDto>, Error> {
     let mut out = Vec::new();
     if start_height == 0 {
@@ -33537,7 +33334,6 @@ fn collect_instruction_history_from_kura(
                     instruction,
                     kind,
                     index,
-                    address_format,
                 ));
             }
         }
@@ -33555,7 +33351,6 @@ fn collect_latest_instruction_history(
     start_height: u64,
     filters: &ExplorerInstructionFilters,
     limit: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<Vec<ExplorerInstructionDto>, Error> {
     let limit = limit.max(1);
     let mut out = Vec::new();
@@ -33608,7 +33403,6 @@ fn collect_latest_instruction_history(
                     instruction,
                     kind,
                     index,
-                    address_format,
                 ));
                 if (out.len() as u64) >= limit {
                     return Ok(out);
@@ -33630,7 +33424,6 @@ fn collect_instruction_history(
     filters: &ExplorerInstructionFilters,
     page: u64,
     per_page: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<
     (
         Vec<ExplorerInstructionDto>,
@@ -33691,7 +33484,6 @@ fn collect_instruction_history(
                         instruction,
                         kind,
                         index,
-                        address_format,
                     ));
                 }
                 total_items = total_items.saturating_add(1);
@@ -33710,7 +33502,6 @@ fn find_transaction_detail(
     state: &CoreState,
     start_height: u64,
     identifier: String,
-    address_format: AddressFormatPreference,
 ) -> Result<crate::explorer::ExplorerTransactionDetailDto, Error> {
     if start_height == 0 {
         return Err(explorer_not_found());
@@ -33721,17 +33512,12 @@ fn find_transaction_detail(
         .map_err(|_| conversion_error("invalid transaction hash".to_owned()))?;
     let indexed_height = indexed_transaction_height(state, start_height, target);
     if let Some(height) = indexed_height {
-        if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)? {
+        if let Some(dto) = transaction_detail_at_height(state, height, target)? {
             return Ok(dto);
         }
     }
-    if let Some(dto) = find_transaction_detail_by_scan(
-        state,
-        start_height,
-        target,
-        address_format,
-        indexed_height,
-    )? {
+    if let Some(dto) = find_transaction_detail_by_scan(state, start_height, target, indexed_height)?
+    {
         return Ok(dto);
     }
     Err(explorer_not_found())
@@ -33743,7 +33529,6 @@ fn find_instruction_detail(
     start_height: u64,
     identifier: String,
     index: u64,
-    address_format: AddressFormatPreference,
 ) -> Result<ExplorerInstructionDto, Error> {
     if start_height == 0 {
         return Err(explorer_not_found());
@@ -33757,20 +33542,13 @@ fn find_instruction_detail(
         .map_err(|_| conversion_error("instruction index exceeds host pointer width".into()))?;
     let indexed_height = indexed_transaction_height(state, start_height, target);
     if let Some(height) = indexed_height {
-        if let Some(dto) =
-            instruction_detail_at_height(state, height, target, lookup_index, address_format)?
-        {
+        if let Some(dto) = instruction_detail_at_height(state, height, target, lookup_index)? {
             return Ok(dto);
         }
     }
-    if let Some(dto) = find_instruction_detail_by_scan(
-        state,
-        start_height,
-        target,
-        lookup_index,
-        address_format,
-        indexed_height,
-    )? {
+    if let Some(dto) =
+        find_instruction_detail_by_scan(state, start_height, target, lookup_index, indexed_height)?
+    {
         return Ok(dto);
     }
     Err(explorer_not_found())
@@ -33793,7 +33571,6 @@ fn transaction_detail_at_height(
     state: &CoreState,
     height: u64,
     target: HashOf<TransactionEntrypoint>,
-    address_format: AddressFormatPreference,
 ) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
@@ -33809,10 +33586,7 @@ fn transaction_detail_at_height(
     {
         if tx.hash_as_entrypoint() == target {
             return Ok(Some(crate::explorer::transaction_detail_dto(
-                tx,
-                height,
-                result,
-                address_format,
+                tx, height, result,
             )));
         }
     }
@@ -33824,14 +33598,12 @@ fn find_transaction_detail_by_scan(
     state: &CoreState,
     start_height: u64,
     target: HashOf<TransactionEntrypoint>,
-    address_format: AddressFormatPreference,
     skip_height: Option<u64>,
 ) -> Result<Option<crate::explorer::ExplorerTransactionDetailDto>, Error> {
     let mut height = start_height;
     loop {
         if Some(height) != skip_height {
-            if let Some(dto) = transaction_detail_at_height(state, height, target, address_format)?
-            {
+            if let Some(dto) = transaction_detail_at_height(state, height, target)? {
                 return Ok(Some(dto));
             }
         }
@@ -33849,7 +33621,6 @@ fn instruction_detail_at_height(
     height: u64,
     target: HashOf<TransactionEntrypoint>,
     lookup_index: usize,
-    address_format: AddressFormatPreference,
 ) -> Result<Option<ExplorerInstructionDto>, Error> {
     let Some(nonzero_height) = nonzero_height(height) else {
         return Ok(None);
@@ -33881,7 +33652,6 @@ fn instruction_detail_at_height(
             instruction,
             kind,
             index_u32,
-            address_format,
         )));
     }
     Ok(None)
@@ -33893,15 +33663,12 @@ fn find_instruction_detail_by_scan(
     start_height: u64,
     target: HashOf<TransactionEntrypoint>,
     lookup_index: usize,
-    address_format: AddressFormatPreference,
     skip_height: Option<u64>,
 ) -> Result<Option<ExplorerInstructionDto>, Error> {
     let mut height = start_height;
     loop {
         if Some(height) != skip_height {
-            if let Some(dto) =
-                instruction_detail_at_height(state, height, target, lookup_index, address_format)?
-            {
+            if let Some(dto) = instruction_detail_at_height(state, height, target, lookup_index)? {
                 return Ok(Some(dto));
             }
         }
@@ -33937,15 +33704,14 @@ pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
     account_id: AccountId,
     telemetry: MaybeTelemetry,
-    address_format: AddressFormatPreference,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
     world
         .account(&account_id)
         .map_err(|_| explorer_not_found())?;
-    record_address_format_selection(&telemetry, ENDPOINT_EXPLORER_ACCOUNT_QR, address_format);
-    let dto = crate::explorer::ExplorerAccountQrDto::build(&account_id, address_format)
-        .map_err(explorer_qr_error)?;
+    record_account_literal_selection(&telemetry, ENDPOINT_EXPLORER_ACCOUNT_QR);
+    let dto =
+        crate::explorer::ExplorerAccountQrDto::build(&account_id).map_err(explorer_qr_error)?;
     Ok(JsonBody(dto).into_response())
 }
 
@@ -37062,11 +36828,7 @@ fn offline_allowance_filter_projection(expr: &FilterExpr, item: &OfflineAllowanc
 }
 
 #[cfg(feature = "app_api")]
-fn offline_allowance_item_to_json(
-    item: &OfflineAllowanceListItem,
-    address_format: AddressFormatPreference,
-    now_ms: u64,
-) -> Result<Value> {
+fn offline_allowance_item_to_json(item: &OfflineAllowanceListItem, now_ms: u64) -> Result<Value> {
     let mut map = Map::new();
     map.insert(
         "certificate_id_hex".into(),
@@ -37078,7 +36840,7 @@ fn offline_allowance_item_to_json(
     );
     map.insert(
         "controller_display".into(),
-        Value::from(address_format.display_literal(&item.controller)),
+        Value::from(crate::account_literal::display_literal(&item.controller)),
     );
     map.insert("asset_id".into(), Value::from(item.asset_id.clone()));
     map.insert(
@@ -37266,10 +37028,7 @@ fn offline_revocation_filter_projection(
 }
 
 #[cfg(feature = "app_api")]
-fn offline_revocation_item_to_json(
-    item: &OfflineVerdictRevocationListItem,
-    address_format: AddressFormatPreference,
-) -> Result<Value> {
+fn offline_revocation_item_to_json(item: &OfflineVerdictRevocationListItem) -> Result<Value> {
     let mut map = Map::new();
     map.insert(
         "verdict_id_hex".into(),
@@ -37278,7 +37037,7 @@ fn offline_revocation_item_to_json(
     map.insert("issuer_id".into(), Value::from(item.issuer.to_string()));
     map.insert(
         "issuer_display".into(),
-        Value::from(address_format.display_literal(&item.issuer)),
+        Value::from(crate::account_literal::display_literal(&item.issuer)),
     );
     map.insert("revoked_at_ms".into(), Value::from(item.revoked_at_ms));
     map.insert(
@@ -37375,10 +37134,7 @@ fn offline_summary_filter_projection(
 }
 
 #[cfg(feature = "app_api")]
-fn offline_summary_item_to_json(
-    item: &OfflineCounterSummaryListItem,
-    address_format: AddressFormatPreference,
-) -> Value {
+fn offline_summary_item_to_json(item: &OfflineCounterSummaryListItem) -> Value {
     let mut map = Map::new();
     map.insert(
         "certificate_id_hex".into(),
@@ -37390,7 +37146,7 @@ fn offline_summary_item_to_json(
     );
     map.insert(
         "controller_display".into(),
-        Value::from(address_format.display_literal(&item.controller)),
+        Value::from(crate::account_literal::display_literal(&item.controller)),
     );
     map.insert(
         "summary_hash_hex".into(),
@@ -37451,8 +37207,7 @@ pub async fn handle_v1_offline_allowances(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_ALLOWANCES_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_ALLOWANCES_LIST);
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_ALLOWANCES_LIST)?;
@@ -37486,7 +37241,7 @@ pub async fn handle_v1_offline_allowances(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_allowance_item_to_json(item, address_format, now_ms)?;
+        let value = offline_allowance_item_to_json(item, now_ms)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -37537,12 +37292,7 @@ pub async fn handle_v1_offline_revocations(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_OFFLINE_REVOCATIONS_LIST,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_REVOCATIONS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_REVOCATIONS_LIST)?;
@@ -37572,7 +37322,7 @@ pub async fn handle_v1_offline_revocations(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_revocation_item_to_json(item, address_format)?;
+        let value = offline_revocation_item_to_json(item)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -37631,12 +37381,7 @@ pub async fn handle_v1_offline_allowances_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_OFFLINE_ALLOWANCES_QUERY,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_ALLOWANCES_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -37674,7 +37419,7 @@ pub async fn handle_v1_offline_allowances_query(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_allowance_item_to_json(item, address_format, response_now_ms)?;
+        let value = offline_allowance_item_to_json(item, response_now_ms)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -37698,21 +37443,16 @@ pub async fn handle_v1_offline_allowances_query(
 pub async fn handle_v1_nexus_public_lane_validators(
     state: Arc<CoreState>,
     lane_id: LaneId,
-    params: PublicLaneValidatorsQueryParams,
+    _params: PublicLaneValidatorsQueryParams,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS);
 
     let world = state.world_view();
     let mut entries = Vec::new();
     for ((lane, _), record) in world.public_lane_validators().iter() {
         if *lane == lane_id {
-            entries.push(validator_record_to_json(record, address_format));
+            entries.push(validator_record_to_json(record));
         }
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
@@ -37759,8 +37499,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
     } else {
         None
     };
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_STAKE, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_STAKE);
 
     let world = state.world_view();
     let mut entries = Vec::new();
@@ -37773,7 +37512,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
                 continue;
             }
         }
-        entries.push(stake_share_to_json(share, address_format));
+        entries.push(stake_share_to_json(share));
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     let payload = build_lane_items_payload(
@@ -37827,12 +37566,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         ),
         None => None,
     };
-    let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS);
     let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
 
     let world = state.world_view();
@@ -37847,7 +37581,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     let mut entries = rewards
         .into_iter()
         .filter(|reward| !reward.amount.is_zero())
-        .map(|reward| pending_reward_to_json(reward, address_format))
+        .map(pending_reward_to_json)
         .collect::<Vec<_>>();
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
 
@@ -37962,14 +37696,11 @@ fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
 }
 
 #[cfg(feature = "app_api")]
-fn validator_record_to_json(
-    record: &PublicLaneValidatorRecord,
-    address_format: AddressFormatPreference,
-) -> (String, Value) {
+fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Value) {
     let mut map = Map::new();
     let canonical_validator = record.validator.to_string();
-    let validator_literal = address_format.display_literal(&record.validator);
-    let stake_literal = address_format.display_literal(&record.stake_account);
+    let validator_literal = crate::account_literal::display_literal(&record.validator);
+    let stake_literal = crate::account_literal::display_literal(&record.stake_account);
     map.insert("lane_id".into(), Value::from(u64::from(record.lane_id)));
     map.insert("validator".into(), Value::from(validator_literal));
     map.insert("stake_account".into(), Value::from(stake_literal));
@@ -38041,15 +37772,12 @@ fn validator_status_to_json(status: &PublicLaneValidatorStatus) -> Value {
 }
 
 #[cfg(feature = "app_api")]
-fn stake_share_to_json(
-    share: &PublicLaneStakeShare,
-    address_format: AddressFormatPreference,
-) -> (String, Value) {
+fn stake_share_to_json(share: &PublicLaneStakeShare) -> (String, Value) {
     let mut map = Map::new();
     let canonical_validator = share.validator.to_string();
     let canonical_staker = share.staker.to_string();
-    let validator_literal = address_format.display_literal(&share.validator);
-    let staker_literal = address_format.display_literal(&share.staker);
+    let validator_literal = crate::account_literal::display_literal(&share.validator);
+    let staker_literal = crate::account_literal::display_literal(&share.staker);
     map.insert("lane_id".into(), Value::from(u64::from(share.lane_id)));
     map.insert("validator".into(), Value::from(validator_literal));
     map.insert("staker".into(), Value::from(staker_literal));
@@ -38070,10 +37798,9 @@ fn stake_share_to_json(
 #[cfg(feature = "app_api")]
 fn pending_reward_to_json(
     reward: iroha_data_model::nexus::PublicLanePendingReward,
-    address_format: AddressFormatPreference,
 ) -> (String, Value) {
     let mut map = Map::new();
-    let account_literal = address_format.display_literal(&reward.account);
+    let account_literal = crate::account_literal::display_literal(&reward.account);
     map.insert("lane_id".into(), Value::from(u64::from(reward.lane_id)));
     map.insert("account".into(), Value::from(account_literal));
     map.insert("asset".into(), Value::from(reward.asset.to_string()));
@@ -38121,7 +37848,7 @@ mod public_lane_tests {
     use super::*;
 
     #[test]
-    fn validator_record_to_json_respects_address_format() {
+    fn validator_record_to_json_uses_canonical_i105_literals() {
         let record = PublicLaneValidatorRecord {
             lane_id: LaneId::new(7),
             validator: ALICE_ID.clone(),
@@ -38135,22 +37862,22 @@ mod public_lane_tests {
             last_reward_epoch: Some(3),
         };
 
-        let (_, value) = validator_record_to_json(&record, AddressFormatPreference::Compressed);
+        let (_, value) = validator_record_to_json(&record);
         let obj = value
             .as_object()
             .expect("validator record should encode as object");
-        let expected_validator = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
-        let expected_stake = AddressFormatPreference::Compressed.display_literal(&BOB_ID);
+        let expected_validator = crate::account_literal::display_literal(&ALICE_ID);
+        let expected_stake = crate::account_literal::display_literal(&BOB_ID);
 
         assert_eq!(
             obj.get("validator").and_then(Value::as_str),
             Some(expected_validator.as_str()),
-            "validator literal should honour address_format preference"
+            "validator literal should use canonical i105 rendering"
         );
         assert_eq!(
             obj.get("stake_account").and_then(Value::as_str),
             Some(expected_stake.as_str()),
-            "stake account literal should honour address_format preference"
+            "stake account literal should use canonical i105 rendering"
         );
         assert_eq!(
             obj.get("lane_id").and_then(Value::as_u64),
@@ -38159,7 +37886,7 @@ mod public_lane_tests {
     }
 
     #[test]
-    fn pending_reward_to_json_respects_address_format() {
+    fn pending_reward_to_json_uses_canonical_i105_literals() {
         let asset_def: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
         let reward = PublicLanePendingReward {
             lane_id: LaneId::new(5),
@@ -38170,11 +37897,11 @@ mod public_lane_tests {
             amount: Numeric::from(42_u32),
         };
 
-        let (_, value) = pending_reward_to_json(reward, AddressFormatPreference::Compressed);
+        let (_, value) = pending_reward_to_json(reward);
         let obj = value
             .as_object()
             .expect("pending reward should encode as object");
-        let expected_account = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
+        let expected_account = crate::account_literal::display_literal(&ALICE_ID);
 
         assert_eq!(
             obj.get("account").and_then(Value::as_str),
@@ -38387,12 +38114,7 @@ pub async fn handle_v1_offline_revocations_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_OFFLINE_REVOCATIONS_QUERY,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_REVOCATIONS_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -38430,7 +38152,7 @@ pub async fn handle_v1_offline_revocations_query(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_revocation_item_to_json(item, address_format)?;
+        let value = offline_revocation_item_to_json(item)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -38481,8 +38203,7 @@ pub async fn handle_v1_offline_summaries(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_LIST);
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_SUMMARIES_LIST)?;
@@ -38512,7 +38233,7 @@ pub async fn handle_v1_offline_summaries(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_summary_item_to_json(item, address_format);
+        let value = offline_summary_item_to_json(item);
         arr.push(value);
     }
     let mut top = Map::new();
@@ -38556,8 +38277,7 @@ pub async fn handle_v1_offline_summaries_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -38596,7 +38316,7 @@ pub async fn handle_v1_offline_summaries_query(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_summary_item_to_json(item, address_format);
+        let value = offline_summary_item_to_json(item);
         arr.push(value);
     }
     let mut top = Map::new();
@@ -39577,10 +39297,7 @@ fn offline_transfer_filter_projection(expr: &FilterExpr, item: &OfflineTransferS
 }
 
 #[cfg(feature = "app_api")]
-fn offline_transfer_item_to_json(
-    item: &OfflineTransferSummary,
-    address_format: AddressFormatPreference,
-) -> Result<Value> {
+fn offline_transfer_item_to_json(item: &OfflineTransferSummary) -> Result<Value> {
     let mut map = Map::new();
     map.insert(
         "bundle_id_hex".into(),
@@ -39592,12 +39309,12 @@ fn offline_transfer_item_to_json(
     );
     map.insert(
         "controller_display".into(),
-        Value::from(address_format.display_literal(&item.controller)),
+        Value::from(crate::account_literal::display_literal(&item.controller)),
     );
     map.insert("receiver_id".into(), Value::from(item.receiver.to_string()));
     map.insert(
         "receiver_display".into(),
-        Value::from(address_format.display_literal(&item.receiver)),
+        Value::from(crate::account_literal::display_literal(&item.receiver)),
     );
     map.insert(
         "deposit_account_id".into(),
@@ -39605,7 +39322,9 @@ fn offline_transfer_item_to_json(
     );
     map.insert(
         "deposit_account_display".into(),
-        Value::from(address_format.display_literal(&item.deposit_account)),
+        Value::from(crate::account_literal::display_literal(
+            &item.deposit_account,
+        )),
     );
     if let Some(asset) = &item.asset_id {
         map.insert("asset_id".into(), Value::from(asset.clone()));
@@ -39733,8 +39452,7 @@ pub async fn handle_v1_offline_transfers(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_TRANSFERS_LIST)?;
@@ -39768,7 +39486,7 @@ pub async fn handle_v1_offline_transfers(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_transfer_item_to_json(item, address_format)?;
+        let value = offline_transfer_item_to_json(item)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -39826,8 +39544,7 @@ pub async fn handle_v1_offline_transfers_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -39865,7 +39582,7 @@ pub async fn handle_v1_offline_transfers_query(
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
-        let value = offline_transfer_item_to_json(item, address_format)?;
+        let value = offline_transfer_item_to_json(item)?;
         arr.push(value);
     }
     let mut top = Map::new();
@@ -39890,7 +39607,7 @@ pub async fn handle_v1_offline_transfers_query(
 pub async fn handle_v1_offline_transfer_get(
     state: Arc<CoreState>,
     bundle_id_hex: String,
-    crate::NoritoQuery(p): crate::NoritoQuery<OfflineTransferGetParams>,
+    crate::NoritoQuery(_p): crate::NoritoQuery<OfflineTransferGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
@@ -39903,14 +39620,9 @@ pub async fn handle_v1_offline_transfer_get(
         .cloned()
         .ok_or_else(|| Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)))?;
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        ENDPOINT_OFFLINE_TRANSFERS_DETAIL,
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_DETAIL);
     let item = OfflineTransferSummary::from(record);
-    let value = offline_transfer_item_to_json(&item, address_format)?;
+    let value = offline_transfer_item_to_json(&item)?;
     json_response(&value)
 }
 
@@ -39949,8 +39661,7 @@ pub async fn handle_v1_offline_receipts(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_LIST, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_LIST);
     let cap = app_query_page_cap(&state);
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_RECEIPTS_LIST)?;
@@ -40035,9 +39746,9 @@ pub async fn handle_v1_offline_receipts(
                         tx_id_hex: hex::encode(receipt.tx_id.as_ref()),
                         certificate_id_hex,
                         controller_id: receipt.from.to_string(),
-                        controller_display: address_format.display_literal(&receipt.from),
+                        controller_display: crate::account_literal::display_literal(&receipt.from),
                         receiver_id: receipt.to.to_string(),
-                        receiver_display: address_format.display_literal(&receipt.to),
+                        receiver_display: crate::account_literal::display_literal(&receipt.to),
                         asset_id: receipt.asset.to_string(),
                         amount: receipt.amount,
                         invoice_id: receipt.invoice_id,
@@ -40120,8 +39831,7 @@ pub async fn handle_v1_offline_receipts_query(
         )?;
     }
 
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_QUERY);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(
         envelope.pagination.limit,
@@ -40155,9 +39865,9 @@ pub async fn handle_v1_offline_receipts_query(
                         tx_id_hex: hex::encode(receipt.tx_id.as_ref()),
                         certificate_id_hex: hex::encode(receipt.sender_certificate_id.as_ref()),
                         controller_id: receipt.from.to_string(),
-                        controller_display: address_format.display_literal(&receipt.from),
+                        controller_display: crate::account_literal::display_literal(&receipt.from),
                         receiver_id: receipt.to.to_string(),
-                        receiver_display: address_format.display_literal(&receipt.to),
+                        receiver_display: crate::account_literal::display_literal(&receipt.to),
                         asset_id: receipt.asset.to_string(),
                         amount: receipt.amount,
                         invoice_id: receipt.invoice_id,
@@ -40198,12 +39908,7 @@ pub async fn handle_v1_offline_bundle_proof_status(
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let bundle_id = parse_hash_hex(&p.bundle_id_hex, "bundle_id_hex")?;
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(
-        &telemetry,
-        "/v1/offline/bundle/proof_status",
-        address_format,
-    );
+    record_account_literal_selection(&telemetry, "/v1/offline/bundle/proof_status");
 
     let world = state.world_view();
     let record = world
@@ -44183,8 +43888,7 @@ mod adapter_filter_tests {
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
         let item = OfflineAllowanceListItem::from(record);
         let now_ms = refresh_at.saturating_sub(500);
-        let value = offline_allowance_item_to_json(&item, AddressFormatPreference::Ih58, now_ms)
-            .expect("json");
+        let value = offline_allowance_item_to_json(&item, now_ms).expect("json");
         let object = value.as_object().expect("json object");
         assert_eq!(
             object
@@ -44249,10 +43953,8 @@ mod adapter_filter_tests {
     fn offline_allowance_filter_canonicalizes_controller_literals() {
         use iroha_test_samples::ALICE_ID;
 
-        use crate::address_format::AddressFormatPreference;
-
-        let compressed = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
-        let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(compressed));
+        let i105 = crate::account_literal::display_literal(&ALICE_ID);
+        let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(i105));
 
         canonicalize_offline_allowance_filter_literals(
             &mut expr,
@@ -44438,8 +44140,6 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_allowance_query_filters_handle_controller_param() {
-        use crate::address_format::AddressFormatPreference;
-
         let record = sample_allowance_record();
         let literal = record.certificate.controller.to_string();
         let telemetry = MaybeTelemetry::for_tests();
@@ -44564,8 +44264,7 @@ mod adapter_filter_tests {
     fn offline_transfer_item_json_surfaces_certificate_metadata() {
         let record = sample_transfer_record();
         let item = OfflineTransferSummary::from(record);
-        let value =
-            offline_transfer_item_to_json(&item, AddressFormatPreference::Ih58).expect("json");
+        let value = offline_transfer_item_to_json(&item).expect("json");
         let object = value.as_object().expect("json object");
         assert_eq!(
             object
@@ -44598,8 +44297,7 @@ mod adapter_filter_tests {
         record.transfer.platform_snapshot = None;
 
         let item = OfflineTransferSummary::from(record);
-        let value =
-            offline_transfer_item_to_json(&item, AddressFormatPreference::Ih58).expect("json");
+        let value = offline_transfer_item_to_json(&item).expect("json");
         let object = value.as_object().expect("json object");
         assert!(object.get("platform_policy").is_none());
         assert!(object.get("platform_token_snapshot").is_none());
@@ -44613,8 +44311,7 @@ mod adapter_filter_tests {
         record.rejection_reason = Some("allowance_exceeded".into());
 
         let item = OfflineTransferSummary::from(record);
-        let value =
-            offline_transfer_item_to_json(&item, AddressFormatPreference::Ih58).expect("json");
+        let value = offline_transfer_item_to_json(&item).expect("json");
         let object = value.as_object().expect("json object");
         assert_eq!(
             object
@@ -44803,15 +44500,11 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_transfer_query_filters_handle_account_params() {
-        use crate::address_format::AddressFormatPreference;
-
         let record = sample_transfer_record();
-        let controller_literal =
-            AddressFormatPreference::Compressed.display_literal(&record.controller);
-        let receiver_literal =
-            AddressFormatPreference::Compressed.display_literal(&record.transfer.receiver);
+        let controller_literal = crate::account_literal::display_literal(&record.controller);
+        let receiver_literal = crate::account_literal::display_literal(&record.transfer.receiver);
         let deposit_literal =
-            AddressFormatPreference::Compressed.display_literal(&record.transfer.deposit_account);
+            crate::account_literal::display_literal(&record.transfer.deposit_account);
         let telemetry = MaybeTelemetry::for_tests();
 
         let params = OfflineTransferListParams {
@@ -44847,11 +44540,9 @@ mod adapter_filter_tests {
     fn offline_transfer_filter_canonicalizes_all_account_fields() {
         use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 
-        use crate::address_format::AddressFormatPreference;
-
-        let controller = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
-        let receiver = AddressFormatPreference::Compressed.display_literal(&BOB_ID);
-        let deposit = AddressFormatPreference::Compressed.display_literal(&CARPENTER_ID);
+        let controller = crate::account_literal::display_literal(&ALICE_ID);
+        let receiver = crate::account_literal::display_literal(&BOB_ID);
+        let deposit = crate::account_literal::display_literal(&CARPENTER_ID);
 
         let mut expr = FilterExpr::And(vec![
             FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(controller)),
@@ -44893,10 +44584,8 @@ mod adapter_filter_tests {
     fn offline_summary_filter_canonicalizes_controller_literals() {
         use iroha_test_samples::ALICE_ID;
 
-        use crate::address_format::AddressFormatPreference;
-
-        let compressed = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
-        let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(compressed));
+        let i105 = crate::account_literal::display_literal(&ALICE_ID);
+        let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(i105));
 
         canonicalize_offline_summary_filter_literals(
             &mut expr,
@@ -45420,8 +45109,7 @@ pub async fn handle_v1_asset_holders(
             *entry = sum;
         }
     }
-    let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_ASSET_HOLDERS, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_HOLDERS)?;
     let limits = app_query_limits();
@@ -45451,7 +45139,7 @@ pub async fn handle_v1_asset_holders(
     let mut arr = Vec::with_capacity(items_vec.len());
     for it in &items_vec {
         let mut m = norito::json::Map::new();
-        let display = address_format.display_literal(&it.account_id);
+        let display = crate::account_literal::display_literal(&it.account_id);
         m.insert("account_id".into(), norito::json::Value::from(display));
         m.insert(
             "quantity".into(),
@@ -45506,8 +45194,7 @@ pub async fn handle_v1_asset_holders_query(
             *entry = sum;
         }
     }
-    let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
-    record_address_format_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY, address_format);
+    record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS_QUERY);
     let crate::filter::QueryEnvelope {
         filter,
         sort,
@@ -45583,7 +45270,7 @@ pub async fn handle_v1_asset_holders_query(
     // Norito JSON response
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
-        let display = address_format.display_literal(&it.account_id);
+        let display = crate::account_literal::display_literal(&it.account_id);
         let mut m = norito::json::Map::new();
         m.insert("account_id".into(), norito::json::Value::from(display));
         m.insert(

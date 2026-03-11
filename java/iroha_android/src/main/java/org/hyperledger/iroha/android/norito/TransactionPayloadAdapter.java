@@ -177,9 +177,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         throw new IllegalArgumentException("authority identifier must not include @domain suffix");
       }
       try {
-        return AccountIdLiteral.extractIh58Address(trimmed);
+        return AccountIdLiteral.extractI105Address(trimmed);
       } catch (final IllegalArgumentException ex) {
-        throw new IllegalArgumentException("authority identifier must be IH58 or sora-encoded", ex);
+        throw new IllegalArgumentException("authority identifier must be canonical I105 encoded", ex);
       }
     }
   }

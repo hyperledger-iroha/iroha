@@ -62,7 +62,7 @@ translation_last_reviewed: 2026-02-07
 | Чартер + KPI の計算 | `docs/source/sns/governance_addenda/` | KPI 規約と、CLI との接続。 |
 | Схема реестра | [`registry-schema.md`](./registry-schema.md) | Norito (`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`) を参照してください。 |
 | Контракт レジストラ | [`registrar-api.md`](./registrar-api.md) | REST/gRPC ペイロード、`sns_registrar_status_total` および ожидания ガバナンス フック。 |
-| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения IH58 (предпочтительно) и сжатые (второй выбор)、используемые кольками/эксплорерами。 |
+| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения I105 (предпочтительно) и сжатые (второй выбор)、используемые кольками/эксплорерами。 |
 | SoraDNS / GAR | ログイン[`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |ホスト、透明性のテーラー、および правила алертов を提供します。 |
 | Регуляторные мемо | `docs/source/sns/regulatory/` | Заметки приема по юрисдикциям (например、EU DSA)、謝辞スチュワード、ваблонные приложения。 |
 |ドリルログ | `ops/drill-log.md` | Записи хаос- и IR-репетиций перед выходом из фаз. |
@@ -106,7 +106,7 @@ translation_last_reviewed: 2026-02-07
    GAR/ゾーン (最低 4.5)。
 6. **Клиентское раскрытие:** Обновите клиентский 元帳 (ウォレット/エクスプローラー) через
    общие フィクスチャ [`address-display-guidelines.md`](./address-display-guidelines.md)、
-   IH58 と сжатые отображения совпадают с copy/QR гайдами.
+   I105 と сжатые отображения совпадают с copy/QR гайдами.
 
 ### 4.3 Продления、биллинг и сверка казначейства- **ワークフローの説明:** レジストラの確認 30 日の猶予 + 引き換え
   60 日、`SuffixPolicyV1` です。 Через 60 days автоматически запускается
@@ -135,11 +135,11 @@ translation_last_reviewed: 2026-02-07
 | Фаза | Владелец | Действие と доказательства | SLA |
 |------|----------|----------------------------|-----|
 |ソフトフリーズ |スチュワード / поддержка | Создать тикет `SNS-DF-<id>` с доказательствами платежа, ссылкой на Bond спора и затронутыми селекторами. | 4 時間以内。 |
-|ガーディアン |ガーディアンボード | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` は `GuardianFreezeTicketV1` です。 JSON と `artifacts/sns/guardian/<id>.json` を確認します。 | <=30 分 ACK、<=2 時間以内。 |
+|ガーディアン |ガーディアンボード | `sns governance freeze --selector <I105> --reason <text> --until <ts>` は `GuardianFreezeTicketV1` です。 JSON と `artifacts/sns/guardian/<id>.json` を確認します。 | <=30 分 ACK、<=2 時間以内。 |
 | Ратификация совета |ガバナンス評議会 |ガーディアンとダイジェストボンドを組み合わせて、ガーディアンとダイジェストボンドを組み合わせてください。 | Следующее заседание совета или асинхронное голосование. |
 | Арбитражная панель | Комплаенс + スチュワード | 7 番目のロードマップ (ロードマップ) が `sns governance dispute ballot` に到達します。 Приложить анонимные квитанции голосов к пакету инцидента. | Вердикт <=7 days 保証金。 |
 | Апелляция |ガーディアン + ビデオ |絆と絆、そして絆。 Norito `DisputeAppealV1` を確認してください。 | <=10 日。 |
-| Разморозка и ремедиация |レジストラー + リゾルバー操作 | `sns governance unfreeze --selector <IH58> --ticket <id>`、レジストラと差分 GAR/リゾルバ。 | Сразу после вердикта. |
+| Разморозка и ремедиация |レジストラー + リゾルバー操作 | `sns governance unfreeze --selector <I105> --ticket <id>`、レジストラと差分 GAR/リゾルバ。 | Сразу после вердикта. |
 
 Экстренные каноны (заморозки, инициированные ガーディアン <=72 h) следуют тому же
 потоку, но требуют ретроспективного обзора совета и заметки о прозрачности в

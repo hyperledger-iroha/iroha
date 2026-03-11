@@ -265,7 +265,7 @@ VRF
     - G2 hash: `"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
     - G1 hash: `"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
     - Output: `Hash("iroha:vrf:v1:output" || canonical_proof_bytes)`.
-  - Encodings: pk and proof MUST be canonical compressed (`sora`, second-best) encodings; infinity/non-subgroup are rejected.
+  - Encodings: pk and proof MUST be canonical compressed encodings; infinity/non-subgroup are rejected.
   - Variants: `1 = SigInG2 (pk=G1 48B, proof=G2 96B)`, `2 = SigInG1 (pk=G2 96B, proof=G1 48B)`.
 
 - 0x67 VRF_VERIFY_BATCH — Args: `r10=&NoritoBytes(VrfVerifyBatchRequest{items: [VrfVerifyRequest]})` → Return: `r10=ptr (&NoritoBytes(Vec<[u8;32]>))`, `r11=status:u64`, `r12=fail_index?:u64` — Gas: G_verify

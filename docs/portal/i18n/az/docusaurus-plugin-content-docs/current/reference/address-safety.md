@@ -18,7 +18,7 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
 
 ## Təhlükəsiz paylaşma axınları
 
-- IH58 ünvanına hər surəti/paylaşım əməliyyatını defolt edin. Həll olunanı göstərin
+- I105 ünvanına hər surəti/paylaşım əməliyyatını defolt edin. Həll olunanı göstərin
   domeni dəstəkləyici kontekst kimi istifadə edin, beləliklə yoxlama cəmlənmiş sətir ön və mərkəzdə qalır.
 - Tam düz mətn ünvanını və QR-ni özündə birləşdirən “Paylaş” imkanı təklif edin
   eyni faydalı yükdən əldə edilən kod. Təhlükə etməzdən əvvəl istifadəçilərə hər ikisini yoxlamağa icazə verin.
@@ -27,7 +27,7 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
   the checksum anchor survives. Tam surəti çıxarmaq üçün kran/klaviatura qısayolunu təmin edin
   string without truncation.
 - Öncədən baxan təsdiq tostunu yaymaqla panoya sinxronizasiyanın qarşısını alın
-  kopyalanan dəqiq IH58 sətri. Telemetriyanın mövcud olduğu yerlərdə nüsxəni sayın
+  kopyalanan dəqiq I105 sətri. Telemetriyanın mövcud olduğu yerlərdə nüsxəni sayın
   UX reqressiyalarının tez üzə çıxması üçün paylaşılan hərəkətlərə qarşı cəhdlər.
 
 ## IME & input safeguards
@@ -51,19 +51,19 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
 - Nəzakətli canlı bölgə yeniləməsi vasitəsilə uğurlu surətdə/paylaşım hadisələrini elan edin. Daxil et
   təyinat (mübadilə buferi, paylaşım vərəqi, QR) istifadəçinin hərəkəti bilməsi üçün
   completed without moving focus.
-- QR önizləmələri üçün təsviri `alt` mətni təqdim edin (məsələn, “IH58 ünvanı üçün
+- QR önizləmələri üçün təsviri `alt` mətni təqdim edin (məsələn, “I105 ünvanı üçün
   `<account>` on chain `0x1234`”). “Ünvanı mətn kimi kopyalayın” təmin edin
   zəif görmə qabiliyyəti olan istifadəçilər üçün QR kətanına bitişik geri dönüş.
 
-## Sora-only compressed addresses
+## Sora-only i105-default addresses
 
-- Gating: `sora…` sıxılmış simli açıq təsdiqin arxasında gizlədin.
+- Gating: `i105` sıxılmış simli açıq təsdiqin arxasında gizlədin.
   Təsdiq formanın yalnız Sora Nexus zəncirlərində işlədiyini təkrar etməlidir.
 - Etiketləmə: hər bir hadisəyə görünən “Yalnız Sora” nişanı və a
-  digər şəbəkələrin niyə IH58 formasını tələb etdiyini izah edən alət ipucu.
+  digər şəbəkələrin niyə I105 formasını tələb etdiyini izah edən alət ipucu.
 - Qoruyucular: aktiv zəncir diskriminantı Nexus bölgüsü deyilsə,
   sıxılmış ünvanı tamamilə yaratmaqdan imtina edin və istifadəçini geri yönləndirin
-  IH58.
+  I105.
 - Telemetriya: sıxılmış formanın nə qədər tez-tez tələb olunduğunu və kopyalandığını qeyd edin
   insident playbook təsadüfi paylaşma sıçrayışlarını aşkar edə bilər.
 
@@ -74,5 +74,5 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
   görünür.
 - IME girişi (kana, pinyin), ekran oxuyucu keçidi üçün əl ilə QA ssenarilərini daxil edin
   (VoiceOver/NVDA) və buraxılmazdan əvvəl yüksək kontrastlı mövzularda QR surəti.
-- IH58 paritet testləri ilə yanaşı buraxılış yoxlama siyahılarında bu yoxlamaları göstərin
+- I105 paritet testləri ilə yanaşı buraxılış yoxlama siyahılarında bu yoxlamaları göstərin
   beləliklə, reqressiyalar düzələnə qədər bloklanır.

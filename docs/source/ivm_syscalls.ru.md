@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON принимает ключ `"perms"` или `"permissions"`, каждый из которых представляет собой строковый массив имен разрешений.
     - Примеры:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - Поддерживаемые префиксы имен разрешений в макете:
       - И18НИ00000153Х, И18НИ00000154Х, И18НИ00000155Х
       - `read_assets:<account_id>`

@@ -11,7 +11,6 @@ const TEST_CALLER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRU
 
 fn test_caller_account() -> ScopedAccountId {
     ScopedAccountId::parse_encoded(TEST_CALLER_ID)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("test account literal must be valid canonical AccountId")
 }
 

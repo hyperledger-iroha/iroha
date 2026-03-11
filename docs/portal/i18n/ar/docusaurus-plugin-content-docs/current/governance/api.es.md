@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64 سداسيًا"،
       "abi_version": "1"،
       "نافذة": { "سفلي": 12345، "علوي": 12400}،
-      "السلطة": "ih58...؟",
+      "السلطة": "i105...؟",
       "مفتاح_خاص": "...؟"
     }
   - الرد (JSON):
@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 
 API للعقود (نشر)
 - المشاركة `/v1/contracts/deploy`
-  - طلب: { "authority": "ih58..."، "private_key": "..."، "code_b64": "..." }
+  - طلب: { "authority": "i105..."، "private_key": "..."، "code_b64": "..." }
   - النسبة: حساب `code_hash` لجسم البرنامج IVM و`abi_hash` للرأس `abi_version`، وإرسال `RegisterSmartContractCode` (البيان) و`RegisterSmartContractBytes` (بايت `.to` كاملة) بالاسم `authority`.
   - الرد: { "ok": true، "code_hash_hex": "..."، "abi_hash_hex": "..." }
   - العلاقة:
     - احصل على `/v1/contracts/code/{code_hash}` -> قم بإعادة البيان المتراكم
     - احصل على `/v1/contracts/code-bytes/{code_hash}` -> devuelve `{ code_b64 }`
 - المشاركة `/v1/contracts/instance`
-  - طلب: { "authority": "ih58..."، "private_key": "..."، "namespace": "apps"، "contract_id": "calc.v1"، "code_b64": "..." }
+  - طلب: { "authority": "i105..."، "private_key": "..."، "namespace": "apps"، "contract_id": "calc.v1"، "code_b64": "..." }
   - التوافق: فتح الرمز الثانوي المقدم وتنشيط الخريطة `(namespace, contract_id)` عبر `ActivateContractInstance`.
   - الرد: { "ok": true، "namespace": "apps"، "contract_id": "calc.v1"، "code_hash_hex": "..."، "abi_hash_hex": "..." }
 
@@ -61,11 +61,11 @@ API للعقود (نشر)
   - الأخطاء: HTTP `400` عند إدخال نموذج سداسي عشري خاطئ. Torii قم بإنشاء مظروف Norito `ValidationFail::QueryFailed::Conversion` مع رسالة خطأ في وحدة فك التشفير.
 - المشاركة `/v1/aliases/resolve`
   - التماس: { "الاسم المستعار": "GB82 WEST 1234 5698 7654 32" }
-  - الرد: { "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "ih58..."، "index": 0، "source": "iso_bridge" }
+  - الرد: { "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "i105..."، "index": 0، "source": "iso_bridge" }
   - الملاحظات: مطلوب التدريج المرحلي لجسر ISO في وقت التشغيل (`[iso_bridge.account_aliases]` en `iroha_config`). Torii تطبيع الاسم المستعار لإزالة المساحات والتحرك إلى أقصى حد قبل البحث. قم بإعادة النظر في 404 عندما يكون الاسم المستعار غير موجود و 503 عندما يتم إلغاء تأهيل جسر ISO لوقت التشغيل.
 - المشاركة `/v1/aliases/resolve_index`
   - طلب: { "الفهرس": 0 }
-  - الرد: { "index": 0, "alias": "GB82WEST12345698765432"، "account_id": "ih58..."، "source": "iso_bridge" }
+  - الرد: { "index": 0, "alias": "GB82WEST12345698765432"، "account_id": "i105..."، "source": "iso_bridge" }
   - الملاحظات: يتم تعيين مؤشرات الأسماء المستعارة بطريقة محددة حسب ترتيب التكوين (يعتمد على 0). يمكن للعملاء تخزين الردود مؤقتًا في وضع عدم الاتصال لإنشاء عمليات الاستماع لأحداث المصادقة على الأسماء المستعارة.
 
 Tope de tamano de codego
@@ -75,7 +75,7 @@ Tope de tamano de codego
   - يمكن للمشغلين ضبط `SetParameter(Custom)` مع `id = "max_contract_code_bytes"` وحمولة رقمية.
 
 - المشاركة `/v1/gov/ballots/zk`
-  - التماس: { "authority": "ih58..."، "private_key": "...؟"، "chain_id": "..."، "election_id": "e1"، "proof_b64": "..."، "public": {...} }
+  - التماس: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "election_id": "e1"، "proof_b64": "..."، "public": {...} }
   - الرد: { "ok": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - ملاحظات:
     - عند تضمين إدخالات الدائرة العامة `owner` و`amount` و`duration_blocks` واختبار التحقق من تكوين VK، تقوم العقدة بإنشاء أو توسيع حظر الإدارة لـ `election_id` مع هذا هو `owner`. الاتجاه الدائم الخفي (`unknown`); فقط قم بتحديث المبلغ/انتهاء الصلاحية. تعتبر عمليات الإلغاء رتيبة: يتم زيادة المبلغ وانتهاء الصلاحية فقط (العقدة تنطبق على الحد الأقصى (المبلغ، المبلغ السابق) والحد الأقصى (انتهاء الصلاحية، انتهاء الصلاحية السابق)).
@@ -83,12 +83,12 @@ Tope de tamano de codego
     - يجب استدعاء تنفيذ العقد `ZK_VOTE_VERIFY_BALLOT` قبل إرفاقه `SubmitBallot`; يطلب المضيفون مزلاجًا مرة واحدة فقط.
 
 - المشاركة `/v1/gov/ballots/plain`
-  - التماس: { "authority": "ih58..."، "private_key": "...؟"، "chain_id": "..."، "referendum_id": "r1"، "owner": "ih58..."، "amount": "1000"، "duration_blocks": 6000، "direction": "Aye|Nay|امتناع" }
+  - التماس: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "referendum_id": "r1"، "owner": "i105..."، "amount": "1000"، "duration_blocks": 6000، "direction": "Aye|Nay|امتناع" }
   - الرد: { "ok": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - الملاحظات: عمليات الإلغاء هي مجرد تمديد - لا يمكن لبطاقة اقتراع جديدة تقليل المبلغ أو انتهاء صلاحية الحظر الموجود. يجب أن يكون `owner` مساوٍ لسلطة المعاملة. الحد الأدنى للمدة هو `conviction_step_blocks`.
 
 - المشاركة `/v1/gov/finalize`
-  - التماس: { "referendum_id": "r1"، "proposal_id": "...64hex"، "authority": "ih58...؟"، "private_key": "...؟" }
+  - التماس: { "referendum_id": "r1"، "proposal_id": "...64hex"، "authority": "i105...؟"، "private_key": "...؟" }
   - الإجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...FinalizeReferendum"، "payload_hex": "..." }] }
   - التأثير على السلسلة (الفعلي): نشر اقتراح نشر صحيح يتم إدراجه على الحد الأدنى `ContractManifest` مع الفصل `code_hash` مع `abi_hash` المتوقع ووضع علامة على العرض كما تم تفعيله. إذا كان هناك بيان لـ `code_hash` مع `abi_hash` مختلف، فسيتم إعادة إصداره.
   - ملاحظات:
@@ -97,7 +97,7 @@ Tope de tamano de codego
     - يتم استخدام تسويات الإقبال منفردًا بالموافقة+الرفض؛ الامتناع عن التصويت لا يستحق الإقبال.
 
 - المشاركة `/v1/gov/enact`
-  - طلب: { "proposal_id": "...64hex"، "preimage_hash": "...64hex؟"، "window": { "lower": 0، "upper": 0}؟، "authority": "ih58...؟"، "private_key": "...؟" }
+  - طلب: { "proposal_id": "...64hex"، "preimage_hash": "...64hex؟"، "window": { "lower": 0، "upper": 0}؟، "authority": "i105...؟"، "private_key": "...؟" }
   - الإجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...EnactReferendum"، "payload_hex": "..." }] }
   - الملاحظات: Torii أرسل المعاملة المؤكدة عندما يتم تقديمها `authority`/`private_key`؛ على العكس من ذلك، يجب أن يكون هناك أسلوب لجعل العملاء يثبتون ويحسدونهم. الصورة المسبقة اختيارية ومعلوماتية بالفعل.
 
@@ -199,15 +199,15 @@ RBAC
     - توجد اقتراح إدارة تم سنه لـ `(namespace, contract_id, code_hash, abi_hash)` مشتق من نفس تجزئة معرف الاقتراح الذي يستخدم العقدة.
   - قم بإصدار تقرير JSON مع `results[]` بموجب عقد (قضايا، سير ذاتية للبيان/الكود/الاقتراح) بالإضافة إلى استئناف لخط إطلاق يتفوق (`--no-summary`).
   - استخدام لمراجعة مساحات الأسماء المحمية أو التحقق من تدفقات نشر الضوابط من أجل الإدارة.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - قم بإنشاء مجموعة JSON من البيانات التعريفية المستخدمة عند نشر مساحات أسماء محمية، بما في ذلك `gov_manifest_approvers` الاختيارية لإرضاء قواعد نصاب البيان.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل إلزامية عندما `min_bond_amount > 0`، وأي مجموعة من التلميحات المقدمة تشمل `owner`، و`amount`، و`duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل إلزامية عندما `min_bond_amount > 0`، وأي مجموعة من التلميحات المقدمة تشمل `owner`، و`amount`، و`duration_blocks`.
   - التحقق من صحة معرفات الحساب الأساسية، والتحقق من تلميحات الإبطال ذات 32 بايت، ودمج التلميحات في `public_inputs_json` (مع `--public <path>` للتجاوزات الإضافية).
   - يُشتق المبطل من التزام الإثبات (الإدخال العام) بالإضافة إلى `domain_tag` و`chain_id` و`election_id`؛ تم التحقق من صحة `--nullifier` مقابل الدليل عند تقديمه.
   - السيرة الذاتية للخط الآن تعرض `fingerprint=<hex>` محددًا مشتقًا من `CastZkBallot` مشفرًا مع تلميحات مفكوكة (`owner`، `amount`، `duration_blocks`، `direction` عندما يتم توفيره).
   - تشير إجابات CLI إلى `tx_instructions[]` مع `payload_fingerprint_hex` وهي عبارة عن مجالات تم فك تشفيرها حتى تتمكن الأدوات المتلقية للمعلومات من التحقق من الإجراء بدون إعادة تنفيذ فك التشفير Norito.
   - قم بإثبات تلميحات القفل التي تسمح للعقدة بإصدار أحداث `LockCreated`/`LockExtended` لبطاقات الاقتراع ZK مرة واحدة حيث توضح الدائرة نفس القيم.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - يشير الاسم المستعار `--lock-amount`/`--lock-duration-blocks` إلى أسماء علامات ZK لمساواة البرامج النصية.
   - نتيجة استئناف المراجعة `vote --mode zk` بما في ذلك بصمة التعليمات المقننة ومجالات الاقتراع المقروءة (`owner`، `amount`، `duration_blocks`، `direction`)، تأكيد الاستلام قم بالسرعة قبل تثبيت الهيكل.
 
@@ -226,14 +226,14 @@ RBAC
 - المشاركة `/v1/gov/ballots/zk-v1`
   - طلب (DTO estilo v1):
     {
-      "السلطة": "ih58..."،
+      "السلطة": "i105..."،
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...؟",
       "election_id": "ref-1",
       "الواجهة الخلفية": "halo2/ipa"،
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex؟",
-      "مالك": "ih58...؟",
+      "مالك": "i105...؟",
       "nullifier": "blake2b32:...64hex؟"
     }
   - الرد: { "ok": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
@@ -242,7 +242,7 @@ RBAC
   - اقبل ملف JSON `BallotProof` مباشرة وقم بتحويله إلى `CastZkBallot`.
   - التماس:
     {
-      "السلطة": "ih58..."،
+      "السلطة": "i105..."،
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...؟",
       "election_id": "ref-1",

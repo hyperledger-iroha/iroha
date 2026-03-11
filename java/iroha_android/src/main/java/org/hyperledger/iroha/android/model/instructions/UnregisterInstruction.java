@@ -166,7 +166,7 @@ public final class UnregisterInstruction implements InstructionTemplate {
     private static String normalizeTargetId(final Target target, final String id) {
       final String raw = Objects.requireNonNull(id, "identifier");
       if (target == Target.ACCOUNT) {
-        return AccountIdLiteral.extractIh58Address(raw);
+        return AccountIdLiteral.extractI105Address(raw);
       }
       return raw;
     }

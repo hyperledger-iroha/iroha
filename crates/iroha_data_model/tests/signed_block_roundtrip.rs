@@ -17,7 +17,7 @@ fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTran
     let chain: ChainId = "constvec-roundtrip-chain"
         .parse()
         .expect("chain id for sample block");
-    let domain: DomainId = "wonderland".parse().expect("domain for sample block");
+    let _domain: DomainId = "wonderland".parse().expect("domain for sample block");
     let authority: AccountId = AccountId::new(keypair.public_key().clone());
 
     let txs = vec![

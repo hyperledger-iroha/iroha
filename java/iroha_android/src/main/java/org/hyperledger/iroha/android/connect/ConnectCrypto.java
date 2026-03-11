@@ -164,9 +164,9 @@ public final class ConnectCrypto {
     requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey");
     final String normalizedAccountId;
     try {
-      normalizedAccountId = AccountIdLiteral.extractIh58Address(accountId);
+      normalizedAccountId = AccountIdLiteral.extractI105Address(accountId);
     } catch (final IllegalArgumentException ex) {
-      throw new ConnectProtocolException("accountId must be encoded IH58 or compressed sora", ex);
+      throw new ConnectProtocolException("accountId must be canonical I105 encoded", ex);
     }
 
     final byte[] accountBytes = normalizedAccountId.getBytes(StandardCharsets.UTF_8);

@@ -18,10 +18,9 @@ translation_last_reviewed: 2026-01-30
 Roadmap link: **ADDR-5c** — “Local → Global Normalisation Toolkit”
 
 This guide packages the operational steps, CLI helpers, and automation hooks
-needed to migrate Local selectors to canonical IH58 (preferred) or compressed (`sora`, second-best) forms ahead
-of the Local-8/Local-12 enforcement gates. IH58 is the preferred format for
-sharing and canonical output; the compressed `sora` form is second-best and
-Sora-only.
+needed to migrate Local selectors to canonical I105 forms ahead
+of the Local-8/Local-12 enforcement gates. I105 is the preferred format for
+sharing and canonical output; the i105-default `sora` form is Sora-only.
 
 Pair it with:
 - [Address display guidelines](address_display_guidelines.md) — wallet/explorer UX,
@@ -36,7 +35,7 @@ Pair it with:
 ## 1. Goals
 
 1. Retire Local selectors before Local-8/Local-12 enforcement gates activate.
-2. Provide deterministic conversion helpers (IH58 (preferred)/sora (second-best)) so operators can
+2. Provide deterministic conversion helpers (I105) so operators can
    refresh manifests, customer lists, and wallet address books.
 3. Capture artefacts (audit report + converted list) suitable for compliance
    submissions and SRE readiness reviews.
@@ -50,7 +49,7 @@ Pair it with:
 1. `audit.json` — structured report from `iroha tools address audit` with entry-by-entry status,
    Local-domain warnings, and parse errors. Use this to prioritise remediation.
 2. `normalized.txt` — converted address list that replaces every Local selector
-   with the chosen format (IH58 preferred or compressed (`sora`, second-best)) while optionally preserving the
+   with the chosen format (canonical I105) while optionally preserving the
    original domain suffix.
 
 ### 2.1 Invocation
@@ -60,13 +59,13 @@ scripts/address_local_toolkit.sh \
   --input fixtures/address/local_digest_examples.txt \
   --output-dir artifacts/address_migration \
   --network-prefix 753 \
-  --format ih58
+  --format i105
 ```
 
 Flags of note:
 
-- `--format compressed` converts to the `sora…` Sora alphabet instead of IH58.
-- `domainless output (default)` emits bare IH58 (preferred)/sora (second-best) values (useful for systems
+- `--format i105` converts to the `i105` Sora alphabet instead of I105.
+- `domainless output (default)` emits bare I105 values (useful for systems
   that store the domain separately).
 - `--audit-only` trims the run to the JSON report (no conversion).
 - `--allow-errors` keeps scanning when malformed rows are present; the behaviour
@@ -89,8 +88,7 @@ already powers SDK heuristics. Each entry contains:
       "kind": "local12",
       "warning": "local-domain selector detected…"
     },
-    "ih58": {"value": "ih1qzg…", "prefix": 753},
-    "compressed": "sora…",
+    "i105": {"value": "ih1qzg…", "prefix": 753},
     "input_domain": "default"
   }
 }
@@ -114,7 +112,7 @@ already powers SDK heuristics. Each entry contains:
 
 1. Export addresses from your database or wallet.
 2. Run the toolkit script; inspect `audit.json` for `domain.kind = local12`.
-3. Review/spot-check `normalized.txt` (IH58 (preferred)/sora (second-best)). Attach both files to
+3. Review/spot-check `normalized.txt` (I105). Attach both files to
    your change management system, along with the dashboard screenshot showing
    zero Local detections for your surfaces.
 4. Update manifests, customer records, or wallet address books with the
@@ -131,7 +129,7 @@ already powers SDK heuristics. Each entry contains:
 - **Alertmanager**
   - `AddressLocal8Resurgence` — pages on any Local-8 increment (treat as release blocker).
   - `AddressLocal12Collision` — pages when two Local-12 labels collide; pause manifest promotions until governance approves the fix.
-  - `AddressInvalidRatioSlo` — warns when invalid IH58 (preferred)/sora (second-best) submissions exceed the 0.1 % budget for ten minutes.
+  - `AddressInvalidRatioSlo` — warns when invalid I105 submissions exceed the 0.1 % budget for ten minutes.
 
 Both alerts reference the address manifest runbook for escalation. Treat any
 non-zero Local selector signal as a release blocker until remediation is shipped.

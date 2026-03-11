@@ -204,9 +204,17 @@ fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
 }
 
 fn ensure_not_derived_multisig_account(
-    _multisig_account: &AccountId,
-    _spec: &MultisigSpec,
+    multisig_account: &AccountId,
+    spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
+    if spec.signatories.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "multisig spec must include at least one signatory".to_owned(),
+        ));
+    }
+    // TODO: Reject deterministically derived multisig account ids once the derivation
+    // inputs are finalized for the domainless AccountId model.
+    let _ = multisig_account;
     Ok(())
 }
 

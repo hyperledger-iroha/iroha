@@ -539,9 +539,6 @@ pub struct QueryEnvelope {
     pub pagination: Pagination,
     /// Optional batch fetch size for iterable queries.
     pub fetch_size: Option<u64>,
-    /// Optional response address format (`ih58` or `compressed`).
-    #[norito(default)]
-    pub address_format: Option<String>,
 }
 
 const _: () = {

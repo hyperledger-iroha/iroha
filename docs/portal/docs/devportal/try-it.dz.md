@@ -95,6 +95,7 @@ npm run start
 འོག་གི་ཆ་ཤས་ཚུ་གིས་ `docusaurus.config.js` ལས་ གནས་གོང་འདི་ཚུ་ལྷག་ཡོདཔ་ཨིན།
 
 - **Swagger UI*** — `/reference/torii-swagger` ལུ་བཀོད་ཡོདཔ། སྔོན་བཤད་ འབད་ནི།
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   བརྡ་མཚོན་ཅིག་ཡོད་པའི་སྐབས་ འབག་མི་འཆར་གཞི་ I18NI0000080X དང་གཅིག་ཁར་ ངོ་རྟགས་ཚུ་ཞུ་བ་འབདཝ་ཨིན།
   `X-TryIt-Auth` བཙུགས་ཞིནམ་ལས་ བསྐྱར་འབྲི་འབད་དེ་ ངོ་ཚབ་བརྒྱུད་དེ་ ག་དེམ་ཅིག་སྦེ་ འབོད་བརྡ་འབདཝ་ཨིན།
   `TRYIT_PROXY_PUBLIC_URL` གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན།

@@ -19,9 +19,9 @@ description: يوضح إنشاء النطاقات المصرح وتسجيل ال
 
 ## جولة أستاذ الأستاذ
 
-- التأكد من وجود حساب الوجه (مثل `ih58...`) بما في ذلك التحقق من صحة كل بدء سريع لـ SDK.
+- التأكد من وجود حساب الوجه (مثل `i105...`) بما في ذلك التحقق من صحة كل بدء سريع لـ SDK.
 - فوراِ نقطة الدخول `register_and_mint` لتعريف التعريف الأصلي ROSE وسك 250 وحدة لأليس في فارة واحدة.
-- تحقق من الرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
+- تحقق من الرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account i105...` لتأكيد نجاح السك.
 
 ## دليل SDK ذات صلة
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

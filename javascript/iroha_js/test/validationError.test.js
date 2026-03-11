@@ -42,7 +42,7 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
     domain: DEFAULT_DOMAIN_NAME,
     publicKey: SAMPLE_KEY,
   });
-  const literalWithoutDomain = address.toIH58();
+  const literalWithoutDomain = address.toI105();
   const normalized = normalizeAccountId(literalWithoutDomain, "accountId");
   assert.equal(normalized, literalWithoutDomain);
   assert.throws(
@@ -69,19 +69,19 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /IH58 \(preferred\) or sora compressed/i.test(error.message),
+      /must be an I105 account id/i.test(error.message),
   );
 });
 
-const maybeTestCompressed = process.env.IROHA_JS_DISABLE_NATIVE === "1" ? test.skip : test;
+const maybeTestI105Default = process.env.IROHA_JS_DISABLE_NATIVE === "1" ? test.skip : test;
 
-maybeTestCompressed("normalizeAccountId accepts compressed default-domain literal without suffix", () => {
+maybeTestI105Default("normalizeAccountId accepts i105Default default-domain literal without suffix", () => {
   const address = AccountAddress.fromAccount({
     domain: DEFAULT_DOMAIN_NAME,
     publicKey: SAMPLE_KEY,
   });
-  const compressed = address.toCompressedSora();
-  const normalized = normalizeAccountId(compressed, "accountId");
+  const i105Default = address.toI105Default();
+  const normalized = normalizeAccountId(i105Default, "accountId");
 
   const parsed = AccountAddress.parseEncoded(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
   assert.deepEqual(
@@ -90,14 +90,14 @@ maybeTestCompressed("normalizeAccountId accepts compressed default-domain litera
   );
 });
 
-test("normalizeAccountId canonicalizes compressed literal without suffix for non-default domain", () => {
+test("normalizeAccountId canonicalizes i105Default literal without suffix for non-default domain", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const compressed = address.toCompressedSora();
+  const i105Default = address.toI105Default();
 
-  const normalized = normalizeAccountId(compressed, "accountId");
+  const normalized = normalizeAccountId(i105Default, "accountId");
   const parsed = AccountAddress.parseEncoded(normalized, undefined, "wonderland").address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
@@ -105,12 +105,12 @@ test("normalizeAccountId canonicalizes compressed literal without suffix for non
   );
 });
 
-test("normalizeAccountId canonicalizes non-default IH58 literal without suffix", () => {
+test("normalizeAccountId canonicalizes non-default I105 literal without suffix", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const literalWithoutDomain = address.toIH58();
+  const literalWithoutDomain = address.toI105();
   const normalized = normalizeAccountId(literalWithoutDomain, "accountId");
   assert.equal(normalized, literalWithoutDomain);
 });
@@ -160,7 +160,7 @@ test("normalizeAccountId rejects encoded addresses with domain suffixes", () => 
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const mismatchedId = `${address.toIH58()}@${DEFAULT_DOMAIN_NAME}`;
+  const mismatchedId = `${address.toI105()}@${DEFAULT_DOMAIN_NAME}`;
   assert.throws(
     () => normalizeAccountId(mismatchedId, "accountId"),
     (error) =>

@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 Пока узел работает, отправьте скомпилированный байткод в Torii через CLI. Дефолтная дев-идентичность выводится из публичного ключа в `defaults/client.toml`, поэтому ID аккаунта:
 ```
-ih58...
+i105...
 ```
 
 Используйте конфигурационный файл, чтобы задать URL Torii, идентификатор цепочки и ключ загрузки:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

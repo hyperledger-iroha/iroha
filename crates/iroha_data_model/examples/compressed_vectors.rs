@@ -1,22 +1,14 @@
-//! Dump reference compressed account addresses for documentation fixtures.
+//! Dump reference I105 account addresses for documentation fixtures.
 
-use std::{convert::TryFrom, str::FromStr};
+use std::convert::TryFrom;
 
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use iroha_data_model::{
-    account::{AccountAddress, AccountId},
-    domain::DomainId,
-    name::Name,
-};
+use iroha_data_model::account::{AccountAddress, AccountId};
 
 fn ed25519_pk_with(byte: u8) -> PublicKey {
     let seed = vec![byte; 32];
     let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
     public_key
-}
-
-fn domain(name: &str) -> DomainId {
-    DomainId::new(Name::from_str(name).expect("valid domain name"))
 }
 
 fn main() {
@@ -41,9 +33,7 @@ fn main() {
         let canonical = address
             .canonical_hex()
             .expect("canonical hex encoding must succeed");
-        let compressed = address
-            .to_compressed_sora()
-            .expect("compressed encoding must succeed");
-        println!("{label}:{index} ->\n  canonical: {canonical}\n  compressed: {compressed}");
+        let i105 = address.to_i105().expect("i105 encoding must succeed");
+        println!("{label}:{index} ->\n  canonical: {canonical}\n  i105: {i105}");
     }
 }

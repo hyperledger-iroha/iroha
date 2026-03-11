@@ -19,9 +19,9 @@ slug: /norito/examples/call-transfer-asset
 
 ## Roteiro do livro razao
 
-- Financie a autoridade do contrato (por exemplo `ih58...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
-- Chame o entrypoint `call_transfer_asset` עבור העברה של 5 יחידות קונטרה קונטרה עבור `ih58...`, refletindo como a automacao on-chain pode envolver chamadas do host.
-- Verifique saldos via `FindAccountAssets` או `iroha_cli ledger assets list --account ih58...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- Financie a autoridade do contrato (por exemplo `i105...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
+- Chame o entrypoint `call_transfer_asset` עבור העברה של 5 יחידות קונטרה קונטרה עבור `i105...`, refletindo como a automacao on-chain pode envolver chamadas do host.
+- Verifique saldos via `FindAccountAssets` או `iroha_cli ledger assets list --account i105...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
 
 ## Guias de SDK relacionados
 
@@ -36,8 +36,8 @@ slug: /norito/examples/call-transfer-asset
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

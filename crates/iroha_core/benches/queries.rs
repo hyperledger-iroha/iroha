@@ -37,7 +37,7 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .expect("Failed building the Runtime")
 });
 
-fn fixture_account_in_domain(label: &str, domain_id: &DomainId) -> AccountId {
+fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
     let (public_key, _) = KeyPair::from_seed(seed, Algorithm::Ed25519).into_parts();
     AccountId::new(public_key)
@@ -65,7 +65,7 @@ fn build_state_with_accounts(n: usize) -> State {
     for i in 0..n {
         let acc_id = bench_account(&format!("user{i}"));
         // Use the account itself as the authority for building
-        let account = Account::new(acc_id.clone()).build(&acc_id);
+        let account = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
         accounts.push(account);
     }
 
@@ -154,7 +154,10 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     let state = State::new_for_testing(
         World::with(
             domains,
-            [Account::new(authority_id.clone()).build(&authority_id)],
+            [
+                Account::new(authority_id.to_account_id("d0".parse().unwrap()))
+                    .build(&authority_id),
+            ],
             [],
         ),
         kura,
@@ -254,7 +257,7 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let mut assets: Vec<iroha_data_model::asset::Asset> = Vec::with_capacity(1_000);
     for i in 0..1_000 {
         let acc_id = bench_account(&format!("user{i}"));
-        let acc = Account::new(acc_id.clone()).build(&acc_id);
+        let acc = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
         accounts.push(acc);
         let asset_id = AssetId::new(asset_def_id.clone(), acc_id.clone());
         assets.push(iroha_data_model::asset::Asset::new(
@@ -366,7 +369,11 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         );
         defs.push(ad);
     }
-    let world = World::with([domain], [Account::new(auth.clone()).build(&auth)], defs);
+    let world = World::with(
+        [domain],
+        [Account::new(auth.to_account_id("bench".parse().unwrap())).build(&auth)],
+        defs,
+    );
     // Provide default telemetry only when enabled; otherwise call 3-arg ctor
     let state = {
         #[cfg(feature = "telemetry")]
@@ -457,7 +464,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let mut assets = Vec::with_capacity(n_accounts * assets_per_account);
     for i in 0..n_accounts {
         let acc_id = bench_account(&format!("user{i}"));
-        let account = Account::new(acc_id.clone()).build(&acc_id);
+        let account = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
         for j in 0..assets_per_account {
             let ad = if j == 0 {
                 asset_def_id.clone()
@@ -579,7 +586,7 @@ fn build_state_with_asset_definitions(n: usize) -> State {
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let owner = Account::new(authority_id.clone()).build(&authority_id);
+    let owner = Account::new(authority_id.to_account_id(domain_id)).build(&authority_id);
 
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
@@ -631,7 +638,6 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
@@ -660,7 +666,7 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&authority_id, &mut stx)
         .expect("register domain");
-    Register::account(Account::new(authority_id.clone()))
+    Register::account(Account::new(authority_id.to_account_id(domain_id)))
         .execute(&authority_id, &mut stx)
         .expect("register account");
 

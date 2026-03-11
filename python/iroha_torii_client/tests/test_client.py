@@ -314,7 +314,6 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
             payload={
                 "canonical_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                 "literal": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                "address_format": "ih58",
                 "network_prefix": 26,
                 "error_correction": "quartile",
                 "modules": 33,
@@ -325,12 +324,11 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", address_format="compressed")
+    qr = client.get_explorer_account_qr("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL")
 
     assert qr == ExplorerAccountQr(
         canonical_id="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         literal="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-        address_format="ih58",
         network_prefix=26,
         error_correction="quartile",
         modules=33,
@@ -342,7 +340,7 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     assert call["url"].endswith(
         "/v1/explorer/accounts/6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL/qr"
     )
-    assert call["params"] == {"address_format": "compressed"}
+    assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
 
 
@@ -353,7 +351,6 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
             payload={
                 "canonicalId": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
                 "literal": "sorabobacct",
-                "addressFormat": "compressed",
                 "networkPrefix": 27,
                 "errorCorrection": "medium",
                 "modules": 41,
@@ -369,7 +366,6 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     assert qr == ExplorerAccountQr(
         canonical_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
         literal="sorabobacct",
-        address_format="compressed",
         network_prefix=27,
         error_correction="medium",
         modules=41,
@@ -673,7 +669,7 @@ def test_get_uaid_portfolio_rejects_invalid_lsb() -> None:
         client.get_uaid_portfolio(invalid)
 
 
-def test_get_uaid_bindings_applies_address_format() -> None:
+def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
     uaid_literal = "uaid:" + "bb" * 32
     session = RecordingSession()
     session.queue(
@@ -692,10 +688,10 @@ def test_get_uaid_bindings_applies_address_format() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    bindings = client.get_uaid_bindings(uaid_literal, address_format="compressed")
+    bindings = client.get_uaid_bindings(uaid_literal)
 
     assert bindings.dataspaces[0].accounts == ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
-    assert session.calls[0]["params"] == {"address_format": "compressed"}
+    assert session.calls[0]["params"] == {}
 
 
 def test_get_uaid_manifests_parses_payload_and_filters() -> None:
@@ -741,7 +737,6 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
     manifests = client.get_uaid_manifests(
         uaid_literal,
         dataspace_id=9,
-        address_format="canonical",
     )
 
     assert len(manifests.manifests) == 1
@@ -749,7 +744,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
     assert record.manifest_hash == manifest_hash.lower()
     assert record.lifecycle.revocation is not None
     assert record.manifest.entries[0].notes == "demo"
-    assert session.calls[0]["params"] == {"dataspace": 9, "address_format": "ih58"}
+    assert session.calls[0]["params"] == {"dataspace": 9}
 
 
 def test_publish_space_directory_manifest_posts_payload() -> None:

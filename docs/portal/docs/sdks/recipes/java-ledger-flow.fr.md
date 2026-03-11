@@ -36,8 +36,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 > Utilisez `iroha_cli tools crypto private-key export --raw --private-key <multihash>` si vous devez retirer le préfixe multihash de la configuration par défaut.

@@ -86,13 +86,12 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 
 const formats = address.displayFormats(753);
-console.log(formats.ih58);
-console.log(formats.compressed);
-console.log(formats.compressedWarning);
+console.log(formats.i105);
+console.log(formats.i105Warning);
 console.log(formats.domainSummary.selector.label); // "default"
 console.log(formats.domainSummary.selector.registryId); // registry id when Global selectors are used
 ```
@@ -100,8 +99,8 @@ console.log(formats.domainSummary.selector.registryId); // registry id when Glob
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > dual-format UX checklist captured in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
-> IH58 remains the default copy/share target, compressed (`sora`, second-best) strings need an inline
-> warning, and QR codes should always encode the IH58 value.
+> I105 remains the default copy/share target, I105 strings need an inline
+> warning, and QR codes should always encode the I105 value.
 
 ## Subscriptions
 
@@ -375,7 +374,6 @@ for await (const holding of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sush
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
   sort: [{ key: "quantity", order: "desc" }],
-  addressFormat: "ih58",
 })) {
   console.log(`${holding.asset_id} => ${holding.quantity}`);
 }
@@ -1466,7 +1464,7 @@ for (const ds of portfolio.dataspaces) {
   });
 }
 
-const bindings = await torii.getUaidBindings(uaidLiteral, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaidLiteral);
 bindings.dataspaces.forEach((entry) => {
   console.log(`${entry.dataspace_alias ?? entry.dataspace_id}: ${entry.accounts.join(", ")}`);
 });
@@ -1484,9 +1482,7 @@ Each helper normalises/validates the response payloads:
 - `getUaidPortfolio` enforces numeric totals and returns the deterministically
   sorted dataspace/account tree.
 - `getUaidBindings` mirrors the Space Directory bindings map so tooling can
-  confirm which Torii account IDs are active per dataspace. Pass
-  `addressFormat: "compressed"` to retrieve `sora…` literals when you
-  need QR-friendly output; IH58 strings remain the default.
+  confirm which Torii account IDs are active per dataspace.
 - `getUaidManifests` validates lifecycle metadata, manifest hashes, allow/deny
   entries, and optional dataspace filters (set `dataspaceId` to restrict the
   snapshot).
@@ -1881,8 +1877,8 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 
 // Build a registry-backed selector when a global registry id is available.
 const registryAddress = AccountAddress.fromAccount({
@@ -2014,8 +2010,8 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 ```
 
 ```js
@@ -2041,7 +2037,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical IH58 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -2680,8 +2676,8 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 ```
 
 ```js
@@ -2883,7 +2879,7 @@ When you need to pin iterator parity to specific Norito selectors, apply
 structured filters against the NFT definition (`id.definition_id`) or asset
 definition (`asset_id.definition_id`) fields and trim payloads with `select`
 projections; see `recipes/nft_account_iteration.mjs` for a runnable example
-that requests compressed account literals for downstream storage.
+that uses canonical account literals for downstream storage.
 
 ```js
 const { items, total } = await torii.listAccounts({
@@ -2892,19 +2888,14 @@ const { items, total } = await torii.listAccounts({
 });
 console.log("first five accounts", items.map((item) => item.id), "of", total);
 
-const compressed = await torii.listAccounts({
-  limit: 3,
-  addressFormat: "compressed",
-});
-console.log("compressed literals", compressed.items.map((item) => item.id));
+const i105Page = await torii.listAccounts({ limit: 3 });
+console.log("i105 literals", i105Page.items.map((item) => item.id));
+```
 
 All iterable list/query helpers now require the `options` argument to be a
 plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
-
-`addressFormat` accepts `"compressed"` to request the sora form or `"ih58"`/`"canonical"`
-to stick with the multihash default; any other value is rejected before the HTTP call.
 
 All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetchSize`) accept the
 `NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
@@ -2962,7 +2953,7 @@ so you can persist the verdict metadata immediately.
 
 ```js
 const draft = {
-  controller: "ih58:...",
+  controller: "i105:...",
   allowance: {
     asset: "usd#wonderland",
     amount: "10",
@@ -2982,7 +2973,7 @@ const draft = {
 // Torii derives the certificate operator from its configured offline issuer keypair.
 
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "ih58:...",
+  authority: "i105:...",
   privateKey: "ed25519:...",
   certificate: draft,
 });
@@ -2995,7 +2986,7 @@ For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate 
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "ih58:...",
+    authority: "i105:...",
     privateKey: "ed25519:...",
     certificate: draft,
   },
@@ -3025,7 +3016,7 @@ certificates), pass per-receipt `buildClaimOverrides` and set
 
 ```js
 const settlement = await torii.submitOfflineSettlement({
-  authority: "ih58:...",
+  authority: "i105:...",
   privateKey: "ed25519:...",
   transfer: transferPayload,
   buildClaimOverrides: [
@@ -3050,7 +3041,7 @@ try {
   const settleAbort = new AbortController();
   const settlement = await torii.submitOfflineSettlementAndWait(
     {
-      authority: "ih58:...",
+      authority: "i105:...",
       privateKey: "ed25519:...",
       transfer: transferPayload,
     },
@@ -3230,7 +3221,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=art#wonderland
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only encoded account IDs (IH58 preferred, compressed `sora…` accepted). Domain-suffixed and legacy compatibility literals are rejected.
+> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical I105 account IDs. Domain-suffixed and legacy compatibility literals are rejected.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3283,8 +3274,8 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 ```
 
 ```js
@@ -3304,10 +3295,8 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
-  addressFormat: "compressed",
-});
-console.log(qr.literal); // compressed literal embedded in the QR SVG
+const qr = await torii.getExplorerAccountQr("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT");
+console.log(qr.literal); // i105 literal embedded in the QR SVG
 console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 
 const block = await torii.getBlock(42);
@@ -3327,7 +3316,6 @@ for await (const holding of torii.iterateAccountAssets("6cmzPVPX5ZhYaa7sushd7mC6
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
-  addressFormat: "compressed",
 })) {
   holdings.push(holding.asset_id);
 }
@@ -3338,7 +3326,6 @@ for await (const nft of torii.iterateNftsQuery({
   pageSize: 3,
   maxItems: 4,
   filter: { Contains: ["id", "ticket#"] },
-  addressFormat: "ih58",
 })) {
   nftIds.push(nft.id);
 }
@@ -3434,7 +3421,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical IH58 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -3591,9 +3578,8 @@ await torii.registerTrigger({
 });
 ```
 
-When calling `list*` helpers or `getExplorerAccountQr`, set `addressFormat` to
-`"compressed"` for sora literals or `"ih58"`/`"canonical"` for the default multihash
-form—other values throw before the HTTP request is made.
+`list*`/`query*` helpers and explorer QR snapshots now emit canonical i105 account
+literals only; address-format hints are no longer supported.
 
 `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise
 the Torii responses (or synthesize an empty draft when Torii replies with `204 No Content`)
@@ -3633,8 +3619,8 @@ const address = AccountAddress.fromAccount({
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
-console.log(address.toIH58(753));
-console.log(address.toCompressedSora());
+console.log(address.toI105(753));
+console.log(address.toI105Default());
 ```
 
 ```js

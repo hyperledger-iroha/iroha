@@ -111,7 +111,7 @@ one‑to‑one map ہوتے ہیں:
 - **Risk intake** – `POST /v1/fraud/query` اسکیمہ `RiskQuery` کو accept
   کرتا ہے:
   - `query_id` (`[u8; 32]`, hex encoded)
-  - `subject` (`AccountId`, `domainless encoded literal; IH58 preferred, compressed sora accepted`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (tagged enum جو `RiskOperation` سے match کرتا ہے؛ JSON
     فیلڈ `type` enum variant کو reflect کرتا ہے)
   - `related_asset` (`AssetId`, optional)

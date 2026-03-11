@@ -21,7 +21,7 @@ NFT-nin həyat dövrünün sonundan sona qədər gedir: sahibinə zərbetmə, me
 
 ## Ledger prospekti
 
-- NFT tərifinin (məsələn, `n0#wonderland`) fraqmentdə istifadə edilən sahib/alıcı hesabları ilə (`ih58...`, `ih58...`) yanaşı mövcud olduğundan əmin olun.
+- NFT tərifinin (məsələn, `n0#wonderland`) fraqmentdə istifadə edilən sahib/alıcı hesabları ilə (`i105...`, `i105...`) yanaşı mövcud olduğundan əmin olun.
 - NFT-ni hazırlamaq üçün `nft_issue_and_transfer` giriş nöqtəsini çağırın, onu Alicedən Boba köçürün və buraxılışı təsvir edən metadata bayrağı əlavə edin.
 - Köçürməni yoxlamaq üçün `iroha_cli ledger nfts list --account <id>` və ya SDK ekvivalentləri ilə NFT kitabçasının vəziyyətini yoxlayın, sonra yandırma təlimatı işlədikdən sonra aktivin silindiyini təsdiqləyin.
 
@@ -37,11 +37,11 @@ NFT-nin həyat dövrünün sonundan sona qədər gedir: sahibinə zərbetmə, me
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("ih58...");
+    let owner = account!("i105...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("ih58...");
+    let to = account!("i105...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

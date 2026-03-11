@@ -14,7 +14,7 @@ titre : Cummplimiento de direcciones de cuenta
 description : Résumé du travail sur le luminaire ADDR-2 et comme les équipements du SDK sont synchronisés.
 ---
 
-Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture les appareils IH58 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatifs. Chaque surface du SDK + Torii est utilisée dans le même JSON pour détecter tout dérivé du codec avant de commencer la production. Cette page reflète le dossier de l'état interne (`docs/source/account_address_status.md` dans le dépôt principal) pour que les lecteurs du portail consultent le flux sans chercher dans le mono-dépôt.
+Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture les appareils I105 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatifs. Chaque surface du SDK + Torii est utilisée dans le même JSON pour détecter tout dérivé du codec avant de commencer la production. Cette page reflète le dossier de l'état interne (`docs/source/account_address_status.md` dans le dépôt principal) pour que les lecteurs du portail consultent le flux sans chercher dans le mono-dépôt.
 
 ## Régénérer ou vérifier le paquet
 
@@ -43,7 +43,7 @@ Chaque fois que vous modifiez l'appareil, le générateur ou la documentation po
 | SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Chaque harnais a un aller-retour de octets canoniques + IH58 + codifications compressées et vérifie que les codes d'erreur du style Norito coïncident avec le montage pour les cas négatifs.
+Chaque harnais a un aller-retour de octets canoniques + I105 + codifications compressées et vérifie que les codes d'erreur du style Norito coïncident avec le montage pour les cas négatifs.
 
 ## Avez-vous besoin d'une automatisation ?
 

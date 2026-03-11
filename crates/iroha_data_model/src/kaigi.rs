@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn relay_hop_canonical_roundtrip() {
-        let domain = DomainId::from_str("relay-domain").expect("domain");
+        let _domain = DomainId::from_str("relay-domain").expect("domain");
         let relay = AccountId::new(KeyPair::random().public_key().clone());
         let hop = KaigiRelayHop {
             relay_id: relay.clone(),
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn relay_registration_norito_roundtrip() {
-        let domain_id = DomainId::from_str("kaigi").expect("domain");
+        let _domain_id = DomainId::from_str("kaigi").expect("domain");
         let relay_id = AccountId::new(KeyPair::random().public_key().clone());
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),

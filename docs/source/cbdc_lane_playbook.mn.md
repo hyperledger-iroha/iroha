@@ -104,10 +104,10 @@ Lane манифестууд нь `nexus.registry.manifest_directory` (`crates/ir
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "ih58...",
-    "ih58...",
-    "ih58...",
-    "ih58..."
+    "i105...",
+    "i105...",
+    "i105...",
+    "i105..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ Lane манифестууд нь `nexus.registry.manifest_directory` (`crates/ir
 }
 ```
 
-Гол шаардлага:- Баталгаажуулагчид **заавал** нь каталогт байгаа IH58 дансны стандарт ID (`@domain` байхгүй; `@domain`-г зөвхөн тодорхой чиглүүлэлтийн сануулга болгон нэмнэ үү) байх ёстой. `quorum`-г multisig босго (≥2) болгож тохируулна уу.
+Гол шаардлага:- Баталгаажуулагчид **заавал** нь каталогт байгаа I105 дансны стандарт ID (`@domain` байхгүй; `@domain`-г зөвхөн тодорхой чиглүүлэлтийн сануулга болгон нэмнэ үү) байх ёстой. `quorum`-г multisig босго (≥2) болгож тохируулна уу.
 - Хамгаалагдсан нэрийн орон зайг `Queue::push` (`crates/iroha_core/src/queue.rs`-ыг үзнэ үү) хэрэгжүүлдэг тул бүх CBDC гэрээнд `gov_namespace` + `gov_contract_id` заах ёстой.
 - `composability_group` талбарууд нь `docs/source/nexus.md` §8.6-д тодорхойлсон схемийн дагуу байна; эзэмшигч (CBDC lane) нь цагаан жагсаалт болон квотыг нийлүүлдэг. Зөвшөөрөгдсөн жагсаалтад орсон DS манифест нь зөвхөн `group_id_hex` + `activation_epoch`-г зааж өгдөг.
 - Манифестыг хуулж авсны дараа `LaneManifestRegistry::from_config` ачаалж байгааг баталгаажуулахын тулд `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ажиллуулна уу.
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

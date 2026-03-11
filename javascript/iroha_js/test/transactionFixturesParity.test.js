@@ -52,7 +52,7 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
         if (signatory && domain) {
           try {
             const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
-            return address.toIH58();
+            return address.toI105();
           } catch {
             // Fall back to payload scan.
           }
@@ -60,7 +60,7 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
       } else {
         try {
           const { address } = AccountAddress.parseEncoded(trimmed);
-          return address.toIH58();
+          return address.toI105();
         } catch {
           // Fall back to payload scan.
         }
@@ -96,14 +96,14 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
       }
       try {
         const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
-        return address.toIH58();
+        return address.toI105();
       } catch {
         continue;
       }
     }
     try {
       const { address } = AccountAddress.parseEncoded(entry);
-      return address.toIH58();
+      return address.toI105();
     } catch {
       continue;
     }

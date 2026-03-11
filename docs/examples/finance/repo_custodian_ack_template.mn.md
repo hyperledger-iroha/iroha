@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 | Талбай | Үнэ цэнэ |
 |-------|-------|
 | Гэрээний танигч | `<repo-yyMMdd-XX>` |
-| Кастодианы дансны ID | `<ih58...>` |
+| Кастодианы дансны ID | `<i105...>` |
 | Бэлтгэсэн / огноо | `<custodian ops lead>` |
 | Ширээний харилцагчдыг хүлээн зөвшөөрсөн | `<desk lead + counterparty>` |
 | Нотлох лавлах | ``artifacts/finance/repo/<slug>/`` |

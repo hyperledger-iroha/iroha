@@ -19,7 +19,7 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::WriteExt;
-use iroha_data_model::prelude::{AccountId, DomainId};
+use iroha_data_model::prelude::DomainId;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::sample_ivm_path;
 use norito::json::{self, Value};
@@ -209,7 +209,7 @@ fn local_program_config() -> ProgramConfig {
     let domain_id: DomainId = "wonderland".parse().expect("literal domain should parse");
     ProgramConfig {
         torii_url: Url::parse("http://127.0.0.1:8080").expect("literal URL should parse"),
-        account: AccountId::new(key.public_key().clone()),
+        account_domain: domain_id,
         key,
         status_timeout: DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -218,7 +218,7 @@ fn local_program_config() -> ProgramConfig {
 
 struct ProgramConfig {
     torii_url: Url,
-    account: AccountId,
+    account_domain: DomainId,
     key: KeyPair,
     status_timeout: Duration,
     ttl: Duration,
@@ -227,7 +227,9 @@ struct ProgramConfig {
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
         let torii_url = value.torii_url.clone();
-        let account = value.account.clone();
+        let account_domain: DomainId = "wonderland"
+            .parse()
+            .expect("wonderland domain should parse");
         let key = value.key_pair.clone();
         let status_timeout = value.transaction_status_timeout;
         let ttl = value
@@ -235,7 +237,7 @@ impl From<&Client> for ProgramConfig {
             .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
         Self {
             torii_url,
-            account,
+            account_domain,
             key,
             status_timeout,
             ttl,
@@ -248,7 +250,7 @@ impl ProgramConfig {
         [
             ("CHAIN", iroha_test_network::chain_id().to_string()),
             ("TORII_URL", self.torii_url.to_string()),
-            ("ACCOUNT_DOMAIN", self.account.domain().to_string()),
+            ("ACCOUNT_DOMAIN", self.account_domain.to_string()),
             ("ACCOUNT_PUBLIC_KEY", self.key.public_key().to_string()),
             (
                 "ACCOUNT_PRIVATE_KEY",
@@ -269,7 +271,7 @@ impl ProgramConfig {
         toml::Table::new()
             .write("chain", iroha_test_network::chain_id().to_string())
             .write("torii_url", self.torii_url.to_string())
-            .write(["account", "domain"], self.account.domain().to_string())
+            .write(["account", "domain"], self.account_domain.to_string())
             .write(
                 ["account", "private_key"],
                 ExposedPrivateKey(self.key.private_key().clone()).to_string(),

@@ -176,9 +176,9 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
 
   private static String normalizeAccount(final String accountId, final String field) {
     try {
-      return AccountIdLiteral.extractIh58Address(accountId);
+      return AccountIdLiteral.extractI105Address(accountId);
     } catch (final IllegalArgumentException ex) {
-      throw new IllegalArgumentException(field + " must be encoded IH58 or compressed sora", ex);
+      throw new IllegalArgumentException(field + " must be canonical I105 encoded", ex);
     }
   }
 

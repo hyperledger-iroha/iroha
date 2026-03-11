@@ -29,6 +29,7 @@ Kotodama y el pipeline centrado en la IVM. Para una versión en japonés, consul
 - API de aplicaciones ZK (adjuntos, probador, recuento de votos): `zk_app_api.md`
 - Runbook de adjuntos/probador ZK en Torii: `zk/prover_runbook.md`
 - Guía operativa de la API ZK App de Torii (adjuntos/probador; doc del crate): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - Ciclo de vida de VK/proofs (registro, verificación, telemetría): `zk/lifecycle.md`
 - Ayudas operativas de Torii (endpoints de visibilidad): `references/operator_aids.md`
 - Guía rápida del carril por defecto de Nexus: `quickstart/default_lane.md`

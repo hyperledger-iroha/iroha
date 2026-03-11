@@ -309,14 +309,12 @@ pub mod action {
 
     #[cfg(test)]
     mod tests {
-        use std::str::FromStr;
 
         use iroha_crypto::KeyPair;
 
         use super::*;
         use crate::{
             account::AccountId,
-            domain::DomainId,
             events::execute_trigger::ExecuteTriggerEventFilter,
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
@@ -326,7 +324,7 @@ pub mod action {
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new()))
         }
 
-        fn account_in(domain: &str) -> AccountId {
+        fn account_in(_domain: &str) -> AccountId {
             let kp = KeyPair::random();
             AccountId::new(kp.public_key().clone())
         }

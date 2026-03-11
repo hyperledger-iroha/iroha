@@ -114,7 +114,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | Obtenez `SuffixPolicyV1` réel (mis en cache). |
 | `/v1/sns/registrations/{selector}` | OBTENIR | -- | Devuelve `NameRecordV1` actuel + état effectif (Active, Grace, etc.). |
 
-**Codification du sélecteur :** le segment `{selector}` accepte IH58, compressé ou hexadécimal canonique selon ADDR-5 ; Torii pour normaliser via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison ont été développés avec Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Codification du sélecteur :** le segment `{selector}` accepte I105, compressé ou hexadécimal canonique selon ADDR-5 ; Torii pour normaliser via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison ont été développés avec Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 Helpers CLI (requisito de registrador manuel N0)
 
@@ -158,7 +158,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -216,7 +216,7 @@ Fallos a développé `sns_err_governance_missing`.
 
 1. Le client consulte `/v1/sns/policies/{suffix_id}` pour obtenir des prix, gracia et niveaux disponibles.
 2. Le client arma `RegisterNameRequestV1` :
-   - `selector` dérivé de l'étiquette IH58 (préféré) ou compressé (seconde meilleure option).
+   - `selector` dérivé de l'étiquette I105 (préféré) ou compressé (seconde meilleure option).
    - `term_years` dans les limites de la politique.
    - `payment` qui fait référence au transfert du répartiteur tesoreria/steward.
 3. Torii valide :

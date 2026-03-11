@@ -32,21 +32,21 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64шестнадцатеричный",
       "abi_version": "1",
       "окно": { "нижний": 12345, "верхний": 12400 },
-      "authority": "ih58…?",
+      "authority": "i105…?",
       "private_key": "...?"
     }
   - Формат (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Сообщение: Зарегистрируйтесь `abi_hash` для `abi_version`. التطابق. Для `abi_version = "v1"` используйте `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API-интерфейс (развертывание)
 - ПОСТ `/v1/contracts/deploy`
-  - الطلب: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - الطلب: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Код: `code_hash` в جسم برنامج IVM и `abi_hash` в ترويسة. `abi_version`, `RegisterSmartContractCode` (манифест) и `RegisterSmartContractBytes` (запись `.to`) `authority`.
   - الرد: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Ответ:
     - GET `/v1/contracts/code/{code_hash}` -> Открыть манифест
     - GET `/v1/contracts/code-bytes/{code_hash}` -> يعيد `{ code_b64 }`
 - ПОСТ `/v1/contracts/instance`
-  - الطلب: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - الطلب: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Сообщение: Установлено приложение `ActivateContractInstance`.
   - الرد: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -59,11 +59,11 @@ translation_last_reviewed: 2026-02-07
   - Сообщение: HTTP `400` соответствует шестнадцатеричному значению. Установите Torii на Norito `ValidationFail::QueryFailed::Conversion` для декодера.
 - ПОСТ `/v1/aliases/resolve`
   - الطلب: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - الرد: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - الرد: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Добавлено: установлен мост ISO (`[iso_bridge.account_aliases]` или `iroha_config`). يقوم Torii. قبل البحث. В 404 году он был запущен в 2017 году и 503 был запущен во время выполнения с использованием моста ISO.
 - ПОСТ `/v1/aliases/resolve_index`
   - Сообщение: { "индекс": 0 }
-  - الرد: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - الرد: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Название: Написано с участием Пьера Стоуна в Колумбии (отсчет от 0). يمكن للعملاء تخزين الردود offline لبناء مسارات تدقيق لاحداث аттестация الخاصة بالاسماء.
 
 حد حجم الكود
@@ -71,7 +71,7 @@ translation_last_reviewed: 2026-02-07
   - Написано в фильме "Убийца" (Бантан) в фильме "Старый мир".
   - Размер: 16 МБ. Инвариант `RegisterSmartContractBytes` используется в качестве инварианта.
   - Установите флажок `SetParameter(Custom)` и `id = "max_contract_code_bytes"` в исходном состоянии.- ПОСТ `/v1/gov/ballots/zk`
-  - الطلب: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - الطلب: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - الرد: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - Ответ:
     - عندما تتضمن المدخلات العامة للدائرة `owner` и `amount` и `duration_blocks`, وتتحقق Посетите ВК и создайте замок на `election_id`. `owner`. Дополнительный файл (`unknown`); Указанная сумма/срок действия. Монотонный: сумма с истечением срока действия (срок действия max(amount, prev.amount) иmax(expiry, prev.expiry)).
@@ -79,12 +79,12 @@ translation_last_reviewed: 2026-02-07
     - установите флажок `ZK_VOTE_VERIFY_BALLOT` или установите `SubmitBallot`; Установите защелку на место.
 
 - ПОСТ `/v1/gov/ballots/plain`
-  - الطلب: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Да|Нет|Воздержаться" }
+  - الطلب: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Да|Нет|Воздержаться" }
   - الرد: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - Сообщение: Вы можете указать сумму, указанную в бюллетене, до истечения срока действия. Он был установлен на `owner`. Установите флажок `conviction_step_blocks`.
 
 - ПОСТ `/v1/gov/finalize`
-  - الطلب: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - الطلب: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - الرد: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Добавлено сообщение (открыто): Вы можете развернуть файл `ContractManifest` ادنى. بمفتاح `code_hash` и `abi_hash` Введено в действие. В манифесте появится `code_hash` и `abi_hash`, который будет открыт.
   - Ответ:
@@ -93,7 +93,7 @@ translation_last_reviewed: 2026-02-07
     - Явка تستخدم одобрить+отклонить فقط؛ воздержались из-за явки избирателей.
 
 - ПОСТ `/v1/gov/enact`
-  - الطلب: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - الطلب: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - الرد: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Код: Torii для проверки подлинности `authority`/`private_key`; Уилла Хейлала Лэрри Уинстона. Прообраз اختيارية وحاليا معلوماتية.
 
@@ -191,15 +191,15 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
     - В соответствии с Законом о хешировании введен в действие код `(namespace, contract_id, code_hash, abi_hash)` для хеширования идентификатора предложения الذي تستخدمه العقدة.
   - Создание файла JSON `results[]` для проверки (проблемы, манифест/код/предложение) Был установлен флажок (`--no-summary`).
   - Создание пространств имен и возможность развертывания локальных пространств имен.
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Добавление метаданных JSON для развертывания пространств имен в файле `gov_manifest_approvers`. الاختيارية لتلبية قواعد quorum لللmanifest.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — установите флажок `min_bond_amount > 0` и установите флажок `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`. Установите флажок `owner` и `amount` и `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — установите флажок `min_bond_amount > 0` и установите флажок `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`. Установите флажок `owner` и `amount` и `duration_blocks`.
   — Проверяет канонические идентификаторы учетных записей, канонизирует 32-байтовые подсказки обнулителя и объединяет подсказки в `public_inputs_json` (с `--public <path>` для дополнительных переопределений).
   - Обнулитель получается из обязательства доказательства (общедоступный вклад) плюс `domain_tag`, `chain_id` и `election_id`; `--nullifier` проверяется на соответствие при поставке.
   - Найдите подсказки для `fingerprint=<hex>` и подсказки для `CastZkBallot`. Проверьте (`owner`, `amount`, `duration_blocks`, `direction`).
   - Запустите CLI для `tx_instructions[]` и `payload_fingerprint_hex`, чтобы загрузить его с помощью `payload_fingerprint_hex`. Он был создан в 2008 году в 18NT00000006X.
   - توفير намекает на замок, чтобы получить доступ к `LockCreated`/`LockExtended`, чтобы просмотреть бюллетени ZK بمجرد ان. تكشف الدائرة القيم نفسها.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Псевдонимы `--lock-amount`/`--lock-duration-blocks` используются для флагов الخاصة بـ ZK لتحقيق تماثل السكربتات.
   - Чтобы получить отпечаток пальца `vote --mode zk`, необходимо проверить бюллетень для голосования. (`owner`, `amount`, `duration_blocks`, `direction`).
 
@@ -218,14 +218,14 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
 - ПОСТ `/v1/gov/ballots/zk-v1`
   - Обновление (DTO نمط v1):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "бэкэнд": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "владелец": "ih58…?",
+      "владелец": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - الرد: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
@@ -234,7 +234,7 @@ GOV_ALIAS_FRONTIER_TELEMETRY=true
   - Файл JSON `BallotProof` создается в формате `CastZkBallot`.
   - Вопрос:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

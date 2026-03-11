@@ -293,7 +293,7 @@ pub use utils::{
     extractors::{JsonOnly, NoritoJson, NoritoJsonWithBytes, NoritoQuery},
 };
 #[cfg(feature = "app_api")]
-mod address_format;
+mod account_literal;
 mod app_auth;
 mod block;
 #[cfg(feature = "connect")]
@@ -4638,7 +4638,6 @@ async fn handler_explorer_account_qr(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(account_raw): AxPath<String>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
@@ -4646,14 +4645,8 @@ async fn handler_explorer_account_qr(
     }
     let account_id =
         parse_account_id_for_endpoint(&app, &account_raw, CONTEXT_EXPLORER_ACCOUNT_QR)?;
-    let address_format = query.address_format_pref()?;
-    routing::handle_v1_explorer_account_qr(
-        app.state.clone(),
-        account_id,
-        app.telemetry.clone(),
-        address_format,
-    )
-    .await
+    routing::handle_v1_explorer_account_qr(app.state.clone(), account_id, app.telemetry.clone())
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4780,18 +4773,15 @@ async fn handler_explorer_transaction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(hash): AxPath<String>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/transactions/{hash}").await?;
     }
-    let address_format = query.address_format_pref()?;
     crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
-        address_format,
     )
     .await
 }
@@ -4802,7 +4792,6 @@ async fn handler_explorer_instruction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath((hash, index)): AxPath<(String, u64)>,
-    AxQuery(query): AxQuery<explorer::ExplorerAddressFormatQuery>,
 ) -> Result<AxResponse, Error> {
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
@@ -4814,13 +4803,11 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    let address_format = query.address_format_pref()?;
     crate::routing::handle_v1_explorer_instruction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
         index,
-        address_format,
     )
     .await
 }
@@ -17043,11 +17030,11 @@ mod gateway_denylist_loader_tests {
         let account = AccountId::new(public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account_id");
         let canonical = address.canonical_hex().expect("canonical hex");
-        let ih58 = address
-            .to_ih58(chain_discriminant())
-            .expect("ih58 encoding");
-        let compressed = address.to_compressed_sora().expect("compressed encoding");
-        (canonical, ih58, compressed)
+        let i105 = address
+            .to_i105_for_discriminant(chain_discriminant())
+            .expect("i105 encoding");
+        let non_canonical_i105 = address.to_i105().expect("i105 encoding");
+        (canonical, i105, non_canonical_i105)
     }
 
     fn base_account_entry() -> GatewayDenylistFileEntry {
@@ -17073,9 +17060,9 @@ mod gateway_denylist_loader_tests {
 
     #[test]
     fn account_id_entries_normalise_to_canonical_hex() {
-        let (sample_canonical, sample_ih58, _) = sample_account_literals();
+        let (sample_canonical, sample_i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(sample_ih58);
+        entry.account_id = Some(sample_i105);
         entry.account_alias = Some("routing@sora".to_string());
         entry.jurisdiction = Some("US".to_string());
         entry.reason = Some("test".to_string());
@@ -17111,9 +17098,9 @@ mod gateway_denylist_loader_tests {
 
     #[test]
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
-        let (_, ih58, _) = sample_account_literals();
+        let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{ih58}@wonderland"));
+        entry.account_id = Some(format!("{i105}@wonderland"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -17159,14 +17146,14 @@ mod gateway_denylist_loader_tests {
     }
 
     #[test]
-    fn account_id_entries_accept_ih58_literals() {
-        let (canonical, ih58, _) = sample_account_literals();
+    fn account_id_entries_accept_i105_literals() {
+        let (canonical, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(ih58);
+        entry.account_id = Some(i105);
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("ih58 entry");
+        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("i105 entry");
 
         match kind {
             sorafs::gateway::DenylistKind::AccountId(ref value) => assert_eq!(value, &canonical),
@@ -17175,15 +17162,15 @@ mod gateway_denylist_loader_tests {
     }
 
     #[test]
-    fn account_id_entries_reject_compressed_literals() {
-        let (_, _, compressed) = sample_account_literals();
+    fn account_id_entries_reject_non_canonical_i105_literals() {
+        let (_, _, non_canonical_i105) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(compressed);
+        entry.account_id = Some(non_canonical_i105);
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
         let err = build_account_id_denylist_entry(&entry, &policy)
-            .expect_err("compressed account_id must be rejected");
+            .expect_err("non-canonical I105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
     }
 }

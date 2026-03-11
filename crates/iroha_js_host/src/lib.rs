@@ -43,7 +43,7 @@ use iroha_data_model::{
     ChainId,
     account::{
         Account, AccountId, NewAccount,
-        address::{AccountAddress, AccountAddressError, AccountAddressFormat},
+        address::{AccountAddress, AccountAddressError},
     },
     asset::{
         definition::{AssetDefinition, NewAssetDefinition},
@@ -277,9 +277,7 @@ pub struct JsAliasEvaluation {
 pub struct JsAccountAddressParse {
     /// Canonical bytes for the parsed account address.
     pub canonical_bytes: Buffer,
-    /// Detected textual format (`ih58` or `compressed`).
-    pub detected_format: String,
-    /// Network prefix when the source was IH58.
+    /// Network prefix inferred while parsing the encoded literal.
     pub network_prefix: Option<u16>,
 }
 
@@ -288,12 +286,12 @@ pub struct JsAccountAddressParse {
 pub struct JsAccountAddressRender {
     /// Canonical hexadecimal encoding with `0x` prefix.
     pub canonical_hex: String,
-    /// IH58 encoding generated with the supplied network prefix.
-    pub ih58: String,
-    /// Compressed half-width Sora encoding (`sora…`).
-    pub compressed: String,
-    /// Compressed full-width Sora encoding (イロハ glyphs).
-    pub compressed_fullwidth: String,
+    /// I105 encoding generated with the supplied network prefix.
+    pub i105: String,
+    /// I105-default half-width sentinel encoding (`sora…`).
+    pub i105_default: String,
+    /// I105-default full-width sentinel encoding (イロハ glyphs).
+    pub i105_default_fullwidth: String,
 }
 
 /// Deterministic gateway host bindings exposed to JavaScript callers.
@@ -431,15 +429,14 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string in strict encoded form
-/// (IH58 (preferred) or compressed (`sora`, second-best)).
+/// Parse an account address string in strict encoded form (canonical I105).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_encoded(
     input: String,
     expected_prefix: Option<u16>,
 ) -> napi::Result<JsAccountAddressParse> {
-    let (address, format) =
+    let address =
         AccountAddress::parse_encoded(&input, expected_prefix).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
     let hex_body = canonical_hex
@@ -447,13 +444,11 @@ pub fn account_address_parse_encoded(
         .unwrap_or(canonical_hex.as_str());
     let canonical =
         hex::decode(hex_body).map_err(|err| napi::Error::from_reason(err.to_string()))?;
-    let (detected_format, network_prefix) = match format {
-        AccountAddressFormat::IH58 { network_prefix } => ("ih58".to_owned(), Some(network_prefix)),
-        AccountAddressFormat::Compressed => ("compressed".to_owned(), None),
-    };
+    let network_prefix = Some(
+        expected_prefix.unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
+    );
     Ok(JsAccountAddressParse {
         canonical_bytes: Buffer::from(canonical),
-        detected_format,
         network_prefix,
     })
 }
@@ -468,18 +463,16 @@ pub fn account_address_render(
     let address =
         AccountAddress::from_canonical_bytes(bytes.as_ref()).map_err(account_address_err)?;
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
-    let ih58 = address
-        .to_ih58(network_prefix)
+    let i105 = address
+        .to_i105_for_discriminant(network_prefix)
         .map_err(account_address_err)?;
-    let compressed = address.to_compressed_sora().map_err(account_address_err)?;
-    let compressed_fullwidth = address
-        .to_compressed_sora_fullwidth()
-        .map_err(account_address_err)?;
+    let i105_default = address.to_i105().map_err(account_address_err)?;
+    let i105_default_fullwidth = address.to_i105_fullwidth().map_err(account_address_err)?;
     Ok(JsAccountAddressRender {
         canonical_hex,
-        ih58,
-        compressed,
-        compressed_fullwidth,
+        i105,
+        i105_default,
+        i105_default_fullwidth,
     })
 }
 

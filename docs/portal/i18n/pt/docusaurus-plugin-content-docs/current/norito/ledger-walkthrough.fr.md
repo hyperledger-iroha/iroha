@@ -30,8 +30,8 @@ IDs de conta que você usará. Le bundle par defaut inclut deja deux comptes
 emite as fichas de demonstração:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirme os valores na lista das principais contas:

@@ -16,7 +16,7 @@ Verifique se o `docs/source/sns/local_to_global_toolkit.md` está no lugar certo
 
 - `scripts/address_local_toolkit.sh` no CLI, para `iroha`:
   - `audit.json` -- É igual a `iroha tools address audit --format json`.
-  - `normalized.txt` -- literais IH58 (IH58) / compactado (`sora`) (IH58) O seletor está localizado no Local.
+  - `normalized.txt` -- literais I105 (I105) / compactado (`sora`) (I105) O seletor está localizado no Local.
 - استخدم السكربت مع لوحة ingerir للعناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
   Local-12 meses. راقب لوحات التصادم Local-8 e Local-12 والتنبيهات
@@ -28,12 +28,12 @@ Verifique se o `docs/source/sns/local_to_global_toolkit.md` está no lugar certo
 ## الاستخدام
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Nomes:
 
-- `--format compressed (`sora`)` para `sora...` é baseado em IH58.
+- `--format I105` para `sora...` é baseado em I105.
 - `domainless output (default)` literais não são válidos.
 - `--audit-only` لتخطي خطوة التحويل.
 - `--allow-errors` é uma opção de gerenciamento de software que não pode ser usada (como CLI).

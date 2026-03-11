@@ -30,7 +30,7 @@ and repeatable smoke gates.
   var cancellables: Set<AnyCancellable> = []
   let client = ToriiClient(baseURL: URL(string: "https://torii.dev")!)
 
-  client.assetsPublisher(accountId: "ih58...")
+  client.assetsPublisher(accountId: "i105...")
       .sink(receiveCompletion: { completion in
           print("Finished: \(completion)")
       }, receiveValue: { balances in

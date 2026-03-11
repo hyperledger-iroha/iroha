@@ -85,7 +85,7 @@ Norito አይነቶች በI18NI0000018X ውስጥ ተተግብረዋል፡
 
 - **የአደጋ ቅበላ** - `POST /v1/fraud/query` የI18NI0000020X እቅድ ይቀበላል፡-
   - `query_id` (`[u8; 32]`፣ ሄክስ ኮድ የተደረገ)
-  - `subject` (`AccountId`፣ ቀኖናዊ IH58 ቀጥተኛ፣ አማራጭ `@<domain>` ፍንጭ ወይም ተለዋጭ ስም)
+  - `subject` (`AccountId`፣ ቀኖናዊ I105 ቀጥተኛ፣ አማራጭ `@<domain>` ፍንጭ ወይም ተለዋጭ ስም)
   - `operation` (መለያ የተሰጠው enum ተዛማጅ `RiskOperation`፣ JSON `type`
     አድሎአዊ የቁጥር ልዩነትን ያንጸባርቃል)
   - `related_asset` (`AssetId`፣ አማራጭ)

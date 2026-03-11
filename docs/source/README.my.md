@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API ( ပူးတွဲပါဖိုင်များ၊ သက်သေပြချက် ၊ မဲစာရင်း ) : `zk_app_api.md`
 - Torii ZK attachments/prover runbook- `zk/prover_runbook.md`
 - Torii ZK အက်ပ် API အော်ပရေတာလမ်းညွှန် ( ပူးတွဲပါဖိုင်/သက်သေ; crate doc )- `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/အထောက်အထားသက်တမ်း (မှတ်ပုံတင်ခြင်း၊ အတည်ပြုခြင်း၊ တယ်လီမီတာ) - `zk/lifecycle.md`
 - Torii အော်ပရေတာ အကူအညီများ (မြင်နိုင်မှုအတွက် အဆုံးမှတ်များ)- `references/operator_aids.md`
 - Nexus မူရင်း-လမ်းသွား အမြန်စတင်ခြင်း- `quickstart/default_lane.md`

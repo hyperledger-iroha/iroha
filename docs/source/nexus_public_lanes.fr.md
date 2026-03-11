@@ -234,19 +234,19 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
   - `iroha app nexus lane-report --summary` affiche les entrees du catalogue lane, la readiness des manifests,
     et les modes de validateurs (stake-elected vs admin-managed) pour que les operateurs confirment si
     l'admission staking est activee pour une lane.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     expose les marqueurs de cycle de vie/activation (epoch cible pending, `activation_epoch` /
     `activation_height`, release de sortie, slash id) avec le stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     reflete le endpoint `/stake` avec des hints pending-unbond par paire `(validator, staker)`.
   - Snapshots Torii pour dashboards et SDKs :
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, statut
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoch/height d'activation,
       timers de release, stake bonded, dernier epoch de reward.
-      `address_format=ih58|compressed` controle le rendu des litteraux.
+      `canonical I105 literal rendering` controle le rendu des litteraux.
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
-      `staker`, montant bonded) plus timers pending unbond. `?validator=ih58...`
-      filtre la reponse pour les dashboards focalises sur un validateur ; `address_format`
+      `staker`, montant bonded) plus timers pending unbond. `?validator=i105...`
+      filtre la reponse pour les dashboards focalises sur un validateur ; `canonical I105 rendering`
       s'applique a tous les litteraux.
   - Les ISIs de cycle de vie utilisent le chemin transaction standard (Torii
     `/v1/transactions` ou le pipeline d'instructions CLI). Exemples de payloads Norito JSON :

@@ -20,7 +20,7 @@ Usa esta plantilla cuando un repo (bilateral o tri-party) referencia un custodio
 | Campo | Valor |
 |-------|-------|
 | Identificador de acuerdo | `<repo-yyMMdd-XX>` |
-| ID de cuenta del custodio | `<ih58...>` |
+| ID de cuenta del custodio | `<i105...>` |
 | Preparado por / fecha | `<custodian ops lead>` |
 | Contactos de desk reconocidos | `<desk lead + counterparty>` |
 | Directorio de evidencia | ``artifacts/finance/repo/<slug>/`` |

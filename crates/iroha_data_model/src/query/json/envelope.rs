@@ -976,8 +976,8 @@ mod tests {
     }
 
     #[test]
-    fn find_domains_by_account_id_accepts_canonical_ih58_literal() {
-        let domain: crate::domain::DomainId = "wonderland".parse().expect("valid domain id");
+    fn find_domains_by_account_id_accepts_canonical_i105_literal() {
+        let _domain: crate::domain::DomainId = "wonderland".parse().expect("valid domain id");
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let account_id = crate::account::AccountId::new(keypair.public_key().clone());
 
@@ -992,10 +992,10 @@ mod tests {
         assert_eq!(parsed.controller(), account_id.controller());
         assert_eq!(
             parsed
-                .canonical_ih58()
+                .canonical_i105()
                 .expect("parsed account id should emit canonical literal"),
             account_id
-                .canonical_ih58()
+                .canonical_i105()
                 .expect("source account id should emit canonical literal")
         );
     }

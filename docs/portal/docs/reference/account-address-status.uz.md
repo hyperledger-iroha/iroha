@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 ---
 
 Kanonik ADDR-2 to'plami (`fixtures/account/address_vectors.json`) suratga oladi
-IH58 (afzal), siqilgan (`sora`, ikkinchi eng yaxshi; yarim/toʻliq kenglik), multisignature va salbiy moslamalar.
+I105 (afzal), siqilgan (`sora`, ikkinchi eng yaxshi; yarim/toʻliq kenglik), multisignature va salbiy moslamalar.
 Har bir SDK + Torii yuzasi bir xil JSONga tayanadi, shuning uchun biz har qanday kodekni aniqlay olamiz
 ishlab chiqarishga yetguncha drift. Ushbu sahifa ichki holat qisqachasini aks ettiradi
 (`docs/source/account_address_status.md` ildiz omborida) shuning uchun portal
@@ -50,7 +50,7 @@ moslama, generator yoki hujjatlar o'zgarganda, sharhlovchilarni darhol ogohlanti
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Har bir aylanish uchun kanonik baytlar + IH58 + siqilgan (`sora`, ikkinchi eng yaxshi) kodlash va
+Har bir aylanish uchun kanonik baytlar + I105 + siqilgan (`sora`, ikkinchi eng yaxshi) kodlash va
 Norito uslubidagi xato kodlari salbiy holatlar uchun armatura bilan mos kelishini tekshiradi.
 
 ## Avtomatlashtirish kerakmi?

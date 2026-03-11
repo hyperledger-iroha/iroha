@@ -48,9 +48,7 @@ from urllib.parse import quote
 
 import requests
 
-IH58_CHECKSUM_PREFIX = b"IH58PRE"
-IH58_CHECKSUM_BYTES = 2
-IH58_ALPHABET = (
+I105_ASCII_ALPHABET = (
     "1",
     "2",
     "3",
@@ -110,7 +108,62 @@ IH58_ALPHABET = (
     "y",
     "z",
 )
-IH58_INDEX = {symbol: idx for idx, symbol in enumerate(IH58_ALPHABET)}
+I105_KANA_ALPHABET = (
+    "ｲ",
+    "ﾛ",
+    "ﾊ",
+    "ﾆ",
+    "ﾎ",
+    "ﾍ",
+    "ﾄ",
+    "ﾁ",
+    "ﾘ",
+    "ﾇ",
+    "ﾙ",
+    "ｦ",
+    "ﾜ",
+    "ｶ",
+    "ﾖ",
+    "ﾀ",
+    "ﾚ",
+    "ｿ",
+    "ﾂ",
+    "ﾈ",
+    "ﾅ",
+    "ﾗ",
+    "ﾑ",
+    "ｳ",
+    "ヰ",
+    "ﾉ",
+    "ｵ",
+    "ｸ",
+    "ﾔ",
+    "ﾏ",
+    "ｹ",
+    "ﾌ",
+    "ｺ",
+    "ｴ",
+    "ﾃ",
+    "ｱ",
+    "ｻ",
+    "ｷ",
+    "ﾕ",
+    "ﾒ",
+    "ﾐ",
+    "ｼ",
+    "ヱ",
+    "ﾋ",
+    "ﾓ",
+    "ｾ",
+    "ｽ",
+)
+I105_ALPHABET = I105_ASCII_ALPHABET + I105_KANA_ALPHABET
+I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
+I105_BASE = len(I105_ALPHABET)
+I105_CHECKSUM_LEN = 6
+I105_BECH32M_CONST = 0x2BC830A3
+I105_SENTINELS = ("sora", "test", "dev")
+I105_NUMERIC_SENTINEL_PREFIX = "n"
 
 
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
@@ -134,40 +187,84 @@ def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     return b"\x00" * pad + decoded
 
 
-def _decode_ih58_prefix(buffer: bytes) -> Tuple[int, int]:
-    if not buffer:
-        raise ValueError("invalid length for IH58 payload")
-    first = buffer[0]
-    if first <= 63:
-        return first, 1
-    if first & 0b0100_0000:
-        if len(buffer) < 2:
-            raise ValueError("invalid length for IH58 payload")
-        second = buffer[1]
-        value = ((second & 0xFF) << 6) | (first & 0b0011_1111)
-        return value, 2
-    raise ValueError("invalid IH58 prefix encoding")
+def _convert_to_base32(data: bytes) -> List[int]:
+    acc = 0
+    bits = 0
+    out: List[int] = []
+    for byte in data:
+        acc = (acc << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            out.append((acc >> bits) & 0x1F)
+    if bits:
+        out.append((acc << (5 - bits)) & 0x1F)
+    return out
 
 
-def _decode_ih58_string(encoded: str) -> Tuple[int, bytes]:
+def _bech32_polymod(values: Iterable[int]) -> int:
+    generators = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+    chk = 1
+    for value in values:
+        top = chk >> 25
+        chk = ((chk & 0x1FF_FFFF) << 5) ^ value
+        for idx, generator in enumerate(generators):
+            if (top >> idx) & 1:
+                chk ^= generator
+    return chk
+
+
+def _expand_hrp(hrp: str) -> List[int]:
+    out: List[int] = []
+    for ch in hrp:
+        value = ord(ch)
+        out.append(value >> 5)
+    out.append(0)
+    out.extend(ord(ch) & 0x1F for ch in hrp)
+    return out
+
+
+def _bech32m_checksum(data: Sequence[int]) -> List[int]:
+    values = _expand_hrp("snx")
+    values.extend(data)
+    values.extend([0] * I105_CHECKSUM_LEN)
+    polymod = _bech32_polymod(values) ^ I105_BECH32M_CONST
+    return [(polymod >> (5 * (I105_CHECKSUM_LEN - 1 - i))) & 0x1F for i in range(I105_CHECKSUM_LEN)]
+
+
+def _i105_checksum_digits(canonical: bytes) -> List[int]:
+    return _bech32m_checksum(_convert_to_base32(canonical))
+
+
+def _strip_i105_sentinel(encoded: str) -> str:
+    for sentinel in I105_SENTINELS:
+        if encoded.startswith(sentinel):
+            return encoded[len(sentinel) :]
+    if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
+        index = len(I105_NUMERIC_SENTINEL_PREFIX)
+        while index < len(encoded) and encoded[index].isdigit():
+            index += 1
+        if index > len(I105_NUMERIC_SENTINEL_PREFIX):
+            return encoded[index:]
+    raise ValueError("I105 address is missing the expected chain-discriminant sentinel")
+
+
+def _decode_i105_string(encoded: str) -> bytes:
+    payload = _strip_i105_sentinel(encoded)
     digits: List[int] = []
-    for ch in encoded:
+    for symbol in payload:
         try:
-            digits.append(IH58_INDEX[ch])
+            digits.append(I105_INDEX[symbol])
         except KeyError as exc:
-            raise ValueError("invalid IH58 base58 encoding") from exc
-    body = _decode_base_n(digits, 58)
-    if len(body) < 1 + IH58_CHECKSUM_BYTES:
-        raise ValueError("invalid length for IH58 payload")
-    payload = body[:-IH58_CHECKSUM_BYTES]
-    checksum_bytes = body[-IH58_CHECKSUM_BYTES:]
-    prefix, prefix_len = _decode_ih58_prefix(payload)
-    checksum_input = IH58_CHECKSUM_PREFIX + payload
-    expected = hashlib.blake2b(checksum_input, digest_size=64).digest()[:IH58_CHECKSUM_BYTES]
-    if checksum_bytes != expected:
-        raise ValueError("IH58 checksum mismatch")
-    canonical = payload[prefix_len:]
-    return prefix, canonical
+            raise ValueError("invalid character in I105 address") from exc
+    if len(digits) <= I105_CHECKSUM_LEN:
+        raise ValueError("I105 address too short")
+    data_digits = digits[:-I105_CHECKSUM_LEN]
+    checksum_digits = digits[-I105_CHECKSUM_LEN:]
+    canonical = _decode_base_n(data_digits, I105_BASE)
+    if checksum_digits != _i105_checksum_digits(canonical):
+        raise ValueError("I105 checksum mismatch")
+    return canonical
 
 __all__ = [
     "ToriiClient",
@@ -720,7 +817,6 @@ class ExplorerAccountQr:
 
     canonical_id: str
     literal: str
-    address_format: str
     network_prefix: int
     error_correction: str
     modules: int
@@ -2696,23 +2792,13 @@ class ToriiClient:
     def get_explorer_account_qr(
         self,
         account_id: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> ExplorerAccountQr:
         """Fetch QR metadata for an account (`GET /v1/explorer/accounts/{account_id}/qr`)."""
 
         canonical = self._require_non_empty_string(account_id, "account_id")
-        params: Dict[str, Any] = {}
-        fmt = self._normalize_address_format_option(
-            address_format,
-            context="get_explorer_account_qr.address_format",
-        )
-        if fmt is not None:
-            params["address_format"] = fmt
         response = self._request(
             "GET",
             f"/v1/explorer/accounts/{quote(canonical, safe='')}/qr",
-            params=self._clean_params(params),
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200})
@@ -3549,23 +3635,13 @@ class ToriiClient:
     def get_uaid_bindings(
         self,
         uaid: str,
-        *,
-        address_format: Optional[str] = None,
     ) -> UaidBindingsResponse:
         """Fetch dataspace bindings for a UAID (`GET /v1/space-directory/uaids/{uaid}`)."""
 
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
-        params: Dict[str, Any] = {}
-        fmt = self._normalize_address_format_option(
-            address_format,
-            context="get_uaid_bindings.address_format",
-        )
-        if fmt is not None:
-            params["address_format"] = fmt
         response = self._request(
             "GET",
             f"/v1/space-directory/uaids/{quote(canonical, safe='')}",
-            params=self._clean_params(params),
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200})
@@ -3580,7 +3656,6 @@ class ToriiClient:
         uaid: str,
         *,
         dataspace_id: Optional[int] = None,
-        address_format: Optional[str] = None,
     ) -> UaidManifestsResponse:
         """Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
 
@@ -3588,12 +3663,6 @@ class ToriiClient:
         params: Dict[str, Any] = {}
         if dataspace_id is not None:
             params["dataspace"] = self._coerce_unsigned(dataspace_id, "get_uaid_manifests.dataspace_id")
-        fmt = self._normalize_address_format_option(
-            address_format,
-            context="get_uaid_manifests.address_format",
-        )
-        if fmt is not None:
-            params["address_format"] = fmt
         response = self._request(
             "GET",
             f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
@@ -4955,13 +5024,6 @@ class ToriiClient:
             record.get("literal"),
             f"{context}.literal",
         )
-        fmt_raw = record.get("address_format", record.get("addressFormat"))
-        fmt = ToriiClient._normalize_address_format_option(
-            fmt_raw,
-            context=f"{context}.address_format",
-        )
-        if fmt is None:
-            fmt = "ih58"
         network_prefix = ToriiClient._coerce_int(
             record.get("network_prefix", record.get("networkPrefix")),
             f"{context}.network_prefix",
@@ -4982,7 +5044,6 @@ class ToriiClient:
         return ExplorerAccountQr(
             canonical_id=canonical,
             literal=literal,
-            address_format=fmt,
             network_prefix=network_prefix,
             error_correction=error_correction,
             modules=modules,
@@ -6666,21 +6727,6 @@ class ToriiClient:
         return f"uaid:{normalized.lower()}"
 
     @staticmethod
-    def _normalize_address_format_option(value: Any, *, context: str) -> Optional[str]:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise RuntimeError(f"{context} must be a string when present")
-        normalized = value.strip().lower()
-        if not normalized:
-            return None
-        if normalized in {"ih58", "ih-b32", "canonical"}:
-            return "ih58"
-        if normalized in {"compressed", "sora"}:
-            return "compressed"
-        raise RuntimeError(f"{context} must be 'ih58'/'canonical' or 'compressed'")
-
-    @staticmethod
     def _require_string(value: Any, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a string")
@@ -6815,10 +6861,10 @@ class ToriiClient:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         if "@" in trimmed:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
-        if trimmed.lower().startswith(("0x", "sora")):
+        if trimmed.lower().startswith("0x"):
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         try:
-            _decode_ih58_string(trimmed)
+            _decode_i105_string(trimmed)
         except ValueError as exc:
             raise RuntimeError(f"{context}.owner must be a canonical account id") from exc
 

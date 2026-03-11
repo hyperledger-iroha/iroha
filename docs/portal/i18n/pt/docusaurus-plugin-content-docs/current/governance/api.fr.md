@@ -32,7 +32,7 @@ Pontos finais
       "abi_hash": "blake2b32:..." | "...64 hexadecimal",
       "abi_versão": "1",
       "janela": { "inferior": 12345, "superior": 12400 },
-      "autoridade": "ih58…?",
+      "autoridade": "i105…?",
       "chave_privada": "...?"
     }
   - Resposta (JSON):
@@ -41,14 +41,14 @@ Pontos finais
 
 Contratos de API (implantação)
 -POSTO `/v1/contracts/deploy`
-  - Requete: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Requete: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Comportamento: calcule `code_hash` a partir do corpo do programa IVM e `abi_hash` a partir de `abi_version`, depois soumet `RegisterSmartContractCode` (manifesto) e `RegisterSmartContractBytes` (bytes `.to` completos) para `authority`.
   - Resposta: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Mentira:
     - GET `/v1/contracts/code/{code_hash}` -> reenviar o manifesto em estoque
     - OBTER `/v1/contracts/code-bytes/{code_hash}` -> reenvio `{ code_b64 }`
 -POSTO `/v1/contracts/instance`
-  - Requete: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Requete: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportamento: implemente o bytecode fornecido e ative imediatamente o mapeamento `(namespace, contract_id)` via `ActivateContractInstance`.
   - Resposta: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Serviço de alias
 -POSTO `/v1/aliases/voprf/evaluate`
@@ -59,11 +59,11 @@ Contratos de API (implantação)
   - Erros: HTTP `400` na entrada hexadecimal de formato incorreto. Torii envia um envelope Norito `ValidationFail::QueryFailed::Conversion` com mensagem de erro do decodificador.
 -POSTO `/v1/aliases/resolve`
   - Requete: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notas: requer o teste de ponte ISO em tempo de execução (`[iso_bridge.account_aliases]` e `iroha_config`). Torii normaliza o alias, retirando os espaços e colocando letras maiúsculas antes da pesquisa. Retorne 404 se o alias estiver ausente e 503 se a ponte ISO de tempo de execução estiver desativada.
 -POSTO `/v1/aliases/resolve_index`
   - Requete: { "index": 0 }
-  - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notas: os índices de alias são atribuídos deterministicamente de acordo com a ordem de configuração (baseado em 0). Os clientes podem colocar um cache fora da linha para construir pistas de auditoria para eventos de atestado de alias.
 
 Cap de taille de código
@@ -73,7 +73,7 @@ Cap de taille de código
   - Os operadores podem ser ajustados via `SetParameter(Custom)` com `id = "max_contract_code_bytes"` e um número de carga útil.
 
 -POSTO `/v1/gov/ballots/zk`
-  - Requete: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - Requete: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas:
     - Quando as entradas públicas do circuito incluem `owner`, `amount` e `duration_blocks`, e que você verifique previamente a configuração do VK, ele criará ou estabelecerá uma versão de governo para `election_id` com ce `owner`. La direção resto cachee (`unknown`); seu valor/expiração não foi atualizado. Os re-votos são monótonos: amount et expiration ne font qu'augmenter (le noeud applique max(amount, prev.amount) et max(expiry, prev.expiry)).
@@ -81,10 +81,10 @@ Cap de taille de código
     - A execução do contrato deve ser feita pelo `ZK_VOTE_VERIFY_BALLOT` antes do arquivo `SubmitBallot`; Os hosts impõem uma trava apenas uma vez.
 
 -POSTO `/v1/gov/ballots/plain`
-  - Requete: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim|Não|Abstenção" }
+  - Requete: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim|Não|Abstenção" }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas: les re-votos são em extensão única - uma nova cédula não pode reduzir o valor ou o vencimento do verrou existente. Le `owner` iguala a autoridade da transação. A duração mínima é `conviction_step_blocks`.-POSTO `/v1/gov/finalize`
-  - Requete: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Requete: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efeito on-chain (scaffold atual): executar uma proposta de implantação aprovada, inserir um `ContractManifest` mínimo cle `code_hash` com l'`abi_hash` atender e marcar a proposta promulgada. Se um manifesto já existir para o `code_hash` com um `abi_hash` diferente, a promulgação será rejeitada.
   - Notas:
@@ -93,7 +93,7 @@ Cap de taille de código
     - Les verificações de comparecimento utilizando apenas aprovação + rejeição; abster-se de não contar com a participação.
 
 -POSTO `/v1/gov/enact`
-  - Requete: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Requete: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas: Torii é o signatário da transação quando `authority`/`private_key` é fornecido; sem reenviar uma planilha para assinatura e envio do cliente. A pré-imagem é opcional e informativa para o instante.
 
@@ -193,15 +193,15 @@ Endpoint de commodities
     - Existe uma proposta de governo promulgada para `(namespace, contract_id, code_hash, abi_hash)` derivada do meme hashing do ID da proposta que o noeud utiliza.
   - Classifique um relatório JSON com `results[]` por contrato (problemas, currículos de manifesto/código/proposta) mais um currículo em uma linha segura de supressão (`--no-summary`).
   - Útil para auditar namespaces protegidos ou verificar fluxos de trabalho de implantação de controles de governança.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Emita o modelo JSON de metadados utilizado durante implantações em namespaces protegidos, incluindo opções `gov_manifest_approvers` para satisfazer as regras de quorum do manifesto.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — as dicas de bloqueio são necessárias antes de `min_bond_amount > 0`, e todo o conjunto de dicas fornecidas inclui `owner`, `amount` e `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — as dicas de bloqueio são necessárias antes de `min_bond_amount > 0`, e todo o conjunto de dicas fornecidas inclui `owner`, `amount` e `duration_blocks`.
   - Valida IDs de contas canônicas, canoniza dicas de nulificador de 32 bytes e mescla as dicas em `public_inputs_json` (com `--public <path>` para substituições adicionais).
   - O anulador é derivado do compromisso de prova (entrada pública) mais `domain_tag`, `chain_id` e `election_id`; `--nullifier` é validado em relação à prova quando fornecido.
   - O resumo em uma linha expõe mantendo um `fingerprint=<hex>` determinado pela codificação `CastZkBallot`, assim como as dicas decodificadas (`owner`, `amount`, `duration_blocks`, `direction` si quatronis).
   - As respostas CLI anotadas `tx_instructions[]` com `payload_fingerprint_hex` mais descodificações de campeões para que as ferramentas downstream verifiquem o esquema sem reimplementar a decodificação Norito.
   - Fornecer dicas de bloqueio para permitir a ocorrência de eventos `LockCreated`/`LockExtended` para as cédulas ZK uma vez que o circuito expõe os valores dos memes.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - O alias `--lock-amount`/`--lock-duration-blocks` reflete os nomes dos sinalizadores ZK para a parte do script.
   - O resumo da triagem reflete `vote --mode zk`, incluindo a impressão digital da instrução codificada e os campos de votação disponíveis (`owner`, `amount`, `duration_blocks`, `direction`), para uma confirmação rápida antes da assinatura do esqueleto.
 
@@ -222,21 +222,21 @@ Balayage d'unlocks (Operador/Auditoria)
 -POSTO `/v1/gov/ballots/zk-v1`
   - Requete (estilo DTO v1):
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",
       "back-end": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "proprietário": "ih58…?",
+      "proprietário": "i105…?",
       "anulador": "blake2b32:...64hex?"
     }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (recurso: `zk-ballot`)
   - Aceite um JSON `BallotProof` direto e envie um modelo `CastZkBallot`.
   -Requete:
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",

@@ -6180,10 +6180,10 @@ impl Telemetry {
         }
     }
 
-    /// Record the `address_format` selection emitted by a Torii endpoint.
-    pub fn inc_torii_address_format(&self, endpoint: &'static str, format: &'static str) {
+    /// Record the `account literal` selection emitted by a Torii endpoint.
+    pub fn inc_torii_account_literal(&self, endpoint: &'static str, format: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.inc_torii_address_format(endpoint, format);
+            self.metrics.inc_torii_account_literal(endpoint, format);
         }
     }
 
@@ -14271,14 +14271,13 @@ mod tests {
 
         use iroha_crypto::SignatureOf;
         use iroha_data_model::{
-            ChainId, DomainId,
+            ChainId,
             block::{BlockHeader, BlockSignature},
             transaction::signed::SignedTransaction,
         };
 
         fn dummy_transaction() -> SignedTransaction {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
             let key_pair = KeyPair::random();
             let authority = AccountId::new(key_pair.public_key().clone());
             TransactionBuilder::new(chain_id, authority).sign(key_pair.private_key())

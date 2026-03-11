@@ -41,6 +41,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 
 1. [ابدأ الوكيل](./try-it.md#start-the-proxy-locally) واضبط `TRYIT_PROXY_PUBLIC_URL` حتى تعرف الادوات المصغرة اين ترسل الحركة.
 2. افتح بطاقة **Try it** في هذه الصفحة او لوحة `/reference/torii-swagger` واختر مسارا مثل `POST /v1/pipeline/submit`.
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. بدل **Content-Type** الى `application/x-norito`، اختر محرر **Binary**، وارفع `fixtures/norito_rpc/transfer_asset.norito` (او اي حمولة مدرجة في `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. قدم bearer token عبر ودجت OAuth device-code او حقل الرمز اليدوي (الوكيل يقبل تجاوزات `X-TryIt-Auth` عند ضبط `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. ارسل الطلب وتحقق ان Torii يعيد قيمة `schema_hash` المدرجة في `fixtures/norito_rpc/schema_hashes.json`. تطابق القيم يؤكد ان راس Norito نجا من قفزة المتصفح/الوكيل.

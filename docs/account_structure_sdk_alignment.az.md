@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-SDK və Codec Sahibləri üçün # IH58 Yayım Qeydi
+SDK və Codec Sahibləri üçün # I105 Yayım Qeydi
 
 Komandalar: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec alətləri
 
-Kontekst: `docs/account_structure.md` indi göndərmə IH58 hesab ID-sini əks etdirir
+Kontekst: `docs/account_structure.md` indi göndərmə I105 hesab ID-sini əks etdirir
 həyata keçirilməsi. Lütfən, SDK davranışını və testlərini kanonik spesifikasiya ilə uyğunlaşdırın.
 
 Əsas istinadlar:
@@ -24,11 +24,11 @@ həyata keçirilməsi. Lütfən, SDK davranışını və testlərini kanonik spe
 - Armatur vektorları — `fixtures/account/address_vectors.json`
 
 Fəaliyyət elementləri:
-1. **Kanonik çıxış:** `AccountId::to_string()`/Ekran yalnız IH58 yaymalıdır
+1. **Kanonik çıxış:** `AccountId::to_string()`/Ekran yalnız I105 yaymalıdır
    (`@domain` şəkilçisi yoxdur). Kanonik hex sazlama üçündir (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **IH58 yoxlama məbləği:** `IH58PRE || prefix || payload` üzərində Blake2b-512 istifadə edin, götürün
+4. **I105 yoxlama məbləği:** `I105PRE || prefix || payload` üzərində Blake2b-512 istifadə edin, götürün
    ilk 2 bayt. Sıxılmış əlifba bazası **105**-dir.
 5. **Əyri keçid:** SDK-lar defolt olaraq yalnız Ed25519-dur. üçün açıq seçim təmin edin
    ML‑DSA/GOST/SM (Swift qurma bayraqları; JS/Android `configureCurveSupport`). Et

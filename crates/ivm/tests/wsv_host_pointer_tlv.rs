@@ -47,7 +47,12 @@ fn make_transfer_batch_tlv(
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
-            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset.clone(), amount.clone())
+            TransferAssetBatchEntry::new(
+                ivm::mock_wsv::AccountId::from(from),
+                ivm::mock_wsv::AccountId::from(to),
+                asset.clone(),
+                amount.clone(),
+            )
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);

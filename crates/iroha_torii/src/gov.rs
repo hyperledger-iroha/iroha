@@ -2801,7 +2801,7 @@ mod tests {
     #[test]
     fn parse_candidates_rejects_invalid_account_id_literal() {
         let candidates = vec![VrfCandidateDto {
-            account_id: "not-an-ih58@invalid-domain".to_string(),
+            account_id: "not-an-i105@invalid-domain".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
@@ -2844,8 +2844,8 @@ mod tests {
             .into_account_id();
         account_id
             .to_account_address()
-            .and_then(|address| address.to_compressed_sora())
-            .expect("compressed literal")
+            .and_then(|address| address.to_i105())
+            .expect("non-canonical I105 literal")
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {

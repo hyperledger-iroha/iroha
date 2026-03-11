@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 الوصف: استئناف سير العمل من خلال ADDR-2 ومزامنة معدات SDK.
 ---
 
-تلتقط الحزمة الكنسي ADDR-2 (`fixtures/account/address_vectors.json`) التركيبات IH58 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيعات المتعددة والسلبية. يتم تطبيق Chaque surface SDK + Torii على meme JSON للكشف عن جميع مشتقات برنامج الترميز قبل الإنتاج. تعكس هذه الصفحة ملخص الوضع الداخلي (`docs/source/account_address_status.md` في مستودع العرق) حتى يتمكن قراء المكتب من استشارة سير العمل بدون أخطاء في المستودع الأحادي.
+تلتقط الحزمة الكنسي ADDR-2 (`fixtures/account/address_vectors.json`) التركيبات I105 (المفضل)، المضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، التوقيعات المتعددة والسلبية. يتم تطبيق Chaque surface SDK + Torii على meme JSON للكشف عن جميع مشتقات برنامج الترميز قبل الإنتاج. تعكس هذه الصفحة ملخص الوضع الداخلي (`docs/source/account_address_status.md` في مستودع العرق) حتى يتمكن قراء المكتب من استشارة سير العمل بدون أخطاء في المستودع الأحادي.
 
 ## تجديد أو التحقق من الحزمة
 
@@ -43,7 +43,7 @@ Le Workflow CI **Address Vector Drift** ينفذ `cargo xtask address-vectors --
 | سويفت SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-يقوم كل تسخير بإجراء إرجاع للثمانيات الأساسية + IH58 + ضغطات الترميز والتحقق من أن رموز أخطاء النمط Norito تتوافق مع التركيبات السلبية.
+يقوم كل تسخير بإجراء إرجاع للثمانيات الأساسية + I105 + ضغطات الترميز والتحقق من أن رموز أخطاء النمط Norito تتوافق مع التركيبات السلبية.
 
 ## هل تحتاج إلى الأتمتة؟
 

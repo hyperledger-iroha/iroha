@@ -230,19 +230,19 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
 - **Torii/CLI quickstart:**
   - `iroha app nexus lane-report --summary` lane catalog entries، manifest readiness، اور validator modes
     (stake-elected vs admin-managed) دکھاتا ہے تاکہ آپریٹرز confirm کر سکیں کہ کسی lane کے لئے staking admission فعال ہے۔
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     lifecycle/activation markers (pending target epoch, `activation_epoch` / `activation_height`, exit release, slash id)
     کو bonded/self stake کے ساتھ دکھاتا ہے۔
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     `/stake` endpoint کو `(validator, staker)` جوڑی کے pending-unbond hints کے ساتھ mirror کرتا ہے۔
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `address_format=ih58|compressed` literal rendering کو کنٹرول کرتا ہے۔
+      `canonical I105 literal rendering` literal rendering کو کنٹرول کرتا ہے۔
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=ih58...` response کو
-      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `address_format` سب literals پر لاگو ہوتا ہے۔
+      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=i105...` response کو
+      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `canonical I105 rendering` سب literals پر لاگو ہوتا ہے۔
   - Lifecycle ISIs standard transaction path استعمال کرتے ہیں (Torii `/v1/transactions`
     یا CLI instruction pipeline)۔ مثال Norito JSON payloads:
 

@@ -21,7 +21,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical IH58 account id
+authority = pair.default_account_id("wonderland")  # Canonical I105 account id
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
@@ -65,7 +65,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 draft = {
-    "controller": "ih58:...",
+    "controller": "sora...",
     "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],
@@ -77,7 +77,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    authority="sora...",
     private_key="operator-private-key",
 )
 print("certificate id", top_up.registration.certificate_id_hex)
@@ -90,7 +90,7 @@ For renewals, call `top_up_offline_allowance_renewal` with the current
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    authority="sora...",
     private_key="operator-private-key",
 )
 print("renewed", renewed.registration.certificate_id_hex)
@@ -102,28 +102,23 @@ If you already have a signed certificate, call `register_offline_allowance` or
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-switch between canonical bytes, IH58 strings, and the Sora-only compressed (`sora`, second-best)
-alphabet without writing bespoke conversions:
+round-trip canonical bytes and canonical I105 account literals without bespoke conversions:
 
 ```python
 from iroha_python.address import AccountAddress
 
 address = AccountAddress.from_account(domain="default", public_key=b"\x00" * 32)
 print(address.canonical_hex())
-print(address.to_ih58(753))
-print(address.to_compressed_sora())
+print(address.to_i105(753))
 
 formats = address.display_formats(753)
-print(formats["ih58"])
-print(formats["compressed"])
-print(formats["compressed_warning"])
+print(formats["i105"])
+print(formats["chain_discriminant"])
+print(formats["i105_warning"])
 ```
 
-> ℹ️ Follow the dual-format UX checklist described in
-> [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md)
-> whenever you surface addresses in SDK samples or operator tooling: IH58 remains the default share
-> target, compressed (`sora`, second-best) strings need an inline warning, and QR payloads should
-> always encode the IH58 value.
+> ℹ️ Use I105 literals consistently across SDK samples and operator tooling.
+> For Sora network discriminant `753`, literals should start with the `sora` sentinel.
 
 ## CUDA helpers
 
@@ -908,7 +903,7 @@ for dataspace in portfolio.dataspaces:
         for asset in account.assets:
             print(dataspace.dataspace_alias, account.account_id, asset.asset_id, asset.quantity)
 
-bindings = client.get_uaid_bindings_typed(uaid_literal, address_format="compressed")
+bindings = client.get_uaid_bindings_typed(uaid_literal)
 for slice in bindings.dataspaces:
     print(slice.dataspace_alias, slice.accounts)
 
@@ -916,7 +911,6 @@ manifests = client.list_space_directory_manifests_typed(
     uaid_literal,
     dataspace=11,
     status="active",
-    address_format="ih58",
 )
 for record in manifests.manifests:
     print(record.dataspace_alias, record.status, record.manifest_hash)

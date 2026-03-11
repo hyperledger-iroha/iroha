@@ -60,7 +60,7 @@ Ao abrir as configurações de segurança (N0), segurança pública (N1) e segur
 | Planejamento + KPI | `docs/source/sns/governance_addenda/` | Você pode criar contratos com versão de controle, convênios de KPI e atualização de definição, na interface CLI da interface. |
 | Lista de exemplos | [`registry-schema.md`](./registry-schema.md) | Estrutura canônica Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Registrador de contrato | [`registrar-api.md`](./registrar-api.md) | Cargas úteis REST/gRPC, métricas `sns_registrar_status_total` e gancho de governança confiável. |
-| Endereços UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения IH58 (предпочтительно) e сжатые (второй выбор), используемые кошельками/эксплорерами. |
+| Endereços UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения I105 (предпочтительно) e сжатые (второй выбор), используемые кошельками/эксплорерами. |
 | Documentos SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Definindo o host, você pode trabalhar com o alfaiate de transparência e fornecer alertas. |
 | Memorando de regulamentação | `docs/source/sns/regulatory/` | Заметки приема по юрисдикциям (например, EU DSA), administrador de reconhecimentos, шаблонные приложения. |
 | Registro de perfuração | `ops/drill-log.md` | Записи хаос- e IR-репетиций перед выходом из фаз. |
@@ -96,11 +96,11 @@ então, esses auditores podem ter uma avaliação de desempenho em 24 horas.
 ### 4.4 Esportes, esportes e apelos| Faz | Владелец | Действие e доказательства | SLA |
 |------|----------|---------------------------|-----|
 | Congelamento suave | Administrador / поддержка | Compre o bilhete `SNS-DF-<id>` com uma placa de transferência, selecione um suporte de títulos e selecione uma seleção. | <=4 horas após a postagem. |
-| Guardião ingresso | Quadro guardião | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` é igual a `GuardianFreezeTicketV1`. Сохранить JSON em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
+| Guardião ingresso | Quadro guardião | `sns governance freeze --selector <I105> --reason <text> --until <ts>` é igual a `GuardianFreezeTicketV1`. Сохранить JSON em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h выполнение. |
 | Ратификация совета | Conselho de governação | Утвердить или отклонить заморозки, задокументировать решение со ссылкой на Guardian тикет и Digest Bond спора. | A solução mais importante é o sucesso ou o valor assíncrono. |
 | Painel de arbitragem | Complans + mordomo | Созвать панель из 7 instruções (roteiro detalhado) com хешированными бюллетенями через `sns governance dispute ballot`. Use o pacote anonimamente para receber o pacote. | Вердикт <=7 дней после внесения bond. |
 | Apelação | Guardião + aviso | Апелляции удваивают bond e повторяют процесс присяжных; Selecione o manifesto Norito `DisputeAppealV1` e solicite o seu bilhete original. | <=10 de janeiro. |
-| Reparação e reparação | Operações de registrador + resolvedor | Selecione `sns governance unfreeze --selector <IH58> --ticket <id>`, registre o status do registrador e распространить diff GAR/resolver. | Essa é a verdade. |
+| Reparação e reparação | Operações de registrador + resolvedor | Selecione `sns governance unfreeze --selector <I105> --ticket <id>`, registre o status do registrador e распространить diff GAR/resolver. | Essa é a verdade. |
 
 Экстренные каноны (заморозки, инициированные guardião <=72 h) следуют тому же
 потоку, но требуют ретроспективного обзора совета и заметки о прозрачности в

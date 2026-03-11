@@ -23,7 +23,7 @@ translation_last_reviewed: 2026-01-01
 | Field | Value |
 |-------|-------|
 | Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<ih58...>` |
+| Custodian account id | `<i105...>` |
 | Prepared by / date | `<custodian ops lead>` |
 | Desk contacts acknowledged | `<desk lead + counterparty>` |
 | Evidence directory | ``artifacts/finance/repo/<slug>/`` |

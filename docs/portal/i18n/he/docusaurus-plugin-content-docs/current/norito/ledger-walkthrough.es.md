@@ -30,8 +30,8 @@ IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
 הדגמה של Derivadas de las claves:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 אישור לוס valores listando las primeras cuentas:

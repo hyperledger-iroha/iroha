@@ -8,10 +8,9 @@ export {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  AccountAddressFormat,
   DEFAULT_DOMAIN_NAME,
-  decodeCompressedAccountAddress,
-  encodeCompressedAccountAddress,
+  decodeI105AccountAddress,
+  encodeI105AccountAddress,
   inspectAccountId,
   configureCurveSupport,
 } from "./address.js";

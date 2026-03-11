@@ -38,7 +38,7 @@ const BASE_URL = "https://localhost:8080";
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const SAMPLE_ACCOUNT_DOMAIN = "wonderland";
-const SORA_IH58_PREFIX = 0x2f1;
+const SORA_I105_DISCRIMINANT = 0x2f1;
 const SAMPLE_CONNECT_SID_BASE64 = bufferToBase64Url(Buffer.alloc(32, 0xcd));
 const toriiFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/torii_responses.json", import.meta.url), "utf8"),
@@ -65,9 +65,9 @@ function sampleAccountForms() {
     domain: SAMPLE_ACCOUNT_DOMAIN,
     publicKey,
   });
-  const ih58Literal = address.toIH58(SORA_IH58_PREFIX);
+  const i105Literal = address.toI105(SORA_I105_DISCRIMINANT);
   const canonical = normalizeAccountId(
-    ih58Literal,
+    i105Literal,
     "toriiClient.sampleAccountForms",
   );
   const canonicalBytes = Buffer.from(address.canonicalHex().slice(2), "hex");
@@ -79,8 +79,8 @@ function sampleAccountForms() {
   const local8 = `0x${truncated.toString("hex")}`;
   return Object.freeze({
     canonical,
-    ih58: ih58Literal,
-    compressed: address.toCompressedSora(),
+    i105: i105Literal,
+    i105Default: address.toI105Default(),
     local8,
   });
 }
@@ -114,14 +114,14 @@ function fixtureAccountAddress(label, domain = "fixture-domain") {
 }
 
 function fixtureAccountId(label, domain = "fixture-domain") {
-  return fixtureAccountAddress(label, domain).toIH58(SORA_IH58_PREFIX);
+  return fixtureAccountAddress(label, domain).toI105(SORA_I105_DISCRIMINANT);
 }
 
 function fixtureAccountForms(label, domain = "fixture-domain") {
   const address = fixtureAccountAddress(label, domain);
   return {
-    ih58: address.toIH58(SORA_IH58_PREFIX),
-    compressed: address.toCompressedSora(),
+    i105: address.toI105(SORA_I105_DISCRIMINANT),
+    i105Default: address.toI105Default(),
   };
 }
 
@@ -353,12 +353,12 @@ function createOfflineTransferPayload(overrides = {}) {
   const deposit = fixtureAccountForms("vault");
   const baseItem = {
     bundle_id_hex: "ff00",
-    controller_id: controller.ih58,
-    controller_display: controller.compressed,
-    receiver_id: receiver.ih58,
-    receiver_display: receiver.compressed,
-    deposit_account_id: deposit.ih58,
-    deposit_account_display: deposit.compressed,
+    controller_id: controller.i105,
+    controller_display: controller.i105Default,
+    receiver_id: receiver.i105,
+    receiver_display: receiver.i105Default,
+    deposit_account_id: deposit.i105,
+    deposit_account_display: deposit.i105Default,
     asset_id: "usd#wonderland",
     receipt_count: 1,
     total_amount: "1",
@@ -396,7 +396,7 @@ function createOfflineAllowanceItem(overrides = {}) {
   return {
     certificate_id_hex: "aa".repeat(32),
     controller_id: SAMPLE_ACCOUNT_ID,
-    controller_display: SAMPLE_ACCOUNT_FORMS.compressed,
+    controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     asset_id: "usd#wonderland",
     registered_at_ms: 1,
     expires_at_ms: 2,
@@ -412,7 +412,7 @@ function createOfflineSummaryItem(overrides = {}) {
   return {
     certificate_id_hex: "aa".repeat(32),
     controller_id: SAMPLE_ACCOUNT_ID,
-    controller_display: SAMPLE_ACCOUNT_FORMS.compressed,
+    controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     summary_hash_hex: "11".repeat(32),
     ...overrides,
   };
@@ -422,7 +422,7 @@ function createOfflineRevocationItem(overrides = {}) {
   return {
     verdict_id_hex: "bb".repeat(32),
     issuer_id: SAMPLE_ACCOUNT_ID,
-    issuer_display: SAMPLE_ACCOUNT_FORMS.compressed,
+    issuer_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     revoked_at_ms: 10,
     reason: "certificate_revoked",
     note: null,
@@ -443,7 +443,7 @@ test("listAccountAssets canonicalizes encoded account ids", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets(forms.compressed);
+  await client.listAccountAssets(forms.i105Default);
   assert.ok(
     capturedUrl?.includes(encodeURIComponent(forms.canonical)),
     `expected ${capturedUrl} to include canonical segment ${forms.canonical}`,
@@ -2296,7 +2296,7 @@ test("getUaidPortfolio rejects unsupported option fields", async () => {
   );
 });
 
-test("getUaidBindings enforces UAID formats, address_format, and normalizes entries", async () => {
+test("getUaidBindings enforces UAID formats and normalizes entries", async () => {
   let capturedUrl;
   const fixture = cloneFixture(toriiFixtures.uaid.bindings);
   const fetchImpl = async (url) => {
@@ -2308,15 +2308,19 @@ test("getUaidBindings enforces UAID formats, address_format, and normalizes entr
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidBindings(fixture.uaid, { addressFormat: "compressed" });
+  const result = await client.getUaidBindings(fixture.uaid);
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.origin + parsed.pathname, `${BASE_URL}/v1/space-directory/uaids/${encodeURIComponent(fixture.uaid)}`);
-  assert.equal(parsed.searchParams.get("address_format"), "compressed");
+  assert.equal(parsed.search, "");
   assert.equal(result.dataspaces[0].accounts[0], fixture.dataspaces[0].accounts[0]);
   await assert.rejects(() => client.getUaidBindings("uaid:xyz"), /64 hex characters/);
   await assert.rejects(
     () => client.getUaidBindings(`uaid:${"10".repeat(32)}`),
     /least significant bit/i,
+  );
+  await assert.rejects(
+    () => client.getUaidBindings(fixture.uaid, { legacyFormat: "i105" }),
+    /getUaidBindings options contains unsupported fields: legacyFormat/,
   );
 });
 
@@ -2332,18 +2336,19 @@ test("getUaidManifests validates lifecycle metadata and filters by dataspace", a
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidManifests(fixture.uaid, {
-    dataspaceId: 11,
-    addressFormat: "ih58",
-  });
+  const result = await client.getUaidManifests(fixture.uaid, { dataspaceId: 11 });
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.searchParams.get("dataspace"), "11");
-  assert.equal(parsed.searchParams.get("address_format"), "ih58");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
   assert.equal(result.manifests.length, 1);
   const record = result.manifests[0];
   assert.equal(record.status, "Active");
   assert.equal(record.lifecycle.activated_epoch, 4097);
   assert.equal(record.manifest.entries[0].effect.Allow.max_amount, "500000000");
+  await assert.rejects(
+    () => client.getUaidManifests(fixture.uaid, { dataspaceId: 11, legacyFormat: "i105" }),
+    /getUaidManifests options contains unsupported fields: legacyFormat/,
+  );
 });
 
 test("publishSpaceDirectoryManifest posts manifest payloads with normalized keys", async () => {
@@ -4536,7 +4541,7 @@ test("governance helpers validate options", async () => {
     committee_size: 1,
     candidates: [
       {
-        account_id: SAMPLE_ACCOUNT_FORMS.ih58,
+        account_id: SAMPLE_ACCOUNT_FORMS.i105,
         variant: "Normal",
         pk_b64: Buffer.from("pk").toString("base64"),
         proof_b64: Buffer.from("proof").toString("base64"),
@@ -9165,7 +9170,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     electionId: "ref-zk",
     proof: [1, 2, 3],
     public: {
-      owner: SAMPLE_ACCOUNT_FORMS.ih58,
+      owner: SAMPLE_ACCOUNT_FORMS.i105,
       amount: "42",
       duration_blocks: 128,
       direction: "Aye",
@@ -9175,7 +9180,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   });
   assert.equal(calls[0].body.proof_b64, "AQID");
   assert.deepEqual(calls[0].body.public, {
-    owner: SAMPLE_ACCOUNT_FORMS.ih58,
+    owner: SAMPLE_ACCOUNT_FORMS.i105,
     amount: "42",
     duration_blocks: 128,
     direction: "Aye",
@@ -9233,7 +9238,7 @@ test("governanceSubmitZk ballots reject partial lock hints", async () => {
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
-        public: { owner: SAMPLE_ACCOUNT_FORMS.ih58, amount: "42" },
+        public: { owner: SAMPLE_ACCOUNT_FORMS.i105, amount: "42" },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
@@ -9257,7 +9262,7 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: SAMPLE_ACCOUNT_FORMS.ih58,
+          owner: SAMPLE_ACCOUNT_FORMS.i105,
           amount: "42",
           duration_blocks: 128,
           root_hint: "not-hex",
@@ -9285,7 +9290,7 @@ test("governanceSubmitZk ballots reject deprecated public input keys", async () 
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: SAMPLE_ACCOUNT_FORMS.ih58,
+          owner: SAMPLE_ACCOUNT_FORMS.i105,
           amount: "42",
           durationBlocks: 128,
         },
@@ -9312,14 +9317,14 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: SAMPLE_ACCOUNT_FORMS.compressed,
+          owner: SAMPLE_ACCOUNT_FORMS.i105Default,
           amount: "42",
           duration_blocks: 128,
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
+      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
       return true;
     },
   );
@@ -9339,7 +9344,7 @@ test("governanceSubmitZkBallotV1 rejects partial lock hints", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        owner: SAMPLE_ACCOUNT_FORMS.ih58,
+        owner: SAMPLE_ACCOUNT_FORMS.i105,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
@@ -9363,13 +9368,13 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        owner: SAMPLE_ACCOUNT_FORMS.compressed,
+        owner: SAMPLE_ACCOUNT_FORMS.i105Default,
         amount: "42",
         duration_blocks: 128,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
+      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
       return true;
     },
   );
@@ -9411,7 +9416,7 @@ test("governanceSubmitZkBallotProofV1 rejects partial lock hints", async () => {
         authority: FIXTURE_BOB_ID,
         chainId: "chain-0",
         electionId: "ref-zk",
-        ballot: { owner: SAMPLE_ACCOUNT_FORMS.ih58 },
+        ballot: { owner: SAMPLE_ACCOUNT_FORMS.i105 },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
@@ -9434,14 +9439,14 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: {
-          owner: SAMPLE_ACCOUNT_FORMS.compressed,
+          owner: SAMPLE_ACCOUNT_FORMS.i105Default,
           amount: "42",
           duration_blocks: 128,
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
+      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
       return true;
     },
   );
@@ -10894,7 +10899,7 @@ test("listAccounts encodes iterable params", async () => {
       JSON.stringify({ Eq: ["id", FIXTURE_ALICE_ID] }),
     );
     assert.equal(parsed.searchParams.get("sort"), "id:asc");
-    assert.equal(parsed.searchParams.get("address_format"), "compressed");
+    assert.equal(parsed.searchParams.get("canonical_i105"), null);
     return createResponse({
       status: 200,
       jsonData: cloneFixture(toriiFixtures.iterable.accountListPage),
@@ -10907,29 +10912,11 @@ test("listAccounts encodes iterable params", async () => {
     offset: 5n,
     filter: { Eq: ["id", FIXTURE_ALICE_ID] },
     sort: [{ key: "id", order: "asc" }],
-    addressFormat: "compressed",
   });
   assert.deepEqual(payload, toriiFixtures.iterable.accountListPage);
 });
 
-test("listAccounts accepts canonical addressFormat alias", async () => {
-  let capturedSearch = null;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    capturedSearch = parsed.searchParams.get("address_format");
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ id: FIXTURE_ALICE_ID }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccounts({ addressFormat: "canonical", limit: 1 });
-  assert.equal(capturedSearch, "ih58");
-  assert.equal(payload.items[0].id, FIXTURE_ALICE_ID);
-});
-
-test("listAccounts rejects unknown addressFormat values", async () => {
+test("listAccounts rejects unsupported legacy option", async () => {
   let called = false;
   const fetchImpl = async () => {
     called = true;
@@ -10941,10 +10928,10 @@ test("listAccounts rejects unknown addressFormat values", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAccounts({ addressFormat: "bogus" }),
-    /addressFormat/i,
+    () => client.listAccounts({ legacyFormat: "i105" }),
+    /unsupported fields: legacyFormat/i,
   );
-  assert.equal(called, false, "request should not fire when addressFormat is invalid");
+  assert.equal(called, false, "request should not fire when legacyFormat is unsupported");
 });
 
 test("listAccounts rejects unsupported sort order entries", async () => {
@@ -10962,18 +10949,6 @@ test("listAccounts rejects unsupported sort order entries", async () => {
     /sort\[0]\.order must be "asc" or "desc"/,
   );
   assert.equal(called, false);
-});
-
-test("listAccounts rejects unknown address formats", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listAccounts({ addressFormat: "future-mode" }),
-    /addressFormat must be "ih58", "canonical", or "compressed"/,
-  );
 });
 
 test("listAccounts rejects non-object filter values", async () => {
@@ -11089,7 +11064,7 @@ test("queryAccounts rejects array filters from JSON strings", async () => {
   assert.equal(callCount, 0);
 });
 
-test("queryAccounts forwards address format option", async () => {
+test("queryAccounts rejects unsupported legacy option", async () => {
   let captured;
   const fetchImpl = async (_url, init) => {
     captured = JSON.parse(init.body);
@@ -11100,8 +11075,11 @@ test("queryAccounts forwards address format option", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccounts({ addressFormat: "compressed" });
-  assert.equal(captured.address_format, "compressed");
+  await assert.rejects(
+    () => client.queryAccounts({ legacyFormat: "i105" }),
+    /unsupported fields: legacyFormat/i,
+  );
+  assert.equal(captured, undefined);
 });
 
 test("queryAccounts rejects unsupported sort order tokens", async () => {
@@ -11178,7 +11156,6 @@ test("listExplorerNfts encodes owner/domain filters and pagination", async () =>
     domainId: "wonderland",
     offset: 5,
     limit: 5,
-    addressFormat: "ih58",
   });
   assert.equal(calls.length, 1);
   const parsed = calls[0];
@@ -11187,7 +11164,7 @@ test("listExplorerNfts encodes owner/domain filters and pagination", async () =>
   assert.equal(parsed.searchParams.get("domain"), "wonderland");
   assert.equal(parsed.searchParams.get("per_page"), "5");
   assert.equal(parsed.searchParams.get("page"), "2");
-  assert.equal(parsed.searchParams.get("address_format"), "ih58");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
   assert.deepEqual(page.pagination, { page: 2, perPage: 5, totalPages: 3, totalItems: 12 });
   assert.deepEqual(page.items[0], {
     id: "nft#wonderland#1",
@@ -11295,12 +11272,11 @@ test("queryNfts posts Norito envelope", async () => {
     filter: { Eq: ["id", "nft#wonderland"] },
     sort: [{ key: "id", order: "desc" }],
     fetchSize: 10,
-    addressFormat: "compressed",
   });
   assert.deepEqual(capturedBody.filter, { Eq: ["id", "nft#wonderland"] });
   assert.deepEqual(capturedBody.sort, [{ key: "id", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 10);
-  assert.equal(capturedBody.address_format, "compressed");
+  assert.equal(capturedBody.canonical_i105, undefined);
 });
 
 test("listNfts enforces credentials when requirePermissions is set", async () => {
@@ -11370,7 +11346,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, "/v1/accounts/query");
     const body = JSON.parse(init.body);
-    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.compressed] });
+    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105Default] });
     const offset = Number(body.pagination?.offset ?? 0);
     const limit = Number(body.pagination?.limit ?? 0);
     if (callCount === 0) {
@@ -11394,7 +11370,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
   for await (const account of client.iterateAccountsQuery({
-    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.compressed] },
+    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105Default] },
     pageSize: 2,
   })) {
     seen.push(account.id);
@@ -11762,9 +11738,9 @@ test("listAccountPermissions validates entry names", async () => {
   );
 });
 
-test("listAccountPermissions normalizes IH58 and compressed (`sora`) account ids", async () => {
+test("listAccountPermissions normalizes I105 and i105Default (`sora`) account ids", async () => {
   const forms = sampleAccountForms();
-  for (const literal of [forms.ih58, forms.compressed]) {
+  for (const literal of [forms.i105, forms.i105Default]) {
     let requestedPath = null;
     const fetchImpl = async (url) => {
       requestedPath = new URL(url).pathname;
@@ -11889,12 +11865,11 @@ test("queryAccountAssets posts structured envelope", async () => {
     filter: { Gte: ["quantity", 5] },
     sort: [{ key: "quantity", order: "desc" }],
     fetchSize: 10,
-    addressFormat: "ih58",
   });
   assert.deepEqual(capturedBody.filter, { Gte: ["quantity", 5] });
   assert.deepEqual(capturedBody.sort, [{ key: "quantity", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 10);
-  assert.equal(capturedBody.address_format, "ih58");
+  assert.equal(capturedBody.canonical_i105, undefined);
 });
 
 test("queryAccountAssets surfaces errors for invalid filters", async () => {
@@ -13266,7 +13241,7 @@ test("getKaigiRelay rejects unsupported option keys", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getKaigiRelay(SAMPLE_ACCOUNT_FORMS.ih58, { extra: true }),
+    () => client.getKaigiRelay(SAMPLE_ACCOUNT_FORMS.i105, { extra: true }),
     /getKaigiRelay options contains unsupported fields: extra/,
   );
 });
@@ -15209,7 +15184,7 @@ test("queryTriggers posts iterable envelope", async () => {
   assert.equal(result.total, 0);
 });
 
-test("queryTriggers normalizes alias fields and address format", async () => {
+test("queryTriggers normalizes alias fields", async () => {
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (_url, init) => {
@@ -15224,11 +15199,10 @@ test("queryTriggers normalizes alias fields and address format", async () => {
   const result = await client.queryTriggers({
     fetch_size: 3,
     query_name: "alias-query",
-    address_format: "compressed",
   });
   assert.equal(capturedBody.fetch_size, 3);
   assert.equal(capturedBody.query, "alias-query");
-  assert.equal(capturedBody.address_format, "compressed");
+  assert.equal(capturedBody.canonical_i105, undefined);
   assert.deepEqual(result.items, []);
   assert.equal(result.total, 0);
 });
@@ -15342,13 +15316,12 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
     sort: "registered_at_ms:desc",
     limit: 5,
     offset: 10,
-    addressFormat: "compressed",
   });
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.pathname, "/v1/offline/allowances");
   assert.equal(parsed.searchParams.get("limit"), "5");
   assert.equal(parsed.searchParams.get("offset"), "10");
-  assert.equal(parsed.searchParams.get("address_format"), "compressed");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
   assert.equal(parsed.searchParams.get("sort"), "registered_at_ms:desc");
   assert.equal(parsed.searchParams.get("filter"), JSON.stringify(filter));
   assert.equal(page.total, 2);
@@ -16546,7 +16519,6 @@ test("queryOfflineAllowances forwards convenience options to query endpoint", as
     attestationNonceHex: "CAFEBABE",
     platformPolicy: "HARDENED",
     includeExpired: true,
-    addressFormat: "compressed",
     fetchSize: 2,
     queryName: "offline_allowances",
     filter,
@@ -16560,7 +16532,7 @@ test("queryOfflineAllowances forwards convenience options to query endpoint", as
   assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
   assert.equal(parsed.searchParams.get("platform_policy"), "hardened");
   assert.equal(parsed.searchParams.get("include_expired"), "true");
-  assert.equal(parsed.searchParams.get("address_format"), "compressed");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
   const body = JSON.parse(capturedBody);
   assert.deepEqual(body.filter, filter);
   assert.equal(body.fetch_size, 2);
@@ -16741,7 +16713,6 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
     offset: 5,
     filter,
     sort: [{ key: "total_counters", order: "desc" }],
-    addressFormat: "canonical",
   });
   assert.ok(capturedUrl);
   const parsed = new URL(capturedUrl);
@@ -16750,7 +16721,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
   assert.equal(parsed.searchParams.get("offset"), "5");
   assert.equal(parsed.searchParams.get("filter"), JSON.stringify(filter));
   assert.equal(parsed.searchParams.get("sort"), "total_counters:desc");
-  assert.equal(parsed.searchParams.get("address_format"), "ih58");
+  assert.equal(parsed.searchParams.get("canonical_i105"), null);
   assert.equal(page.total, 1);
   assert.equal(page.items.length, 1);
   const item = page.items[0];
@@ -16802,7 +16773,6 @@ test("queryOfflineSummaries posts envelope and normalizes payload", async () => 
     offset: 4,
     filter,
     sort: "controller_id:asc",
-    addressFormat: "compressed",
     queryName: "summaryCountersByController",
     select,
   });
@@ -16815,7 +16785,7 @@ test("queryOfflineSummaries posts envelope and normalizes payload", async () => 
   assert.equal(envelope.fetch_size, 25);
   assert.deepEqual(envelope.filter, filter);
   assert.deepEqual(envelope.sort, [{ key: "controller_id", order: "asc" }]);
-  assert.equal(envelope.address_format, "compressed");
+  assert.equal(envelope.canonical_i105, undefined);
   assert.equal(envelope.query, "summaryCountersByController");
   assert.deepEqual(envelope.select, select);
   assert.equal(page.total, 1);
@@ -16997,7 +16967,6 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
     filter: { Eq: ["asset_id", "usd#wonderland"] },
     fetchSize: 25,
     limit: 5,
-    addressFormat: "ih58",
     sort: [{ key: "receipt_count", order: "desc" }],
   });
   assert.ok(capturedInit);
@@ -17005,7 +16974,7 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
   const body = JSON.parse(capturedInit.body);
   assert.deepEqual(body.pagination, { offset: 0, limit: 5 });
   assert.equal(body.fetch_size, 25);
-  assert.equal(body.address_format, "ih58");
+  assert.equal(body.canonical_i105, undefined);
   assert.deepEqual(body.filter, { Eq: ["asset_id", "usd#wonderland"] });
   assert.deepEqual(body.sort, [{ key: "receipt_count", order: "desc" }]);
   assert.equal(result.total, 1);
@@ -17030,11 +16999,11 @@ test("iterateOfflineAllowances paginates and honours maxItems", async () => {
     createOfflineAllowanceItem({ certificate_id_hex: "aa".repeat(32) }),
     createOfflineAllowanceItem({
       certificate_id_hex: "bb".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.ih58,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
     }),
     createOfflineAllowanceItem({
       certificate_id_hex: "cc".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.compressed,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105Default,
     }),
     createOfflineAllowanceItem({
       certificate_id_hex: "dd".repeat(32),
@@ -17075,8 +17044,8 @@ test("iterateOfflineSummariesQuery paginates structured responses", async () => 
     createOfflineSummaryItem({ summary_hash_hex: "11".repeat(32) }),
     createOfflineSummaryItem({
       summary_hash_hex: "22".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.ih58,
-      controller_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
+      controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     }),
   ];
   const capturedRequests = [];
@@ -17113,30 +17082,30 @@ test("iterateOfflineTransfersQuery walks paginated transfer responses", async ()
       bundle_id_hex: "aa00",
       recorded_at_height: 1,
       controller_id: SAMPLE_ACCOUNT_ID,
-      receiver_id: SAMPLE_ACCOUNT_FORMS.ih58,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.compressed,
-      deposit_account_id: SAMPLE_ACCOUNT_FORMS.compressed,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      receiver_id: SAMPLE_ACCOUNT_FORMS.i105,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      deposit_account_id: SAMPLE_ACCOUNT_FORMS.i105Default,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     },
     {
       ...cloneFixture(baseTransfer),
       bundle_id_hex: "bb00",
       recorded_at_height: 2,
-      controller_id: SAMPLE_ACCOUNT_FORMS.ih58,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
       receiver_id: SAMPLE_ACCOUNT_FORMS.canonical,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
       deposit_account_id: SAMPLE_ACCOUNT_FORMS.canonical,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     },
     {
       ...cloneFixture(baseTransfer),
       bundle_id_hex: "cc00",
       recorded_at_height: 3,
-      controller_id: SAMPLE_ACCOUNT_FORMS.compressed,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105Default,
       receiver_id: SAMPLE_ACCOUNT_ID,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
       deposit_account_id: SAMPLE_ACCOUNT_ID,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.compressed,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     },
   ];
   const capturedRequests = [];
@@ -17443,7 +17412,7 @@ test("getExplorerMetrics rejects unsupported option fields", async () => {
   );
 });
 
-test("getExplorerAccountQr normalizes payloads and accepts address format options", async () => {
+test("getExplorerAccountQr normalizes payloads", async () => {
   const accountId = FIXTURE_ALICE_ID;
   let callCount = 0;
   const fetchImpl = async (url, init = {}) => {
@@ -17456,13 +17425,12 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
       `/v1/explorer/accounts/${encodeURIComponent(accountId)}/qr`,
     );
     if (callCount === 1) {
-      assert.equal(requestUrl.searchParams.get("address_format"), "compressed");
+      assert.equal(requestUrl.search, "");
       return createResponse({
         status: 200,
         jsonData: {
           canonical_id: accountId,
-          literal: "soratestliteral",
-          address_format: "compressed",
+          literal: "i105testliteral",
           network_prefix: 73,
           error_correction: "M",
           modules: 192,
@@ -17477,8 +17445,7 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
       status: 200,
       jsonData: {
         canonical_id: accountId,
-        literal: "ih58testliteral",
-        address_format: "ih58",
+        literal: "i105defaultliteral",
         network_prefix: 73,
         error_correction: "M",
         modules: 192,
@@ -17489,13 +17456,10 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const compressedSnapshot = await client.getExplorerAccountQr(accountId, {
-    addressFormat: "compressed",
-  });
-  assert.deepEqual(compressedSnapshot, {
+  const firstSnapshot = await client.getExplorerAccountQr(accountId);
+  assert.deepEqual(firstSnapshot, {
     canonicalId: accountId,
-    literal: "soratestliteral",
-    addressFormat: "compressed",
+    literal: "i105testliteral",
     networkPrefix: 73,
     errorCorrection: "M",
     modules: 192,
@@ -17503,8 +17467,7 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
     svg: "<svg />",
   });
   const defaultSnapshot = await client.getExplorerAccountQr(accountId);
-  assert.equal(defaultSnapshot.addressFormat, "ih58");
-  assert.equal(defaultSnapshot.literal, "ih58testliteral");
+  assert.equal(defaultSnapshot.literal, "i105defaultliteral");
   assert.equal(callCount, 2);
 });
 
@@ -17527,8 +17490,8 @@ test("getExplorerAccountQr rejects unsupported option fields", async () => {
     },
   });
   await assert.rejects(
-    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { addressFormat: "ih58", extra: true }),
-    /getExplorerAccountQr options contains unsupported fields: extra/,
+    () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { legacyFormat: "i105", extra: true }),
+    /getExplorerAccountQr options contains unsupported fields: legacyFormat, extra/,
   );
 });
 
@@ -17741,8 +17704,8 @@ test("freezeSnsRegistration posts normalized payload and parses record", async (
   const responseBody = {
     selector: { version: 1, suffix_id: 2, label: " alice " },
     name_hash: `0x${nameHash}`,
-    owner: SAMPLE_ACCOUNT_FORMS.ih58,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.ih58 }],
+    owner: SAMPLE_ACCOUNT_FORMS.i105,
+    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
     status: { status: "Frozen", reason: "timeout", until_ms: 7000 },
     pricing_class: 2,
     registered_at_ms: 10,
@@ -17790,8 +17753,8 @@ test("unfreezeSnsRegistration posts governance hook payload", async () => {
   const responseBody = {
     selector: { version: 1, suffix_id: 2, label: "alice" },
     name_hash: "ff".repeat(32),
-    owner: SAMPLE_ACCOUNT_FORMS.ih58,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.ih58 }],
+    owner: SAMPLE_ACCOUNT_FORMS.i105,
+    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
     status: "Active",
     pricing_class: 3,
     registered_at_ms: 100,

@@ -103,7 +103,7 @@ Cette section documente les formes TLV et les charges utiles JSON minimales acce
     - JSON accepte la clé `"perms"` ou `"permissions"`, chacune étant un tableau de chaînes de noms d'autorisation.
     - Exemples :
       -`{ "perms": [ "mint_asset:rose#wonder" ] }`
-      -`{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      -`{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - Préfixes de nom d'autorisation pris en charge dans la simulation :
       -`register_domain`, `register_account`, `register_asset_definition`
       -`read_assets:<account_id>`

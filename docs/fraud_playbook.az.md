@@ -85,7 +85,7 @@ qarşıdan gələn tətbiqlər kitab kitabçasına təhlükəsiz şəkildə daxi
 
 - **Risk qəbulu** – `POST /v1/fraud/query` `RiskQuery` sxemini qəbul edir:
   - `query_id` (`[u8; 32]`, hex kodlu)
-  - `subject` (`AccountId`, kanonik IH58 hərfi; isteğe bağlı `@<domain>` işarə və ya ləqəb)
+  - `subject` (`AccountId`, kanonik I105 hərfi; isteğe bağlı `@<domain>` işarə və ya ləqəb)
   - `operation` (`RiskOperation`-ə uyğun etiketlənmiş nömrə; JSON `type`
     diskriminator enum variantını əks etdirir)
   - `related_asset` (`AssetId`, isteğe bağlı)

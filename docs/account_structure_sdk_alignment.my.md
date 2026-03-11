@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-SDK နှင့် Codec ပိုင်ရှင်များအတွက် # IH58 ထုတ်ဝေမှုမှတ်စု
+SDK နှင့် Codec ပိုင်ရှင်များအတွက် # I105 ထုတ်ဝေမှုမှတ်စု
 
 အဖွဲ့များ- Rust SDK၊ TypeScript/JavaScript SDK၊ Python SDK၊ Kotlin SDK၊ Codec tooling
 
-အကြောင်းအရာ- ယခု `docs/account_structure.md` သည် IH58 အကောင့် ID ကို ရောင်ပြန်ဟပ်ပါသည်။
+အကြောင်းအရာ- ယခု `docs/account_structure.md` သည် I105 အကောင့် ID ကို ရောင်ပြန်ဟပ်ပါသည်။
 အကောင်အထည်ဖော်ခြင်း။ SDK အပြုအမူနှင့် စမ်းသပ်မှုများကို canonical spec နှင့် ချိန်ညှိပါ။
 
 အဓိက ကိုးကားချက်များ-
@@ -24,11 +24,11 @@ SDK နှင့် Codec ပိုင်ရှင်များအတွက်
 - Fixture vectors — `fixtures/account/address_vectors.json`
 
 လုပ်ဆောင်ချက်များ-
-1. ** Canonical အထွက်-** `AccountId::to_string()`/Display သည် IH58 ကိုသာ ထုတ်လွှတ်ရမည်
+1. ** Canonical အထွက်-** `AccountId::to_string()`/Display သည် I105 ကိုသာ ထုတ်လွှတ်ရမည်
    (နံပါတ် `@domain` နောက်ဆက်တွဲ)။ Canonical hex သည် အမှားရှာပြင်ခြင်းအတွက် (`0x...`) ဖြစ်သည်။
-2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **IH58 checksum-** `IH58PRE || prefix || payload` ကျော် Blake2b-512 ကိုသုံးပါ၊ ယူပါ။
+4. **I105 checksum-** `I105PRE || prefix || payload` ကျော် Blake2b-512 ကိုသုံးပါ၊ ယူပါ။
    ပထမ 2 bytes ။ ချုံ့ထားသော အက္ခရာအခြေခံသည် **105** ဖြစ်သည်။
 5. ** Curve gating-** SDKs များသည် မူရင်း Ed25519-only သို့ဖြစ်သည်။ တိကျပြတ်သားသော ရွေးချယ်မှုကို ပေးပါ။
    ML-DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`)။ လုပ်ပါ။

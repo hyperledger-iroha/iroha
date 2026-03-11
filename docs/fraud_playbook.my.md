@@ -85,7 +85,7 @@ Norito အမျိုးအစားများ `crates/iroha_data_model::frau
 
 - **စွန့်စားမှု** – `POST /v1/fraud/query` သည် `RiskQuery` အစီအစဉ်ကို လက်ခံသည်-
   - `query_id` (`[u8; 32]`၊ hex ကုဒ်လုပ်ထားသည်)
-  - `subject` (`AccountId`၊ canonical IH58 literal; ရွေးချယ်နိုင်သော `@<domain>` အရိပ်အမြွက် သို့မဟုတ် နာမည်တူ)
+  - `subject` (`AccountId`၊ canonical I105 literal; ရွေးချယ်နိုင်သော `@<domain>` အရိပ်အမြွက် သို့မဟုတ် နာမည်တူ)
   - `operation` (`RiskOperation`၊ JSON `type` နှင့် ကိုက်ညီသော enum ကို tag လုပ်ထားသည်
     ခွဲခြားဆက်ဆံသူသည် enum မူကွဲကို ထင်ဟပ်စေသည်)
   - `related_asset` (`AssetId`၊ ရွေးချယ်နိုင်သည်)

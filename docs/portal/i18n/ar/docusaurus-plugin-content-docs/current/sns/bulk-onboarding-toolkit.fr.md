@@ -34,7 +34,7 @@ Le parseur exige la ligne d'en-tete suivante (الأمر مرن):| كولون | 
 |---------|-------|-------------|
 | `label` | أوي | Libelle requeste (casse mixte Acceptee؛ l'outil Normalize selon Norm v1 et UTS-46). |
 | `suffix_id` | أوي | معرف لاحقة رقمية (عشري أو `0x` سداسي عشري). |
-| `owner` | أوي | معرف حساب Chaine (IH58 حرفي؛ تلميح @domain اختياري) لمالك التسجيل. |
+| `owner` | أوي | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | أوي | كامل `1..=255`. |
 | `payment_asset_id` | أوي | نشاط التسوية (على سبيل المثال `xor#sora`). |
 | `payment_gross` / `payment_net` | أوي | Entiers Non Signespresentant des Units Natives de l'actif. |
@@ -73,9 +73,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -241,7 +241,7 @@ reussite/echec des soumissions. مرشح اللوحة على أساس `release` 
   المراجع إلى الملفات هي قرارات تتعلق بوضع ملف CSV.
   تؤدي بيانات التعريف غير المهمة إلى خطأ في التحقق من الصحة.
 - **وحدات التحكم:** الخلايا تحترم `--default-controllers`. فورنيسيز
-  القوائم الصريحة (على سبيل المثال `ih58...;ih58...`) عند تفويضها
+  القوائم الصريحة (على سبيل المثال `i105...;i105...`) عند تفويضها
   الجهات الفاعلة غير المالك.
 
 الإشارات هي إشارات بأرقام الخطوط السياقية (على سبيل المثال

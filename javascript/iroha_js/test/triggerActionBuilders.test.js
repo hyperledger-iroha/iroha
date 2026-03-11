@@ -17,7 +17,7 @@ const CANONICAL_AUTHORITY = AccountAddress.fromAccount({
     "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     "hex",
   ),
-}).toIH58();
+}).toI105();
 const test = makeNativeTest(baseTest);
 
 function okJsonResponse(body = {}) {

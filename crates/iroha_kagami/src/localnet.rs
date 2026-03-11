@@ -1,6 +1,7 @@
 //! Generate a bare-metal local network configuration (genesis, peer configs, scripts).
 
 use std::{
+    collections::BTreeSet,
     env,
     fs::{self, File},
     io::{BufWriter, Write},
@@ -401,6 +402,7 @@ const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
 const LOCALNET_IVM_DOMAIN: &str = "ivm";
 const LOCALNET_STAKE_ASSET_ID: &str = "xor#nexus";
+const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 /// Default localnet client status timeout (ms); must stay <= TTL.
@@ -703,18 +705,23 @@ struct LocalnetTxGossipOverrides {
     resend_ticks: u32,
 }
 
-fn localnet_gas_account_id(
-    genesis_public_key: &iroha_crypto::PublicKey,
-) -> Result<ScopedAccountId> {
-    let domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
-    Ok(ScopedAccountId::new(domain, genesis_public_key.clone()))
+fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> AccountId {
+    let gas_key_pair = iroha_crypto::KeyPair::from_seed(
+        genesis_public_key
+            .to_string()
+            .bytes()
+            .chain(LOCALNET_GAS_ACCOUNT_SEED.iter().copied())
+            .collect(),
+        iroha_crypto::Algorithm::default(),
+    );
+    AccountId::new(gas_key_pair.public_key().clone())
 }
 
-fn account_id_raw_string(account_id: &ScopedAccountId) -> String {
+fn account_id_raw_string(account_id: &AccountId) -> String {
     account_id.to_string()
 }
 
-fn account_id_runtime_literal(account_id: &ScopedAccountId) -> String {
+fn account_id_runtime_literal(account_id: &AccountId) -> String {
     account_id_raw_string(account_id)
 }
 
@@ -784,12 +791,12 @@ fn generate_localnet_with_line<T: Write>(
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
     let gas_account_id = if npos_bootstrap {
-        Some(localnet_gas_account_id(&genesis_public_key)?)
+        Some(localnet_gas_account_id(&genesis_public_key))
     } else {
         None
     };
     let mut genesis = generate_raw_genesis(
-        genesis_public_key.clone(),
+        &genesis_public_key,
         opts.consensus_mode,
         opts.next_consensus_mode,
         opts.mode_activation_height,
@@ -825,7 +832,7 @@ fn generate_localnet_with_line<T: Write>(
         .with_consensus_meta();
     write_genesis(
         &genesis,
-        genesis_public_key.clone(),
+        &genesis_public_key,
         genesis_private.clone(),
         &genesis_json_path,
         &genesis_signed_path,
@@ -1580,7 +1587,7 @@ fn render_peer_config(
 }
 
 fn generate_raw_genesis(
-    genesis_public_key: iroha_crypto::PublicKey,
+    genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
     mode_activation_height: Option<u64>,
@@ -1778,47 +1785,102 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
         .build_raw()
 }
 
+struct BootstrapRegistrations {
+    domains: BTreeSet<DomainId>,
+    accounts: BTreeSet<AccountId>,
+    asset_defs: BTreeSet<AssetDefinitionId>,
+}
+
+impl BootstrapRegistrations {
+    fn from_manifest(manifest: &RawGenesisTransaction) -> Self {
+        let mut domains = BTreeSet::new();
+        let mut accounts = BTreeSet::new();
+        let mut asset_defs = BTreeSet::new();
+        for instruction in manifest.instructions() {
+            if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
+                domains.insert(register.object.id.clone());
+                continue;
+            }
+            if let Some(register) = instruction.as_any().downcast_ref::<Register<Account>>() {
+                accounts.insert(register.object.id.clone());
+                continue;
+            }
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<Register<AssetDefinition>>()
+            {
+                asset_defs.insert(register.object.id.clone());
+            }
+        }
+        Self {
+            domains,
+            accounts,
+            asset_defs,
+        }
+    }
+}
+
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
-    gas_account_id: &ScopedAccountId,
+    gas_account_id: &AccountId,
     stake_amount: u64,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
     let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
     let stake_asset_id: AssetDefinitionId = LOCALNET_STAKE_ASSET_ID.parse()?;
+    let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
-    builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
-    builder = builder.append_instruction(Register::domain(Domain::new(ivm_domain)));
-    builder = builder.append_instruction(Register::account(Account::new(gas_account_id.clone())));
+    if !registrations.domains.contains(&nexus_domain) {
+        builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
+        registrations.domains.insert(nexus_domain.clone());
+    }
+    if !registrations.domains.contains(&ivm_domain) {
+        builder = builder.append_instruction(Register::domain(Domain::new(ivm_domain.clone())));
+        registrations.domains.insert(ivm_domain.clone());
+    }
+    if !registrations.accounts.contains(gas_account_id) {
+        builder = builder.append_instruction(Register::account(Account::new(
+            gas_account_id.to_account_id(ivm_domain.clone()),
+        )));
+        registrations.accounts.insert(gas_account_id.clone());
+    }
 
-    let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-        .with_metadata(Metadata::default());
-    builder = builder.append_instruction(Register::asset_definition(definition));
+    if !registrations.asset_defs.contains(&stake_asset_id) {
+        let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_metadata(Metadata::default());
+        builder = builder.append_instruction(Register::asset_definition(definition));
+        registrations.asset_defs.insert(stake_asset_id.clone());
+    }
 
     for peer in peers {
-        let validator_id = ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone());
-        builder = builder.append_instruction(Register::account(Account::new(validator_id.clone())));
+        let validator_id = AccountId::new(peer.public_key.clone());
+        if !registrations.accounts.contains(&validator_id) {
+            builder = builder.append_instruction(Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            )));
+            registrations.accounts.insert(validator_id.clone());
+        }
         builder = builder.append_instruction(Mint::asset_numeric(
             stake_amount,
-            AssetId::new(stake_asset_id.clone(), validator_id.clone().into()),
+            AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
     }
 
     let mut builder = builder.next_transaction();
     for peer in peers {
-        let validator_id = ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone());
+        let validator_id = AccountId::new(peer.public_key.clone());
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
-            validator: validator_id.clone().into(),
-            stake_account: validator_id.clone().into(),
+            validator: validator_id.clone(),
+            stake_account: validator_id.clone(),
             initial_stake: Numeric::from(stake_amount),
             metadata: Metadata::default(),
         });
         builder = builder.append_instruction(ActivatePublicLaneValidator {
             lane_id: LaneId::SINGLE,
-            validator: validator_id.into(),
+            validator: validator_id,
         });
     }
 
@@ -1827,7 +1889,7 @@ fn append_localnet_npos_bootstrap(
 
 fn write_genesis(
     genesis: &RawGenesisTransaction,
-    genesis_public_key: iroha_crypto::PublicKey,
+    genesis_public_key: &iroha_crypto::PublicKey,
     genesis_private_key: ExposedPrivateKey,
     json_path: &Path,
     signed_path: &Path,
@@ -1835,7 +1897,7 @@ fn write_genesis(
     let json = norito::json::to_json_pretty(genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
 
-    let genesis_key_pair = KeyPair::new(genesis_public_key, genesis_private_key.0)
+    let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
     let block = genesis
         .clone()
@@ -2166,7 +2228,7 @@ mod tests {
         let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let mut genesis = generate_raw_genesis(
-            genesis_public_key.clone(),
+            &genesis_public_key,
             opts.consensus_mode,
             opts.next_consensus_mode,
             opts.mode_activation_height,
@@ -2189,8 +2251,7 @@ mod tests {
         );
         genesis = append_peer_pop(genesis, &peers);
         if npos_bootstrap {
-            let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-                .expect("gas account id required for NPoS bootstrap");
+            let gas_account_id = localnet_gas_account_id(&genesis_public_key);
             let stake_amount =
                 localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
             genesis =
@@ -2272,7 +2333,9 @@ mod tests {
             extra_accounts: 0,
             assets: vec![AssetSpec {
                 id: "sample#wonderland".into(),
-                mint_to: ALICE_ID.clone(),
+                mint_to: ALICE_ID
+                    .clone()
+                    .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
                 quantity: 100,
             }],
             block_time_ms: None,
@@ -3011,7 +3074,9 @@ mod tests {
             extra_accounts: 0,
             assets: vec![AssetSpec {
                 id: "sample#wonderland".into(),
-                mint_to: ALICE_ID.clone(),
+                mint_to: ALICE_ID
+                    .clone()
+                    .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
                 quantity: 100,
             }],
             block_time_ms: None,
@@ -3244,10 +3309,9 @@ mod tests {
             opts.base_api_port,
             opts.base_p2p_port,
         );
-        let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse().expect("nexus domain");
         let expected: BTreeSet<_> = peers
             .iter()
-            .map(|peer| ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone()))
+            .map(|peer| AccountId::new(peer.public_key.clone()))
             .collect();
         let actual: BTreeSet<_> = validators
             .iter()
@@ -3327,10 +3391,9 @@ mod tests {
             opts.base_api_port,
             opts.base_p2p_port,
         );
-        let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse().expect("nexus domain");
         let expected: BTreeSet<_> = peers
             .iter()
-            .map(|peer| ScopedAccountId::new(nexus_domain.clone(), peer.public_key.clone()))
+            .map(|peer| AccountId::new(peer.public_key.clone()))
             .collect();
         let actual: BTreeSet<_> = validators
             .iter()
@@ -3660,7 +3723,7 @@ mod tests {
             .expect("account table");
         assert_eq!(
             account.get("domain").and_then(toml::Value::as_str),
-            Some(ALICE_ID.domain().to_string().as_str())
+            Some(CLIENT_ACCOUNT_DOMAIN)
         );
     }
 
@@ -4191,7 +4254,7 @@ mod tests {
 
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
 
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
@@ -4263,21 +4326,69 @@ mod tests {
     fn account_id_raw_string_parses_as_account_id() {
         let seed_bytes = Some(b"localnet-gas-parse".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
         let encoded = account_id_raw_string(&gas_account_id);
-        let parsed = ScopedAccountId::parse_encoded(&encoded)
+        let parsed = AccountId::parse_encoded(&encoded)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("account id parse");
-        assert_eq!(parsed.to_string(), gas_account_id.to_string());
+        assert_eq!(parsed, gas_account_id);
     }
 
     #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
         let literal = account_id_runtime_literal(&gas_account_id);
         assert_eq!(literal, gas_account_id.to_string());
+    }
+
+    #[test]
+    fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-genesis-account-dedupe".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 31080,
+            base_p2p_port: 31337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let genesis_account_id = AccountId::new(genesis_public_key.clone());
+        let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse().expect("ivm domain");
+        let ivm_genesis_registrations = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<Register<Account>>()
+                    .map(|register| (register.object.id.clone(), register.object.domain.clone()))
+            })
+            .filter(|(account_id, domain)| {
+                account_id == &genesis_account_id && domain == &ivm_domain
+            })
+            .count();
+
+        assert_eq!(
+            ivm_genesis_registrations, 0,
+            "expected NPoS bootstrap to avoid re-registering the genesis controller under ivm"
+        );
     }
 
     #[test]

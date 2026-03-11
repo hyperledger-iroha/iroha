@@ -1443,8 +1443,6 @@ test(
     assert.ok(iteratorQueryFound, "asset holder query iterator should surface the sender account");
 
     const accountFilter = { Eq: { id: senderAccountId } };
-    const senderCompressedLiteral = compressedLiteralForAccount(senderAccountId);
-    const authorityCompressedLiteral = compressedLiteralForAccount(AUTHORITY_ACCOUNT_ID);
     const accountList = await client.listAccounts({ filter: accountFilter, limit: 5 });
     const accountListItems = accountList?.items ?? [];
     assert.ok(
@@ -1474,61 +1472,56 @@ test(
       "account query iterator should include the sender account",
     );
 
-    const compressedAccountList = await client.listAccounts({
+    const i105AccountList = await client.listAccounts({
       filter: accountFilter,
       limit: 5,
-      addressFormat: "compressed",
     });
-    const compressedAccountItems = compressedAccountList?.items ?? [];
+    const i105AccountItems = i105AccountList?.items ?? [];
     assert.ok(
-      compressedAccountItems.some((entry) => entry?.id === senderCompressedLiteral),
-      "account list should honour compressed address formatting",
+      i105AccountItems.some((entry) => entry?.id === senderAccountId),
+      "account list should honour i105 address formatting",
     );
 
-    const compressedAccountQuery = await client.queryAccounts({
+    const i105AccountQuery = await client.queryAccounts({
       filter: accountFilter,
       limit: 1,
-      addressFormat: "compressed",
     });
-    const compressedQueryItems = compressedAccountQuery?.items ?? [];
+    const i105QueryItems = i105AccountQuery?.items ?? [];
     assert.ok(
-      compressedQueryItems.length > 0 && compressedQueryItems[0]?.id === senderCompressedLiteral,
-      "account query should return compressed literals when requested",
+      i105QueryItems.length > 0 && i105QueryItems[0]?.id === senderAccountId,
+      "account query should return i105 literals when requested",
     );
 
-    const compressedListIteratorFound = await iteratorIncludes(
+    const i105ListIteratorFound = await iteratorIncludes(
       client.iterateAccounts({
         filter: accountFilter,
         limit: 5,
         maxItems: 10,
-        addressFormat: "compressed",
       }),
-      (entry) => entry?.id === senderCompressedLiteral,
+      (entry) => entry?.id === senderAccountId,
     );
     assert.ok(
-      compressedListIteratorFound,
-      "account iterator should emit compressed literals when requested",
+      i105ListIteratorFound,
+      "account iterator should emit i105 literals when requested",
     );
 
-    const compressedQueryIteratorFound = await iteratorIncludes(
+    const i105QueryIteratorFound = await iteratorIncludes(
       client.iterateAccountsQuery({
         filter: accountFilter,
         limit: 5,
         maxItems: 10,
-        addressFormat: "compressed",
       }),
-      (entry) => entry?.id === senderCompressedLiteral,
+      (entry) => entry?.id === senderAccountId,
     );
     assert.ok(
-      compressedQueryIteratorFound,
-      "account query iterator should emit compressed literals when requested",
+      i105QueryIteratorFound,
+      "account query iterator should emit i105 literals when requested",
     );
 
-    const compressedTransactions = await client.listAccountTransactions(senderAccountId, {
+    const i105Transactions = await client.listAccountTransactions(senderAccountId, {
       limit: 5,
-      addressFormat: "compressed",
     });
-    const listAuthority = (compressedTransactions?.items ?? []).find(
+    const listAuthority = (i105Transactions?.items ?? []).find(
       (entry) => typeof entry?.authority === "string",
     );
     assert.ok(
@@ -1537,15 +1530,14 @@ test(
     );
     assert.equal(
       listAuthority.authority,
-      authorityCompressedLiteral,
-      "account transaction list should honour addressFormat=compressed for authority fields",
+      AUTHORITY_ACCOUNT_ID,
+      "account transaction list should emit canonical authority literals",
     );
 
-    const compressedTransactionQuery = await client.queryAccountTransactions(senderAccountId, {
+    const i105TransactionQuery = await client.queryAccountTransactions(senderAccountId, {
       limit: 5,
-      addressFormat: "compressed",
     });
-    const queryAuthority = (compressedTransactionQuery?.items ?? []).find(
+    const queryAuthority = (i105TransactionQuery?.items ?? []).find(
       (entry) => typeof entry?.authority === "string",
     );
     assert.ok(
@@ -1554,34 +1546,32 @@ test(
     );
     assert.equal(
       queryAuthority.authority,
-      authorityCompressedLiteral,
-      "account transaction query should honour addressFormat=compressed for authority fields",
+      AUTHORITY_ACCOUNT_ID,
+      "account transaction query should emit canonical authority literals",
     );
 
-    const compressedTransactionIteratorFound = await iteratorIncludes(
+    const i105TransactionIteratorFound = await iteratorIncludes(
       client.iterateAccountTransactions(senderAccountId, {
         limit: 5,
         maxItems: 10,
-        addressFormat: "compressed",
       }),
-      (entry) => entry?.authority === authorityCompressedLiteral,
+      (entry) => entry?.authority === AUTHORITY_ACCOUNT_ID,
     );
     assert.ok(
-      compressedTransactionIteratorFound,
-      "account transaction iterator should emit compressed authority literals",
+      i105TransactionIteratorFound,
+      "account transaction iterator should emit i105 authority literals",
     );
 
-    const compressedTransactionQueryIteratorFound = await iteratorIncludes(
+    const i105TransactionQueryIteratorFound = await iteratorIncludes(
       client.iterateAccountTransactionsQuery(senderAccountId, {
         limit: 5,
         maxItems: 10,
-        addressFormat: "compressed",
       }),
-      (entry) => entry?.authority === authorityCompressedLiteral,
+      (entry) => entry?.authority === AUTHORITY_ACCOUNT_ID,
     );
     assert.ok(
-      compressedTransactionQueryIteratorFound,
-      "account transaction query iterator should emit compressed authority literals",
+      i105TransactionQueryIteratorFound,
+      "account transaction query iterator should emit i105 authority literals",
     );
   },
 );
@@ -2559,7 +2549,6 @@ test(
       () =>
         client.listOfflineTransfers({
           limit: 5,
-          addressFormat: "compressed",
         }),
     );
     if (!transfers) {
@@ -4066,40 +4055,22 @@ test(
     }
 
     assertExplorerAccountQrSnapshot(defaultSnapshot, "default explorer QR snapshot");
+    const secondSnapshot = await client.getExplorerAccountQr(AUTHORITY_ACCOUNT_ID);
+    assertExplorerAccountQrSnapshot(secondSnapshot, "second explorer QR snapshot");
     assert.equal(
-      defaultSnapshot.addressFormat,
-      "ih58",
-      "default explorer QR snapshot should use IH58 format",
-    );
-    assert.ok(
-      defaultSnapshot.literal.includes("@"),
-      "IH58 literal should include the domain separator",
-    );
-
-    const compressedSnapshot = await client.getExplorerAccountQr(AUTHORITY_ACCOUNT_ID, {
-      addressFormat: "compressed",
-    });
-    assertExplorerAccountQrSnapshot(compressedSnapshot, "compressed explorer QR snapshot");
-
-    assert.equal(
-      compressedSnapshot.addressFormat,
-      "compressed",
-      "compressed snapshot should honour the requested address format",
-    );
-    assert.equal(
-      compressedSnapshot.canonicalId,
+      secondSnapshot.canonicalId,
       defaultSnapshot.canonicalId,
-      "canonicalId must remain stable across address formats",
+      "canonicalId must remain stable across repeated requests",
     );
     assert.equal(
-      compressedSnapshot.networkPrefix,
+      secondSnapshot.networkPrefix,
       defaultSnapshot.networkPrefix,
-      "networkPrefix must remain stable across address formats",
+      "networkPrefix must remain stable across repeated requests",
     );
-    assert.notEqual(
-      compressedSnapshot.addressFormat,
-      defaultSnapshot.addressFormat,
-      "address format flag should change when requesting compressed output",
+    assert.equal(
+      secondSnapshot.literal,
+      defaultSnapshot.literal,
+      "literal should remain stable across repeated requests",
     );
   },
 );
@@ -5526,7 +5497,7 @@ function randomAccountId(domainId) {
     .createHash("sha256")
     .update(`${domainId}:${label}`)
     .digest();
-  return AccountAddress.fromAccount({ domain: domainId, publicKey }).toIH58();
+  return AccountAddress.fromAccount({ domain: domainId, publicKey }).toI105();
 }
 
 function randomAssetDefinitionId(domainId) {
@@ -5839,15 +5810,16 @@ async function iteratorIncludes(iterator, predicate) {
   return false;
 }
 
-function compressedLiteralForAccount(accountId) {
+function i105DefaultLiteralForAccount(accountId) {
   const literal = String(accountId);
   const separator = literal.lastIndexOf("@");
   if (separator === -1) {
     throw new Error(`account id "${literal}" must include a domain`);
   }
+  const accountLiteral = literal.slice(0, separator);
   const domain = literal.slice(separator + 1);
-  const { compressed } = inspectAccountId(literal);
-  return `${compressed}@${domain}`;
+  const summary = inspectAccountId(accountLiteral);
+  return `${summary.i105.value}@${domain}`;
 }
 
 async function waitForDaManifest(client, ticketHex, options = {}) {
@@ -6335,11 +6307,6 @@ function assertExplorerAccountQrSnapshot(snapshot, label) {
   assert.notEqual(snapshot.canonicalId.length, 0, `${label}.canonicalId must not be empty`);
   assert.equal(typeof snapshot.literal, "string", `${label}.literal must be a string`);
   assert.notEqual(snapshot.literal.length, 0, `${label}.literal must not be empty`);
-  assert.equal(typeof snapshot.addressFormat, "string", `${label}.addressFormat must be a string`);
-  assert.ok(
-    snapshot.addressFormat === "ih58" || snapshot.addressFormat === "compressed",
-    `${label}.addressFormat must be "ih58" or "compressed"`,
-  );
   assert.ok(
     Number.isInteger(snapshot.networkPrefix) && snapshot.networkPrefix > 0,
     `${label}.networkPrefix must be a positive integer`,

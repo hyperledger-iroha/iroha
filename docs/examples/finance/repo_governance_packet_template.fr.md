@@ -57,7 +57,7 @@ reference a sec 2.8 de `docs/source/finance/repo_ops.md`.
 
 | Custodian | Fichier | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA signe couvrant fenetre de custody, compte de routage et contact drill. |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA signe couvrant fenetre de custody, compte de routage et contact drill. |
 
 > Stockez l'acknowledgement a cote des autres preuves (`artifacts/finance/repo/<slug>/`)
 > afin que `scripts/repo_evidence_manifest.py` enregistre le fichier dans le meme arbre que

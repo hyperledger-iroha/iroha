@@ -31,16 +31,13 @@ export interface SignedTransactionResult {
   hash: Buffer;
 }
 
-export type AccountAddressFormat = "ih58" | "compressed";
-
 export const AccountAddressErrorCode: {
   readonly UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM";
   readonly KEY_PAYLOAD_TOO_LONG: "ERR_KEY_PAYLOAD_TOO_LONG";
   readonly INVALID_HEADER_VERSION: "ERR_INVALID_HEADER_VERSION";
   readonly INVALID_NORM_VERSION: "ERR_INVALID_NORM_VERSION";
-  readonly INVALID_IH58_PREFIX: "ERR_INVALID_IH58_PREFIX";
+  readonly INVALID_I105_DISCRIMINANT: "ERR_INVALID_I105_DISCRIMINANT";
   readonly CANONICAL_HASH_FAILURE: "ERR_CANONICAL_HASH_FAILURE";
-  readonly INVALID_IH58_ENCODING: "ERR_INVALID_IH58_ENCODING";
   readonly INVALID_LENGTH: "ERR_INVALID_LENGTH";
   readonly CHECKSUM_MISMATCH: "ERR_CHECKSUM_MISMATCH";
   readonly INVALID_HEX_ADDRESS: "ERR_INVALID_HEX_ADDRESS";
@@ -55,12 +52,11 @@ export const AccountAddressErrorCode: {
   readonly INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY";
   readonly UNKNOWN_CURVE: "ERR_UNKNOWN_CURVE";
   readonly UNEXPECTED_TRAILING_BYTES: "ERR_UNEXPECTED_TRAILING_BYTES";
-  readonly INVALID_IH58_PREFIX_ENCODING: "ERR_INVALID_IH58_PREFIX_ENCODING";
-  readonly MISSING_COMPRESSED_SENTINEL: "ERR_MISSING_COMPRESSED_SENTINEL";
-  readonly COMPRESSED_TOO_SHORT: "ERR_COMPRESSED_TOO_SHORT";
-  readonly INVALID_COMPRESSED_CHAR: "ERR_INVALID_COMPRESSED_CHAR";
-  readonly INVALID_COMPRESSED_BASE: "ERR_INVALID_COMPRESSED_BASE";
-  readonly INVALID_COMPRESSED_DIGIT: "ERR_INVALID_COMPRESSED_DIGIT";
+  readonly MISSING_I105_SENTINEL: "ERR_MISSING_I105_SENTINEL";
+  readonly I105_TOO_SHORT: "ERR_I105_TOO_SHORT";
+  readonly INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR";
+  readonly INVALID_I105_BASE: "ERR_INVALID_I105_BASE";
+  readonly INVALID_I105_DIGIT: "ERR_INVALID_I105_DIGIT";
   readonly LOCAL_DIGEST_TOO_SHORT: "ERR_LOCAL8_DEPRECATED";
   readonly UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT";
   readonly MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW";
@@ -109,10 +105,9 @@ export interface AccountAddressDomainSummary {
 }
 
 export interface AccountAddressDisplay {
-  ih58: string;
-  compressed: string;
-  networkPrefix: number;
-  compressedWarning: string;
+  i105: string;
+  chainDiscriminant: number;
+  i105Warning: string;
   domainSummary: AccountAddressDomainSummary;
 }
 
@@ -142,44 +137,46 @@ export class AccountAddress {
   static fromCanonicalBytes(
     bytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
   ): AccountAddress;
-  static fromIH58(
+  static fromI105(
     encoded: string,
     expectedPrefix?: number | string | bigint,
   ): AccountAddress;
-  static fromCompressedSora(encoded: string): AccountAddress;
+  static fromI105Default(encoded: string): AccountAddress;
   static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,
     expectedDomain?: string,
-  ): { address: AccountAddress; format: AccountAddressFormat; networkPrefix?: number };
+  ): { address: AccountAddress; chainDiscriminant?: number };
   canonicalBytes(): Uint8Array;
   canonicalHex(): string;
-  toIH58(networkPrefix: number | string | bigint): string;
-  toCompressedSora(): string;
-  toCompressedSoraFullWidth(): string;
+  toI105(prefix?: number | string | bigint): string;
+  toI105Default(): string;
+  toI105DefaultFullWidth(): string;
   toString(): string;
-  displayFormats(networkPrefix?: number | string | bigint): AccountAddressDisplay;
+  displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
   domainSummary(): AccountAddressDomainSummary;
 }
 
-export function encodeCompressedAccountAddress(
+export function encodeI105AccountAddress(
   canonicalBytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
-  options?: { fullWidth?: boolean },
+  options?: { fullWidth?: boolean; chainDiscriminant?: number | string | bigint },
 ): string;
-export function decodeCompressedAccountAddress(encoded: string): Uint8Array;
+export function decodeI105AccountAddress(
+  encoded: string,
+  options?: { expectDiscriminant?: number | string | bigint },
+): Uint8Array;
 
 export interface InspectAccountIdOptions {
-  networkPrefix?: number | string | bigint;
-  expectPrefix?: number | string | bigint;
+  chainDiscriminant?: number | string | bigint;
+  expectDiscriminant?: number | string | bigint;
 }
 
 export interface AccountIdInspection {
-  detectedFormat: { kind: string; networkPrefix?: number };
+  detectedFormat: { kind: string; chainDiscriminant?: number };
   domain: { kind: string; warning: string | null };
   canonicalHex: string;
-  ih58: { value: string; networkPrefix: number };
-  compressed: string;
-  compressedWarning: string;
+  i105: { value: string; chainDiscriminant: number };
+  i105Warning: string;
   inputDomain: string | null;
   warnings: string[];
 }
@@ -448,9 +445,9 @@ export interface ProofAttachmentInput {
 }
 
 /**
- * Canonicalise an account identifier to IH58.
+ * Canonicalise an account identifier to I105.
  *
- * Accepts only encoded account IDs (IH58 preferred, sora compressed accepted).
+ * Accepts only encoded I105 account IDs.
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
@@ -483,8 +480,6 @@ export interface EventStreamOptions {
   signal?: AbortSignal;
 }
 
-export type ToriiAddressFormat = "ih58" | "canonical" | "compressed";
-
 export interface CanonicalRequestAuth {
   accountId: string;
   privateKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | string | number[];
@@ -500,7 +495,6 @@ export interface IterableListOptions extends PermissionedIterableOptions {
   offset?: NumericLike;
   filter?: string | Record<string, unknown>;
   sort?: string | ReadonlyArray<{ key: string; order?: "asc" | "desc" }>;
-  addressFormat?: ToriiAddressFormat;
   signal?: AbortSignal;
 }
 
@@ -581,7 +575,6 @@ export interface ExplorerNftListOptions {
   offset?: NumericLike;
   ownedBy?: string;
   domainId?: string;
-  addressFormat?: ToriiAddressFormat;
   signal?: AbortSignal;
 }
 
@@ -1105,7 +1098,6 @@ export interface ToriiExplorerBlocksPage {
 export interface ToriiExplorerAccountQrSnapshot {
   canonicalId: string;
   literal: string;
-  addressFormat: "ih58" | "compressed";
   networkPrefix: number;
   errorCorrection: string;
   modules: number;
@@ -5645,13 +5637,11 @@ export interface RevokeSpaceDirectoryManifestRequest {
 }
 
 export interface UaidBindingsQueryOptions {
-  addressFormat?: ToriiAddressFormat;
   signal?: AbortSignal;
 }
 
 export interface UaidManifestQueryOptions {
   dataspaceId?: number;
-  addressFormat?: ToriiAddressFormat;
   signal?: AbortSignal;
 }
 
@@ -6477,7 +6467,6 @@ export declare class ToriiClient {
   getExplorerAccountQr(
     accountId: string,
     options?: {
-      addressFormat?: ToriiAddressFormat;
       signal?: AbortSignal;
     },
   ): Promise<ToriiExplorerAccountQrSnapshot>;

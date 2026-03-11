@@ -631,7 +631,6 @@ mod tests {
     }
 
     fn sample_account() -> AccountId {
-        let domain = DomainId::from_str("relay").expect("domain id");
         let key_hex = "11".repeat(32);
         let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
         AccountId::new(public_key)

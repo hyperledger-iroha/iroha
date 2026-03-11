@@ -64,7 +64,7 @@ repo `--custodian` ሲጠቀም ይህንን ክፍል ያጠናቅቁ። የአ
 
 | ጠባቂ | ፋይል | SHA-256 | ማስታወሻ |
 |--------|-------|-----|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | የተፈረመ SLA የጥበቃ መስኮት፣ የማዞሪያ መለያ እና የመሰርሰሪያ ግንኙነት። |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | የተፈረመ SLA የጥበቃ መስኮት፣ የማዞሪያ መለያ እና የመሰርሰሪያ ግንኙነት። |
 
 > እውቅናውን ከሌላው ማስረጃ (`artifacts/finance/repo/<slug>/`) አጠገብ ያከማቹ
 > ስለዚህ `scripts/repo_evidence_manifest.py` ፋይሉን በተመሳሳይ ዛፍ ውስጥ ይመዘግባል

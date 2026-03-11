@@ -369,15 +369,14 @@ struct NativeSignedTransaction {
 
 struct NativeAccountAddressParseResult {
     let canonicalBytes: Data
-    let format: AccountAddressFormat
     let networkPrefix: UInt16?
 }
 
 struct NativeAccountAddressRenderResult {
     let canonicalHex: String
-    let ih58: String
-    let compressed: String
-    let compressedFullWidth: String
+    let i105: String
+    let i105Default: String
+    let i105DefaultFullWidth: String
 }
 
 enum NativeBridgeError: Error, Equatable {
@@ -1132,7 +1131,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt16, UInt8,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<UInt16>?,
+        UnsafeMutablePointer<UInt16>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
     ) -> Int32
 
@@ -1812,9 +1811,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
         #if canImport(Darwin)
         guard let parsed = try? parseAccountAddress(literal: authority, expectedPrefix: nil) else {
-            return nil
-        }
-        guard parsed.format == .ih58 else {
             return nil
         }
         return parsed.networkPrefix
@@ -2793,7 +2789,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let accountAddressParseFn else { return nil }
         var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
         var canonicalLen: UInt = 0
-        var formatCode: UInt8 = 0
         var networkPrefix: UInt16 = 0
         var errorPtr: UnsafeMutablePointer<UInt8>? = nil
         var errorLen: UInt = 0
@@ -2808,7 +2803,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 prefixFlag,
                 &canonicalPtr,
                 &canonicalLen,
-                &formatCode,
                 &networkPrefix,
                 &errorPtr,
                 &errorLen
@@ -2821,12 +2815,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             else {
                 return nil
             }
-            let format = AccountAddressFormat(bridgeCode: formatCode) ?? .ih58
-            let prefix = format == .ih58 ? networkPrefix : nil
             return NativeAccountAddressParseResult(
                 canonicalBytes: canonical,
-                format: format,
-                networkPrefix: prefix
+                networkPrefix: networkPrefix
             )
         }
 
@@ -2850,8 +2841,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let accountAddressRenderFn else { return nil }
         var hexPtr: UnsafeMutablePointer<UInt8>? = nil
         var hexLen: UInt = 0
-        var ih58Ptr: UnsafeMutablePointer<UInt8>? = nil
-        var ih58Len: UInt = 0
+        var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
+        var i105Len: UInt = 0
         var compressedPtr: UnsafeMutablePointer<UInt8>? = nil
         var compressedLen: UInt = 0
         var compressedFullPtr: UnsafeMutablePointer<UInt8>? = nil
@@ -2866,8 +2857,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 networkPrefix,
                 &hexPtr,
                 &hexLen,
-                &ih58Ptr,
-                &ih58Len,
+                &i105Ptr,
+                &i105Len,
                 &compressedPtr,
                 &compressedLen,
                 &compressedFullPtr,
@@ -2880,7 +2871,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         if status == 0 {
             guard
                 let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
-                let ih58 = takeString(pointer: ih58Ptr, length: ih58Len),
+                let i105 = takeString(pointer: i105Ptr, length: i105Len),
                 let compressed = takeString(pointer: compressedPtr, length: compressedLen),
                 let compressedFull = takeString(pointer: compressedFullPtr, length: compressedFullLen)
             else {
@@ -2888,22 +2879,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
             return NativeAccountAddressRenderResult(
                 canonicalHex: canonicalHex,
-                ih58: ih58,
-                compressed: compressed,
-                compressedFullWidth: compressedFull
+                i105: i105,
+                i105Default: compressed,
+                i105DefaultFullWidth: compressedFull
             )
         }
 
         if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
             if let hexPtr { freeFn?(hexPtr) }
-            if let ih58Ptr { freeFn?(ih58Ptr) }
+            if let i105Ptr { freeFn?(i105Ptr) }
             if let compressedPtr { freeFn?(compressedPtr) }
             if let compressedFullPtr { freeFn?(compressedFullPtr) }
             throw error
         }
 
         if let hexPtr { freeFn?(hexPtr) }
-        if let ih58Ptr { freeFn?(ih58Ptr) }
+        if let i105Ptr { freeFn?(i105Ptr) }
         if let compressedPtr { freeFn?(compressedPtr) }
         if let compressedFullPtr { freeFn?(compressedFullPtr) }
         return nil

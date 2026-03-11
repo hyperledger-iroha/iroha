@@ -18,8 +18,8 @@ translation_last_reviewed: 2026-02-07
 
 تحتوي الحافظات والمستكشفون وأمثلة SDK على العناوين
 من حساب الحمولات غير القابلة للتغيير. مثال على محفظة Android بالتجزئة
-في `examples/android/retail-wallet` يتم صيانة نمط UX:- **اثنين من أسراب النسخ.** قم بتزويد اثنين من أزرار النسخ الصريحة: IH58
-  (يفضل) وشكل الضغط Sora فقط (`sora...`، الخيار الثاني). IH58 موجود دائمًا
+في `examples/android/retail-wallet` يتم صيانة نمط UX:- **اثنين من أسراب النسخ.** قم بتزويد اثنين من أزرار النسخ الصريحة: I105
+  (يفضل) وشكل الضغط Sora فقط (`sora...`، الخيار الثاني). I105 موجود دائمًا
   تأكد من مشاركة حمولة QR خارجيًا وشحنها. الضغط المتغير
   يجب أن تتضمن إعلانًا مضمنًا لأنه لا يعمل في
   تطبيقات الأسعار تهمة على قدم المساواة سورا. مثال على Android المتفرع من الأزرار المزدوجة Material et
@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-02-07
   المجال الضمني `default`، يعرض أسطورة للمشغلين
   qu'aucun لاحقة لا تتطلب. يجب على المستكشفين أيضًا أن يتقدموا للأمام
   تسمية المجال الكنسي عندما يقوم المحدد بتشفير ملخص.
-- **QR IH58.** تعمل رموز QR على تشفير السلسلة IH58. سي لا جيل دو
+- **QR I105.** تعمل رموز QR على تشفير السلسلة I105. سي لا جيل دو
   صدى QR، لعرض خطأ واضح بدلاً من مقطع فيديو للصورة.
 - **أوراق الرسائل المطبوعة.** بعد أن تتجنب نسخ الشكل المضغوط، قم بتحريرهاالخبز المحمص أو الوجبات الخفيفة Rappelant aux utilisateurs qu'elle est Sora-only et sujette
   على غرار تشويه IME.
@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
 
 ## مساعدين SDK
 
-يعرض Chaque SDK مساعدًا للعقد يقوم بإرجاع نماذج IH58 et
+يعرض Chaque SDK مساعدًا للعقد يقوم بإرجاع نماذج I105 et
 اضغط أيضًا على سلسلة الإعلانات حتى تبقى الأرائك في واجهة المستخدم
 متماسكة:
 
@@ -85,7 +85,7 @@ translation_last_reviewed: 2026-02-07
 
 
 يجب على المستكشفين إعادة إنتاج عمل القياس عن بعد وإمكانية الوصول إليه
-fait pour le portefeuille:- Appliquez `data-copy-mode="ih58|compressed|qr"` aux boutons de copie afin que
+fait pour le portefeuille:- Appliquez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie afin que
   يمكن للواجهات الأمامية أن تطلق حاسبات الاستخدام بالتوازي
   متري Torii `torii_address_format_total`. العرض التوضيحي للمؤلف
   أرسل حدثًا `iroha:address-copy` مع `{mode,timestamp}` - تخلص من هذا
@@ -97,7 +97,7 @@ fait pour le portefeuille:- Appliquez `data-copy-mode="ih58|compressed|qr"` aux 
   Preuve de 30 jours `domain_kind="local12"` مباشرة بعد اللوحة
   `address_ingest` من Grafana.
 - Associez chaque controle a des المؤشرات `aria-label`/`aria-describedby`
-  المميزات التي توضح ما إذا كان الحرفي موجودًا في مشاركة (IH58) أو Sora فقط
+  المميزات التي توضح ما إذا كان الحرفي موجودًا في مشاركة (I105) أو Sora فقط
   (ضغط). أدخل أسطورة المجال الضمني في الوصف من أجل
   تعكس تقنيات المساعدة سياق الصورة التي يتم عرضها.
 - عرض منطقة مباشرة (على سبيل المثال `<output aria-live="polite">...</output>`).
@@ -110,7 +110,7 @@ fait pour le portefeuille:- Appliquez `data-copy-mode="ih58|compressed|qr"` aux 
 
 استخدم [toolkit Local -> Global](local-to-global-toolkit.md) للصب
 أتمتة عملية التدقيق وتحويل المحددات المحلية. لو المساعد
-قم بإنشاء تقرير مراجعة JSON والقائمة المحولة إلى IH58/compressee مرة أخرى
+قم بإنشاء تقرير مراجعة JSON والقائمة المحولة إلى I105/compressee مرة أخرى
 ينضم المشغلون إلى تذاكر الاستعداد بينما يرتبط دفتر التشغيل
 تكمن في لوحات المعلومات Grafana والقواعد Alertmanager التي تم قفلها
 قطع في وضع صارم.
@@ -164,14 +164,14 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
 
 ## فرض الأشكال canoniques
 
-المشغلون الذين يقومون بتحويل الترميزات المحلية إلى IH58 canonique
-يجب عليك اتباع سلاسل الضغطات لسير العمل CLI المستند الخاص بـ ADDR-5:1. `iroha tools address inspect` يقوم بصيانة استئناف بنية JSON مع IH58،
+المشغلون الذين يقومون بتحويل الترميزات المحلية إلى I105 canonique
+يجب عليك اتباع سلاسل الضغطات لسير العمل CLI المستند الخاص بـ ADDR-5:1. `iroha tools address inspect` يقوم بصيانة استئناف بنية JSON مع I105،
    ضغط وحمولة الحمولات السداسية. تتضمن السيرة الذاتية أيضًا كائنًا
    `domain` مع الأبطال `kind`/`warning` ويفتح المجال بأكمله عبر
    لو تشامب `input_domain`. عندما `kind` vaut `local12`، لا CLI يطبع un
    Avertissement sur stderr واستئناف JSON يعكس الرسالة المرسلة لذلك
    يمكن عرض خطوط الأنابيب CI وSDK. باسيز `legacy  suffix`
-   عندما ترغب في تجديد التشفير المحول إلى الشكل `<ih58>@<domain>`.
+   عندما ترغب في تجديد التشفير المحول إلى الشكل `<i105>@<domain>`.
 2. يمكن لـ SDK عرض رسالة التنبيه/الاستئناف عبر المساعد
    جافا سكريبت:
 
@@ -182,12 +182,12 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  يقوم المساعد في الحفاظ على البادئة IH58 بالكشف عن الحرفي إذا كنت ترغب في ذلك
+  يقوم المساعد في الحفاظ على البادئة I105 بالكشف عن الحرفي إذا كنت ترغب في ذلك
   قم بتقديم `networkPrefix` بشكل واضح، قم بإرسال السيرة الذاتية للأبحاث
-  Non defaut ne sont pas rerendus silencieusement avec le prefixe par defaut.3. قم بتحويل الحمولة الكنسي إلى إعادة استخدام الأبطال `ih58.value` ou
-   `compressed` من السيرة الذاتية (أو تطلب تشفيرًا آخر عبر `--format`). سيس
+  Non defaut ne sont pas rerendus silencieusement avec le prefixe par defaut.3. قم بتحويل الحمولة الكنسي إلى إعادة استخدام الأبطال `i105.value` ou
+   `i105_default` من السيرة الذاتية (أو تطلب تشفيرًا آخر عبر `--format`). سيس
    السلاسل هي بالتأكيد مشاركة خارجية.
 4. قم بإعداد البيانات والسجلات والمستندات الموجهة يوميًا من قبل العميل
    النموذج القانوني وإخطار المشاركين بأن المحددات المحلية ستظهر
@@ -196,7 +196,7 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
    `iroha tools address audit --input addresses.txt --network-prefix 753`. لا أمر
    lit des literaux separes par nouvelle ligne (les commentaires commencant par
    `#` يتم تجاهله، و`--input -` أو علامة تستخدم STDIN)، وإصدار تقرير
-   JSON مع السيرة الذاتية canoniques/IH58/compresse لكل إدخال وحساب
+   JSON مع السيرة الذاتية canoniques/I105/compresse لكل إدخال وحساب
    أخطاء التحليل بالإضافة إلى إعلانات النطاق المحلي. استخدم
    `--allow-errors` أثناء تدقيق مخلفات المخلفات المحتوي على الخطوط
    الطفيليات، وحظر الأتمتة عبر `strict CI post-check` عندما تكون
@@ -205,7 +205,7 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
   Pour les feuilles de calcule de recession des sélecteurs Local, utilisez
   من أجل مُصدِّر ملف CSV `input,status,format,...` الذي تم إعداده مسبقًا بالتشفيرات
   المعايير والإعلانات والتحليلات في خطوة واحدة.
-   يقوم المساعد بتجاهل الخطوط غير المحلية بشكل افتراضي، وتحويلها كل مرةيتم حفظه في التشفير المطلوب (IH58/compresse/hex/JSON)، مع الاحتفاظ بالملف
+   يقوم المساعد بتجاهل الخطوط غير المحلية بشكل افتراضي، وتحويلها كل مرةيتم حفظه في التشفير المطلوب (I105/compresse/hex/JSON)، مع الاحتفاظ بالملف
    المجال الأصلي عندما `legacy  suffix` نشط. أسوشييز لو أ
    `--allow-errors` لمواصلة تحليل المحتوى أثناء تفريغ المحتوى
    أشكال literaux mal.
@@ -250,6 +250,6 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
 lors du Cutover:> **العناوين:** Ajoute le helper `iroha tools address normalize`
 > والفرع في CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
 > Portefeuille/explorateur puissent converter les Selecteurs Local Herites vers
-> الأشكال canoniques IH58/compressees avant que Local-8/Local-12 soient
+> الأشكال canoniques I105/compressees avant que Local-8/Local-12 soient
 > كتل على الشبكة الرئيسية. قم بتخصيص الصادرات يوميًا لتنفيذها
 > الأمر وضم القائمة الطبيعية إلى حزمة الإصدار المسبق.

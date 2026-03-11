@@ -54,7 +54,7 @@ public final class UaidJsonParser {
                 accountItems.get(j),
                 "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "]");
         final String accountId =
-            AccountIdLiteral.extractIh58Address(
+            AccountIdLiteral.extractI105Address(
                 asString(
                     account.get("account_id"),
                     "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].account_id"));
@@ -112,7 +112,7 @@ public final class UaidJsonParser {
               entry.get("accounts"), "uaid bindings.dataspaces[" + i + "].accounts");
       final List<String> normalizedAccounts = new ArrayList<>(accounts.size());
       for (final String accountId : accounts) {
-        normalizedAccounts.add(AccountIdLiteral.extractIh58Address(accountId));
+        normalizedAccounts.add(AccountIdLiteral.extractI105Address(accountId));
       }
       dataspaces.add(
           new UaidBindingsResponse.UaidBindingsDataspace(
@@ -169,7 +169,7 @@ public final class UaidJsonParser {
               entry.get("accounts"), "uaid manifests.manifests[" + i + "].accounts");
       final List<String> normalizedAccounts = new ArrayList<>(accounts.size());
       for (final String accountId : accounts) {
-        normalizedAccounts.add(AccountIdLiteral.extractIh58Address(accountId));
+        normalizedAccounts.add(AccountIdLiteral.extractI105Address(accountId));
       }
       final String manifestJson =
           JsonEncoder.encode(

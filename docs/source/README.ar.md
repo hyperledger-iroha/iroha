@@ -34,6 +34,7 @@ translation_last_reviewed: 2025-11-14
 - كتيّب التشغيل للمرفقات/المثبت (prover) في Torii: ‎`zk/prover_runbook.md`‎
 - دليل تشغيل واجهة ZK App API في Torii (مرفقات/prover؛ وثائق crate):
   ‎`../../crates/iroha_torii/docs/zk_app_api.md`‎
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - دورة حياة مفاتيح التحقق/البراهين VK/proofs (التسجيل، التحقق، التليمترية):
   ‎`zk/lifecycle.md`‎
 - أدوات مساعدة لمشغّل Torii (نقاط نهاية لمراقبة الحالة): ‎`references/operator_aids.md`‎

@@ -104,10 +104,10 @@ description = "Route CBDC contracts to the restricted lane"
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "ih58...",
-    "ih58...",
-    "ih58...",
-    "ih58..."
+    "i105...",
+    "i105...",
+    "i105...",
+    "i105..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-Հիմնական պահանջներ.- Վավերացնողները **պետք է** լինեն կանոնական IH58 հաշվի ID-ներ (առանց `@domain`; հավելված `@domain` միայն որպես հստակ երթուղային հուշում), որոնք առկա են կատալոգում: Սահմանեք `quorum` բազմապատիկ շեմին (≥2):
+Հիմնական պահանջներ.- Վավերացնողները **պետք է** լինեն կանոնական I105 հաշվի ID-ներ (առանց `@domain`; հավելված `@domain` միայն որպես հստակ երթուղային հուշում), որոնք առկա են կատալոգում: Սահմանեք `quorum` բազմապատիկ շեմին (≥2):
 - Պաշտպանված անունների տարածքները պարտադրվում են `Queue::push`-ով (տես `crates/iroha_core/src/queue.rs`), ուստի CBDC-ի բոլոր պայմանագրերը պետք է նշեն `gov_namespace` + `gov_contract_id`:
 - `composability_group` դաշտերը հետևում են `docs/source/nexus.md` §8.6-ում նկարագրված սխեմային; սեփականատերը (CBDC lane) տրամադրում է սպիտակ ցուցակը և քվոտաները: Սպիտակ ցուցակում նշված DS մանիֆեստները նշում են միայն `group_id_hex` + `activation_epoch`:
 - Մանիֆեստը պատճենելուց հետո գործարկեք `cargo test -p integration_tests nexus::lane_registry -- --nocapture`՝ հաստատելու համար, որ `LaneManifestRegistry::from_config`-ը բեռնում է այն:
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

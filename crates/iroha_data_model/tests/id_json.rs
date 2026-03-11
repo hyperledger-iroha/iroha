@@ -21,7 +21,7 @@ fn asset_id() -> AssetId {
 #[test]
 fn account_id_json_roundtrip() {
     let account_id = account_id();
-    let canonical = account_id.canonical_ih58().expect("canonical ih58");
+    let canonical = account_id.canonical_i105().expect("canonical i105");
 
     let json = norito::json::to_json(&account_id).expect("serialize account id");
     let expected = format!("\"{canonical}\"");

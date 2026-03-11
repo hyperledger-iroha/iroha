@@ -103,7 +103,7 @@ Pointer-ABI զանգերի կոնվենցիա (խելացի պայմանագրա
     - JSON-ն ընդունում է `"perms"` կամ `"permissions"` ստեղնը, որոնցից յուրաքանչյուրը թույլտվությունների անունների տողային զանգված է:
     - Օրինակներ.
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - Աջակցված թույլտվության անվան նախածանցները ծաղրում.
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON 接受键 `"perms"` 或 `"permissions"`，每个键都是权限名称的字符串数组。
     - 示例：
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
     - 模拟中支持的权限名称前缀：
       - `register_domain`、`register_account`、`register_asset_definition`
       - `read_assets:<account_id>`

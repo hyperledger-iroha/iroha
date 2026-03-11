@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Запись мэра библиотеки
 
-- Убедитесь, что существующий адрес назначения (например, `ih58...`), отобразите этап настройки в каждом быстром запуске SDK.
+- Убедитесь, что существующий адрес назначения (например, `i105...`), отобразите этап настройки в каждом быстром запуске SDK.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение активности ROSE и добавить 250 единиц для Алисы в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить, что ваша запись вышла.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account i105...`, чтобы подтвердить, что ваша запись вышла.
 
 ## Руководство по настройке SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

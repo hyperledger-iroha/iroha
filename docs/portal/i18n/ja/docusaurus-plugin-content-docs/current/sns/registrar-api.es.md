@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Obtiene `SuffixPolicyV1` 実際（キャッシュ可能）。 |
 | `/v1/sns/registrations/{selector}` |入手 | -- | Devuelve `NameRecordV1` 実際 + 効果 (アクティブ、グレースなど)。 |
 
-**セレクターのコード:** セグメント `{selector}` アセプタ IH58、16 進カノニコ セグン ADDR-5 を含む。 Torii は `NameSelectorV1` 経由で正規化されます。
+**セレクターのコード:** セグメント `{selector}` アセプタ I105、16 進カノニコ セグン ADDR-5 を含む。 Torii は `NameSelectorV1` 経由で正規化されます。
 
 **エラーのモデル:** todos los endpoints devuelven Norito JSON con `code`、`message`、`details`。ロスコディゴには、`sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing` が含まれます。
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -224,7 +224,7 @@ Torii 検証ラス プルエバス コンプロバンド:
 
 1. 顧客は、`/v1/sns/policies/{suffix_id}` の優先事項、恩恵を受ける条件を参照してください。
 2. クライアント アルマ `RegisterNameRequestV1`:
-   - `selector` ラベル IH58 (プレフェリド) またはコンプリミド (セグンダ メジャー オプション) のデリバド。
+   - `selector` ラベル I105 (プレフェリド) またはコンプリミド (セグンダ メジャー オプション) のデリバド。
    - `term_years` 政治の限界。
    - `payment` 参照、転送、スプリッター テソレリア/スチュワード。
 3. Torii の有効性:

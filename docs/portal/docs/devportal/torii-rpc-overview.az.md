@@ -58,6 +58,7 @@ sifarişli skriptlər yazmadan faydalı yüklər.
 1. [Proksi işə salın](./try-it.md#start-the-proxy-locally) və təyin edin
    `TRYIT_PROXY_PUBLIC_URL` beləliklə, vidjetlər trafikin hara göndəriləcəyini bilir.
 2. Bu səhifədə **Sınaq** kartını və ya `/reference/torii-swagger` açın
+   For MCP/agent flows, use `/reference/torii-mcp`.
    paneli seçin və `POST /v1/pipeline/submit` kimi son nöqtəni seçin.
 3. **Məzmun növü**-ni `application/x-norito`-ə dəyişin, **İkili** seçin
    redaktoru və `fixtures/norito_rpc/transfer_asset.norito` yükləyin

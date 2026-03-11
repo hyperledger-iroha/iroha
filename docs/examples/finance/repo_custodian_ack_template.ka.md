@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 | ველი | ღირებულება |
 |-------|-------|
 | ხელშეკრულების იდენტიფიკატორი | `<repo-yyMMdd-XX>` |
-| მეურვის ანგარიშის ID | `<ih58...>` |
+| მეურვის ანგარიშის ID | `<i105...>` |
 | მომზადებულია / თარიღი | `<custodian ops lead>` |
 | სამაგიდო კონტაქტები აღიარებულია | `<desk lead + counterparty>` |
 | მტკიცებულებათა დირექტორია | ``artifacts/finance/repo/<slug>/`` |

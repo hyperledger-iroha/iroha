@@ -70,7 +70,7 @@ fn transactions_should_be_applied() -> Result<()> {
         let asset_definition_id = "MAY#and".parse::<AssetDefinitionId>()?;
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
 
-        let create_domain = Register::domain(Domain::new(domain_id));
+        let create_domain = Register::domain(Domain::new(domain_id.clone()));
         iroha.submit(create_domain).wrap_err_with(|| {
             format!(
                 "submit create_domain; torii={torii}, env_dir={}",
@@ -91,7 +91,8 @@ fn transactions_should_be_applied() -> Result<()> {
         target_height += 1;
         wait_for_height(target_height, "after create_asset")?;
 
-        let create_account = Register::account(Account::new(account_id.clone()));
+        let create_account =
+            Register::account(Account::new(account_id.to_account_id(domain_id.clone())));
         iroha.submit(create_account).wrap_err_with(|| {
             format!(
                 "submit create_account; torii={torii}, env_dir={}",

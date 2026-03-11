@@ -843,7 +843,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier (IH58 or `sora...` compressed literal).",
+            "description": "Relay account identifier rendered as canonical I105 literal.",
             "type": "string"
           },
           "reported_at_ms": {
@@ -965,7 +965,7 @@
             "type": "string"
           },
           "controller_display": {
-            "description": "Controller rendered according to the address_format hint.",
+            "description": "Controller rendered as canonical I105.",
             "type": "string"
           },
           "controller_id": {
@@ -1333,10 +1333,6 @@
       "OfflineQueryEnvelope": {
         "description": "Superset of Torii's Norito QueryEnvelope structure.",
         "properties": {
-          "address_format": {
-            "description": "Optional rendering preference for account ids (`ih58` or `compressed`).",
-            "type": "string"
-          },
           "fetch_size": {
             "description": "Optional batch fetch size hint.",
             "format": "uint64",
@@ -1702,7 +1698,7 @@
             "type": "string"
           },
           "controller_display": {
-            "description": "Controller rendered according to the address_format hint.",
+            "description": "Controller rendered as canonical I105.",
             "type": "string"
           },
           "controller_id": {
@@ -2177,11 +2173,11 @@
             "type": "array"
           },
           "staker": {
-            "description": "Staker account literal rendered per address_format.",
+            "description": "Staker account literal rendered as canonical I105.",
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered per address_format.",
+            "description": "Validator account literal rendered as canonical I105.",
             "type": "string"
           }
         },
@@ -2293,7 +2289,7 @@
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered per address_format.",
+            "description": "Validator account literal rendered as canonical I105.",
             "type": "string"
           }
         },
@@ -2594,13 +2590,6 @@
       "RepoAgreementsQueryRequest": {
         "additionalProperties": false,
         "properties": {
-          "address_format": {
-            "enum": [
-              "ih58",
-              "compressed"
-            ],
-            "type": "string"
-          },
           "fetch_size": {
             "format": "uint64",
             "type": "integer"
@@ -3664,7 +3653,7 @@
     },
     "/v1/accounts/{account_id}/transactions": {
       "get": {
-        "description": "List transactions authored by an account (supports pagination, address_format, and optional asset_id filtering).",
+        "description": "List transactions authored by an account (supports pagination and optional asset_id filtering).",
         "parameters": [
           {
             "description": "Account identifier.",
@@ -3693,19 +3682,6 @@
             "schema": {
               "format": "uint64",
               "type": "integer"
-            }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
             }
           },
           {
@@ -4060,7 +4036,7 @@
     },
     "/v1/assets/{definition_id}/holders": {
       "get": {
-        "description": "List holders for an asset definition (supports pagination, address_format, and optional asset_id filtering).",
+        "description": "List holders for an asset definition (supports pagination and optional asset_id filtering).",
         "parameters": [
           {
             "description": "Asset definition identifier.",
@@ -4089,19 +4065,6 @@
             "schema": {
               "format": "uint64",
               "type": "integer"
-            }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
             }
           },
           {
@@ -5468,20 +5431,7 @@
             }
           },
           {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter assets by account owner (accepts canonical I105 account literals).",
             "in": "query",
             "name": "owned_by",
             "required": false,
@@ -5710,20 +5660,7 @@
             }
           },
           {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter instructions by authority account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -5732,7 +5669,7 @@
             }
           },
           {
-            "description": "Filter transfer instructions by participant account (source or destination; accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter transfer instructions by participant account (source or destination; accepts canonical I105 account literals).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -5967,20 +5904,7 @@
             }
           },
           {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter transactions by authority account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -6917,7 +6841,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier (e.g., `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).",
+            "description": "Relay account identifier encoded as a canonical I105 account literal.",
             "in": "path",
             "name": "relay_id",
             "required": true,
@@ -7201,28 +7125,15 @@
     },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
-        "description": "Resolves the supplied account literal (IH58 (preferred)/sora (second-best)/alias/public-key) and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
+        "description": "Resolves the supplied canonical I105 account literal and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
         "operationId": "nexusDataspacesAccountSummary",
         "parameters": [
           {
-            "description": "Account literal to resolve (IH58 (preferred)/sora (second-best)/alias/public-key).",
+            "description": "Account literal to resolve (canonical I105 only).",
             "in": "path",
             "name": "literal",
             "required": true,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
               "type": "string"
             }
           }
@@ -7298,7 +7209,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and accepts optional `asset_id` and `upto_epoch` filters.",
+        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -7312,20 +7223,7 @@
             }
           },
           {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
+            "description": "Account literal to evaluate pending rewards for (canonical I105 only).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -7383,7 +7281,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/stake": {
       "get": {
-        "description": "Returns bonded stake per validator/staker pair for the requested public lane, including pending unbond timers. Supports an optional validator filter and renders account literals according to the `address_format` hint (`ih58` or `compressed`).",
+        "description": "Returns bonded stake per validator/staker pair for the requested public lane, including pending unbond timers. Supports an optional validator filter.",
         "operationId": "nexusPublicLaneStake",
         "parameters": [
           {
@@ -7397,20 +7295,7 @@
             }
           },
           {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional validator account literal to filter stake entries (IH58 (preferred)/sora (second-best)).",
+            "description": "Optional validator account literal to filter stake entries (canonical I105 only).",
             "in": "query",
             "name": "validator",
             "required": false,
@@ -7449,7 +7334,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/validators": {
       "get": {
-        "description": "Returns validators servicing the requested public lane with lifecycle status (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, and `release_at_ms` when an exit timer is running. Account literals honour the optional `address_format` hint (`ih58` or `compressed`).",
+        "description": "Returns validators servicing the requested public lane with lifecycle status (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, and `release_at_ms` when an exit timer is running.",
         "operationId": "nexusPublicLaneValidators",
         "parameters": [
           {
@@ -7460,19 +7345,6 @@
             "schema": {
               "format": "uint64",
               "type": "integer"
-            }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
             }
           }
         ],
@@ -7675,16 +7547,7 @@
             }
           },
           {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter allowances by controller account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8122,19 +7985,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -8237,16 +8087,7 @@
             }
           },
           {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter allowances by controller account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8828,16 +8669,7 @@
             }
           },
           {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter receipts by sender/controller account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8846,7 +8678,7 @@
             }
           },
           {
-            "description": "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter receipts by receiver account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -9116,16 +8948,7 @@
             }
           },
           {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by originating controller account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -9134,7 +8957,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by receiver account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -9143,7 +8966,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by deposit account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,
@@ -9425,19 +9248,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -9592,15 +9402,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -9735,16 +9536,7 @@
             }
           },
           {
-            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by originating controller account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -9753,7 +9545,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by receiver account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -9762,7 +9554,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "description": "Filter bundles by deposit account (accepts canonical I105 account literals).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,
@@ -10024,19 +9816,6 @@
             "name": "bundle_id_hex",
             "required": true,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "enum": [
-                "ih58",
-                "compressed"
-              ],
               "type": "string"
             }
           }
@@ -10539,7 +10318,7 @@
     },
     "/v1/repo/agreements": {
       "get": {
-        "description": "Returns the active repo agreements recorded on-chain with optional pagination, filtering, and account address formatting.",
+        "description": "Returns the active repo agreements recorded on-chain with optional pagination and filtering.",
         "parameters": [
           {
             "description": "Optional maximum number of entries to return.",
@@ -10576,15 +10355,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "Preferred address format (`ih58` or `compressed`).",
-            "in": "query",
-            "name": "address_format",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -10607,7 +10377,7 @@
     },
     "/v1/repo/agreements/query": {
       "post": {
-        "description": "Structured query endpoint accepting a JSON envelope with pagination, sort, filter, and address_format fields.",
+        "description": "Structured query endpoint accepting a JSON envelope with pagination, sort, and filter fields.",
         "requestBody": {
           "content": {
             "application/json": {

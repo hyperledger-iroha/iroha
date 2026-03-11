@@ -178,7 +178,7 @@ private func expectedAuthorityLiteral(from label: String) throws -> String {
                                                         expectedPrefix: FixtureConstants.networkPrefix) else {
         throw FixtureError.invalidAuthority(label)
     }
-    return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
+    return try parsed.toI105(networkPrefix: FixtureConstants.networkPrefix)
 }
 
 private func decodeSignedPayload(from json: String) -> [String: Any]? {

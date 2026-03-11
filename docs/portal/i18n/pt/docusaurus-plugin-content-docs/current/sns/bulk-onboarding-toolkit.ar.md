@@ -34,7 +34,7 @@ cargas úteis são usadas para carregar cargas úteis.
 |----|-------|-------|
 | `label` | Não | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norma v1 e UTS-46). |
 | `suffix_id` | Não | O valor é o mesmo (hex e `0x`). |
-| `owner` | Não | O AccountId (literal AccountId codificado (IH58 preferido, compressed aceito; sem sufixo @domain)) é definido como AccountId. |
+| `owner` | Não | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Não | Eu usei `1..=255`. |
 | `payment_asset_id` | Não | Verifique o valor (como `xor#sora`). |
 | `payment_gross` / `payment_net` | Não | Verifique se o seu dispositivo está funcionando corretamente. |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -233,7 +233,7 @@ Então.
 - **metadados e governança:** no JSON inline مباشرة؛ ويتم حل
   مراجع الملفات نسبة em formato CSV. metadata não está disponível.
 - **Controladores:** O controlador é o `--default-controllers`. قدم قوائم
-  O controlador de controle (como `ih58...;ih58...`) não funciona mais.
+  O controlador de controle (como `i105...;i105...`) não funciona mais.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). Chave de fenda `1`

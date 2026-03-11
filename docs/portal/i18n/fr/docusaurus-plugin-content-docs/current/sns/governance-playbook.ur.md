@@ -52,7 +52,7 @@ résolveur et passerelle pour résoudre le problème یہ روڈمیپ کی اس
 | Charte + addenda KPI | `docs/source/sns/governance_addenda/` | Les engagements des KPI et les votes CLI sont également pris en compte. |
 | Schéma du registre | [`registry-schema.md`](./registry-schema.md) | Carte Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`) |
 | Contrat de bureau d'enregistrement | [`registrar-api.md`](./registrar-api.md) | Charges utiles REST/gRPC, métriques `sns_registrar_status_total` et hook de gouvernance |
-| Adresse du guide UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus IH58 (ترجیحی) / compressés (`sora`) (`sora`, deuxième meilleur) et portefeuilles/explorateurs pour les utilisateurs |
+| Adresse du guide UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus I105 (ترجیحی) / compressés (`sora`) (`sora`, deuxième meilleur) et portefeuilles/explorateurs pour les utilisateurs |
 | Documents SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Dérivation déterministe de l'hôte, flux de travail de suivi de transparence et règles d'alerte |
 | Notes réglementaires | `docs/source/sns/regulatory/` | Notes d'admission juridictionnelles (مثلا EU DSA) ، accusés de réception des responsables ، annexes du modèle ۔ |
 | Journal de forage | `ops/drill-log.md` | Chaos et répétitions IR et sorties de phase |
@@ -90,7 +90,7 @@ Il s'agit d'un artefact pour un artefact
    tailer چلائیں تاکہ نیا GAR/zone state پھیلنے کی تصدیق ہو (4.5 دیکھیں)۔
 6. **Divulgation client :** Grand livre destiné au client (portefeuille/explorateur) کو
    [`address-display-guidelines.md`](./address-display-guidelines.md) pour les appareils partagés
-   Copie du rendu IH58 compressé (`sora`) copie/QR
+   Copie du rendu I105 compressé (`sora`) copie/QR
    orientation سے میل کھاتے ہیں۔### 4.3 Renouvellements, facturation et rapprochement de trésorerie
 
 - **Flux de travail de renouvellement :** Bureau d'enregistrement `SuffixPolicyV1` pour 30 $ de grâce + 60 $
@@ -115,11 +115,11 @@ Il s'agit d'un artefact pour un artefact
 | مرحلہ | مالک | Action et Preuve | ANS |
 |-------|------|----------|-----|
 | Demande de gel doux | Intendant / support | Ticket `SNS-DF-<id>` pour obtenir les preuves de paiement, la référence de la caution en litige, et le(s) sélecteur(s) concerné(s) | <=4 h de prise سے۔ |
-| Billet de gardien | Conseil des gardiens | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` `GuardianFreezeTicketV1` Français Ticket JSON `artifacts/sns/guardian/<id>.json` pour le client | <=30 min ACK, <=2 h d'exécution۔ |
+| Billet de gardien | Conseil des gardiens | `sns governance freeze --selector <I105> --reason <text> --until <ts>` `GuardianFreezeTicketV1` Français Ticket JSON `artifacts/sns/guardian/<id>.json` pour le client | <=30 min ACK, <=2 h d'exécution۔ |
 | Ratification du Conseil | Conseil de gouvernance | Geler approuver/rejeter le ticket du tuteur et le résumé des obligations de litige | اگلا séance du conseil یا vote asynchrone۔ |
 | Commission d'arbitrage | Conformité + intendant | 7 panels de jurés (feuille de route pour les votes) avec bulletins de vote hachés `sns governance dispute ballot` pour les votes hachés Paquet d'incidents de reçus de vote anonymes میں لگائیں۔ | Verdict <=7 jours pour le dépôt de garantie |
 | Appel | Gardien + conseil | Cautionnement d'appel et procédure du juré Norito Manifeste `DisputeAppealV1` Billet d'entrée principal et ticket principal | <=10 jours۔ |
-| Dégel et correction | Opérations de registraire + résolveur | `sns governance unfreeze --selector <IH58> --ticket <id>` Le statut du registraire est activé et les différences GAR/résolveur se propagent. | Verdict کے فوراً بعد۔ |
+| Dégel et correction | Opérations de registraire + résolveur | `sns governance unfreeze --selector <I105> --ticket <id>` Le statut du registraire est activé et les différences GAR/résolveur se propagent. | Verdict کے فوراً بعد۔ |
 
 Canons d'urgence (gels déclenchés par un tuteur <= 72 h) pour le flux de travail
 Pour l'examen rétroactif du conseil et pour la transparence `docs/source/sns/regulatory/`

@@ -14,7 +14,7 @@ título: اکاؤنٹ ایڈریس تعمیل
 descripción: Dispositivo ADDR-2 ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
 ---
 
-paquete canónico ADDR-2 (`fixtures/account/address_vectors.json`) IH58 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple, accesorios negativos y captura de pantalla ہر SDK + Torii superficie اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی resumen de estado (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ lectores de portal بغیر mono-repo میں کھوج لگائے flujo de trabajo دیکھ سکیں۔
+paquete canónico ADDR-2 (`fixtures/account/address_vectors.json`) I105 (preferido), comprimido (`sora`, segundo mejor; ancho medio/completo), firma múltiple, accesorios negativos y captura de pantalla ہر SDK + Torii superficie اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی resumen de estado (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ lectores de portal بغیر mono-repo میں کھوج لگائے flujo de trabajo دیکھ سکیں۔
 
 ## Paquete کو regenerar یا verificar کریں
 
@@ -43,7 +43,7 @@ Flujo de trabajo de CI **Deriva del vector de dirección** `cargo xtask address-
 | Torii (servidor) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK de JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |ہر aprovechar bytes canónicos + IH58 + codificaciones comprimidas (`sora`, segunda mejor) کا ida y vuelta کرتا ہے اور casos negativos کیلئے Códigos de error de estilo Norito کو accesorio کے ساتھ coincidencia کرتا ہے۔
+| SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |ہر aprovechar bytes canónicos + I105 + codificaciones comprimidas (`sora`, segunda mejor) کا ida y vuelta کرتا ہے اور casos negativos کیلئے Códigos de error de estilo Norito کو accesorio کے ساتھ coincidencia کرتا ہے۔
 
 ## Automatización چاہئے؟
 

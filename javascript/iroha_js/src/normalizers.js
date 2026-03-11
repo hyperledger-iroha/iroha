@@ -3,7 +3,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  AccountAddressFormat,
   DEFAULT_DOMAIN_NAME,
 } from "./address.js";
 import {
@@ -186,7 +185,7 @@ export function normalizeAccountId(value, name) {
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must not include '@domain'; use an encoded IH58/sora account id`,
+      `${name} must not include '@domain'; use an encoded I105 account id`,
       name,
     );
   }
@@ -197,19 +196,19 @@ export function normalizeAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be IH58 (preferred) or sora compressed account id`,
+      `${name} must be an I105 account id`,
       name,
     );
   }
 
   try {
     const { address } = AccountAddress.parseEncoded(raw);
-    return address.toIH58();
+    return address.toI105();
   } catch (error) {
     if (error instanceof AccountAddressError) {
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be IH58 (preferred) or sora compressed account id`,
+        `${name} must be an I105 account id`,
         name,
       );
     }
@@ -225,7 +224,7 @@ export function ensureCanonicalAccountId(value, name) {
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical IH58 account id`,
+      `${name} must be a canonical I105 account id`,
       name,
     );
   }
@@ -236,7 +235,7 @@ export function ensureCanonicalAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical IH58 account id`,
+      `${name} must be a canonical I105 account id`,
       name,
     );
   }
@@ -247,25 +246,18 @@ export function ensureCanonicalAccountId(value, name) {
     if (error instanceof AccountAddressError) {
       throw createValidationError(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be a canonical IH58 account id`,
+        `${name} must be a canonical I105 account id`,
         name,
         error,
       );
     }
     throw error;
   }
-  if (parsed.format !== AccountAddressFormat.IH58) {
-    fail(
-      ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical IH58 account id`,
-      name,
-    );
-  }
-  const canonical = parsed.address.toIH58();
+  const canonical = parsed.address.toI105();
   if (raw !== canonical) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must use canonical IH58 account id form`,
+      `${name} must use canonical I105 account id form`,
       name,
     );
   }

@@ -57,7 +57,7 @@ translation_last_reviewed: 2026-02-07
 |憲章 + KPI 追加条項 | `docs/source/sns/governance_addenda/` | KPI 規約、CLI 投票数、および CLI 投票数やあ|
 |レジストリスキーマ | [`registry-schema.md`](./registry-schema.md) | Norito 認証 (`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`) |
 |レジストラ契約 | [`registrar-api.md`](./registrar-api.md) | REST/gRPC ペイロード、`sns_registrar_status_total` メトリクス、ガバナンス フックの管理|
-|アドレス UX ガイド | [`address-display-guidelines.md`](./address-display-guidelines.md) | IH58 (評価) / 圧縮 (`sora`) (`sora`、2 番目に優れた) レンダリング、ウォレット/エクスプローラーのレンダリング|
+|アドレス UX ガイド | [`address-display-guidelines.md`](./address-display-guidelines.md) | I105 (評価) / 圧縮 (`sora`) (`sora`、2 番目に優れた) レンダリング、ウォレット/エクスプローラーのレンダリング|
 | SoraDNS / GAR ドキュメント | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |決定論的なホスト導出、透明性テーラー ワークフロー、アラート ルール|
 |規制に関するメモ | `docs/source/sns/regulatory/` |管轄区域の摂取メモ (EU DSA)、スチュワードの謝辞、テンプレートの付属書|
 |ドリルログ | `ops/drill-log.md` |カオス IR リハーサル、フェーズ終了、終了|
@@ -99,7 +99,7 @@ translation_last_reviewed: 2026-02-07
    テールラー چلائیں تاکہ نیا GAR/ゾーン状態 پھیلنے کی تصدیق ہو (4.5 دیکھیں)۔
 6. **顧客開示:** 顧客向け台帳 (ウォレット/エクスプローラー)
    [`address-display-guidelines.md`](./address-display-guidelines.md) 共有備品
-   IH58 圧縮 (`sora`) レンダリング コピー/QR
+   I105 圧縮 (`sora`) レンダリング コピー/QR
    ガイダンス سے میل کھاتے ہیں۔
 
 ### 4.3 更新、請求、財務調整- **更新ワークフロー:** レジストラ `SuffixPolicyV1` میں دی گئی 30 € 猶予 + 60 دن
@@ -126,11 +126,11 @@ translation_last_reviewed: 2026-02-07
 | |意味 |行動と証拠 | SLA |
 |------|------|-----------|-----|
 |ソフトフリーズリクエスト |スチュワード / サポート |チケット `SNS-DF-<id>` 支払い証明、紛争保証金参照、影響を受けるセレクター| <=4 時間の摂取量|
-|ガーディアンチケット |ガーディアンボード | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` `GuardianFreezeTicketV1` いいえチケット JSON `artifacts/sns/guardian/<id>.json` میں رکھیں۔ | <=30 分 ACK、<=2 時間実行|
+|ガーディアンチケット |ガーディアンボード | `sns governance freeze --selector <I105> --reason <text> --until <ts>` `GuardianFreezeTicketV1` いいえチケット JSON `artifacts/sns/guardian/<id>.json` میں رکھیں۔ | <=30 分 ACK、<=2 時間実行|
 |理事会の批准 |ガバナンス評議会 |承認/拒否の凍結 ガーディアン チケット 争議債券ダイジェスト 承認 承認 承認 承認拒否 ガーディアン チケット 紛争保証金ダイジェスト 承認 承認拒否|議会セッション、非同期投票、 |
 |仲裁委員会 |コンプライアンス + スチュワード | 7 陪審員パネル (ロードマップ بلائیں، ハッシュ化投票 `sns governance dispute ballot` کے ذریعے جمع کریں۔)匿名投票受領事件パケット میں لگائیں۔ |評決 <=7 日、保証金の預け入れ|
 |アピール |保護者 + 評議会 |控訴保証金 ہیں 陪審員プロセス دہراتی ہیں؛ Norito マニフェスト `DisputeAppealV1` ریکارڈ کریں اور プライマリ チケット ریفرنس کریں۔ | <=10 日|
-|凍結解除と修復 |レジストラー + リゾルバー操作 | `sns governance unfreeze --selector <IH58> --ticket <id>` レジストラのステータス اپڈیٹ کریں، اور GAR/リゾルバーの差分が伝播する|評決 فوراً بعد۔ |
+|凍結解除と修復 |レジストラー + リゾルバー操作 | `sns governance unfreeze --selector <I105> --ticket <id>` レジストラのステータス اپڈیٹ کریں، اور GAR/リゾルバーの差分が伝播する|評決 فوراً بعد۔ |
 
 緊急大砲（ガーディアン発動によるフリーズ <=72 時間）
 遡及審議会の見直し `docs/source/sns/regulatory/` 透明性

@@ -1,10 +1,9 @@
-//! Account address tooling (IH58 (preferred)/sora compressed inputs; canonical output available).
+//! Account address tooling (canonical I105 input/output).
 
 use super::*;
 use clap::ValueEnum;
 use iroha::account_address::{
-    AccountAddress, AccountAddressError, AccountAddressFormat, AddressDomainKind,
-    ParsedAccountAddress,
+    AccountAddress, AccountAddressError, AddressDomainKind, ParsedAccountAddress,
 };
 use norito::json::{self, JsonSerialize};
 use std::{
@@ -13,8 +12,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Default IH58 prefix for Sora Nexus (see `address_prefix_registry.json`).
-const DEFAULT_IH58_PREFIX: u16 = 753;
+/// Default I105 prefix for Sora Nexus (see `address_prefix_registry.json`).
+const DEFAULT_I105_PREFIX: u16 = 753;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -38,21 +37,21 @@ impl Run for Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Convert {
-    /// Address literal to parse (IH58 or `sora…` compressed).
+    /// Address literal to parse (canonical I105 encoded).
     #[arg(value_name = "ADDRESS")]
     input: String,
-    /// Require IH58 inputs to match the provided network prefix.
+    /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting IH58 output.
+    /// Network prefix to use when emitting I105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
-        default_value_t = DEFAULT_IH58_PREFIX
+        default_value_t = DEFAULT_I105_PREFIX
     )]
     network_prefix: u16,
-    /// Desired output format (defaults to IH58).
-    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Ih58)]
+    /// Desired output format (defaults to I105).
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::I105)]
     format: OutputFormat,
 }
 
@@ -77,8 +76,7 @@ impl Convert {
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 #[value(rename_all = "kebab_case")]
 enum OutputFormat {
-    Ih58,
-    Compressed,
+    I105,
     CanonicalHex,
     Json,
 }
@@ -88,14 +86,14 @@ pub struct Audit {
     /// Path to a file containing newline-separated addresses (defaults to STDIN).
     #[arg(long = "input", value_name = "PATH")]
     input: Option<PathBuf>,
-    /// Require IH58 inputs to match the provided network prefix.
+    /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting IH58 output.
+    /// Network prefix to use when emitting I105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
-        default_value_t = DEFAULT_IH58_PREFIX
+        default_value_t = DEFAULT_I105_PREFIX
     )]
     network_prefix: u16,
     /// Succeed even if parse errors were encountered (allow auditing large dumps).
@@ -163,7 +161,8 @@ impl Audit {
     }
 
     fn print_csv<C: RunContext>(report: &AddressAuditReport, context: &mut C) -> Result<()> {
-        const HEADER: &str = "input,status,format,domain_kind,ih58,canonical_hex,compressed,error_code,error_message";
+        const HEADER: &str =
+            "input,status,format,domain_kind,i105,canonical_hex,error_code,error_message";
         context.println(HEADER.to_owned())?;
         for entry in &report.entries {
             let summary = entry.summary.as_ref();
@@ -173,9 +172,8 @@ impl Audit {
                 entry.status,
                 summary.map_or("", |s| s.detected_format.kind),
                 summary.map_or("", |s| s.domain.kind),
-                summary.map_or("", |s| s.ih58.value.as_str()),
+                summary.map_or("", |s| s.i105.value.as_str()),
                 summary.map_or("", |s| s.canonical_hex.as_str()),
-                summary.map_or("", |s| s.compressed.as_str()),
                 error.map_or("", |err| err.code),
                 error.map_or("", |err| err.message.as_str()),
             ];
@@ -205,18 +203,18 @@ pub struct Normalize {
     /// Write the converted addresses to a file (defaults to STDOUT).
     #[arg(long = "output", value_name = "PATH")]
     output: Option<PathBuf>,
-    /// Require IH58 inputs to match the provided network prefix.
+    /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting IH58 output.
+    /// Network prefix to use when emitting I105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
-        default_value_t = DEFAULT_IH58_PREFIX
+        default_value_t = DEFAULT_I105_PREFIX
     )]
     network_prefix: u16,
-    /// Desired output format (defaults to IH58).
-    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Ih58)]
+    /// Desired output format (defaults to I105).
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::I105)]
     format: OutputFormat,
     /// Succeed even if parse errors were encountered (allow auditing large dumps).
     #[arg(long = "allow-errors")]
@@ -292,8 +290,7 @@ struct AddressSummary {
     detected_format: DetectedFormat,
     domain: DomainSummary,
     canonical_hex: String,
-    ih58: Ih58Encoding,
-    compressed: String,
+    i105: I105Encoding,
 }
 
 impl AddressSummary {
@@ -302,14 +299,16 @@ impl AddressSummary {
         network_prefix: u16,
     ) -> Result<Self, AccountAddressError> {
         Ok(Self {
-            detected_format: DetectedFormat::from(parsed.parsed.format),
+            detected_format: DetectedFormat::i105(),
             domain: DomainSummary::from_kind(parsed.parsed.domain_kind()),
             canonical_hex: parsed.parsed.canonical_hex()?,
-            ih58: Ih58Encoding {
-                value: parsed.parsed.address.to_ih58(network_prefix)?,
+            i105: I105Encoding {
+                value: parsed
+                    .parsed
+                    .address
+                    .to_i105_for_discriminant(network_prefix)?,
                 network_prefix,
             },
-            compressed: parsed.parsed.address.to_compressed_sora()?,
         })
     }
 }
@@ -320,23 +319,17 @@ struct DetectedFormat {
     network_prefix: Option<u16>,
 }
 
-impl From<AccountAddressFormat> for DetectedFormat {
-    fn from(format: AccountAddressFormat) -> Self {
-        match format {
-            AccountAddressFormat::IH58 { network_prefix } => Self {
-                kind: "ih58",
-                network_prefix: Some(network_prefix),
-            },
-            AccountAddressFormat::Compressed => Self {
-                kind: "compressed",
-                network_prefix: None,
-            },
+impl DetectedFormat {
+    const fn i105() -> Self {
+        Self {
+            kind: "i105",
+            network_prefix: None,
         }
     }
 }
 
 #[derive(JsonSerialize)]
-struct Ih58Encoding {
+struct I105Encoding {
     value: String,
     network_prefix: u16,
 }
@@ -386,16 +379,13 @@ fn parse_address_input(
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!(
-            "address literal must be IH58 or sora compressed; canonical hex is not accepted"
-        );
+        eyre::bail!("address literal must be canonical I105; canonical hex is not accepted");
     }
-    let (address, format) = AccountAddress::parse_encoded(trimmed, expect_prefix)
+    let address = AccountAddress::parse_encoded(trimmed, expect_prefix)
         .wrap_err("failed to parse account address")?;
     let parsed = ParsedAccountAddress {
         domain_kind: address.domain_kind(),
         address,
-        format,
     };
     Ok(ParsedAddressInput { parsed })
 }
@@ -475,8 +465,10 @@ fn encode_address_literal(
     format: OutputFormat,
 ) -> Result<String, AccountAddressError> {
     match format {
-        OutputFormat::Ih58 => parsed.parsed.address.to_ih58(network_prefix),
-        OutputFormat::Compressed => parsed.parsed.address.to_compressed_sora(),
+        OutputFormat::I105 => parsed
+            .parsed
+            .address
+            .to_i105_for_discriminant(network_prefix),
         OutputFormat::CanonicalHex => parsed.parsed.canonical_hex(),
         OutputFormat::Json => unreachable!("JSON encoding handled separately"),
     }
@@ -551,12 +543,9 @@ mod tests {
             parsed: ParsedAccountAddress {
                 domain_kind: address.domain_kind(),
                 address,
-                format: AccountAddressFormat::IH58 {
-                    network_prefix: DEFAULT_IH58_PREFIX,
-                },
             },
         };
-        let summary = AddressSummary::build(&parsed, DEFAULT_IH58_PREFIX).expect("summary");
+        let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
     }
 
@@ -569,12 +558,9 @@ mod tests {
             parsed: ParsedAccountAddress {
                 domain_kind: address.domain_kind(),
                 address,
-                format: AccountAddressFormat::IH58 {
-                    network_prefix: DEFAULT_IH58_PREFIX,
-                },
             },
         };
-        let summary = AddressSummary::build(&parsed, DEFAULT_IH58_PREFIX).expect("summary");
+        let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
     }
 
@@ -583,14 +569,14 @@ mod tests {
         let account = account_id_for_domain("treasury", 5);
         let literal = AccountAddress::from_account_id(&account)
             .expect("address encoding")
-            .to_ih58(DEFAULT_IH58_PREFIX)
-            .expect("ih58");
+            .to_i105_for_discriminant(DEFAULT_I105_PREFIX)
+            .expect("i105");
 
         let cmd = Normalize {
             input: None,
             output: None,
-            expect_prefix: Some(DEFAULT_IH58_PREFIX),
-            network_prefix: DEFAULT_IH58_PREFIX,
+            expect_prefix: Some(DEFAULT_I105_PREFIX),
+            network_prefix: DEFAULT_I105_PREFIX,
             format: OutputFormat::Json,
             allow_errors: false,
         };
@@ -625,7 +611,7 @@ mod tests {
             .expect("address encoding")
             .canonical_hex()
             .expect("canonical hex");
-        let err = parse_address_input(&canonical, Some(DEFAULT_IH58_PREFIX))
+        let err = parse_address_input(&canonical, Some(DEFAULT_I105_PREFIX))
             .expect_err("canonical hex must be rejected");
         assert!(
             err.to_string().contains("canonical hex is not accepted"),

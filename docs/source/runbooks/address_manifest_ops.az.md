@@ -101,7 +101,7 @@ address-manifest-<REVISION>/
    - `local_alias` entries MUST embed the 12-byte digest produced by Norm v1
      (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      to confirm; the JSON summary echoes the provided domain via `input_domain` and
-     `legacy  suffix` replays the converted encoding as `<ih58>@<domain>` for manifests).
+     `legacy  suffix` replays the converted encoding as `<i105>@<domain>` for manifests).
    - `tombstone` entries MUST reference the exact selector being retired,
      include a `reason_code`, `ticket`, and `replaces_sequence` field.
 
@@ -136,7 +136,7 @@ address-manifest-<REVISION>/
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **Draft manifest entry.** Append a JSON record similar to:
@@ -181,7 +181,7 @@ address-manifest-<REVISION>/
     `scripts/address_local_toolkit.sh` to confirm the digest mapping, and
     coordinate with Nexus governance before reissuing the affected registry
     entry.
-  - `AddressInvalidRatioSlo` — warns when invalid IH58 (preferred)/sora (second-best) submissions
+  - `AddressInvalidRatioSlo` — warns when invalid I105 submissions
     exceed the 0.1 % fleet-wide SLO for ten minutes. Investigate
     `torii_address_invalid_total` by context/reason and coordinate with the
     owning SDK team before declaring the incident resolved.

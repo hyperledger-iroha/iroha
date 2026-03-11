@@ -151,7 +151,7 @@ fn parse_numeric(value: &str, context: &str) -> Result<Numeric> {
         .wrap_err_with(|| eyre!("Failed to parse numeric amount `{value}` for {context}"))
 }
 
-fn account_id_from_parts(public_key: &str, domain: &DomainId) -> Result<AccountId> {
+fn account_id_from_parts(public_key: &str) -> Result<AccountId> {
     let parsed_key = PublicKey::from_str(public_key)
         .wrap_err_with(|| eyre!("Failed to parse public key `{public_key}`"))?;
     Ok(AccountId::new(parsed_key))
@@ -305,10 +305,10 @@ fn main() -> Result<()> {
                 .wrap_err_with(|| eyre!("Failed to register asset definition `{asset_def_id}`"))?;
         }
 
-        let account_id = account_id_from_parts(&public_key, &domain_id)?;
+        let account_id = account_id_from_parts(&public_key)?;
 
         if known_accounts.insert(account_id.clone()) {
-            let mut account_builder = Account::new(account_id.clone());
+            let mut account_builder = Account::new(account_id.to_account_id(domain_id.clone()));
             if let Some(alias) = &name {
                 let mut metadata = Metadata::default();
                 let alias_key = Name::from_str("alias").expect("static alias key");

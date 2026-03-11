@@ -18,7 +18,6 @@ import norito as norito
 from .address import (
     AccountAddress,
     AccountAddressError,
-    AccountAddressFormat,
 )
 from .client import (
     ResolvedToriiClientConfig,
@@ -277,7 +276,6 @@ from .privacy import (
 _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
-    "AccountAddressFormat",
     "ToriiClient",
     "create_torii_client",
     "TransactionStatusError",

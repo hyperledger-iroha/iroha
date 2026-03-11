@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 | መስክ | ዋጋ |
 |-------|------|
 | የስምምነት መለያ | `<repo-yyMMdd-XX>` |
-| የጠባቂ መለያ መታወቂያ | `<ih58...>` |
+| የጠባቂ መለያ መታወቂያ | `<i105...>` |
 | የተዘጋጀው በ / ቀን | `<custodian ops lead>` |
 | የዴስክ እውቂያዎች እውቅና አግኝተዋል | `<desk lead + counterparty>` |
 | የማስረጃ ማውጫ | ``artifacts/finance/repo/<slug>/`` |

@@ -3780,7 +3780,6 @@ mod tests {
         io::ErrorKind,
         net::TcpListener as StdTcpListener,
         num::NonZeroU32,
-        str::FromStr,
         sync::Arc,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
@@ -3800,7 +3799,6 @@ mod tests {
     };
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
         metadata::Metadata,
         soranet::{
             incentives::{BandwidthConfidenceV1, RelayBandwidthProofV1},
@@ -4307,9 +4305,8 @@ mod tests {
     }
 
     fn sample_account(seed: u8) -> AccountId {
-        let domain = DomainId::from_str("sora").expect("domain id");
         let (public_key, _) = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
-        AccountId::new(domain, public_key)
+        AccountId::new(public_key)
     }
 
     fn sample_bandwidth_proof(

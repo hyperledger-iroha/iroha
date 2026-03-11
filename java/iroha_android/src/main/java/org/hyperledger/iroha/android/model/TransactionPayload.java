@@ -95,7 +95,7 @@ public final class TransactionPayload {
     }
 
     public Builder setAuthority(final String authority) {
-      this.authority = AccountIdLiteral.extractIh58Address(normalize(authority, "authority"));
+      this.authority = AccountIdLiteral.extractI105Address(normalize(authority, "authority"));
       return this;
     }
 
@@ -170,7 +170,7 @@ public final class TransactionPayload {
       final byte[] publicKey = new byte[32];
       try {
         return AccountAddress.fromAccount(publicKey, "ed25519")
-            .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalStateException("Failed to construct default encoded authority", ex);
       }

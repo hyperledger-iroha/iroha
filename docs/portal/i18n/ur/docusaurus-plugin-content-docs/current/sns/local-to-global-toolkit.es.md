@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` پیدا کرنے کے لئے `iroha` CLI لپیٹ گیا:
   - `audit.json` - `iroha tools address audit --format json` کی تشکیل شدہ آؤٹ پٹ۔
-  - `normalized.txt` - ہر مقامی ڈومین سلیکٹر کے لئے تبدیل شدہ IH58 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا بہترین) لٹرلز۔
+  - `normalized.txt` - ہر مقامی ڈومین سلیکٹر کے لئے تبدیل شدہ I105 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا بہترین) لٹرلز۔
 - اسکرپٹ کو ایڈریس انجشن ڈیش بورڈ (`dashboards/grafana/address_ingest.json`) کے ساتھ جوڑیں
   اور الرٹ مینجر قواعد (`dashboards/alerts/address_ingest_rules.yml`) اس لوکل -8/کٹ اوور کو جانچنے کے لئے
   مقامی 12 محفوظ ہے۔ لوکل -8 اور لوکل -12 تصادم پینل اور الرٹس کا مشاہدہ کریں
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## استعمال
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 اختیارات:
 
-- `--format compressed (`SORA`)` `sora...` کے لئے IH58 کے بجائے آؤٹ پٹ۔
+- `--format i105 (`SORA`)` `sora...` کے لئے I105 کے بجائے آؤٹ پٹ۔
 - `domainless output (default)` بغیر ڈومین کے لغویوں کو خارج کرنے کے لئے۔
 - تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
 - `--allow-errors` اسکیننگ جاری رکھنے کے لئے جب خراب شدہ قطاریں نمودار ہوتی ہیں (CLI کے طرز عمل سے مماثل ہوتی ہے)۔

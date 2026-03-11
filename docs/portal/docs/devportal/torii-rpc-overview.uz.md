@@ -58,6 +58,7 @@ buyurtma skriptlarni yozmasdan foydali yuklar.
 1. [Proksi-serverni ishga tushiring](./try-it.md#start-the-proxy-locally) va sozlang
    `TRYIT_PROXY_PUBLIC_URL`, shuning uchun vidjetlar trafikni qaerga yuborishni bilishadi.
 2. Ushbu sahifadagi **Sinab ko'ring** kartasini yoki `/reference/torii-swagger`
+   For MCP/agent flows, use `/reference/torii-mcp`.
    paneli va `POST /v1/pipeline/submit` kabi oxirgi nuqtani tanlang.
 3. **Content-Type** ni `application/x-norito` ga almashtiring, **Binary** ni tanlang.
    muharriri va `fixtures/norito_rpc/transfer_asset.norito` yuklang

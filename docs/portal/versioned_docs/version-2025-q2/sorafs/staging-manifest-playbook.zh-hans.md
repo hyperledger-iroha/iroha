@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9f708c9c597c0455761049a17989369498d318be348e28f71196bb82761dd36b
 source_last_modified: "2025-12-29T18:16:35.911952+00:00"
 translation_last_reviewed: 2026-02-07
-id: staging-manifest-playbook
+id: staging-manifest-playbook-zh-hans
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
 translator: machine-google-reviewed
+slug: /sorafs/staging-manifest-playbook-zh-hans
 ---
 
 :::注意规范来源

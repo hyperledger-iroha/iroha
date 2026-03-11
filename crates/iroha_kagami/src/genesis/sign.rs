@@ -61,6 +61,7 @@ const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus";
 const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID: &str = "xor#nexus";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
+const DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED: &[u8] = b"npos-escrow-account";
 
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
@@ -95,6 +96,18 @@ impl BootstrapRegistrations {
             asset_defs,
         }
     }
+}
+
+fn bootstrap_escrow_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> AccountId {
+    let escrow_key_pair = KeyPair::from_seed(
+        genesis_public_key
+            .to_string()
+            .bytes()
+            .chain(DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED.iter().copied())
+            .collect(),
+        iroha_crypto::Algorithm::default(),
+    );
+    AccountId::new(escrow_key_pair.public_key().clone())
 }
 
 fn manifest_has_npos_bootstrap(manifest: &RawGenesisTransaction) -> bool {
@@ -161,7 +174,11 @@ fn append_npos_bootstrap(
     }
 
     for peer in topology {
-        let validator_id = AccountId::new()));
+        let validator_id = AccountId::new(peer.public_key().clone());
+        if !registrations.accounts.contains(&validator_id) {
+            builder = builder.append_instruction(Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            )));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -301,7 +318,10 @@ impl<T: Write> RunArgs<T> for Args {
         )?;
         if needs_npos_bootstrap {
             let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
-            let escrow_account_id = AccountId::new(&mut bootstrap_registrations,
+            let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
+            builder = append_npos_bootstrap(
+                builder,
+                &mut bootstrap_registrations,
                 &topology_peers,
                 &ivm_domain,
                 &escrow_account_id,
@@ -810,13 +830,67 @@ mod tests {
             }
         }
 
-        let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN
-            .parse()
-            .expect("parse default NPoS domain");
         let mut expected = std::collections::BTreeSet::new();
-        let _ = nexus_domain;
-        expected.insert(AccountId::new(expected,
+        expected.insert(AccountId::new(peer.public_key().clone()));
+        assert_eq!(
+            validators, expected,
             "expected NPoS bootstrap to register topology validators"
+        );
+    }
+
+    #[test]
+    fn sign_links_genesis_account_into_ivm_without_reregistering_it() {
+        let peer = PeerId::new(
+            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+        let genesis_account = block
+            .external_transactions()
+            .next()
+            .expect("signed genesis transaction")
+            .authority()
+            .clone();
+        let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN
+            .parse()
+            .expect("ivm domain");
+
+        let mut ivm_genesis_registrations = 0usize;
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(register) = instr.as_any().downcast_ref::<Register<Account>>()
+                        && register.object.domain == ivm_domain
+                        && register.object.id == genesis_account
+                    {
+                        ivm_genesis_registrations += 1;
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            ivm_genesis_registrations, 0,
+            "expected NPoS bootstrap to avoid re-registering the genesis controller under ivm"
         );
     }
 

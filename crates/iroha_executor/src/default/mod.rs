@@ -775,10 +775,8 @@ pub mod domain {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_domain_owner(domain_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
@@ -885,15 +883,15 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition().domain() == domain_id
             }
-            AnyPermission::CanUseFeeSponsor(_) => false,
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanModifyNftMetadata(permission) => permission.nft.domain() == domain_id,
-            AnyPermission::CanUnregisterAccount(_) => false,
-            AnyPermission::CanModifyAccountMetadata(_) => false,
-            AnyPermission::CanRegisterTrigger(_) => false,
-            AnyPermission::CanUnregisterTrigger(_)
+            AnyPermission::CanUseFeeSponsor(_)
+            | AnyPermission::CanUnregisterAccount(_)
+            | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanRegisterTrigger(_)
+            | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
@@ -917,7 +915,6 @@ pub mod domain {
             | AnyPermission::CanRegisterSorafsProviderOwner(_)
             | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
         }
     }
@@ -972,10 +969,7 @@ pub mod account {
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis()
-            || match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-                Err(err) => deny!(executor, err),
-                Ok(is_account_owner) => is_account_owner,
-            }
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
             || {
                 let can_unregister_user_account = CanUnregisterAccount {
                     account: account_id.clone(),
@@ -1006,10 +1000,8 @@ pub mod account {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(account_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         let can_set_key_value_in_user_account_token = CanModifyAccountMetadata {
             account: account_id.clone(),
@@ -1036,10 +1028,8 @@ pub mod account {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(account_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(account_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         let can_remove_key_value_in_user_account_token = CanModifyAccountMetadata {
             account: account_id.clone(),
@@ -1085,7 +1075,6 @@ pub mod account {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
@@ -1188,10 +1177,8 @@ pub mod asset_definition {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
 
         deny!(
@@ -1318,7 +1305,6 @@ pub mod asset_definition {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
             | AnyPermission::CanTransferNft(_)
@@ -1420,10 +1406,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1470,10 +1454,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1513,10 +1495,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1555,10 +1535,8 @@ pub mod asset {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_asset_definition_owner(
             asset_id.definition(),
@@ -1976,10 +1954,8 @@ pub mod nft {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
+        if is_account_owner(source_id, &executor.context().authority, executor.host()) {
+            execute!(executor, isi);
         }
         match is_nft_weak_owner(nft_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
@@ -2488,7 +2464,6 @@ pub mod trigger {
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
-            | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)

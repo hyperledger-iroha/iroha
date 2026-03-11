@@ -37,6 +37,7 @@ const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 fn register_validator_instructions(
     asset_def: &AssetDefinitionId,
     validator: &AccountId,
+    domain: &DomainId,
     stake: u64,
     entity: Option<&str>,
 ) -> Vec<InstructionBox> {
@@ -48,7 +49,7 @@ fn register_validator_instructions(
         );
     }
     vec![
-        Register::account(Account::new(validator.clone())).into(),
+        Register::account(Account::new(validator.to_account_id(domain.clone()))).into(),
         Mint::asset_numeric(stake, AssetId::new(asset_def.clone(), validator.clone())).into(),
         RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -145,24 +146,28 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     instructions.extend(register_validator_instructions(
         &asset_def,
         &eligible_account,
+        &domain,
         ELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &ineligible_account,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &other_account_a,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &other_account_b,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
@@ -338,24 +343,28 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_a,
+        &domain,
         ELIGIBLE_STAKE,
         Some("acme"),
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_b,
+        &domain,
         ELIGIBLE_STAKE,
         Some("acme"),
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_c,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));
     instructions.extend(register_validator_instructions(
         &asset_def,
         &account_d,
+        &domain,
         INELIGIBLE_STAKE,
         None,
     ));

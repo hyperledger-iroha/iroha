@@ -20,7 +20,6 @@ use norito::json::{self, Map, Number, Value};
 
 fn main() {
     let chain_id = ChainId::from_str("00000000-0000-0000-0000-000000000000").unwrap();
-    let domain_id = DomainId::from_str("wonderland").unwrap();
     let asset_id = AssetDefinitionId::from_str("rose#wonderland").unwrap();
     let signing_key: iroha_crypto::PrivateKey =
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
@@ -28,7 +27,7 @@ fn main() {
             .unwrap();
     let keypair = KeyPair::from_private_key(signing_key.clone()).unwrap();
     let authority_seed = AccountId::new(keypair.public_key().clone());
-    let authority_literal = authority_seed.canonical_ih58().unwrap();
+    let authority_literal = authority_seed.canonical_i105().unwrap();
     let authority = AccountId::parse_encoded(&authority_literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .unwrap();

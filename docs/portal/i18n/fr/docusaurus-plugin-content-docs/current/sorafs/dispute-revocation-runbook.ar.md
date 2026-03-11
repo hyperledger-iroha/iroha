@@ -69,7 +69,7 @@ Il s'agit de la référence `docs/source/sorafs/dispute_revocation_runbook.md`. 
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=ih58... \
+     --authority=i105... \
      --private-key=ed25519:<key>
    ```3. راجع `dispute_summary.json` (تأكد من النوع، digest الأدلة، والطوابع الزمنية).
 4. Utilisez JSON pour Torii `/v1/sorafs/capacity/dispute` pour créer des liens. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.

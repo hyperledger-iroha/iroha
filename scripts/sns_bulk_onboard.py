@@ -687,7 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--controllers-column",
         default="controllers",
-        help="CSV column containing controller IH58/hex literals.",
+        help="CSV column containing controller I105/hex literals.",
     )
     parser.add_argument(
         "--metadata-column",

@@ -35,7 +35,7 @@ El parser requiere la suuiente fila de encabezado (el orden es גמיש):
 |--------|--------|-------------|
 | `label` | סי | כללי התנהגות (se acepta mayus/minus; la herramienta normaliza segun Norm v1 y UTS-46). |
 | `suffix_id` | סי | מזהה מספרי סופיו (עשרוני או `0x` hex). |
-| `owner` | סי | Cadena AccountId (IH58 ליטרל; רמז ‎@domain אופציונלי) לרישום. |
+| `owner` | סי | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | סי | Entero `1..=255`. |
 | `payment_asset_id` | סי | Activo de Settlement (por ejemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | סי | Enteros sin signno que representan unidades nativas del activo. |
@@ -76,9 +76,9 @@ En caso de exito el script escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ En caso de exito el script escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ corrida de CSV.
   רפרנסים לארכיון של מערכות יחסים ל-CSV. מטא נתונים
   que no sea objeto produce un error de validacion.
 - **בקרים:** celdas en blanco respetan `--default-controllers`. פרופורציון
-  רשימה מפורשת של בקר (לפי דוגמה `ih58...;ih58...`)
+  רשימה מפורשת של בקר (לפי דוגמה `i105...;i105...`)
   שחקנים אין בעלים.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

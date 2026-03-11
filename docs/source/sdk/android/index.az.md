@@ -70,7 +70,7 @@ TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
     .setChainId("00000000")
-    .setAuthority("ih58...")
+    .setAuthority("i105...")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .build();
@@ -118,13 +118,10 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
   that accepts a `UaidPortfolioQuery` when you need to filter by `asset_id`.
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
-  Supply a `UaidBindingsQuery` when you need to override the
-  `address_format` (IH58 is preferred; use `AddressFormatOption.COMPRESSED`
-  only for the second-best `sora…` literals).
+  Supply a `UaidBindingsQuery` for forward-compatible query options (the endpoint currently returns canonical I105 literals only).
 - `HttpClientTransport.getUaidManifests(String uaid, UaidManifestQuery query)`
   fetches `/v1/space-directory/uaids/{uaid}/manifests`; the query builder lets
-  you filter by dataspace, status (`active`, `inactive`, `all`), paging offsets,
-  and `address_format`.
+  you filter by dataspace, status (`active`, `inactive`, `all`), and paging offsets.
 - `UaidLiteral.canonicalize(literal, context)` normalises user input with the
   `uaid:` prefix and 64‑hex (LSB=1) enforcement so controllers can be pasted in any
   casing.

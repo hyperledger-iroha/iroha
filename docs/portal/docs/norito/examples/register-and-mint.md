@@ -11,9 +11,9 @@ Demonstrates permissioned domain creation, asset registration, and deterministic
 
 ## Ledger walkthrough
 
-- Ensure the destination account (e.g., `ih58...`) exists, mirroring the setup phase in each SDK quickstart.
+- Ensure the destination account (e.g., `i105...` for Alice) exists, mirroring the setup phase in each SDK quickstart.
 - Invoke the `register_and_mint` entrypoint to create the ROSE asset definition and mint 250 units to Alice in one transaction.
-- Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account ih58...` to confirm the mint succeeded.
+- Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account i105...` to confirm the mint succeeded.
 
 ## Related SDK guides
 
@@ -26,6 +26,7 @@ Demonstrates permissioned domain creation, asset registration, and deterministic
 ```text
 // Register a new asset and mint some to the specified account.
 seiyaku RegisterAndMint {
+  #[access(read="*", write="*")]
   kotoage fn register_and_mint() permission(AssetManager) {
     // name, symbol, quantity (precision or supply depending on host), mintable flag
     let name = "rose";
@@ -35,7 +36,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

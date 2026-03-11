@@ -53,44 +53,44 @@ class MainActivity : AppCompatActivity() {
             } else {
                 getString(R.string.wallet_address_domain_note, address.defaultDomain)
             }
-            binding.addressIh58Label.text =
-                getString(R.string.wallet_address_ih58_label, address.networkPrefix)
-            binding.addressIh58Value.text = address.ih58
-            binding.addressCompressedValue.text = address.compressed
-            binding.addressCompressedWarning.text = address.compressedWarning
+            binding.addressI105Label.text =
+                getString(R.string.wallet_address_i105_label, address.networkPrefix)
+            binding.addressI105Value.text = address.i105
+            binding.addressI105DefaultValue.text = address.i105Default
+            binding.addressI105DefaultWarning.text = address.i105Warning
 
-            binding.addressCopyIh58.setOnClickListener {
+            binding.addressCopyI105.setOnClickListener {
                 copyAddressToClipboard(
-                    label = "IH58",
-                    address = address.ih58,
-                    successMessage = getString(R.string.wallet_copy_success, "IH58"),
+                    label = "I105",
+                    address = address.i105,
+                    successMessage = getString(R.string.wallet_copy_success, "I105"),
                     warning = null,
-                    mode = AddressCopyTelemetry.CopyMode.IH58
+                    mode = AddressCopyTelemetry.CopyMode.I105
                 )
             }
-            binding.addressCopyIh58.setTag(
+            binding.addressCopyI105.setTag(
                 R.id.copy_mode_tag,
-                AddressCopyTelemetry.CopyMode.IH58.analyticsLabel
+                AddressCopyTelemetry.CopyMode.I105.analyticsLabel
             )
-            binding.addressCopyCompressed.setOnClickListener {
+            binding.addressCopyI105Default.setOnClickListener {
                 copyAddressToClipboard(
-                    label = "compressed",
-                    address = address.compressed,
-                    successMessage = getString(R.string.wallet_copy_success, "compressed"),
-                    warning = address.compressedWarning,
-                    mode = AddressCopyTelemetry.CopyMode.COMPRESSED
+                    label = "i105_default",
+                    address = address.i105Default,
+                    successMessage = getString(R.string.wallet_copy_success, "i105_default"),
+                    warning = address.i105Warning,
+                    mode = AddressCopyTelemetry.CopyMode.I105_DEFAULT
                 )
             }
-            binding.addressCopyCompressed.setTag(
+            binding.addressCopyI105Default.setTag(
                 R.id.copy_mode_tag,
-                AddressCopyTelemetry.CopyMode.COMPRESSED.analyticsLabel
+                AddressCopyTelemetry.CopyMode.I105_DEFAULT.analyticsLabel
             )
 
-            val qrBitmap = generateQrBitmap(address.ih58)
+            val qrBitmap = generateQrBitmap(address.i105)
             if (qrBitmap != null) {
                 binding.addressQr.setImageBitmap(qrBitmap)
                 binding.addressQr.contentDescription =
-                    getString(R.string.wallet_qr_content_description, address.ih58)
+                    getString(R.string.wallet_qr_content_description, address.i105)
                 binding.addressQrCaption.text = getString(R.string.wallet_qr_caption)
             } else {
                 binding.addressQr.setImageBitmap(null)

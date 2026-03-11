@@ -59,8 +59,8 @@ pub fn canonical_abi_hex() -> String {
 
 fn governance_escrow_account_literal() -> String {
     ALICE_ID
-        .canonical_ih58()
-        .expect("alice account id should encode to canonical ih58")
+        .canonical_i105()
+        .expect("alice account id should encode to canonical i105")
 }
 
 pub fn tune_client_timeouts(client: &mut Client) {
@@ -895,6 +895,7 @@ pub async fn setup_runtime_governance_fixture(
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
         .map(|_| gen_account_in("wonderland"))
         .collect();
+    let wonderland_domain: DomainId = "wonderland".parse()?;
     let unique_citizens: BTreeSet<_> = citizens.iter().map(|(id, _)| id.clone()).collect();
     assert_eq!(
         unique_citizens.len(),
@@ -937,11 +938,11 @@ pub async fn setup_runtime_governance_fixture(
         .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
-        .submit_all(
-            citizens
-                .iter()
-                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
-        )
+        .submit_all(citizens.iter().map(|(account_id, _)| {
+            Register::account(Account::new(
+                account_id.to_account_id(wonderland_domain.clone()),
+            ))
+        }))
         .wrap_err("register runtime-governance citizen accounts")?;
     for (account_id, _) in &citizens {
         wait_for_account_registration(&alice, account_id, Duration::from_secs(180))

@@ -130,7 +130,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanUnregisterAccount},
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
 
-    iroha_executor_data_model::permission::asset_definition::{CanRegisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
 
@@ -523,10 +522,7 @@ pub mod asset {
     /// - `asset_id.account_id` is `account_id`
     /// - `asset_id.account_id.domain_id` domain is owned by `authority`
     ///
-    /// # Errors
-    ///
-    /// Fails if `is_account_owner` fails
-    pub fn is_asset_owner(asset_id: &AssetId, authority: &AccountId, host: &Iroha) -> Result<bool> {
+    pub fn is_asset_owner(asset_id: &AssetId, authority: &AccountId, host: &Iroha) -> bool {
         crate::permission::account::is_account_owner(asset_id.account(), authority, host)
     }
 
@@ -539,7 +535,7 @@ pub mod asset {
 
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
-            if is_asset_owner(self.asset, authority, host)? {
+            if is_asset_owner(self.asset, authority, host) {
                 return Ok(());
             }
 
@@ -683,7 +679,7 @@ pub mod asset_definition {
     //! Module with pass conditions for asset definition related tokens
 
     use iroha_executor_data_model::permission::asset_definition::{
-        CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition, CanUnregisterAssetDefinition,
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
     };
 
     use super::*;
@@ -737,27 +733,6 @@ pub mod asset_definition {
             Err(ValidationFail::NotPermitted(
                 "Can't access asset definition owned by another account".to_owned(),
             ))
-        }
-    }
-
-    impl ValidateGrantRevoke for CanRegisterAssetDefinition {
-        fn validate_grant(
-            &self,
-            _authority: &AccountId,
-            _context: &Context,
-            _host: &Iroha,
-        ) -> Result {
-            // First-release hard-cut semantics no longer gate asset-definition registration
-            // by domain ownership; this permission remains a no-op compatibility token.
-            Ok(())
-        }
-        fn validate_revoke(
-            &self,
-            _authority: &AccountId,
-            _context: &Context,
-            _host: &Iroha,
-        ) -> Result {
-            Ok(())
         }
     }
 
@@ -966,13 +941,8 @@ pub mod account {
     /// Check if `authority` is the owner of account.
     ///
     /// `authority` owns the account if it matches the account subject exactly.
-    pub fn is_account_owner(
-        account_id: &AccountId,
-        authority: &AccountId,
-        host: &Iroha,
-    ) -> Result<bool> {
-        let _ = host;
-        Ok(account_id == authority)
+    pub fn is_account_owner(account_id: &AccountId, authority: &AccountId, _host: &Iroha) -> bool {
+        account_id == authority
     }
 
     /// Pass condition that checks if `authority` is the owner of account.
@@ -984,7 +954,7 @@ pub mod account {
 
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
-            if is_account_owner(self.account, authority, host)? {
+            if is_account_owner(self.account, authority, host) {
                 return Ok(());
             }
 

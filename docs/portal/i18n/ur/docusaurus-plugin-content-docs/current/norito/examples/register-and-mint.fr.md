@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## رجسٹری براؤزنگ
 
-- اس بات کو یقینی بنائیں کہ منزل مقصود اکاؤنٹ (جیسے `ih58...`) موجود ہے ، ہر SDK کوئیک اسٹارٹ میں سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
+- اس بات کو یقینی بنائیں کہ منزل مقصود اکاؤنٹ (جیسے `i105...`) موجود ہے ، ہر SDK کوئیک اسٹارٹ میں سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
 - ایک ہی ٹرانزیکشن میں ایلس کے لئے روز اثاثہ تعریف اور ٹکسال 250 یونٹ بنانے کے لئے انٹری پوائنٹ `register_and_mint` کی انووک کریں۔
-- کی اسٹروک کے کامیاب ہونے کی تصدیق کرنے کے لئے `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں۔
+- کی اسٹروک کے کامیاب ہونے کی تصدیق کرنے کے لئے `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account i105...` کے ذریعے بیلنس چیک کریں۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

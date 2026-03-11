@@ -2150,7 +2150,7 @@ mod network_relay_tests {
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level,
+        AccountId, ChainId, Level,
         block::{BlockHeader, BlockSignature, SignedBlock},
         isi::Log,
         peer::{Peer, PeerId},
@@ -2168,7 +2168,6 @@ mod network_relay_tests {
         let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid chain id");
-        let domain_id: DomainId = "dummy".parse().expect("valid domain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(chain_id, authority);
@@ -7867,7 +7866,6 @@ mod tests {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
             account::AccountId,
-            domain::DomainId,
             metadata::Metadata,
             nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         };
@@ -7877,7 +7875,6 @@ mod tests {
             status: PublicLaneValidatorStatus,
             algorithm: Algorithm,
         ) -> PublicLaneValidatorRecord {
-            let domain: DomainId = "nexus".parse().expect("domain id");
             let keypair = KeyPair::random_with_algorithm(algorithm);
             let account_id = AccountId::new(keypair.public_key().clone());
             let stake = Numeric::from(10_u64);
@@ -8216,8 +8213,10 @@ mod tests {
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([
-                    InstructionBox::from(Register::domain(Domain::new(domain_id))),
-                    InstructionBox::from(Register::account(Account::new(bls_account_id))),
+                    InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+                    InstructionBox::from(Register::account(Account::new(
+                        bls_account_id.to_account_id(domain_id),
+                    ))),
                 ])
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let block = SignedBlock::genesis(

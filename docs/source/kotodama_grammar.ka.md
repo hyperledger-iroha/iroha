@@ -227,7 +227,7 @@ register_trigger wake {
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`პრელუდიის მაკროები უზრუნველყოფენ მოკლე მეტსახელებს და ხაზგასმული ვალიდაციას ამ კონსტრუქტორებისთვის:
-- `account!("ih58...")`, `account_id!("ih58...")`
+- `account!("i105...")`, `account_id!("i105...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

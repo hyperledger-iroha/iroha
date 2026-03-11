@@ -16,7 +16,7 @@ ED25519_PRIVATE_KEY_LENGTH: Final[int] = 32
 ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
 ED25519_SIGNATURE_LENGTH: Final[int] = 64
 _ED25519_MULTIHASH_PREFIX: Final[str] = "ed0120"
-_DEFAULT_IH58_NETWORK_PREFIX: Final[int] = 0x02F1
+_DEFAULT_I105_DISCRIMINANT: Final[int] = 0x02F1
 
 SM2_PRIVATE_KEY_LENGTH: Final[int] = 32
 SM2_PUBLIC_KEY_LENGTH: Final[int] = 65
@@ -200,11 +200,11 @@ class Ed25519KeyPair:
 
         return load_ed25519_keypair_from_hex(private_key_hex)
 
-    def default_account_id(self, domain: str, network_prefix: int = _DEFAULT_IH58_NETWORK_PREFIX) -> str:
-        """Return the canonical IH58 account id using the public key and `domain`."""
+    def default_account_id(self, domain: str, discriminant: int = _DEFAULT_I105_DISCRIMINANT) -> str:
+        """Return the canonical I105 account id using the public key and `domain`."""
 
         return ed25519_public_key_account_id(
-            self.public_key, domain, network_prefix=network_prefix
+            self.public_key, domain, discriminant=discriminant
         )
 
 
@@ -427,15 +427,15 @@ def ed25519_public_key_account_id(
     public_key: bytes,
     domain: str,
     *,
-    network_prefix: int = _DEFAULT_IH58_NETWORK_PREFIX,
+    discriminant: int = _DEFAULT_I105_DISCRIMINANT,
 ) -> str:
-    """Return the canonical IH58 account id using the public key within `domain`."""
+    """Return the canonical I105 account id using the public key within `domain`."""
 
     domain = domain.strip()
     if not domain or "@" in domain:
         raise ValueError("domain must be a non-empty string without '@'")
     address = AccountAddress.from_account(domain=domain, public_key=public_key)
-    return address.to_ih58(network_prefix)
+    return address.to_i105(discriminant)
 
 
 def _build_confidential_keyset(payload: Mapping[str, bytes]) -> ConfidentialKeyset:
@@ -525,7 +525,7 @@ def build_signed_transaction(
         Target chain identifier.
     authority:
         Transaction authority account identifier (domainless encoded account
-        literal: IH58 preferred, compressed sora accepted).
+        literal: canonical I105 only).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
     instructions:

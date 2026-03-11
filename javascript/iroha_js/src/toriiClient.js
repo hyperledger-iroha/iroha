@@ -255,7 +255,6 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "offset",
   "filter",
   "sort",
-  "addressFormat",
   "signal",
   "canonicalAuth",
 ]);
@@ -288,8 +287,6 @@ const ITERABLE_OPTION_KEYS = new Set([
   "offset",
   "filter",
   "sort",
-  "addressFormat",
-  "address_format",
   "signal",
   "fetchSize",
   "fetch_size",
@@ -352,7 +349,6 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "offset",
   "filter",
   "sort",
-  "addressFormat",
   "fetchSize",
   "queryName",
   "select",
@@ -364,8 +360,6 @@ const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
   "perPage",
   "limit",
   "offset",
-  "addressFormat",
-  "address_format",
   "ownedBy",
   "owned_by",
   "domainId",
@@ -745,7 +739,6 @@ function sortJsonForErrorMessage(value) {
  * @property {string | Record<string, unknown>} [filter]
  * @property {string | ReadonlyArray<{key: string, order?: "asc" | "desc"}>} [sort]
  * @property {AbortSignal} [signal]
- * @property {string} [addressFormat]
  * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
  * @property {number} [certificateExpiresAfterMs]
@@ -1159,9 +1152,6 @@ export class ToriiClient {
     }
     if (normalized.domain !== undefined) {
       params.domain = normalized.domain;
-    }
-    if (normalized.addressFormat !== undefined) {
-      params.address_format = normalized.addressFormat;
     }
     const response = await this._request("GET", "/v1/explorer/nfts", {
       params,
@@ -2799,30 +2789,18 @@ export class ToriiClient {
   /**
    * Fetch UAID dataspace bindings (`GET /v1/space-directory/uaids/{uaid}`).
    * @param {string} uaid
-   * @param {{addressFormat?: string, signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<UaidBindingsResponse>}
    */
   async getUaidBindings(uaid, options = {}) {
     const canonicalUaid = normalizeUaidLiteral(uaid, "getUaidBindings.uaid");
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getUaidBindings",
-    );
-    const params = {};
-    const addressFormat = ToriiClient._normalizeAddressFormatOption(
-      rest.addressFormat,
-      "getUaidBindings.addressFormat",
-    );
-    if (addressFormat !== undefined) {
-      params.address_format = addressFormat;
-    }
+    const { signal } = normalizeSignalOnlyOption(options, "getUaidBindings");
     const response = await this._request(
       "GET",
       `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}`,
       {
         headers: { Accept: "application/json" },
         signal,
-        params: Object.keys(params).length === 0 ? undefined : params,
       },
     );
     await this._expectStatus(response, [200]);
@@ -2836,7 +2814,7 @@ export class ToriiClient {
   /**
    * Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`).
    * @param {string} uaid
-   * @param {{dataspaceId?: number, addressFormat?: string, signal?: AbortSignal}} [options]
+   * @param {{dataspaceId?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<UaidManifestsResponse>}
    */
   async getUaidManifests(uaid, options = {}) {
@@ -2845,6 +2823,7 @@ export class ToriiClient {
       options,
       "getUaidManifests",
     );
+    assertSupportedOptionKeys(rest, new Set(["dataspaceId"]), "getUaidManifests options");
     const params = {};
     if (rest.dataspaceId !== undefined && rest.dataspaceId !== null) {
       params.dataspace = ToriiClient._normalizeUnsignedInteger(
@@ -2852,13 +2831,6 @@ export class ToriiClient {
         "getUaidManifests.dataspaceId",
         { allowZero: true },
       );
-    }
-    const addressFormat = ToriiClient._normalizeAddressFormatOption(
-      rest.addressFormat,
-      "getUaidManifests.addressFormat",
-    );
-    if (addressFormat !== undefined) {
-      params.address_format = addressFormat;
     }
     const response = await this._request(
       "GET",
@@ -3582,23 +3554,18 @@ export class ToriiClient {
   /**
    * Fetch the share-ready Explorer QR payload for an account (`GET /v1/explorer/accounts/{account_id}/qr`).
    * @param {string} accountId
-   * @param {{addressFormat?: string, signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiExplorerAccountQrSnapshot>}
    */
   async getExplorerAccountQr(accountId, options = {}) {
-    const { signal, addressFormat } = normalizeExplorerAccountQrOptions(options);
+    const { signal } = normalizeExplorerAccountQrOptions(options);
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    const params = {};
-    if (addressFormat !== undefined) {
-      params.address_format = addressFormat;
-    }
     const response = await this._request(
       "GET",
       `/v1/explorer/accounts/${encodeURIComponent(normalizedId)}/qr`,
       {
         headers: { Accept: "application/json" },
         signal,
-        params: Object.keys(params).length === 0 ? undefined : params,
       },
     );
     await this._expectStatus(response, [200]);
@@ -8899,10 +8866,6 @@ export class ToriiClient {
     }
     const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
     const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
-    const addressFormat = ToriiClient._normalizeAddressFormatOption(
-      normalized.addressFormat ?? normalized.address_format,
-      `${context}.addressFormat`,
-    );
     const base = {
       page: pageValue,
       perPage,
@@ -8913,9 +8876,6 @@ export class ToriiClient {
     }
     if (domainRaw !== undefined && domainRaw !== null) {
       base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
-    }
-    if (addressFormat !== undefined) {
-      base.addressFormat = addressFormat;
     }
     return base;
   }
@@ -9038,13 +8998,6 @@ export class ToriiClient {
     const sortParam = ToriiClient._encodeSortQueryParam(normalizedOptions.sort);
     if (sortParam !== undefined) {
       params.sort = sortParam;
-    }
-    const addressFormat = ToriiClient._normalizeAddressFormatOption(
-      normalizedOptions.addressFormat,
-      "addressFormat",
-    );
-    if (addressFormat !== undefined) {
-      params.address_format = addressFormat;
     }
     if (normalizedOptions.controllerId !== undefined && normalizedOptions.controllerId !== null) {
       params.controller_id = ToriiClient._normalizeAccountId(
@@ -9388,42 +9341,7 @@ export class ToriiClient {
         return plain;
       });
     }
-    const addressFormat = ToriiClient._normalizeAddressFormatOption(
-      options.addressFormat,
-      "addressFormat",
-    );
-    if (addressFormat !== undefined) {
-      envelope.address_format = addressFormat;
-    }
     return envelope;
-  }
-
-  static _normalizeAddressFormatOption(value, context) {
-    if (value === undefined || value === null) {
-      return undefined;
-    }
-    if (typeof value !== "string") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context ?? "addressFormat"} must be a string`,
-        context ?? "addressFormat",
-      );
-    }
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) {
-      return undefined;
-    }
-    if (normalized === "ih58" || normalized === "ih-b32" || normalized === "canonical") {
-      return "ih58";
-    }
-    if (normalized === "compressed" || normalized === "sora") {
-      return "compressed";
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context ?? "addressFormat"} must be "ih58", "canonical", or "compressed"`,
-      context ?? "addressFormat",
-    );
   }
 
   static _normalizeFilterObject(filter) {
@@ -12619,11 +12537,11 @@ function normalizeExplorerMetricsResponse(payload) {
   };
 }
 
-const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["addressFormat", "signal"]);
+const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 
 function normalizeExplorerAccountQrOptions(options) {
   if (options === undefined) {
-    return { signal: undefined, addressFormat: undefined };
+    return { signal: undefined };
   }
   const record = ensureRecord(options, "getExplorerAccountQr options");
   assertSupportedOptionKeys(
@@ -12632,11 +12550,7 @@ function normalizeExplorerAccountQrOptions(options) {
     "getExplorerAccountQr options",
   );
   const { signal } = normalizeSignalOption(record, "getExplorerAccountQr");
-  const addressFormat = ToriiClient._normalizeAddressFormatOption(
-    record.addressFormat,
-    "getExplorerAccountQr.addressFormat",
-  );
-  return { signal, addressFormat };
+  return { signal };
 }
 
 function normalizeSnsSuffixPolicy(payload) {
@@ -13732,10 +13646,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     `${context}.canonical_id`,
   );
   const literal = requireNonEmptyString(record.literal ?? "", `${context}.literal`);
-  const addressFormatRaw = record.address_format ?? "ih58";
-  const addressFormat =
-    ToriiClient._normalizeAddressFormatOption(addressFormatRaw, `${context}.address_format`) ??
-    "ih58";
   const networkPrefix = ToriiClient._normalizeUnsignedInteger(
     record.network_prefix ?? 0,
     `${context}.network_prefix`,
@@ -13759,7 +13669,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
   return {
     canonicalId,
     literal,
-    addressFormat,
     networkPrefix,
     errorCorrection,
     modules,
@@ -19201,17 +19110,7 @@ function assertSupportedOptionKeys(record, allowedKeys, context) {
 }
 
 function normalizeIterableListOptions(options, context, allowedKeys = ITERABLE_LIST_OPTION_KEYS) {
-  const allowedWithAliases = new Set(allowedKeys);
-  allowedWithAliases.add("address_format");
-  const normalized = ToriiClient._normalizeIterableOptions(
-    options,
-    context,
-    allowedWithAliases,
-  );
-  if (normalized.address_format !== undefined && normalized.addressFormat === undefined) {
-    normalized.addressFormat = normalized.address_format;
-  }
-  delete normalized.address_format;
+  const normalized = ToriiClient._normalizeIterableOptions(options, context, allowedKeys);
   assertSupportedOptionKeys(normalized, allowedKeys, context);
   return normalized;
 }
@@ -19222,7 +19121,6 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
     ...extraAllowedKeys,
     "fetch_size",
     "query_name",
-    "address_format",
   ]);
   const normalized = ToriiClient._normalizeIterableOptions(options, context, allowedKeys);
   if (normalized.fetch_size !== undefined && normalized.fetchSize === undefined) {
@@ -19231,15 +19129,8 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
   if (normalized.query_name !== undefined && normalized.queryName === undefined) {
     normalized.queryName = normalized.query_name;
   }
-  if (
-    normalized.address_format !== undefined &&
-    normalized.addressFormat === undefined
-  ) {
-    normalized.addressFormat = normalized.address_format;
-  }
   delete normalized.fetch_size;
   delete normalized.query_name;
-  delete normalized.address_format;
   const resolvedAllowedKeys = new Set([...ITERABLE_QUERY_OPTION_KEYS, ...extraAllowedKeys]);
   assertSupportedOptionKeys(normalized, resolvedAllowedKeys, context);
   return normalized;

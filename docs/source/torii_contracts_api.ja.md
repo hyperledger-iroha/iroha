@@ -101,7 +101,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:...",
   "manifest": {
     "code_hash": "0123…cdef",
@@ -121,7 +121,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority":   "ih58...", // アカウント ID（文字列表現）
+  "authority":   "i105...", // アカウント ID（文字列表現）
   "private_key": "ed25519:0123…",    // ExposedPrivateKey（素の multihash もしくは接頭辞付き）
   "code_b64":    "Base64Payload=="
 }
@@ -144,7 +144,7 @@ translator: manual
 ### JSON の型エンコード
 
 - `Hash`（`code_hash`, `abi_hash` など）は 64 文字の小文字 hex（32 バイト）。
-- `AccountId`: canonical IH58 literal (no `@domain` suffix).
+- `AccountId`: canonical I105 literal (no `@domain` suffix).
 - `ExposedPrivateKey` は素の multihash hex 文字列と、アルゴリズム接頭辞付き（例 `ed25519:…`）のどちらも受け付けます。レスポンスでは素の multihash hex に正規化されます。
 
 ### GET レスポンス: ContractCodeRecordDto
@@ -166,7 +166,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority":   "ih58...",
+  "authority":   "i105...",
   "private_key": "ed25519:…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -175,7 +175,7 @@ translator: manual
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0,
     "access_set_hints": {
-      "read_keys": ["account:ih58..."],
+      "read_keys": ["account:i105..."],
       "write_keys": ["asset:usd#wonderland"]
     }
   }
@@ -204,7 +204,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority":   "ih58...",
+  "authority":   "i105...",
   "private_key": "ed25519:0123…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -242,7 +242,7 @@ translator: manual
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "ih58...",
+        "authority": "i105...",
         "private_key": "ed25519:…",
         "manifest": { "code_hash": "<32-byte-hex>", "abi_hash": null }
       }' \
@@ -261,7 +261,7 @@ curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "ih58...",
+        "authority": "i105...",
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
@@ -276,7 +276,7 @@ curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "ih58...",
+        "authority": "i105...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",
@@ -291,7 +291,7 @@ curl -s -X POST \
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "ih58...",
+        "authority": "i105...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",

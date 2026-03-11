@@ -98,7 +98,7 @@ Campos de cabeçalho de `manifest.json`:
    - Entradas `local_alias` DEVEM embutir o digest de 12 bytes produzido pelo Norm v1
      (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      para confirmar; o resumo JSON ecoa o domínio fornecido via `input_domain` e
-     `legacy  suffix` reproduz a codificação convertida como `<ih58>@<domain>` para manifestos).
+     `legacy  suffix` reproduz a codificação convertida como `<i105>@<domain>` para manifestos).
    - Entradas `tombstone` DEVEM referenciar exatamente o selector que será retirado,
      incluir `reason_code`, `ticket` e `replaces_sequence`.
 
@@ -134,7 +134,7 @@ Campos de cabeçalho de `manifest.json`:
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **Rascunhar entrada de manifesto.** Acrescente um registro JSON como:
@@ -183,7 +183,7 @@ Campos de cabeçalho de `manifest.json`:
     fazem hash para o mesmo digest. Pause promoções de manifesto, execute
     `scripts/address_local_toolkit.sh` para confirmar o mapeamento do digest e
     coordene com a governança Nexus antes de reemitir a entrada afetada.
-  - `AddressInvalidRatioSlo` — alerta quando envios IH58/comprimidos inválidos
+  - `AddressInvalidRatioSlo` — alerta quando envios I105/comprimidos inválidos
     (excluindo rejeições Local‑8/strict‑mode) excedem o SLO global de 0,1 % por
     dez minutos. Investigue `torii_address_invalid_total` por contexto/razão e
     coordene com o time SDK proprietário antes de reativar o modo estrito.

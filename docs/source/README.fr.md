@@ -32,6 +32,7 @@ l’IVM, Kotodama et le pipeline orienté IVM. Pour la version japonaise, voir
 - Runbook des pièces jointes/prover ZK dans Torii : `zk/prover_runbook.md`
 - Guide opérateur de l’API ZK App de Torii (pièces jointes/prover ; doc de crate) :
   `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - Cycle de vie des VK/proofs (registre, vérification, télémétrie) :
   `zk/lifecycle.md`
 - Aides opérateur Torii (endpoints de visibilité) : `references/operator_aids.md`

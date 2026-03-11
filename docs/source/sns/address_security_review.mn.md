@@ -59,7 +59,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 ### 1.3 Regression artefacts
 
 - `fixtures/account/address_vectors.json` publishes canonical Local selectors
-  (Local‑12), IH58, and compressed (`sora`, second-best) encodings. Regenerate via
+  (Local‑12), I105, and I105 encodings. Regenerate via
   `cargo xtask address-vectors` to prove encoder determinism.
 - `scripts/address_local_toolkit.sh` + `docs/source/sns/local_to_global_toolkit.md`
 
@@ -92,9 +92,9 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 
 ## 3. Checksum, kana, and parser hardening
 
-- IH58 literals use the `IH58` alphabet and the Bech32m checksum described in
+- I105 literals use the `I105` alphabet and the Bech32m checksum described in
   the Account Structure RFC (§2.2, `docs/account_structure.md:124`).
-- The compressed `sora…` representation appends the half-width イロハ poem to
+- The canonical I105 representation appends the half-width イロハ poem to
   the same alphabet (`docs/account_structure.md:125`) so IME/Kana inputs can be
   rendered deterministically across locales.
 - All domain labels (for both Local selectors and Global registry entries) run
@@ -103,7 +103,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   confusables and mixed-normalization inputs.
 - Wallet/explorer UX requirements in
   `docs/source/sns/address_display_guidelines.md:34` mandate the dual-format
-  display (IH58 preferred + compressed (`sora`) second-best) plus localized copy helpers so operators can
+  display (canonical I105) plus localized copy helpers so operators can
   reconcile what users see with what Torii enforces.
 
 ## 4. Registry immutability & tombstones
@@ -136,7 +136,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
    `torii_address_collision_total{context!~"/tests/.*",kind="local12_digest"}`,
    and `torii_address_collision_domain_total{context!~"/tests/.*",domain=~"<target-domain>"}` plus the alert snapshot, proving 30 consecutive days of zero Local‑8
    detections and zero collisions scoped to production/staging domains.
-4. **Document inputs:** include copies of the IH58 (preferred)/sora (second-best) checksum fixtures
+4. **Document inputs:** include copies of the I105 checksum fixtures
    (`fixtures/account/address_vectors.json`) with the readiness ticket so IME
    behaviour can be reproduced during support escalations.
 5. **Confirm registry guarantees:** export the name registry state (selected

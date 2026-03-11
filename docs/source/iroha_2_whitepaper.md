@@ -105,7 +105,7 @@ The `iroha_crypto` crate powers key management, hashing, and signature verificat
 
 The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
 
-- **Domains, accounts, and assets** use canonical IH58 account IDs (preferred); `name@domain` remains a routing
+- **Domains, accounts, and assets** use canonical I105 account IDs (preferred); `name@domain` remains a routing
   alias when explicitly supplied. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 - **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.

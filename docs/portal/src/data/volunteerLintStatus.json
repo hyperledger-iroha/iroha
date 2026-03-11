@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "generatedAtIso": "2026-03-10T15:35:40.873Z",
+  "cliGeneratedAtIso": "2026-03-10T15:35:40.871Z",
+  "summary": {
+    "inputs": [
+      "/Users/takemiyamakoto/dev/iroha/docs/examples/ministry/volunteer_brief_template.json"
+    ],
+    "totalBriefs": 1,
+    "failingBriefs": 0,
+    "warningBriefs": 1,
+    "totalErrors": 0,
+    "totalWarnings": 1
+  },
+  "proposals": [
+    {
+      "proposalId": "BLACKLIST-2026-04-12",
+      "totalBriefs": 1,
+      "blocked": 0,
+      "warning": 1,
+      "support": 1,
+      "oppose": 0,
+      "context": 0,
+      "other": 0,
+      "entries": [
+        {
+          "proposalId": "BLACKLIST-2026-04-12",
+          "briefId": "VB-2026-04-EN-01",
+          "stance": "support",
+          "language": "en",
+          "submittedAt": "2026-04-15T11:24:00Z",
+          "moderationOffTopic": false,
+          "errors": [],
+          "warnings": [
+            "brief.fact_table[2].citations is empty; include at least one citation or explain the omission"
+          ],
+          "errorCount": 0,
+          "warningCount": 1,
+          "status": "warning",
+          "inputPath": "docs/examples/ministry/volunteer_brief_template.json"
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "proposalId": "BLACKLIST-2026-04-12",
+      "briefId": "VB-2026-04-EN-01",
+      "stance": "support",
+      "language": "en",
+      "submittedAt": "2026-04-15T11:24:00Z",
+      "moderationOffTopic": false,
+      "errors": [],
+      "warnings": [
+        "brief.fact_table[2].citations is empty; include at least one citation or explain the omission"
+      ],
+      "errorCount": 0,
+      "warningCount": 1,
+      "status": "warning",
+      "inputPath": "docs/examples/ministry/volunteer_brief_template.json"
+    }
+  ],
+  "cli": {
+    "entries": [
+      {
+        "entry_index": 0,
+        "errors": [],
+        "input_path": "/Users/takemiyamakoto/dev/iroha/docs/examples/ministry/volunteer_brief_template.json",
+        "metadata": {
+          "brief_id": "VB-2026-04-EN-01",
+          "language": "en",
+          "moderation_off_topic": false,
+          "proposal_id": "BLACKLIST-2026-04-12",
+          "stance": "support",
+          "submitted_at": "2026-04-15T11:24:00Z"
+        },
+        "warnings": [
+          "brief.fact_table[2].citations is empty; include at least one citation or explain the omission"
+        ]
+      }
+    ],
+    "entries_with_errors": 0,
+    "generated_at_unix_ms": 1773156940871,
+    "inputs": [
+      "/Users/takemiyamakoto/dev/iroha/docs/examples/ministry/volunteer_brief_template.json"
+    ],
+    "total_entries": 1,
+    "total_errors": 0,
+    "total_warnings": 1
+  }
+}

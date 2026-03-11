@@ -107,7 +107,7 @@ Düyün hələ də işlək vəziyyətdə, tərtib edilmiş bayt kodunu CLI-dən 
 Defolt inkişaf identifikasiyası açıq açardan əldə edilir
 `defaults/client.toml`, hesab ID-si belədir
 ```
-ih58...
+i105...
 ```
 
 Torii URL, zəncir identifikatoru və imza açarını təmin etmək üçün konfiqurasiya faylından istifadə edin:
@@ -129,7 +129,7 @@ Müqavilənin yazdığı hesab təfərrüatını əldə etmək üçün eyni CLI 
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

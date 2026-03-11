@@ -18,8 +18,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
 use iroha::{
     account_address::{
-        encode_account_id_to_canonical_hex, encode_account_id_to_compressed,
-        encode_account_id_to_ih58,
+        encode_account_id_to_canonical_hex, encode_account_id_to_i105_for_discriminant,
     },
     data_model::isi::{
         InstructionBox, TransferBox,
@@ -2006,7 +2005,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let state_json = read_state(&state_path);
     assert_eq!(state_json["version"].as_u64(), Some(1));
-    let treasury_json_literal = treasury.canonical_ih58().expect("treasury ih58");
+    let treasury_json_literal = treasury.canonical_i105().expect("treasury i105");
     assert_eq!(
         state_json["treasury_account"].as_str(),
         Some(treasury_json_literal.as_str())
@@ -2270,7 +2269,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     );
 
     let treasury_account = treasury.clone();
-    let treasury_json_literal = treasury.canonical_ih58().expect("treasury ih58");
+    let treasury_json_literal = treasury.canonical_i105().expect("treasury i105");
     assert_eq!(
         state_json["treasury_account"]
             .as_str()
@@ -4590,12 +4589,13 @@ fn zk_prover_reports_flow_against_torii_mock() {
 }
 
 #[test]
-fn address_convert_outputs_ih58_by_default() {
+fn address_convert_outputs_i105_by_default() {
     let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
 
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
-    let expected_ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
+    let expected_i105 =
+        encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
 
     let output = Command::new(cli_binary())
         .args(["tools", "address", "convert", &canonical])
@@ -4609,17 +4609,16 @@ fn address_convert_outputs_ih58_by_default() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        expected_ih58
+        expected_i105
     );
 }
 
 #[test]
-fn address_convert_json_summary_contains_all_formats() {
+fn address_convert_json_summary_contains_i105_and_canonical_hex() {
     let key_pair = KeyPair::from_seed(vec![0xB2; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
 
-    let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
-    let compressed = encode_account_id_to_compressed(&account).expect("compressed");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical");
 
     let output = Command::new(cli_binary())
@@ -4627,7 +4626,7 @@ fn address_convert_json_summary_contains_all_formats() {
             "tools",
             "address",
             "convert",
-            &ih58,
+            &i105,
             "--expect-prefix",
             "753",
             "--format",
@@ -4648,32 +4647,28 @@ fn address_convert_json_summary_contains_all_formats() {
             .get("detected_format")
             .and_then(|value| value.get("kind"))
             .and_then(Value::as_str),
-        Some("ih58")
+        Some("i105")
     );
     assert_eq!(
         summary
             .get("detected_format")
             .and_then(|value| value.get("network_prefix"))
             .and_then(Value::as_u64),
-        Some(753)
+        None
     );
     assert_eq!(
         summary
-            .get("ih58")
+            .get("i105")
             .and_then(|value| value.get("value"))
             .and_then(Value::as_str),
-        Some(ih58.as_str())
+        Some(i105.as_str())
     );
     assert_eq!(
         summary
-            .get("ih58")
+            .get("i105")
             .and_then(|value| value.get("network_prefix"))
             .and_then(Value::as_u64),
         Some(753)
-    );
-    assert_eq!(
-        summary.get("compressed").and_then(Value::as_str),
-        Some(compressed.as_str())
     );
     assert_eq!(
         summary.get("canonical_hex").and_then(Value::as_str),
@@ -4703,7 +4698,7 @@ fn address_convert_rejects_domain_suffix() {
             "convert",
             &literal,
             "--format",
-            "ih58",
+            "i105",
         ])
         .output()
         .expect("run address convert");
@@ -4801,11 +4796,12 @@ fn address_audit_reports_parsed_and_errors() {
     let default_account = account_id_for_domain("default", 0x44);
 
     let local_hex = encode_account_id_to_canonical_hex(&local_account).expect("canonical hex");
-    let default_ih58 = encode_account_id_to_ih58(&default_account, 753).expect("ih58");
+    let default_i105 =
+        encode_account_id_to_i105_for_discriminant(&default_account, 753).expect("i105");
 
     let temp_dir = TempDir::new("address_audit_report").expect("temp dir");
     let input_path = temp_dir.path().join("addresses.txt");
-    let contents = format!("# sample addresses\n{local_hex}\n{default_ih58}\ninvalid-address\n");
+    let contents = format!("# sample addresses\n{local_hex}\n{default_i105}\ninvalid-address\n");
     fs::write(&input_path, contents).expect("write addresses");
 
     let output = Command::new(cli_binary())
@@ -4813,6 +4809,8 @@ fn address_audit_reports_parsed_and_errors() {
         .args([
             "--config",
             "defaults/client.toml",
+            "--output-format",
+            "text",
             "tools",
             "address",
             "audit",
@@ -4842,7 +4840,7 @@ fn address_audit_reports_parsed_and_errors() {
     assert_eq!(entries.len(), 3);
 
     assert_parsed_entry_kind(entries, &local_hex, "default");
-    assert_parsed_entry_kind(entries, &default_ih58, "default");
+    assert_parsed_entry_kind(entries, &default_i105, "default");
     assert_error_entry(entries);
 }
 
@@ -4851,8 +4849,8 @@ fn address_audit_rejects_domain_suffix() {
     use torii_mock_support::TempDir;
 
     let account = account_id_for_domain("wonderland", 0xE5);
-    let ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58");
-    let literal = format!("{ih58}@hbl");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let literal = format!("{i105}@hbl");
 
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
@@ -4923,12 +4921,18 @@ fn address_audit_supports_csv_output() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines().filter(|line| !line.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let csv_stream = if stdout.contains("input,status,format,domain_kind,i105,canonical_hex") {
+        stdout.as_ref()
+    } else {
+        stderr.as_ref()
+    };
+    let mut lines = csv_stream.lines().filter(|line| {
+        !line.is_empty() && !line.starts_with("CLI started") && !line.starts_with("Build line:")
+    });
     assert_eq!(
         lines.next(),
-        Some(
-            "input,status,format,domain_kind,ih58,canonical_hex,compressed,error_code,error_message"
-        )
+        Some("input,status,format,domain_kind,i105,canonical_hex,error_code,error_message")
     );
     let rows: Vec<&str> = lines.collect();
     assert_eq!(rows.len(), 2, "expected two CSV rows");

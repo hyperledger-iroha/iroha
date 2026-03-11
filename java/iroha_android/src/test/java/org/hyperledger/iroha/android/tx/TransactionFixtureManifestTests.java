@@ -315,7 +315,7 @@ public final class TransactionFixtureManifestTests {
     }
     final String accountLiteral = normalizeAuthority(authority);
     try {
-      final AccountAddress accountAddress = AccountAddress.fromIH58(accountLiteral, null);
+      final AccountAddress accountAddress = AccountAddress.fromI105(accountLiteral, null);
       final Optional<AccountAddress.SingleKeyPayload> payload = accountAddress.singleKeyPayload();
       if (!payload.isPresent()) {
         throw new IllegalStateException(
@@ -636,9 +636,9 @@ public final class TransactionFixtureManifestTests {
     }
     final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
     if (payloadData != null) {
-      final String ih58 = toIh58(domain, payloadData);
-      if (ih58 != null) {
-        return ih58 + "@" + domain;
+      final String i105 = toI105(domain, payloadData);
+      if (i105 != null) {
+        return i105 + "@" + domain;
       }
     }
     return publicKeyLiteral + "@" + domain;
@@ -657,9 +657,9 @@ public final class TransactionFixtureManifestTests {
     }
     final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
     if (payloadData != null) {
-      final String ih58 = toIh58(domain, payloadData);
-      if (ih58 != null) {
-        return ih58 + "@" + domain;
+      final String i105 = toI105(domain, payloadData);
+      if (i105 != null) {
+        return i105 + "@" + domain;
       }
     }
     return publicKeyLiteral + "@" + domain;
@@ -760,14 +760,14 @@ public final class TransactionFixtureManifestTests {
     return -1;
   }
 
-  private static String toIh58(final String domain, final PublicKeyPayload payload) {
+  private static String toI105(final String domain, final PublicKeyPayload payload) {
     final String algorithm = algorithmForCurveId(payload.curveId);
     if (algorithm == null) {
       return null;
     }
     try {
       final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes, algorithm);
-      return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+      return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       return null;
     }

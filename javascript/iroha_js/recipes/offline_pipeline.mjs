@@ -39,7 +39,7 @@ const AUTHORITY_ID =
   AccountAddress.fromAccount({
     domain: AUTHORITY_DOMAIN,
     publicKey: publicKeyFromPrivate(PRIVATE_KEY),
-  }).toIH58();
+  }).toI105();
 const OUT_DIR = process.env.OFFLINE_PIPELINE_OUT_DIR ?? path.join("artifacts", "js", "offline_pipeline");
 const USE_MOCK = (process.env.OFFLINE_PIPELINE_USE_MOCK ?? "1") !== "0";
 const SKIP_REPLAY = (process.env.OFFLINE_PIPELINE_SKIP_REPLAY ?? "0") === "1";

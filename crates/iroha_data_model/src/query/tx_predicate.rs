@@ -834,7 +834,7 @@ mod tests {
     type EntryHash = HashOf<crate::transaction::signed::TransactionEntrypoint>;
 
     fn sample_account(seed: u8) -> crate::account::AccountId {
-        let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
         let (public_key, _) =
             iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
         crate::account::AccountId::new(public_key)

@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (хавсралт, нотолгоо, саналын тоо): `zk_app_api.md`
 - Torii ZK хавсралт/prover runbook: `zk/prover_runbook.md`
 - Torii ZK App API операторын гарын авлага (хавсралт/провер; хайрцагны баримт): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof амьдралын мөчлөг (бүртгэл, баталгаажуулалт, телеметр): `zk/lifecycle.md`
 - Torii Операторын туслах хэрэгсэл (харагдахуйц эцсийн цэгүүд): `references/operator_aids.md`
 - Nexus анхдагч эгнээний хурдан эхлүүлэх: `quickstart/default_lane.md`

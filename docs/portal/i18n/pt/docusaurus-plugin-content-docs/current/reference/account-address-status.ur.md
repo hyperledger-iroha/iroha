@@ -14,7 +14,7 @@ título: اکاؤنٹ ایڈریس تعمیل
 description: Fixação ADDR-2
 ---
 
-pacote ADDR-2 canônico (`fixtures/account/address_vectors.json`) IH58 (preferencial), compactado (`sora`, segundo melhor; meia largura / largura total), multiassinatura, اور negativo fixtures کو captura کرتا ہے۔ ہر SDK + Torii superfície اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو espelho کرتا ہے تاکہ leitores de portal بغیر mono-repo میں کھوج لگائے fluxo de trabalho
+pacote ADDR-2 canônico (`fixtures/account/address_vectors.json`) I105 (preferencial), compactado (`sora`, segundo melhor; meia largura / largura total), multiassinatura, اور negativo fixtures کو captura کرتا ہے۔ ہر SDK + Torii superfície اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو espelho کرتا ہے تاکہ leitores de portal بغیر mono-repo میں کھوج لگائے fluxo de trabalho
 
 ## Pacote کو regenerar یا verificar کریں
 
@@ -45,7 +45,7 @@ Fluxo de trabalho de CI **Desvio de vetor de endereço** `cargo xtask address-ve
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-ہر aproveitar bytes canônicos + IH58 + codificações compactadas (`sora`, segunda melhor) کا ida e volta کرتا ہے اور casos negativos کیلئے códigos de erro estilo Norito کو fixture کے ساتھ correspondência کرتا ہے۔
+ہر aproveitar bytes canônicos + I105 + codificações compactadas (`sora`, segunda melhor) کا ida e volta کرتا ہے اور casos negativos کیلئے códigos de erro estilo Norito کو fixture کے ساتھ correspondência کرتا ہے۔
 
 ## Automação چاہئے؟
 

@@ -133,7 +133,7 @@ translation_last_reviewed: 2026-01-21
   ומחזירים אובייקטי instruction מוכנים ל‑Norito להכללה בעסקאות.
 
 fixtures אלו משתמשים בצורת hash קנונית (`hash:...#...`), חתימות באותיות גדולות,
-ומזהי ספק IH58 שנגזרים ממפתחות ed25519 דטרמיניסטיים (למשל,
+ומזהי ספק I105 שנגזרים ממפתחות ed25519 דטרמיניסטיים (למשל,
 `34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA`).
 
 ל‑feeds חברתיים/נושאי PII, `ObservationValue::from_hash`, `from_keyed_hash`,

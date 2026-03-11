@@ -1473,7 +1473,7 @@ mod tests {
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
         let keypair = KeyPair::random();
-        let domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![tx], keypair.private_key(), None, None);
@@ -1663,7 +1663,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
-        let domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<crate::isi::InstructionBox>())
@@ -1739,7 +1739,7 @@ mod tests {
         let chain: ChainId = "genesis-versioned-roundtrip"
             .parse()
             .expect("chain id must parse");
-        let domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
@@ -1907,7 +1907,7 @@ mod tests {
         let chain: ChainId = "genesis-da-commitments"
             .parse()
             .expect("chain id must parse");
-        let domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<InstructionBox>())
@@ -1939,7 +1939,7 @@ mod tests {
         let chain: ChainId = "genesis-da-proof-policies"
             .parse()
             .expect("chain id must parse");
-        let domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<InstructionBox>())
@@ -2006,7 +2006,7 @@ mod tests {
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
 
-        fn fixture_account(domain: &DomainId) -> AccountId {
+        fn fixture_account(_domain: &DomainId) -> AccountId {
             let keypair = KeyPair::random();
             AccountId::new(keypair.public_key().clone())
         }
@@ -2078,7 +2078,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "chain".parse().expect("chain id");
-        let authority_domain: DomainId = "chain".parse().expect("chain domain id");
+        let _authority_domain: DomainId = "chain".parse().expect("chain domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let tx =
             TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
@@ -2191,7 +2191,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2255,7 +2255,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-block".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2333,7 +2333,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "time-proof-block".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2410,7 +2410,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-miss".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2448,7 +2448,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let domain_id: DomainId = "genesis".parse().expect("domain id");
+        let _domain_id: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let transaction =
@@ -2482,7 +2482,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "stale-flags".parse().expect("chain id");
-        let domain_id: DomainId = "genesis".parse().expect("domain id");
+        let _domain_id: DomainId = "genesis".parse().expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let transaction =

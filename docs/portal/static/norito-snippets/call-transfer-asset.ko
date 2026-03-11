@@ -1,8 +1,11 @@
 // Direct builtin call (no contract-style call syntax) inside a contract.
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
-    let from = account!("6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi");
-    let to = account!("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb");
-    transfer_asset(from, to, asset_definition!("rose#default"), 10);
+    transfer_asset(
+      account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+      account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
+      asset_definition!("rose#wonderland"),
+      10
+    );
   }
 }

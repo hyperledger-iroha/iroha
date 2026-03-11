@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -224,7 +224,7 @@ for (const entry of allowances) {
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -234,7 +234,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -276,7 +276,7 @@ Explorer telemetry သည် `/v1/explorer/metrics` နှင့် အတွက
 `/v1/explorer/accounts/{account_id}/qr` သည် အဆုံးမှတ်များဖြစ်သောကြောင့် ဒက်ရှ်ဘုတ်များသည် ၎င်းကို ပြန်လည်ဖွင့်နိုင်သည်။
 ပေါ်တယ်ကို စွမ်းအားပေးသော လျှပ်တစ်ပြက်ပုံများ။ `getExplorerMetrics()` သည် ပုံမှန်ဖြစ်စေသည်။
 လမ်းကြောင်းကိုပိတ်ထားသောအခါ payload နှင့် `null` ကိုပြန်ပေးသည်။ ၎င်းကိုတွဲပါ။
-`getExplorerAccountQr()` IH58 (ဦးစားပေး)/sora (ဒုတိယအကောင်းဆုံး) စာလုံးများ နှင့် inline လိုအပ်သည့်အခါတိုင်း
+`getExplorerAccountQr()` I105 (ဦးစားပေး)/sora (ဒုတိယအကောင်းဆုံး) စာလုံးများ နှင့် inline လိုအပ်သည့်အခါတိုင်း
 မျှဝေခလုတ်များအတွက် SVG
 
 ```ts
@@ -291,9 +291,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -301,8 +299,8 @@ console.log(
 );
 ```
 
-`addressFormat: "compressed"` ကို ဖြတ်သွားခြင်းသည် Explorer ၏ ပုံသေချုံ့ထားသော ပုံဖြစ်သည်။
-ရွေးချယ်သူများ; နှစ်သက်သော IH58 အထွက်အတွက် အစားထိုးခြင်း သို့မဟုတ် `ih58_qr` တောင်းဆိုခြင်း
+`I105` ကို ဖြတ်သွားခြင်းသည် Explorer ၏ ပုံသေချုံ့ထားသော ပုံဖြစ်သည်။
+ရွေးချယ်သူများ; နှစ်သက်သော I105 အထွက်အတွက် အစားထိုးခြင်း သို့မဟုတ် `i105_qr` တောင်းဆိုခြင်း
 QR-safe ဗားရှင်းကို သင်လိုအပ်သောအခါ။ compressed literal သည် ဒုတိယအကောင်းဆုံးဖြစ်သည်။
 UX အတွက် Sora-သီးသန့် ရွေးချယ်မှု။ ကူညီသူသည် ကျမ်းဂန်အမှတ်အသားကို အမြဲတမ်း ပြန်ပေးသည်၊
 ရွေးချယ်ထားသော ပကတိနှင့် မက်တာဒေတာ (ကွန်ရက်ရှေ့ဆက်၊ QR ဗားရှင်း/မော်ဂျူးများ၊ အမှား
@@ -520,8 +518,8 @@ Space Directory APIs များသည် Universal Account ID (UAID) lifecycle
 - `getUaidPortfolio(uaid, { assetId })` သည် dataspace တစ်ခုလျှင် လက်ကျန်များကို စုစည်းသည်၊
   Canonical အကောင့် ID များဖြင့် ပိုင်ဆိုင်မှုပိုင်ဆိုင်မှုများကို အုပ်စုဖွဲ့ခြင်း၊ စစ်ထုတ်ရန် `assetId` ကို ကျော်ဖြတ်ပါ။
   အစုစုသည် တစ်ခုတည်းသော ပိုင်ဆိုင်မှု သာဓကသို့ ဆင်းသက်သည်။
-- `getUaidBindings(uaid, { addressFormat })` သည် dataspace ↔ အကောင့်တိုင်းကို ရေတွက်သည်။
-  စည်းနှောင်ခြင်း (`addressFormat: "compressed"` သည် `sora…` စာလုံးများကို ပြန်ပေးသည်)။
+- `getUaidBindings(uaid)` သည် dataspace ↔ အကောင့်တိုင်းကို ရေတွက်သည်။
+  စည်းနှောင်ခြင်း (`I105` သည် `i105` စာလုံးများကို ပြန်ပေးသည်)။
 - `getUaidManifests(uaid, { dataspaceId })` သည် လုပ်ဆောင်နိုင်စွမ်းတစ်ခုစီကို ထင်ရှားစွာပြသည်၊
   ဘဝသံသရာအခြေအနေနှင့် စာရင်းစစ်များအတွက် ချည်နှောင်ထားသော အကောင့်များ။အော်ပရေတာ အထောက်အထားထုပ်များ အတွက်၊ ထုတ်ဝေခြင်း/ပြန်လည်ရုပ်သိမ်းခြင်း စီးဆင်းမှုများကို ထင်ရှားစေပြီး SDK ပြောင်းရွှေ့ခြင်း။
 လမ်းညွှန်ချက်၊ Universal အကောင့်လမ်းညွှန် (`docs/source/universal_accounts_guide.md`) ကို လိုက်နာပါ
@@ -539,7 +537,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -564,7 +562,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -574,7 +572,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

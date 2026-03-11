@@ -8,10 +8,10 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         return try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     }
 
-    private func makeIH58(seed: UInt8,
+    private func makeI105(seed: UInt8,
                           domain: String = AccountAddress.defaultDomainName) throws -> String {
         let address = try makeAddress(seed: seed, domain: domain)
-        return try address.toIH58(networkPrefix: 0x02F1)
+        return try address.toI105(networkPrefix: 0x02F1)
     }
 
     func testEncodeAssetIdAcceptsNoritoHexLiteral() throws {
@@ -31,13 +31,13 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAssetId("norito:")
     }
 
-    func testEncodeAccountIdAcceptsIh58AndCompressedForms() throws {
+    func testEncodeAccountIdAcceptsI105AndI105DefaultForms() throws {
         let address = try makeAddress(seed: 1)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        let compressed = try address.toCompressedSora()
-        let encodedFromIh58 = try OfflineNorito.encodeAccountId(ih58)
-        let encodedFromCompressed = try OfflineNorito.encodeAccountId(compressed)
-        XCTAssertEqual(encodedFromCompressed, encodedFromIh58)
+        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        let i105Default = try address.toI105Default()
+        let encodedFromI105 = try OfflineNorito.encodeAccountId(i105)
+        let encodedFromI105Default = try OfflineNorito.encodeAccountId(i105Default)
+        XCTAssertEqual(encodedFromI105Default, encodedFromI105)
     }
 
     func testEncodeAccountIdRejectsAliasLiteral() {
@@ -45,9 +45,9 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAccountId(literal, expected: literal)
     }
 
-    func testEncodeAccountIdRejectsIh58WithDomainSuffix() throws {
-        let ih58 = try makeIH58(seed: 2)
-        let providedLiteral = "\(ih58)@hbl"
+    func testEncodeAccountIdRejectsI105WithDomainSuffix() throws {
+        let i105 = try makeI105(seed: 2)
+        let providedLiteral = "\(i105)@hbl"
         assertInvalidAccountId(providedLiteral, expected: providedLiteral)
     }
 

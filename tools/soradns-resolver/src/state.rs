@@ -397,7 +397,6 @@ mod tests {
     use iroha_crypto::{PublicKey, Signature};
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
         soradns::{
             GatewayHostSet, HttpTransportV1, PaddingPolicyV1, ResolverTlsBundle,
             ResolverTransportBundle, RotationPolicyV1, TlsProvisioningProfile, TlsTransportV1,
@@ -707,12 +706,11 @@ mod tests {
     fn sample_rad(valid_from_unix: u64, valid_until_unix: u64) -> ResolverAttestation {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {
-            let domain: DomainId = "sora".parse().expect("valid domain");
             let public_key: PublicKey =
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                     .parse()
                     .expect("public key literal");
-            AccountId::new(domain, public_key)
+            AccountId::new(public_key)
         };
 
         ResolverAttestation {

@@ -7516,14 +7516,7 @@ fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
     }
 
     let mut env = Map::new();
-    for key in [
-        "query",
-        "filter",
-        "select",
-        "sort",
-        "fetch_size",
-        "address_format",
-    ] {
+    for key in ["query", "filter", "select", "sort", "fetch_size"] {
         if let Some(value) = arguments.get(key) {
             env.insert(key.to_owned(), value.clone());
         }
@@ -10610,7 +10603,6 @@ fn iroha_accounts_list_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "asset_id": { "type": "string" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -10710,7 +10702,6 @@ fn iroha_accounts_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -10838,7 +10829,6 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -10879,7 +10869,6 @@ fn iroha_account_assets_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "asset_id": { "type": "string" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -10925,7 +10914,6 @@ fn iroha_account_assets_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11097,7 +11085,6 @@ fn iroha_domains_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11438,7 +11425,6 @@ fn iroha_asset_definitions_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11479,7 +11465,6 @@ fn iroha_asset_holders_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "asset_id": { "type": "string" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11525,7 +11510,6 @@ fn iroha_asset_holders_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11710,7 +11694,6 @@ fn iroha_nfts_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11737,7 +11720,6 @@ fn iroha_offline_transfers_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "kind": { "type": "string" },
@@ -11782,9 +11764,8 @@ fn iroha_offline_transfers_get_tool() -> ToolSpec {
                 "query": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Optional query parameters (for example `address_format`)."
+                    "description": "Optional query parameters."
                 },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11819,7 +11800,6 @@ fn iroha_offline_transfers_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11846,7 +11826,6 @@ fn iroha_offline_settlements_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "kind": { "type": "string" },
@@ -11891,9 +11870,8 @@ fn iroha_offline_settlements_get_tool() -> ToolSpec {
                 "query": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "Optional query parameters (for example `address_format`)."
+                    "description": "Optional query parameters."
                 },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11929,7 +11907,6 @@ fn iroha_offline_settlements_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11994,7 +11971,6 @@ fn iroha_offline_certificates_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "headers": {
@@ -12043,7 +12019,6 @@ fn iroha_offline_certificates_get_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true
                 },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12078,7 +12053,6 @@ fn iroha_offline_certificates_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12270,7 +12244,6 @@ fn iroha_offline_allowances_get_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true
                 },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12370,7 +12343,6 @@ fn iroha_offline_allowances_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "headers": {
@@ -12407,7 +12379,6 @@ fn iroha_offline_allowances_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12434,7 +12405,6 @@ fn iroha_offline_receipts_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "headers": {
@@ -12471,7 +12441,6 @@ fn iroha_offline_receipts_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12498,7 +12467,6 @@ fn iroha_offline_revocations_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "headers": {
@@ -12535,7 +12503,6 @@ fn iroha_offline_revocations_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12669,7 +12636,6 @@ fn iroha_offline_bundle_proof_status_tool() -> ToolSpec {
                     "additionalProperties": true,
                     "description": "Optional query object. If provided, include `bundle_id_hex` or use the top-level shortcut."
                 },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12716,7 +12682,6 @@ fn iroha_offline_summaries_list_tool() -> ToolSpec {
                 },
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "filter": { "type": "string" },
                 "sort": { "type": "string" },
                 "headers": {
@@ -12753,7 +12718,6 @@ fn iroha_offline_summaries_query_tool() -> ToolSpec {
                 "limit": { "type": "integer" },
                 "offset": { "type": "integer" },
                 "fetch_size": { "type": "integer" },
-                "address_format": { "type": "string" },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -13443,7 +13407,7 @@ mod tests {
     static MCP_ASYNC_JOBS_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
         LazyLock::new(|| std::sync::Mutex::new(()));
 
-    const TEST_ACCOUNT_IH58: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
     const TEST_ASSET_ID: &str = "norito:deadbeef";
 
     fn sample_tool(name: &str, method: Method) -> ToolSpec {
@@ -13605,8 +13569,8 @@ mod tests {
         assert_eq!(error_code, MCP_TOOL_NOT_FOUND);
     }
 
-    #[test]
-    fn tools_list_list_changed_tracks_toolset_version() {
+    #[tokio::test]
+    async fn tools_list_list_changed_tracks_toolset_version() {
         let app = mk_app_state_for_tests();
         let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
         let version = compute_toolset_version(&visible_tools);
@@ -14570,7 +14534,7 @@ mod tests {
     #[test]
     fn collect_query_map_accepts_flat_query_fields_when_query_absent() {
         let args = norito::json!({
-            "account_id": TEST_ACCOUNT_IH58,
+            "account_id": TEST_ACCOUNT_I105,
             "limit": 20,
             "offset": 0,
             "headers": {"x": "1"}
@@ -14599,11 +14563,11 @@ mod tests {
     #[test]
     fn extract_account_id_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
-            "account_id": TEST_ACCOUNT_IH58
+            "account_id": TEST_ACCOUNT_I105
         });
         let account_id =
             extract_account_id_argument(args.as_object().expect("object")).expect("account id");
-        assert_eq!(account_id, TEST_ACCOUNT_IH58);
+        assert_eq!(account_id, TEST_ACCOUNT_I105);
     }
 
     #[test]
@@ -14982,7 +14946,7 @@ mod tests {
     #[test]
     fn build_query_envelope_body_collects_shortcut_fields() {
         let args = norito::json!({
-            "filter": { "op": "eq", "args": ["authority", TEST_ACCOUNT_IH58] },
+            "filter": { "op": "eq", "args": ["authority", TEST_ACCOUNT_I105] },
             "limit": 25,
             "offset": 5,
             "fetch_size": 10
@@ -15012,7 +14976,7 @@ mod tests {
     fn build_accounts_onboard_body_collects_shortcut_fields() {
         let args = norito::json!({
             "alias": "alice",
-            "account_id": TEST_ACCOUNT_IH58,
+            "account_id": TEST_ACCOUNT_I105,
             "identity": { "tier": "gold" },
             "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         });
@@ -15059,7 +15023,7 @@ mod tests {
     #[test]
     fn build_object_body_or_flat_shortcuts_collects_top_level_fields() {
         let args = norito::json!({
-            "authority": TEST_ACCOUNT_IH58,
+            "authority": TEST_ACCOUNT_I105,
             "namespace": "nexus",
             "headers": { "x-test": "1" }
         });
@@ -15071,7 +15035,7 @@ mod tests {
         let body = body.as_object().expect("object");
         assert_eq!(
             body.get("authority").and_then(Value::as_str),
-            Some(TEST_ACCOUNT_IH58)
+            Some(TEST_ACCOUNT_I105)
         );
         assert_eq!(body.get("namespace").and_then(Value::as_str), Some("nexus"));
         assert!(body.get("headers").is_none());

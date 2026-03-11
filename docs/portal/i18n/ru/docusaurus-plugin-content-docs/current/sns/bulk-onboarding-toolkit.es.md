@@ -35,7 +35,7 @@ Torii или CLI. El helper valida cada fila de antemano, emite tanto un manific
 |---------|-----------|-------------|
 | `label` | Си | Etiqueta solicitada (se acepta mayus/minus; la Herramienta Normaliza Segun Norm v1 и UTS-46). |
 | `suffix_id` | Си | Цифровой идентификатор суфии (десятичный или шестнадцатеричный `0x`). |
-| `owner` | Си | Cadena AccountId (домен-независимый encoded AccountId (IH58 предпочтительно; compressed допускается; без @domain)) для владельца реестра. |
+| `owner` | Си | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Си | Энтеро `1..=255`. |
 | `payment_asset_id` | Си | Активация урегулирования (например, `xor#sora`). |
 | `payment_gross` / `payment_net` | Си | Enteros sin Signo que представляет собой unidades nativas del activo. |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ alineados о большом прогрессе. Эль-табло Grafana
   Ссылки на архивы могут быть найдены относительно распространения CSV. Метаданные
   ни один морской объект не может привести к ошибке проверки.
 - **Контроллеры:** указаны на белом фоне `--default-controllers`. Пропорционе
-  явные списки контроллеров (например, `ih58...;ih58...`) и делегировать
+  явные списки контроллеров (например, `i105...;i105...`) и делегировать
   актеры без владельца.
 
 Los Fallos se reportan con numeros de fila contextuales (например,

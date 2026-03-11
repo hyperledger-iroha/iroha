@@ -138,7 +138,7 @@ pub struct RepairWorkerSignaturePayloadV1 {
     pub manifest_digest: [u8; 32],
     /// Provider identifier owning the ticket.
     pub provider_id: [u8; 32],
-    /// Worker account identifier (IH58 form).
+    /// Worker account identifier (I105 form).
     pub worker_id: String,
     /// Idempotency key for the action.
     pub idempotency_key: String,
@@ -344,7 +344,7 @@ pub struct RepairReportV1 {
     pub version: u8,
     /// Repair ticket identifier.
     pub ticket_id: RepairTicketId,
-    /// Auditor account (IH58 string) submitting the report.
+    /// Auditor account (I105 string) submitting the report.
     pub auditor_account: String,
     /// Unix timestamp (seconds) when the report was submitted.
     pub submitted_at_unix: u64,
@@ -1017,7 +1017,7 @@ impl SignedAuditorRequestPayloadV1 {
 pub struct SignedAuditorRequestV1 {
     /// Schema version (`SIGNED_AUDITOR_REQUEST_VERSION_V1`).
     pub version: u8,
-    /// Auditor account submitting the request (IH58 string form).
+    /// Auditor account submitting the request (I105 string form).
     pub auditor_account: String,
     /// Monotonic nonce used for replay protection.
     pub nonce: u64,

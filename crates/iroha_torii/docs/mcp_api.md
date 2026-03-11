@@ -1,251 +1,298 @@
 # Torii MCP API
 
 Torii exposes a native Model Context Protocol bridge at `/v1/mcp`.
-It lets AI agents call Torii and Connect endpoints through JSON-RPC.
+It lets MCP clients discover tools and call Torii/Connect endpoints through JSON-RPC.
 
-## Endpoints
-
-- `GET /v1/mcp` returns MCP capabilities and server metadata.
-- `POST /v1/mcp` accepts JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`, `tools/call_batch`, `tools/call_async`, `tools/jobs/get`).
-
-## JSON-RPC Methods
-
-- `initialize`: return server capabilities and protocol metadata.
-- `tools/list`: page through available tools and return `toolsetVersion` / `listChanged`.
-- `tools/call`: execute one tool by name.
-- `tools/call_batch`: execute multiple tool calls in one request.
-- `tools/call_async`: enqueue one tool call and return a job id.
-- `tools/jobs/get`: fetch async job status/result by `job_id`.
-
-Async jobs are stored in-memory and pruned by `torii.mcp.async_job_ttl_secs` and
-`torii.mcp.async_job_max_entries`.
-
-## Common Flow
-
-1. Call `initialize`.
-2. Call `tools/list` (with optional `cursor` and `toolset_version`) until `nextCursor` is `null`.
-3. Call `tools/call` for the target tool.
-
-## Tool Naming
-
-- OpenAPI-derived tools use stable route-derived ids (`torii.<method>_<path...>`), not mutable OpenAPI `operationId` labels.
-- Connect helper tools include:
-  - `connect.ws.ticket`
-  - `connect.session.create`
-  - `connect.session.create_and_ticket`
-  - `connect.session.delete`
-  - `connect.status`
-- Agent-friendly account/transaction aliases include:
-  - `iroha.connect.ws.ticket`
-  - `iroha.connect.session.create`
-  - `iroha.connect.session.create_and_ticket`
-  - `iroha.connect.session.delete`
-  - `iroha.connect.status`
-  - `iroha.health`
-  - `iroha.status`
-  - `iroha.parameters.get`
-  - `iroha.node.capabilities`
-  - `iroha.time.now`
-  - `iroha.time.status`
-  - `iroha.api.versions`
-  - `iroha.sumeragi.commit_certificates`
-  - `iroha.sumeragi.validator_sets.list`
-  - `iroha.sumeragi.validator_sets.get`
-  - `iroha.sumeragi.rbc`
-  - `iroha.sumeragi.pacemaker`
-  - `iroha.sumeragi.phases`
-  - `iroha.sumeragi.params`
-  - `iroha.sumeragi.status`
-  - `iroha.sumeragi.leader`
-  - `iroha.sumeragi.qc`
-  - `iroha.sumeragi.checkpoints`
-  - `iroha.sumeragi.consensus_keys`
-  - `iroha.sumeragi.bls_keys`
-  - `iroha.sumeragi.key_lifecycle`
-  - `iroha.sumeragi.telemetry`
-  - `iroha.sumeragi.rbc.sessions`
-  - `iroha.sumeragi.commit_qc.get`
-  - `iroha.sumeragi.collectors`
-  - `iroha.sumeragi.evidence.count`
-  - `iroha.sumeragi.evidence.list`
-  - `iroha.sumeragi.evidence.submit`
-  - `iroha.sumeragi.new_view`
-  - `iroha.sumeragi.rbc.delivered`
-  - `iroha.sumeragi.vrf.penalties`
-  - `iroha.sumeragi.vrf.epoch`
-  - `iroha.sumeragi.vrf.commit`
-  - `iroha.sumeragi.vrf.reveal`
-  - `iroha.sumeragi.rbc.sample`
-  - `iroha.da.ingest`
-  - `iroha.da.proof_policies`
-  - `iroha.da.proof_policy_snapshot`
-  - `iroha.da.manifests.get`
-  - `iroha.da.commitments.list`
-  - `iroha.da.commitments.prove`
-  - `iroha.da.commitments.verify`
-  - `iroha.da.pin_intents.list`
-  - `iroha.da.pin_intents.prove`
-  - `iroha.da.pin_intents.verify`
-  - `iroha.runtime.abi.active`
-  - `iroha.runtime.abi.hash`
-  - `iroha.runtime.metrics`
-  - `iroha.runtime.upgrades.list`
-  - `iroha.runtime.upgrades.propose`
-  - `iroha.runtime.upgrades.activate`
-  - `iroha.runtime.upgrades.cancel`
-  - `iroha.ledger.headers`
-  - `iroha.ledger.state_root`
-  - `iroha.ledger.state_proof`
-  - `iroha.ledger.block_proof`
-  - `iroha.bridge.finality.proof`
-  - `iroha.bridge.finality.bundle`
-  - `iroha.proofs.get`
-  - `iroha.proofs.query`
-  - `iroha.proofs.retention`
-  - `iroha.gov.instances.list`
-  - `iroha.gov.proposals.deploy_contract`
-  - `iroha.gov.proposals.get`
-  - `iroha.gov.locks.get`
-  - `iroha.gov.referenda.get`
-  - `iroha.gov.tally.get`
-  - `iroha.gov.ballots.zk`
-  - `iroha.gov.ballots.zk_v1`
-  - `iroha.gov.ballots.zk_v1.ballot_proof`
-  - `iroha.gov.ballots.plain`
-  - `iroha.gov.protected_namespaces.list`
-  - `iroha.gov.protected_namespaces.update`
-  - `iroha.gov.unlocks.stats`
-  - `iroha.gov.council.current`
-  - `iroha.gov.council.persist`
-  - `iroha.gov.council.replace`
-  - `iroha.gov.council.audit`
-  - `iroha.gov.council.derive_vrf`
-  - `iroha.gov.enact`
-  - `iroha.gov.finalize`
-  - `iroha.contracts.code.register`
-  - `iroha.contracts.code.get`
-  - `iroha.contracts.code.bytes.get`
-  - `iroha.contracts.deploy`
-  - `iroha.contracts.instance.create`
-  - `iroha.contracts.instance.activate`
-  - `iroha.contracts.instances.list`
-  - `iroha.contracts.call`
-  - `iroha.contracts.call_and_wait`
-  - `iroha.contracts.state.get`
-  - `iroha.accounts.list`
-  - `iroha.accounts.get`
-  - `iroha.accounts.qr`
-  - `iroha.accounts.query`
-  - `iroha.aliases.resolve`
-  - `iroha.aliases.resolve_index`
-  - `iroha.accounts.onboard`
-  - `iroha.accounts.transactions`
-  - `iroha.accounts.transactions.query`
-  - `iroha.accounts.assets`
-  - `iroha.accounts.assets.query`
-  - `iroha.accounts.permissions`
-  - `iroha.accounts.portfolio`
-  - `iroha.domains.list`
-  - `iroha.domains.get`
-  - `iroha.domains.query`
-  - `iroha.subscriptions.plans.list`
-  - `iroha.subscriptions.plans.create`
-  - `iroha.subscriptions.list`
-  - `iroha.subscriptions.create`
-  - `iroha.subscriptions.get`
-  - `iroha.subscriptions.cancel`
-  - `iroha.subscriptions.pause`
-  - `iroha.subscriptions.resume`
-  - `iroha.subscriptions.keep`
-  - `iroha.subscriptions.usage`
-  - `iroha.subscriptions.charge_now`
-  - `iroha.assets.definitions`
-  - `iroha.assets.definitions.get`
-  - `iroha.assets.definitions.query`
-  - `iroha.assets.holders`
-  - `iroha.assets.holders.query`
-  - `iroha.assets.list`
-  - `iroha.assets.get`
-  - `iroha.nfts.chain.list`
-  - `iroha.nfts.list`
-  - `iroha.nfts.get`
-  - `iroha.nfts.query`
-  - `iroha.offline.transfers.list`
-  - `iroha.offline.transfers.get`
-  - `iroha.offline.transfers.query`
-  - `iroha.offline.settlements.list`
-  - `iroha.offline.settlements.get`
-  - `iroha.offline.settlements.query`
-  - `iroha.offline.settlements.submit`
-  - `iroha.offline.certificates.list`
-  - `iroha.offline.certificates.get`
-  - `iroha.offline.certificates.query`
-  - `iroha.offline.certificates.issue`
-  - `iroha.offline.certificates.renew`
-  - `iroha.offline.certificates.renew_issue`
-  - `iroha.offline.certificates.revoke`
-  - `iroha.offline.allowances.get`
-  - `iroha.offline.allowances.issue`
-  - `iroha.offline.allowances.renew`
-  - `iroha.offline.allowances.list`
-  - `iroha.offline.allowances.query`
-  - `iroha.offline.receipts.list`
-  - `iroha.offline.receipts.query`
-  - `iroha.offline.revocations.list`
-  - `iroha.offline.revocations.query`
-  - `iroha.offline.transfers.proof`
-  - `iroha.offline.spend_receipts.submit`
-  - `iroha.offline.state`
-  - `iroha.offline.bundle.proof_status`
-  - `iroha.offline.rejections.list`
-  - `iroha.offline.summaries.list`
-  - `iroha.offline.summaries.query`
-  - `iroha.iso20022.pacs008.submit`
-  - `iroha.iso20022.pacs009.submit`
-  - `iroha.iso20022.status.get`
-  - `iroha.queries.submit`
-  - `iroha.transactions.list`
-  - `iroha.transactions.get`
-  - `iroha.instructions.list`
-  - `iroha.instructions.get`
-  - `iroha.blocks.list`
-  - `iroha.blocks.get`
-  - `iroha.transactions.submit`
-  - `iroha.transactions.submit_and_wait`
-  - `iroha.transactions.wait`
-  - `iroha.transactions.status`
-- `iroha.*` aliases accept flat convenience fields in addition to nested
-  `path`/`query`/`body` payloads (for example `account_id`, `hash`, `literal`,
-  `index`, `instruction_index`, `identifier`, `height`, `block_height`, `entry_hash`, `tx_hash`, `ticket`, `manifest_ticket`, `proof_id`, `upgrade_id`, `code_hash`, `namespace`, `id`, `rid`, `proposal_id`, `referendum_id`, `tally_id`, `signed_tx_base64`, `signed_tx_hex`, `uaid`, `definition_id`, `domain_id`, `subscription_id`, `asset_id`, `nft_id`, and
-  query-envelope shortcuts like `filter`, `sort`, `limit`, `offset`).
-
-## Account Tool Example
-
-List accounts using an OpenAPI-derived tool:
+## Enable And Configure
+MCP is disabled by default. Enable it under `torii.mcp`.
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "accounts-1",
-  "method": "tools/call",
-  "params": {
-    "name": "torii.get_v1_accounts"
+  "torii": {
+    "mcp": {
+      "enabled": true,
+      "max_request_bytes": 1048576,
+      "max_tools_per_list": 500,
+      "profile": "read_only",
+      "expose_operator_routes": false,
+      "allow_tool_prefixes": [],
+      "deny_tool_prefixes": [],
+      "rate_per_minute": 240,
+      "burst": 120,
+      "async_job_ttl_secs": 300,
+      "async_job_max_entries": 2000
+    }
   }
 }
 ```
 
-Query account transactions with path and query arguments:
+### Configuration Fields
+- `enabled`: master switch for `/v1/mcp`.
+- `max_request_bytes`: POST body limit for MCP JSON-RPC.
+- `max_tools_per_list`: pagination size for `tools/list`.
+- `profile`: `read_only`, `writer`, or `operator`.
+- `expose_operator_routes`: include operator routes even when profile is not `operator`.
+- `allow_tool_prefixes`: if non-empty, only matching tool-name prefixes are allowed.
+- `deny_tool_prefixes`: blocked tool-name prefixes (applied before allow-list).
+- `rate_per_minute` / `burst`: MCP endpoint token-bucket limits.
+- `async_job_ttl_secs` / `async_job_max_entries`: in-memory retention policy for `tools/call_async` jobs.
 
+Profile behavior:
+- `read_only`: GET/HEAD/OPTIONS and read-style aliases only.
+- `writer`: includes mutating non-operator tools.
+- `operator`: includes operator tools as well.
+
+## Endpoints
+- `GET /v1/mcp`: capabilities payload (not JSON-RPC wrapped).
+- `POST /v1/mcp`: JSON-RPC 2.0 execution endpoint.
+
+If `torii.mcp.enabled` is `false`, these routes are not exposed.
+
+## Security And Header Forwarding
+MCP does not bypass Torii auth.
+Tool dispatch executes the same handlers as regular HTTP routes, so normal endpoint auth rules still apply.
+
+`/v1/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
+the inbound token is missing/invalid, Torii rejects before JSON-RPC dispatch.
+
+For route dispatch, MCP forwards inbound auth headers automatically:
+- `Authorization`
+- `x-api-token`
+- `x-iroha-account`
+- `x-iroha-signature`
+- `x-iroha-api-version`
+
+Per-call additional headers can also be passed via `arguments.headers`.
+`content-length`, `host`, and `connection` from `arguments.headers` are ignored.
+
+## Protocol Behavior
+- `jsonrpc` is recommended as `"2.0"`.
+- If `jsonrpc` is present as a string and is not `"2.0"`, request is rejected as `invalid_request`.
+- If `jsonrpc` is omitted, request is accepted for compatibility.
+- POST accepts either a single request object or a non-empty request array (batch).
+- Empty batch is rejected as `invalid_request`.
+- Unknown method is `method_not_found`.
+- Missing/non-object `params` is treated as `{}`.
+
+### HTTP Status Behavior
+- `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
+- `400 Bad Request`: invalid JSON payload.
+- `403 Forbidden`: API-token middleware rejected request before JSON-RPC handling.
+- `413 Payload Too Large`: request exceeds `max_request_bytes`.
+- `429 Too Many Requests`: MCP rate-limited.
+- `404 Not Found`: MCP disabled (`torii.mcp.enabled = false`).
+- `405 Method Not Allowed`: method other than GET/POST on `/v1/mcp`.
+
+## Supported JSON-RPC Methods
+- `initialize`
+- `tools/list`
+- `tools/call`
+- `tools/call_batch`
+- `tools/call_async`
+- `tools/jobs/get`
+
+## Method Reference
+
+### `initialize`
+Returns MCP protocol metadata and capabilities for visible tools.
+
+Result shape:
+- `protocolVersion` (currently `2025-06-18`)
+- `serverInfo` (`name`, `version`)
+- `capabilities.tools` (`count`, `listChanged`, `toolsetVersion`)
+
+### `tools/list`
+Returns paginated tool descriptors.
+
+Params:
+- `cursor` (optional numeric-string offset)
+- `toolset_version` or `toolsetVersion` (optional client version hash)
+
+Result:
+- `tools`: array of descriptors (`name`, `description`, `inputSchema`, `outputSchema`)
+- `nextCursor`: string or `null`
+- `listChanged`: `true` when client toolset hash differs
+- `toolsetVersion`: current server toolset hash
+
+Notes:
+- Non-numeric `cursor` falls back to `0`.
+- Effective page size is `max(1, torii.mcp.max_tools_per_list)`.
+
+### `tools/call`
+Executes one tool.
+
+Params:
+- `name` (required string)
+- `arguments` (optional object)
+
+### `tools/call_batch`
+Executes multiple tool calls in one request.
+
+Params:
+- `calls` (required array of `{ "name": string, "arguments": object? }`)
+
+Result:
+- `results`: array where each entry has either `result` or `error`.
+
+Batch execution is best-effort per item. One failing call does not fail sibling calls.
+
+### `tools/call_async`
+Starts one background tool call and returns a job handle.
+
+Params:
+- `name` (required string)
+- `arguments` (optional object)
+
+Immediate result:
+- `job_id`
+- `status` = `pending`
+
+`tools/call_async` only validates envelope shape up front.
+Tool lookup/policy/runtime failures are reflected later in `tools/jobs/get` state.
+
+### `tools/jobs/get`
+Fetches job state by id.
+
+Params:
+- `job_id` or `jobId` (required string)
+
+Result:
+- `job_id`
+- `state`
+
+Possible `state.status` values:
+- `pending`
+- `completed` (with `result`)
+- `failed` (with `error`)
+
+Async job records are in-memory only and are pruned by TTL/capacity.
+Pruning is performed lazily on async job inserts and `tools/jobs/get` reads.
+
+## Tool Names And Discovery
+Tool names are stable and generated from HTTP method + path for OpenAPI-derived routes:
+- format: `torii.<method>_<path...>`
+- example: `torii.get_v1_accounts`
+
+Additional curated aliases are provided under `connect.*` and `iroha.*`.
+
+Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v1/mcp` itself).
+
+Do not hardcode the full tool catalog in clients.
+Use `initialize` + `tools/list` for runtime discovery.
+
+## Tool Arguments
+For OpenAPI-derived tools, pass structured arguments under:
+- `path`: path-template variables
+- `query`: query parameters
+- `body`: request payload (JSON or textual)
+- `body_base64`: binary request body
+- `content_type`: request content type override
+- `headers`: extra headers
+- `accept`: Accept header override
+- `project`: optional body-key projection of structured response
+
+Body/headers behavior:
+- `body_base64` takes precedence over `body`.
+- When `body` is used and `content_type` is omitted, Torii sends `application/json`.
+- When `body_base64` is used and `content_type` is omitted, Torii defaults to Norito MIME.
+- `arguments.headers` entries for `content-length`, `host`, and `connection` are ignored.
+
+Many `iroha.*` alias tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
+Rely on each tool’s `inputSchema` for authoritative accepted fields.
+
+## Tool Result Contract
+`tools/call` returns a JSON-RPC `result` object with MCP tool semantics:
+- `content`: text summary array
+- `isError`: boolean
+- `structuredContent`: structured payload
+
+For route-dispatched tools, `structuredContent` typically contains:
+- `status`: HTTP status code
+- `headers`: response headers map
+- `content_type`: response content type or `null`
+- `body`: decoded response body
+
+Body decoding rules:
+- JSON content-types are decoded as JSON.
+- UTF-8 bodies are returned as strings.
+- Non-UTF8 bodies are base64-encoded strings.
+
+If `structuredContent.status >= 400`, `isError` is set to `true` and `structuredContent.error_code` is added.
+Route-dispatched HTTP status mapping:
+- `400` -> `bad_request`
+- `401` -> `unauthorized`
+- `403` -> `forbidden`
+- `404` -> `not_found`
+- `405` -> `method_not_allowed`
+- `409` -> `conflict`
+- `413` -> `payload_too_large`
+- `415` -> `unsupported_media_type`
+- `422` -> `unprocessable_entity`
+- `429` -> `rate_limited`
+- `5xx` -> `server_error`
+
+## JSON-RPC Error Contract
+Protocol/validation errors are returned in top-level `error` with stable `error.data.error_code`.
+
+Primary top-level JSON-RPC codes:
+- `-32700` -> `parse_error`
+- `-32600` -> `invalid_request`
+- `-32601` -> `method_not_found`
+- `-32602` -> `invalid_params`
+- `-32029` -> `rate_limited`
+
+Additional MCP-specific `error_code` values may appear in `error.data`:
+- `tool_not_found`
+- `tool_not_allowed`
+- `job_not_found`
+
+Notes:
+- Tool runtime failures are returned as MCP tool results (`result.isError = true`) with
+  `result.structuredContent.error_code = "tool_execution_error"`.
+- `-32603/internal_error` is used for malformed internal batch-item handling fallbacks.
+
+## Minimal Usage Flow
+1. `GET /v1/mcp` (optional) or JSON-RPC `initialize`.
+2. `tools/list` and cache `toolsetVersion`.
+3. Call tools with `tools/call`.
+4. For long-running work, use `tools/call_async` + `tools/jobs/get` polling.
+5. Re-run `tools/list` when `listChanged` becomes `true`.
+
+## Examples
+
+### Initialize
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "acct-tx-1",
+  "id": 1,
+  "method": "initialize",
+  "params": {}
+}
+```
+
+### List Tools (paged)
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {
+    "cursor": "0"
+  }
+}
+```
+
+### Call OpenAPI-Derived Tool
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
   "method": "tools/call",
   "params": {
     "name": "torii.get_v1_accounts_account_id_transactions",
     "arguments": {
       "path": {
-        "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
+        "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"
       },
       "query": {
         "limit": 20,
@@ -256,17 +303,16 @@ Query account transactions with path and query arguments:
 }
 ```
 
-Equivalent flat-argument call via the alias tool:
-
+### Call Alias Tool With Flat Arguments
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "acct-tx-2",
+  "id": 4,
   "method": "tools/call",
   "params": {
     "name": "iroha.accounts.transactions",
     "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
+      "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
       "limit": 20,
       "offset": 0
     }
@@ -274,1671 +320,43 @@ Equivalent flat-argument call via the alias tool:
 }
 ```
 
-Account assets alias (flat `account_id` + query keys):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-assets-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.assets",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
-      "limit": 20,
-      "offset": 0
-    }
-  }
-}
-```
-
-Account permissions alias (flat `account_id`):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-perm-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.permissions",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
-    }
-  }
-}
-```
-
-Account detail alias (flat `account_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.get",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
-    }
-  }
-}
-```
-
-Account QR alias (flat `account_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-qr-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.qr",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
-    }
-  }
-}
-```
-
-Accounts query alias (flat query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.query",
-    "arguments": {
-      "limit": 20,
-      "offset": 0
-    }
-  }
-}
-```
-
-Account transactions query alias (flat `account_id` + query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-tx-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.transactions.query",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
-      "limit": 20
-    }
-  }
-}
-```
-
-Account assets query alias (flat `account_id` + query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-assets-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.assets.query",
-    "arguments": {
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN",
-      "limit": 20
-    }
-  }
-}
-```
-
-Account onboarding alias (flat shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-onboard-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.onboard",
-    "arguments": {
-      "alias": "agent-alice",
-      "account_id": "URpZv5Hh7nFYrW83TwCH1RrBX8vE7sGXBSDWME5bkWppM8ABBpBjN"
-    }
-  }
-}
-```
-
-Account portfolio alias (flat `uaid` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "acct-portfolio-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.accounts.portfolio",
-    "arguments": {
-      "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-    }
-  }
-}
-```
-
-Asset holders query alias (flat `definition_id` + query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "asset-holders-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.assets.holders.query",
-    "arguments": {
-      "definition_id": "rose#wonderland",
-      "limit": 20
-    }
-  }
-}
-```
-
-Asset definition detail alias (flat `definition_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "asset-def-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.assets.definitions.get",
-    "arguments": {
-      "definition_id": "rose#wonderland"
-    }
-  }
-}
-```
-
-Domains query alias (flat query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "domains-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.domains.query",
-    "arguments": {
-      "limit": 20
-    }
-  }
-}
-```
-
-Domain detail alias (flat `domain_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "domains-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.domains.get",
-    "arguments": {
-      "domain_id": "wonderland"
-    }
-  }
-}
-```
-
-Subscription plans list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-plans-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.plans.list",
-    "arguments": {
-      "provider": "<account-id>",
-      "limit": 20
-    }
-  }
-}
-```
-
-Subscriptions list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.list",
-    "arguments": {
-      "owned_by": "<account-id>",
-      "status": "active",
-      "limit": 20
-    }
-  }
-}
-```
-
-Subscription detail alias (flat `subscription_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.get",
-    "arguments": {
-      "subscription_id": "<subscription-nft-id>"
-    }
-  }
-}
-```
-
-Subscription plan create alias (`body` payload):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-plans-create-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.plans.create",
-    "arguments": {
-      "body": {
-        "provider": "<account-id>",
-        "asset_definition_id": "usd#wonderland",
-        "amount": "100"
-      }
-    }
-  }
-}
-```
-
-Subscription create alias (`body` payload):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-create-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.create",
-    "arguments": {
-      "body": {
-        "plan_id": "<plan-id>",
-        "subscriber": "<account-id>"
-      }
-    }
-  }
-}
-```
-
-Subscription cancel alias (flat `subscription_id` + optional `body`):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "subs-cancel-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.subscriptions.cancel",
-    "arguments": {
-      "subscription_id": "<subscription-nft-id>",
-      "body": {
-        "at_period_end": true
-      }
-    }
-  }
-}
-```
-
-Other subscription action aliases use the same `subscription_id` + optional `body`
-shape:
-
-- `iroha.subscriptions.pause`
-- `iroha.subscriptions.resume`
-- `iroha.subscriptions.keep`
-- `iroha.subscriptions.usage`
-- `iroha.subscriptions.charge_now`
-
-## Connect Session Lifecycle Example
-
-Create a Connect session:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "connect-create-1",
-  "method": "tools/call",
-  "params": {
-    "name": "connect.session.create",
-    "arguments": {
-      "session_id": "<base64url-32-byte-session-id>"
-    }
-  }
-}
-```
-
-`connect.session.create` also accepts the raw request body as `arguments.body`;
-if both are provided, `body` takes precedence for fields already present there.
-`sid` and `session_id` are equivalent shortcuts.
-When SID is omitted, MCP auto-generates a random 32-byte base64url session id.
-
-Create session + ticket metadata in one call:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "connect-create-ticket-1",
-  "method": "tools/call",
-  "params": {
-    "name": "connect.session.create_and_ticket",
-    "arguments": {
-      "session_id": "<base64url-32-byte-session-id>",
-      "role": "app",
-      "node_url": "https://node.example"
-    }
-  }
-}
-```
-
-SID is optional here as well; when omitted, MCP auto-generates it before calling
-`/v1/connect/session`.
-
-`connect.session.create_and_ticket` returns both `create` (HTTP dispatch output from
-`connect.session.create`) and `ticket` (same shape as `connect.ws.ticket`) when session creation
-succeeds (`2xx`). For non-`2xx` create responses, the tool returns that create response unchanged.
-
-Fetch Connect status:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "connect-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "connect.status"
-  }
-}
-```
-
-Delete a Connect session:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "connect-delete-1",
-  "method": "tools/call",
-  "params": {
-    "name": "connect.session.delete",
-    "arguments": {
-      "session_id": "<base64url-32-byte-session-id>"
-    }
-  }
-}
-```
-
-Build WebSocket ticket metadata directly from a create-session response token:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "connect-ticket-1",
-  "method": "tools/call",
-  "params": {
-    "name": "connect.ws.ticket",
-    "arguments": {
-      "session_id": "<session-id>",
-      "role": "app",
-      "token_app": "<token_app-from-connect.session.create>",
-      "node_url": "https://node.example"
-    }
-  }
-}
-```
-
-`connect.ws.ticket` accepts either `token` or role-matched aliases
-(`token_app` when `role=app`, `token_wallet` when `role=wallet`).
-`connect.session.delete` accepts `sid`/`session_id` either top-level or nested
-under `path.sid`/`path.session_id`.
-
-## Node Ops Example
-
-Health/status/parameter aliases for preflight checks:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "node-health-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.health"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "node-caps-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.node.capabilities"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "node-time-now-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.time.now"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "node-time-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.time.status"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "node-api-versions-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.api.versions"
-  }
-}
-```
-
-## Contract Tool Example
-
-Contract call alias (raw `body` payload):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "contract-call-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.contracts.call",
-    "arguments": {
-      "body": {
-        "authority": "<account-id>",
-        "private_key": "<multihash-private-key>",
-        "namespace": "nexus",
-        "contract_id": "vault",
-        "gas_limit": 100000
-      }
-    }
-  }
-}
-```
-
-Contract state alias (flat query shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "contract-state-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.contracts.state.get",
-    "arguments": {
-      "prefix": "balance",
-      "limit": 20
-    }
-  }
-}
-```
-
-Contract code-bytes alias (`hash` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "contract-code-bytes-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.contracts.code.bytes.get",
-    "arguments": {
-      "hash": "<code-hash-hex>"
-    }
-  }
-}
-```
-
-Contract instances alias (`namespace` + flat query shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "contract-instances-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.contracts.instances.list",
-    "arguments": {
-      "namespace": "nexus",
-      "limit": 20,
-      "order": "cid_asc"
-    }
-  }
-}
-```
-
-Contract call-and-wait alias (one-shot submit + terminal status wait):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "contract-call-wait-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.contracts.call_and_wait",
-    "arguments": {
-      "body": {
-        "authority": "<account-id>",
-        "private_key": "<multihash-private-key>",
-        "namespace": "nexus",
-        "contract_id": "vault",
-        "gas_limit": 100000
-      },
-      "timeout_ms": 30000,
-      "poll_interval_ms": 500
-    }
-  }
-}
-```
-
-## Block, Transaction, and Instruction Explorer Example
-
-Asset explorer list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "asset-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.assets.list",
-    "arguments": {
-      "page": 1,
-      "owned_by": "<account-id>"
-    }
-  }
-}
-```
-
-Asset explorer detail alias (flat `asset_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "asset-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.assets.get",
-    "arguments": {
-      "asset_id": "<asset-id>"
-    }
-  }
-}
-```
-
-NFT chain list alias:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "nft-chain-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.nfts.chain.list"
-  }
-}
-```
-
-NFT explorer list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "nft-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.nfts.list",
-    "arguments": {
-      "page": 1,
-      "owned_by": "<account-id>"
-    }
-  }
-}
-```
-
-NFT explorer detail alias (flat `nft_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "nft-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.nfts.get",
-    "arguments": {
-      "nft_id": "<nft-id>"
-    }
-  }
-}
-```
-
-NFT query alias (flat query-envelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "nft-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.nfts.query",
-    "arguments": {
-      "limit": 20
-    }
-  }
-}
-```
-
-Block explorer list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "block-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.blocks.list",
-    "arguments": {
-      "page": 1,
-      "per_page": 20
-    }
-  }
-}
-```
-
-Block explorer detail alias (flat `identifier`/`block_height` shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "block-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.blocks.get",
-    "arguments": {
-      "block_height": 1
-    }
-  }
-}
-```
-
-Transaction explorer list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "tx-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.transactions.list",
-    "arguments": {
-      "limit": 20,
-      "status": "committed"
-    }
-  }
-}
-```
-
-Transaction explorer detail alias (flat `hash` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "tx-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.transactions.get",
-    "arguments": {
-      "hash": "<transaction-hash-hex>"
-    }
-  }
-}
-```
-
-Nested `path.transaction_hash` is accepted as an alias for `path.hash`.
-
-Offline transfer bundle list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-transfer-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.transfers.list",
-    "arguments": {
-      "limit": 20
-    }
-  }
-}
-```
-
-Offline transfer bundle detail alias (flat `bundle_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-transfer-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.transfers.get",
-    "arguments": {
-      "bundle_id": "<bundle-id-hex>"
-    }
-  }
-}
-```
-
-Offline settlement submit alias (flat body shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-settlement-submit-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.settlements.submit",
-    "arguments": {
-      "authority": "<account-id>",
-      "private_key": "<multihash-private-key>",
-      "transfer": {
-        "bundle_id_hex": "<bundle-id-hex>",
-        "amount": "1",
-        "asset_definition_id": "<asset-definition-id>"
-      }
-    }
-  }
-}
-```
-
-Offline allowance list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-allowance-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.allowances.list",
-    "arguments": {
-      "limit": 20
-    }
-  }
-}
-```
-
-Offline certificate renew-issue alias (flat certificate-id and body shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-certificate-renew-issue-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.certificates.renew_issue",
-    "arguments": {
-      "certificate_id": "<certificate-id-hex>",
-      "authority": "<account-id>"
-    }
-  }
-}
-```
-
-Offline allowance detail alias (flat `certificate_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-allowance-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.allowances.get",
-    "arguments": {
-      "certificate_id": "<certificate-id-hex>"
-    }
-  }
-}
-```
-
-Offline allowance issue alias (flat body shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-allowance-issue-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.allowances.issue",
-    "arguments": {
-      "authority": "<account-id>",
-      "certificate": {
-        "id_hex": "<certificate-id-hex>"
-      }
-    }
-  }
-}
-```
-
-Offline allowance renew alias (flat certificate-id and body shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-allowance-renew-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.allowances.renew",
-    "arguments": {
-      "certificate_id": "<certificate-id-hex>",
-      "authority": "<account-id>",
-      "certificate": {
-        "id_hex": "<certificate-id-hex>"
-      }
-    }
-  }
-}
-```
-
-Offline receipt query alias (flat QueryEnvelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-receipt-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.receipts.query",
-    "arguments": {
-      "query": "FindAll",
-      "limit": 20
-    }
-  }
-}
-```
-
-Offline revocations query alias (flat QueryEnvelope shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-revocations-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.revocations.query",
-    "arguments": {
-      "query": "FindAll",
-      "limit": 20
-    }
-  }
-}
-```
-
-Offline bundle proof-status alias (flat `bundle_id` shortcut):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-bundle-proof-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.bundle.proof_status",
-    "arguments": {
-      "bundle_id": "<bundle-id-hex>"
-    }
-  }
-}
-```
-
-Offline state alias:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "offline-state-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.offline.state"
-  }
-}
-```
-
-Instruction explorer list alias (flat query fields):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "instruction-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.instructions.list",
-    "arguments": {
-      "page": 1,
-      "per_page": 20
-    }
-  }
-}
-```
-
-Instruction explorer detail alias (flat `hash` + `index` shortcuts):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "instruction-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.instructions.get",
-    "arguments": {
-      "hash": "<transaction-hash-hex>",
-      "index": 0
-    }
-  }
-}
-```
-
-Nested `path.transaction_hash` is accepted as an alias for `path.hash`.
-
-`/transaction` expects Norito-encoded signed transaction bytes.
-Send binary payloads through `body_base64`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "tx-submit-1",
-  "method": "tools/call",
-  "params": {
-    "name": "torii.post_transaction",
-    "arguments": {
-      "body_base64": "<base64-signed-transaction-bytes>"
-    }
-  }
-}
-```
-
-Alias shortcuts accepted by `iroha.transactions.submit`:
-
-- `signed_tx_base64` / `tx_base64` (same as `body_base64`)
-- `signed_tx_hex` / `tx_hex` / `body_hex` (hex payload converted to bytes)
-
-Signed query submit alias (`/query`, binary Norito payload):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "query-submit-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.queries.submit",
-    "arguments": {
-      "signed_query_base64": "<base64-signed-query-bytes>"
-    }
-  }
-}
-```
-
-Alias shortcuts accepted by `iroha.queries.submit`:
-
-- `signed_query_base64` / `query_base64` (same as `body_base64`)
-- `signed_query_hex` / `query_hex` / `body_hex` (hex payload converted to bytes)
-
-ISO 20022 bridge submit aliases:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "iso-pacs008-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.iso20022.pacs008.submit",
-    "arguments": {
-      "message_xml": "<Document>...</Document>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "iso-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.iso20022.status.get",
-    "arguments": {
-      "message_id": "<iso-message-id>"
-    }
-  }
-}
-```
-
-Ledger and bridge proof aliases:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "ledger-proof-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.ledger.block_proof",
-    "arguments": {
-      "block_height": 12345,
-      "tx_hash": "<entry-hash-hex>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "finality-bundle-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.bridge.finality.bundle",
-    "arguments": {
-      "height": 12345
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "proof-get-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.proofs.get",
-    "arguments": {
-      "proof_id": "<proof-record-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "proof-query-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.proofs.query",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "proof-retention-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.proofs.retention"
-  }
-}
-```
-
+### Batch Calls
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "gov-instances-1",
-  "method": "tools/call",
+  "id": 5,
+  "method": "tools/call_batch",
   "params": {
-    "name": "iroha.gov.instances.list",
-    "arguments": {
-      "namespace": "nexus",
-      "limit": 20
-    }
+    "calls": [
+      { "name": "iroha.health" },
+      { "name": "iroha.status" }
+    ]
   }
 }
 ```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-proposal-deploy-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.proposals.deploy_contract",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-proposal-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.proposals.get",
-    "arguments": {
-      "proposal_id": "<proposal-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-locks-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.locks.get",
-    "arguments": {
-      "rid": "<referendum-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-referendum-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.referenda.get",
-    "arguments": {
-      "referendum_id": "<referendum-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-tally-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.tally.get",
-    "arguments": {
-      "tally_id": "<tally-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-ballot-zk-v1-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.ballots.zk_v1",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-ballot-proof-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.ballots.zk_v1.ballot_proof",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-protected-ns-list-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.protected_namespaces.list"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-protected-ns-update-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.protected_namespaces.update",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-unlocks-stats-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.unlocks.stats"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-council-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.council.current"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-council-persist-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.council.persist",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-council-audit-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.council.audit"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-council-derive-vrf-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.council.derive_vrf",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-enact-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.enact",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "gov-finalize-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.gov.finalize",
-    "arguments": {
-      "body": {}
-    }
-  }
-}
-```
-
-Sumeragi introspection aliases:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-qcs-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.commit_certificates",
-    "arguments": {
-      "from": 12000,
-      "limit": 20
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-vset-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.validator_sets.get",
-    "arguments": {
-      "block_height": 12345
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.status"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-commit-qc-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.commit_qc.get",
-    "arguments": {
-      "hash": "0xabc123"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-rbc-delivered-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.rbc.delivered",
-    "arguments": {
-      "height": 12345,
-      "view": 2
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sumeragi-evidence-submit-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.sumeragi.evidence.submit",
-    "arguments": {
-      "evidence_hex": "<consensus-evidence-hex>"
-    }
-  }
-}
-```
-
-DA commitment and manifest aliases:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "da-manifest-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.da.manifests.get",
-    "arguments": {
-      "manifest_ticket": "<ticket-id>"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "da-ingest-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.da.ingest",
-    "arguments": {
-      "body": {
-        "manifest_hash": "<manifest-hash-hex>"
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "da-commitments-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.da.commitments.list",
-    "arguments": {
-      "body": {
-        "manifest_hash": "<manifest-hash-hex>"
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "da-pin-intents-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.da.pin_intents.list",
-    "arguments": {
-      "body": {
-        "manifest_hash": "<manifest-hash-hex>"
-      }
-    }
-  }
-}
-```
-
-Runtime introspection aliases:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "runtime-abi-hash-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.runtime.abi.hash"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "runtime-upgrades-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.runtime.upgrades.list"
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "runtime-upgrade-activate-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.runtime.upgrades.activate",
-    "arguments": {
-      "upgrade_id": "<runtime-upgrade-id>",
-      "body": {}
-    }
-  }
-}
-```
-
-Pipeline status alias shortcut:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "tx-status-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.transactions.status",
-    "arguments": {
-      "hash": "<transaction-hash-hex>"
-    }
-  }
-}
-```
-
-`iroha.transactions.status` accepts `hash` or `transaction_hash` (including
-their `query.*` forms) as hash shortcuts.
-
-One-shot submit + wait alias (submits and polls until terminal status):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "tx-submit-wait-1",
-  "method": "tools/call",
-  "params": {
-    "name": "iroha.transactions.submit_and_wait",
-    "arguments": {
-      "signed_tx_base64": "<base64-signed-transaction-bytes>",
-      "timeout_ms": 30000,
-      "poll_interval_ms": 500
-    }
-  }
-}
-```
-
-Optional `iroha.transactions.submit_and_wait` controls:
-
-- `hash` / `transaction_hash` (override hash extraction from submission receipt)
-- `terminal_statuses` (default: `Committed`, `Applied`, `Rejected`, `Expired`)
-- `status_accept` (Accept header for status polling calls; defaults to `application/json`)
-
-Wait on an existing transaction hash (without submitting):
 
+### Async Call + Poll
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "tx-wait-1",
-  "method": "tools/call",
+  "id": 6,
+  "method": "tools/call_async",
   "params": {
     "name": "iroha.transactions.wait",
     "arguments": {
-      "hash": "<transaction-hash-hex>",
-      "timeout_ms": 30000,
-      "poll_interval_ms": 500
+      "hash": "5f6d..."
     }
   }
 }
 ```
-
-Optional `iroha.transactions.wait` controls:
-
-- `transaction_hash` (alias for `hash`)
-- `terminal_statuses` (default: `Committed`, `Applied`, `Rejected`, `Expired`)
-- `status_accept` (Accept header for status polling calls; defaults to `application/json`)
-
-Alias runtime resolve shortcut:
 
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "alias-resolve-1",
-  "method": "tools/call",
+  "id": 7,
+  "method": "tools/jobs/get",
   "params": {
-    "name": "iroha.aliases.resolve",
-    "arguments": {
-      "alias": "<alias-name>"
-    }
+    "job_id": "<job-id-from-call-async>"
   }
 }
 ```
-
-Optional request metadata:
-
-- `arguments.content_type` (defaults to `application/x-norito` for `body_base64`)
-- `arguments.accept`
-- `arguments.headers` (forwarded to the dispatched Torii route)
-
-## Response Shape
-
-`tools/call` returns MCP tool content plus structured HTTP dispatch output:
-
-```json
-{
-  "result": {
-    "isError": false,
-    "structuredContent": {
-      "status": 200,
-      "headers": {},
-      "content_type": "application/json",
-      "body": {}
-    }
-  }
-}
-```
-
-When route dispatch fails validation or access checks, `structuredContent.status`
-contains the HTTP failure status, `isError` is `true` for HTTP `>= 400`, and
-`structuredContent.body` carries the route error payload.
-
-All JSON-RPC error payloads now include `error.data.error_code` for stable programmatic handling.

@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (ҡушымталар, иҫбатлаусы, тауыш биргәндә): `zk_app_api.md`X
 - Torii ZK ҡушымталары/довер номиналь китабы: `zk/prover_runbook.md`
 - Torii ZK App API операторы етәксеһе (беркетмәһе/губерна; йәшник doc): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - ВК/иҫбатлау тормош циклы (реестр, тикшерелгән, телеметрия): `zk/lifecycle.md`
 - Torii оператор ярҙамы (күренеш өсөн нөктәләр): `references/operator_aids.md`
 - Nexus стандарт-трасса старт: `quickstart/default_lane.md`

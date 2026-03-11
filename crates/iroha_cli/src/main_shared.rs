@@ -618,7 +618,7 @@ mod tools {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+        /// Account address helpers (canonical I105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
@@ -1538,10 +1538,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account identifier (canonical IH58 literal)
+        /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (canonical IH58 literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -1804,14 +1804,14 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account identifier (canonical IH58 literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
-        /// Canonical domainless account identifier for registration (canonical IH58 literal)
+        /// Canonical domainless account identifier for registration (canonical I105 literal)
         #[arg(short, long)]
         id: String,
         /// Domain in which to materialize the account link
@@ -1821,7 +1821,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account identifier (canonical IH58 literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1837,7 +1837,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account identifier (canonical IH58 literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1853,7 +1853,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account identifier (canonical IH58 literal)
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub id: String,
         /// Role name
@@ -2189,10 +2189,10 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Source account identifier (canonical IH58 literal)
+            /// Source account identifier (canonical I105 literal)
             #[arg(short, long)]
             pub from: String,
-            /// Destination account identifier (canonical IH58 literal)
+            /// Destination account identifier (canonical I105 literal)
             #[arg(short, long)]
             pub to: String,
         }
@@ -2373,7 +2373,7 @@ mod asset {
         /// Encoded asset identifier (`norito:<hex>`)
         #[arg(short, long, value_parser = parse_asset_id_literal)]
         pub id: AssetId,
-        /// Destination account identifier (canonical IH58 literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
         /// Transfer amount (integer or decimal)
@@ -2632,10 +2632,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account identifier (canonical IH58 literal)
+        /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (canonical IH58 literal)
+        /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -2898,7 +2898,7 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account (canonical IH58 literal)
+        /// List of signatories for the multisig account (canonical I105 literal)
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
@@ -4580,7 +4580,7 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (canonical IH58 literal)
+        /// Account executing the trigger (canonical I105 literal)
         #[arg(long)]
         pub authority: Option<String>,
         /// Filter type for the trigger
@@ -4598,7 +4598,7 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account (canonical IH58 literal)
+        /// Data filter preset: events for an account (canonical I105 literal)
         #[arg(long)]
         pub data_account: Option<String>,
         /// Data filter preset: events for an encoded asset (`norito:<hex>`)
@@ -6494,16 +6494,16 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     }
 
     if trimmed.contains('@') {
-        eyre::bail!("account literal must not include '@domain'; use canonical IH58 only");
+        eyre::bail!("account literal must not include '@domain'; use canonical I105 only");
     }
     if trimmed
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!("account literal must be canonical IH58; canonical hex is not accepted");
+        eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
     let parsed = AccountId::parse_encoded(trimmed)
-        .map_err(|err| eyre!("account literal must be canonical IH58: {err}"))?;
+        .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
 }
 
@@ -6522,7 +6522,7 @@ fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
 fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
-        eyre::bail!("`ledger account register --id` must be a canonical IH58 account id");
+        eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
@@ -6534,11 +6534,11 @@ fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedA
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
         eyre::bail!(
-            "`ledger account register --id` must be canonical IH58; canonical hex is not accepted"
+            "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
-        eyre!("`ledger account register --id` must be a canonical IH58 account id: {err}")
+        eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
     Ok(ScopedAccountId::from_account_id(
         parsed.into_account_id(),
@@ -6822,18 +6822,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_account_id_with_rejects_compressed_literal() {
+    fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
         let key_pair = KeyPair::from_seed(vec![8_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .to_account_address()
             .expect("account address")
-            .to_compressed_sora()
-            .expect("compressed literal");
+            .to_i105()
+            .expect("i105 literal");
 
-        let err = resolve_account_id_with(&literal).expect_err("compressed literal should fail");
+        let err =
+            resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
 
         assert!(
-            err.to_string().contains("must be canonical IH58"),
+            err.to_string().contains("must be canonical I105"),
             "unexpected error: {err}"
         );
     }
@@ -6843,8 +6844,8 @@ mod tests {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
-            .canonical_ih58()
-            .expect("canonical ih58");
+            .canonical_i105()
+            .expect("canonical i105");
         let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
         assert_eq!(
             resolved,
@@ -6865,19 +6866,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_register_account_id_rejects_compressed_literal() {
+    fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .to_account_address()
             .expect("account address")
-            .to_compressed_sora()
-            .expect("compressed literal");
+            .to_i105()
+            .expect("i105 literal");
         let err = parse_register_account_id(&literal, &domain)
-            .expect_err("compressed literal should fail");
+            .expect_err("non-canonical I105 literal should fail");
         assert!(
             err.to_string()
-                .contains("must be a canonical IH58 account id"),
+                .contains("must be a canonical I105 account id"),
             "unexpected error: {err}"
         );
     }
@@ -6960,7 +6961,7 @@ mod tests {
     fn resolve_account_id_with_resolves_encoded_literal() {
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
-        let canonical = account.canonical_ih58().expect("canonical ih58");
+        let canonical = account.canonical_i105().expect("canonical i105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());

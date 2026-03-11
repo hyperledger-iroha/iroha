@@ -195,7 +195,7 @@ Enum RegistryEventKind {
 སྒོ་སྒྲིག་ཚུ་གིས་ `RegistryEventV1` ལུ་ མིང་རྟགས་བཀོདཔ་ཨིནམ་དང་ DNS/I18N1NT000000007X ལུ་ མཉམ་འབྱུང་འབདཝ་ཨིན།
 
 1. བྱུང་ལས་རིམ་པ་གིས་ གཞི་བསྟུན་འབད་མི་ `NameRecordV1` གསརཔ་འདི་ ལེན་དོ།
-2. ཐག་གཅོད་པ་ ཊེམ་པེལེཊི་ཚུ་ སླར་གསོ་འབད་ (དགའ་གདམ་འབད་ཡོད་པའི་ IH58 + གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (`sora`) ཁ་བྱང་ཚུ་, ཚིག་ཡིག་དྲན་ཐོ་ཚུ་)།
+2. ཐག་གཅོད་པ་ ཊེམ་པེལེཊི་ཚུ་ སླར་གསོ་འབད་ (དགའ་གདམ་འབད་ཡོད་པའི་ I105 + གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (`sora`) ཁ་བྱང་ཚུ་, ཚིག་ཡིག་དྲན་ཐོ་ཚུ་)།
 3. པིན་ནིང་གིས་ [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ SoraDNS ལཱ་གི་རྒྱུན་རིམ་བརྒྱུད་དེ་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
 
 བྱུང་རིམ་སྤྲོད་ལེན་འགན་ལེན་ཚུ།
@@ -215,7 +215,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58...",
+    owner: "i105...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -242,7 +242,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58...",
+    steward: "i105...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -255,10 +255,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58...",
+    fund_splitter_account: "i105...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

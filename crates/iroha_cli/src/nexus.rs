@@ -1,7 +1,7 @@
 //! Nexus helpers (lane governance reports and public-lane snapshots).
 
 use eyre::{Result, eyre};
-use iroha::{client::AddressFormat, data_model::nexus::LaneId};
+use iroha::data_model::nexus::LaneId;
 use norito::json::{Map, Value};
 use std::{convert::TryFrom, fmt::Write};
 
@@ -45,9 +45,6 @@ pub struct PublicLaneValidatorsArgs {
     /// Render a compact table instead of raw JSON
     #[arg(long, default_value_t = false)]
     pub summary: bool,
-    /// Preferred address literal encoding (`ih58` or `compressed`)
-    #[arg(long = "address-format", value_enum, default_value_t = AddressFormatArg::Ih58)]
-    pub address_format: AddressFormatArg,
 }
 
 #[derive(clap::Args, Debug)]
@@ -61,25 +58,6 @@ pub struct PublicLaneStakeArgs {
     /// Render a compact table instead of raw JSON
     #[arg(long, default_value_t = false)]
     pub summary: bool,
-    /// Preferred address literal encoding (`ih58` or `compressed`)
-    #[arg(long = "address-format", value_enum, default_value_t = AddressFormatArg::Ih58)]
-    pub address_format: AddressFormatArg,
-}
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-#[value(rename_all = "kebab_case")]
-pub enum AddressFormatArg {
-    Ih58,
-    Compressed,
-}
-
-impl From<AddressFormatArg> for AddressFormat {
-    fn from(value: AddressFormatArg) -> Self {
-        match value {
-            AddressFormatArg::Ih58 => AddressFormat::Ih58,
-            AddressFormatArg::Compressed => AddressFormat::Compressed,
-        }
-    }
 }
 
 impl Run for Command {
@@ -151,10 +129,7 @@ fn public_lane_validators<C: RunContext>(
     args: &PublicLaneValidatorsArgs,
 ) -> Result<()> {
     let client = context.client_from_config();
-    let payload = client.get_public_lane_validators(
-        LaneId::new(args.lane),
-        Some(AddressFormat::from(args.address_format)),
-    )?;
+    let payload = client.get_public_lane_validators(LaneId::new(args.lane))?;
     if args.summary {
         context.println(format_validator_summary(&payload)?)?;
     } else {
@@ -171,11 +146,7 @@ fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs)
         .map(|literal| crate::resolve_account_id(context, literal))
         .transpose()?
         .map(|account| account.to_string());
-    let payload = client.get_public_lane_stake(
-        LaneId::new(args.lane),
-        validator.as_deref(),
-        Some(AddressFormat::from(args.address_format)),
-    )?;
+    let payload = client.get_public_lane_stake(LaneId::new(args.lane), validator.as_deref())?;
     if args.summary {
         context.println(format_stake_summary(&payload)?)?;
     } else {

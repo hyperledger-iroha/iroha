@@ -14,7 +14,7 @@ titre : اکاؤنٹ ایڈریس تعمیل
 description : ADDR-2 luminaire est disponible et SDK est disponible en ligne.
 ---
 
-bundle ADDR-2 canonique (`fixtures/account/address_vectors.json`) IH58 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature, appareils négatifs et capture d'image Le SDK + Torii surface et JSON sont compatibles avec la dérive du codec et la dérive du codec est disponible. سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) et miroir کرتا ہے تاکہ lecteurs de portail pour mono-repo میں کھوج Flux de travail en cours
+bundle ADDR-2 canonique (`fixtures/account/address_vectors.json`) I105 (préféré), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature, appareils négatifs et capture d'image Le SDK + Torii surface et JSON sont compatibles avec la dérive du codec et la dérive du codec est disponible. سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) et miroir کرتا ہے تاکہ lecteurs de portail pour mono-repo میں کھوج Flux de travail en cours
 
 ## Bundle pour régénérer et vérifier
 
@@ -43,7 +43,7 @@ Il y a un générateur de luminaires et un générateur de documents pour les cr
 | Torii (serveur) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |exploiter les octets canoniques + IH58 + encodages compressés (`sora`, deuxième meilleur) pour les codes aller-retour et les cas négatifs pour les codes d'erreur de style Norito et les appareils qui correspondent aux codes d'erreur ہے۔
+| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |exploiter les octets canoniques + I105 + encodages compressés (`sora`, deuxième meilleur) pour les codes aller-retour et les cas négatifs pour les codes d'erreur de style Norito et les appareils qui correspondent aux codes d'erreur ہے۔
 
 ## Automatisation چاہئے؟
 

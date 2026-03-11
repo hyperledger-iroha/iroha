@@ -55,14 +55,14 @@ def main() -> None:
     parser.add_argument(
         "--authority",
         required=True,
-        help="Signing account id (IH58 preferred, encoded-only; e.g. 6cmzPVPX4PK3...)",
+        help="Signing account id (I105 canonical literal, e.g. sora...)",
     )
     parser.add_argument("--private-key-hex", required=True, help="Hex-encoded Ed25519 private key")
     parser.add_argument("--domain-id", default="playground", help="Domain id to register")
     parser.add_argument(
         "--account-id",
-        default="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-        help="Account id to register (IH58 preferred, encoded-only)",
+        default="sora...",
+        help="Account id to register (I105 canonical literal)",
     )
     parser.add_argument(
         "--asset-definition-id",

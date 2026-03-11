@@ -132,15 +132,14 @@ results. Responses use Norito-backed JSON, so the wire format is deterministic.
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -153,9 +152,8 @@ fn download_qr() -> eyre::Result<()> {
 surface: it includes the canonical account id, the literal rendered with the
 requested format, network prefix/error-correction metadata, QR dimensions, and
 the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrOptions` to default to the preferred I105 output or set
+canonical I105 output to retrieve canonical I105 output used by ADDR-6b.
 
 ## 7. Subscribe to events
 

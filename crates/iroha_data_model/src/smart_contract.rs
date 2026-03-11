@@ -66,7 +66,6 @@ pub mod payloads {
     #[cfg(test)]
     mod payloads_tests {
         use core::num::NonZeroU64;
-        use std::str::FromStr;
 
         use iroha_crypto::KeyPair;
         use norito::core::DecodeFromSlice;

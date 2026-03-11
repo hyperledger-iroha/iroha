@@ -29,6 +29,7 @@ Bu indeks IVM, Kotodama və IVM-birinci boru kəməri üçün əsas dizayn və i
 - ZK App API (qoşmalar, sübut, səslərin sayı): `zk_app_api.md`
 - Torii ZK əlavələri/prover runbook: `zk/prover_runbook.md`
 - Torii ZK App API operator təlimatı (qoşmalar/prover; sandıq sənədi): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof həyat dövrü (reyestr, yoxlama, telemetriya): `zk/lifecycle.md`
 - Torii Operator Köməkçiləri (görünmə üçün son nöqtələr): `references/operator_aids.md`
 - Nexus standart zolaqlı sürətli başlanğıc: `quickstart/default_lane.md`

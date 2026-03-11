@@ -37,7 +37,6 @@ async function main() {
     pageSize: 3,
     filter: { Gte: ["quantity", 1] },
     select: [{ Fields: ["asset_id", "quantity"] }],
-    addressFormat: "compressed",
   })) {
     console.log(`${holding.asset_id} => ${holding.quantity}`);
   }

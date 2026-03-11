@@ -872,7 +872,7 @@ mod prefetch_tests {
     }
 
     #[test]
-    fn parse_account_literal_rejects_ih58_with_domain_suffix() {
+    fn parse_account_literal_rejects_i105_with_domain_suffix() {
         let alice = (*ALICE_ID).clone();
         let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
         let alice_scoped = alice.to_account_id(wonderland.clone());
@@ -881,8 +881,8 @@ mod prefetch_tests {
         let world = World::with([domain], [account], []);
         let world_view = world.view();
 
-        let ih58 = alice.canonical_ih58().expect("ih58 encoding");
-        let literal = format!("{ih58}@{wonderland}");
+        let i105 = alice.canonical_i105().expect("i105 encoding");
+        let literal = format!("{i105}@{wonderland}");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &literal),
             None
@@ -900,9 +900,9 @@ mod prefetch_tests {
         world.domain_selectors = Default::default();
         let world_view = world.view();
 
-        let ih58 = alice.canonical_ih58().expect("ih58 encoding");
+        let i105 = alice.canonical_i105().expect("i105 encoding");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &ih58),
+            parse_account_literal_with_world(&world_view, &i105),
             Some(alice)
         );
     }
@@ -928,8 +928,8 @@ mod prefetch_tests {
 
         let encoded = alpha_account
             .account()
-            .canonical_ih58()
-            .expect("canonical ih58 account literal");
+            .canonical_i105()
+            .expect("canonical i105 account literal");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &encoded),
             None,
@@ -3756,6 +3756,7 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
+                false,
             )
         }
 
@@ -3775,6 +3776,7 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
+            skip_tx_signature_validation: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -3787,6 +3789,7 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
+                skip_tx_signature_validation,
             )
         }
 
@@ -3814,6 +3817,7 @@ pub(crate) mod valid {
                 soft_fork,
                 Some(timings),
                 false,
+                false,
             )
         }
 
@@ -3829,6 +3833,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
+            skip_tx_signature_validation: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -3927,6 +3932,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 cache_enabled.then_some(cached_ok.as_slice()),
+                skip_tx_signature_validation,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4136,6 +4142,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 cache_enabled.then_some(cached_ok.as_slice()),
+                false,
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4397,6 +4404,7 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             cached_ok: Option<&[bool]>,
+            skip_tx_signature_validation: bool,
             metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             #[cfg(not(feature = "telemetry"))]
@@ -5231,29 +5239,35 @@ pub(crate) mod valid {
                         .map(BlockValidationError::TransactionAccept);
                     }
 
-                    let signature_override = match tx.authority().controller() {
-                        AccountController::Single(signatory) => {
-                            let algo = signatory.algorithm();
-                            let skip = (algo == iroha_crypto::Algorithm::Ed25519 && ed_preverified)
-                                || (algo == iroha_crypto::Algorithm::Secp256k1 && secp_preverified)
-                                || ({
-                                    #[cfg(feature = "bls")]
-                                    {
-                                        matches!(
-                                            algo,
-                                            iroha_crypto::Algorithm::BlsNormal
-                                                | iroha_crypto::Algorithm::BlsSmall
-                                        ) && bls_preverified
-                                    }
-                                    #[cfg(not(feature = "bls"))]
-                                    {
-                                        false
-                                    }
-                                })
-                                || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
-                            skip.then_some(Ok(()))
+                    let signature_override = if skip_tx_signature_validation {
+                        Some(Ok(()))
+                    } else {
+                        match tx.authority().controller() {
+                            AccountController::Single(signatory) => {
+                                let algo = signatory.algorithm();
+                                let skip = (algo == iroha_crypto::Algorithm::Ed25519
+                                    && ed_preverified)
+                                    || (algo == iroha_crypto::Algorithm::Secp256k1
+                                        && secp_preverified)
+                                    || ({
+                                        #[cfg(feature = "bls")]
+                                        {
+                                            matches!(
+                                                algo,
+                                                iroha_crypto::Algorithm::BlsNormal
+                                                    | iroha_crypto::Algorithm::BlsSmall
+                                            ) && bls_preverified
+                                        }
+                                        #[cfg(not(feature = "bls"))]
+                                        {
+                                            false
+                                        }
+                                    })
+                                    || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
+                                skip.then_some(Ok(()))
+                            }
+                            AccountController::Multisig(_) => None,
                         }
-                        AccountController::Multisig(_) => None,
                     };
 
                     let stateless = if crate::tx::is_heartbeat_transaction(tx) {
@@ -5384,6 +5398,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 cache_enabled.then_some(cached_ok.as_slice()),
+                false,
                 metrics,
             )?;
             if let Some(context) = cache_context {
@@ -9886,6 +9901,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 None,
+                false,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -9963,6 +9979,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 None,
+                false,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");

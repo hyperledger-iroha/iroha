@@ -1009,6 +1009,7 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
+            domain::DomainId,
             isi::{InstructionBox, Mint},
         };
 
@@ -1017,6 +1018,7 @@ seiyaku Test {
                 .parse()
                 .expect("public key"),
         );
+        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
@@ -1032,11 +1034,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(
-            hints
-                .read_keys
-                .contains(&format!("domain:{}", account.domain()))
-        );
+        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
         assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
         assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
         assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
@@ -1146,6 +1144,7 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
+            domain::DomainId,
             query::asset::FindAssetById,
             query::{QueryRequest, SingularQueryBox},
         };
@@ -1155,6 +1154,7 @@ seiyaku Test {
                 .parse()
                 .expect("public key"),
         );
+        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
@@ -1172,11 +1172,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(
-            hints
-                .read_keys
-                .contains(&format!("domain:{}", account.domain()))
-        );
+        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
         assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
         assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
         assert!(hints.write_keys.is_empty());

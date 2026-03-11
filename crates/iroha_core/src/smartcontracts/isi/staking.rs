@@ -1927,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn stake_context_accepts_ih58_account_literals() {
+    fn stake_context_accepts_i105_account_literals() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -1939,7 +1939,7 @@ mod tests {
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
 
         let stake_ctx = stake_context(&stx.world, &stx.nexus.staking, &validator, None)
-            .expect("stake context should accept IH58 literals");
+            .expect("stake context should accept I105 literals");
 
         assert_eq!(
             stake_ctx.escrow_asset.account(),
@@ -4356,7 +4356,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_rewards_accepts_ih58_fee_sink() {
+    fn claim_rewards_accepts_i105_fee_sink() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());

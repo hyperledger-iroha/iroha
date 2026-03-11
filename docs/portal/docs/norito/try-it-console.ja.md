@@ -81,7 +81,7 @@ OAuth 変数が設定されている場合、sandbox は **Sign in with device c
 4. "Try it" ドロワーで `application/x-norito` のコンテンツタイプを選択し、**Choose File** をクリックしてペイロードを選びます。プロキシはリクエストを `/proxy/v1/pipeline/submit` に書き換え、`X-TryIt-Client=docs-portal-rapidoc` でタグ付けします。
 5. Norito のレスポンスをダウンロードするには `Accept: application/x-norito` を設定します。Swagger/RapiDoc は同じドロワーにヘッダーセレクタを表示し、バイナリをプロキシ経由でストリームします。
 
-JSON のみのルートでは、組み込みの Try it sandbox の方が速い場合があります。パス（例: `/v1/accounts/ih58.../assets`）を入力し、HTTP メソッドを選択し、必要なら JSON ボディを貼り付け、**Send request** を押してヘッダー、所要時間、ペイロードをその場で確認します。
+JSON のみのルートでは、組み込みの Try it sandbox の方が速い場合があります。パス（例: `/v1/accounts/i105.../assets`）を入力し、HTTP メソッドを選択し、必要なら JSON ボディを貼り付け、**Send request** を押してヘッダー、所要時間、ペイロードをその場で確認します。
 
 ## トラブルシューティング
 

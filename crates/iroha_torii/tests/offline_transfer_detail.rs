@@ -69,10 +69,7 @@ struct Fixtures {
 #[tokio::test]
 async fn offline_transfer_detail_returns_bundle() {
     let harness = build_harness();
-    let uri = format!(
-        "/v1/offline/transfers/{}?address_format=canonical",
-        harness.fixtures.bundle_hex
-    );
+    let uri = format!("/v1/offline/transfers/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -111,10 +108,7 @@ async fn offline_transfer_detail_returns_bundle() {
 #[tokio::test]
 async fn offline_settlement_detail_alias_returns_bundle() {
     let harness = build_harness();
-    let uri = format!(
-        "/v1/offline/settlements/{}?address_format=canonical",
-        harness.fixtures.bundle_hex
-    );
+    let uri = format!("/v1/offline/settlements/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -176,7 +170,7 @@ async fn offline_settlement_detail_alias_includes_rejected_reason() {
     tx.apply();
     block.commit().expect("commit rejected settlement");
 
-    let uri = format!("/v1/offline/settlements/{rejected_bundle_hex}?address_format=canonical");
+    let uri = format!("/v1/offline/settlements/{rejected_bundle_hex}");
     let resp = harness
         .app
         .clone()

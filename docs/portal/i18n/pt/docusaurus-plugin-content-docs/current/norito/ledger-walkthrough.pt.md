@@ -30,8 +30,8 @@ conta que você planeja usar. O pacote padrão já inclui duas contas derivadas 
 chaves de demonstração:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirme os valores listados como primeiras contas:

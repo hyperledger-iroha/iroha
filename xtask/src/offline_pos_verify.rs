@@ -575,7 +575,7 @@ impl RevocationApiSnapshot {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{account::AccountId, domain::DomainId, offline::OfflinePosBackendRoot};
+    use iroha_data_model::{account::AccountId, offline::OfflinePosBackendRoot};
 
     use super::*;
 
@@ -587,17 +587,13 @@ mod tests {
         KeyPair::from_seed(b"backend-root".to_vec(), Algorithm::Ed25519)
     }
 
-    fn sample_domain() -> DomainId {
-        DomainId::from_str("wonderland").expect("domain parses")
-    }
-
     fn signed_manifest(
         valid_from: u64,
         valid_until: u64,
         backend: &KeyPair,
     ) -> OfflinePosProvisionManifest {
         let operator = operator_pair();
-        let operator_id = AccountId::new(sample_domain(), operator.public_key().clone());
+        let operator_id = AccountId::new(operator.public_key().clone());
         let mut manifest = OfflinePosProvisionManifest {
             manifest_id: "pos-demo".into(),
             sequence: 1,

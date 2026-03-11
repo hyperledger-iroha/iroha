@@ -45,7 +45,7 @@ pub struct PersistCouncilArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (canonical IH58 account literal).
+    /// Authority `AccountId` for signing (canonical I105 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -374,7 +374,7 @@ pub struct DeriveAndPersistArgs {
     /// Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
     #[arg(long, value_name = "PATH")]
     pub candidates_file: std::path::PathBuf,
-    /// Authority `AccountId` for signing (canonical IH58 account literal).
+    /// Authority `AccountId` for signing (canonical I105 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing
@@ -596,13 +596,13 @@ impl Run for CouncilArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReplaceCouncilArgs {
-    /// Account id of the member to replace (canonical IH58 account literal).
+    /// Account id of the member to replace (canonical I105 account literal).
     #[arg(long)]
     pub missing: String,
     /// Optional epoch override; defaults to the latest persisted epoch
     #[arg(long)]
     pub epoch: Option<u64>,
-    /// Authority `AccountId` for signing (canonical IH58 account literal).
+    /// Authority `AccountId` for signing (canonical I105 account literal).
     #[arg(long)]
     pub authority: String,
     /// Private key (hex) for signing

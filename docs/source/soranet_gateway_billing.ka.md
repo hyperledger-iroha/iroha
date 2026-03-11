@@ -47,8 +47,8 @@ cargo xtask soranet-gateway-billing \
   --usage configs/soranet/gateway_m0/billing_usage_sample.json \
   --catalog configs/soranet/gateway_m0/meter_catalog.json \
   --guardrails configs/soranet/gateway_m0/billing_guardrails.json \
-  --payer ih58... \
-  --treasury ih58... \
+  --payer i105... \
+  --treasury i105... \
   --asset xor#wonderland \
   --out artifacts/soranet/gateway_billing
 ```

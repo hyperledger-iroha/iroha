@@ -54,7 +54,7 @@ use tower::ServiceExt as _;
 #[tokio::test]
 async fn offline_receipts_list_returns_flattened_receipts() {
     let harness = build_receipt_harness();
-    let uri = "/v1/offline/receipts?address_format=canonical";
+    let uri = "/v1/offline/receipts";
 
     let resp = harness
         .app

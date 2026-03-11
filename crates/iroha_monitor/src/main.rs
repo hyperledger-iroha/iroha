@@ -1474,49 +1474,49 @@ fn render_focus_panel(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rec
             ]),
         ];
 
-        if let Some(snapshot) = &slot.latest {
-            if let Some(status) = &snapshot.status {
-                rows.push(Line::from(format!(
-                    "Height {}  Tx {} / {}  Queue {}",
-                    status.blocks.map_or_else(|| "-".to_string(), compact_u64),
-                    status
-                        .txs_approved
-                        .map_or_else(|| "-".to_string(), compact_u64),
-                    status
-                        .txs_rejected
-                        .map_or_else(|| "-".to_string(), compact_u64),
-                    status
-                        .queue_size
-                        .map_or_else(|| "-".to_string(), compact_u64),
-                )));
-                rows.push(Line::from(format!(
-                    "Latency {}  Commit {}  Views {}",
-                    snapshot.latency.map_or_else(
-                        || "-".to_string(),
-                        |value| format!("{} ms", value.as_millis())
-                    ),
-                    status
-                        .commit_time_ms
-                        .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
-                    status
-                        .view_changes
-                        .map_or_else(|| "-".to_string(), |value| value.to_string()),
-                )));
-                rows.push(Line::from(format!(
-                    "Uptime {}  Gas {}  Fees {}",
-                    status
-                        .uptime
-                        .map_or_else(|| "-".to_string(), |value| format!("{value} s")),
-                    snapshot
-                        .metrics
-                        .gas_used
-                        .map_or_else(|| "-".to_string(), compact_u64),
-                    snapshot
-                        .metrics
-                        .fee_units
-                        .map_or_else(|| "-".to_string(), compact_u64),
-                )));
-            }
+        if let Some(snapshot) = &slot.latest
+            && let Some(status) = &snapshot.status
+        {
+            rows.push(Line::from(format!(
+                "Height {}  Tx {} / {}  Queue {}",
+                status.blocks.map_or_else(|| "-".to_string(), compact_u64),
+                status
+                    .txs_approved
+                    .map_or_else(|| "-".to_string(), compact_u64),
+                status
+                    .txs_rejected
+                    .map_or_else(|| "-".to_string(), compact_u64),
+                status
+                    .queue_size
+                    .map_or_else(|| "-".to_string(), compact_u64),
+            )));
+            rows.push(Line::from(format!(
+                "Latency {}  Commit {}  Views {}",
+                snapshot.latency.map_or_else(
+                    || "-".to_string(),
+                    |value| format!("{} ms", value.as_millis())
+                ),
+                status
+                    .commit_time_ms
+                    .map_or_else(|| "-".to_string(), |value| format!("{value} ms")),
+                status
+                    .view_changes
+                    .map_or_else(|| "-".to_string(), |value| value.to_string()),
+            )));
+            rows.push(Line::from(format!(
+                "Uptime {}  Gas {}  Fees {}",
+                status
+                    .uptime
+                    .map_or_else(|| "-".to_string(), |value| format!("{value} s")),
+                snapshot
+                    .metrics
+                    .gas_used
+                    .map_or_else(|| "-".to_string(), compact_u64),
+                snapshot
+                    .metrics
+                    .fee_units
+                    .map_or_else(|| "-".to_string(), compact_u64),
+            )));
         }
         rows.push(Line::from(format!("Note {}", peer_note(slot))));
         rows
@@ -1719,11 +1719,15 @@ fn compact_u64(value: u64) -> String {
     const UNITS: [(&str, u64); 3] = [("B", 1_000_000_000), ("M", 1_000_000), ("k", 1_000)];
     for (suffix, scale) in UNITS {
         if value >= scale {
-            let major = value as f64 / scale as f64;
-            return if major >= 10.0 {
-                format!("{major:.0}{suffix}")
+            let scale_u128 = u128::from(scale);
+            return if value >= scale.saturating_mul(10) {
+                let rounded = (u128::from(value) + scale_u128 / 2) / scale_u128;
+                format!("{rounded}{suffix}")
             } else {
-                format!("{major:.1}{suffix}")
+                let tenths = (u128::from(value) * 10 + scale_u128 / 2) / scale_u128;
+                let whole = tenths / 10;
+                let frac = tenths % 10;
+                format!("{whole}.{frac}{suffix}")
             };
         }
     }

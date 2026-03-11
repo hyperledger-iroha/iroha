@@ -3582,10 +3582,9 @@ mod tests {
         let private_key =
             parse_private_key(signing.as_bytes()).expect("ed25519 private key parses");
         let public_key = PublicKey::from(private_key.clone());
-        let authority_domain: DomainId = "default".parse().expect("default domain");
-        let authority = AccountId::new(authority_domain, public_key.clone())
-            .canonical_ih58()
-            .expect("canonical IH58 authority");
+        let authority = AccountId::new(public_key.clone())
+            .canonical_i105()
+            .expect("canonical i105 authority");
 
         let mut builder =
             TransactionBuilder::new("test-chain", &authority).expect("builder constructs");
@@ -5179,11 +5178,6 @@ impl PyAccountId {
     }
 
     #[getter]
-    fn domain<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDomainId>> {
-        domain_id_to_py(py, self.inner.domain())
-    }
-
-    #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
         let (algorithm, bytes) = self.inner.signatory().to_bytes();
         algorithm_guard(algorithm)?;
@@ -5370,8 +5364,14 @@ impl Instruction {
     ) -> PyResult<Self> {
         let account_id: AccountId = parse_account_id(account_id)?;
         ensure_ed25519_account(&account_id)?;
+        let home_domain: DomainId = iroha_data_model::account::address::default_domain_name()
+            .as_ref()
+            .parse()
+            .map_err(|err| {
+                PyValueError::new_err(format!("invalid default account domain label: {err}"))
+            })?;
         let metadata = py_to_metadata(py, metadata)?;
-        let mut new_account = Account::new(account_id.clone());
+        let mut new_account = Account::new(account_id.to_account_id(home_domain));
         new_account.metadata = metadata;
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))

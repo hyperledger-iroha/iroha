@@ -54,22 +54,12 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(map["only_missing_verdict"], "true")
     }
 
-    func testAddressFormatAliasRejection() {
-        let params = ToriiOfflineListParams(addressFormat: "  SoRa ")
-        XCTAssertThrowsError(try params.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-        }
-    }
-
-    func testOfflineRevocationQueryItemsIncludeAddressFormat() throws {
+    func testOfflineRevocationQueryItems() throws {
         let params = ToriiOfflineRevocationListParams(
             filter: "{\"op\":\"eq\",\"args\":[\"reason\",\"device_compromised\"]}",
             limit: 25,
             offset: 5,
-            sort: "revoked_at_ms:desc",
-            addressFormat: "ih58"
+            sort: "revoked_at_ms:desc"
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
@@ -77,7 +67,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(map["limit"], "25")
         XCTAssertEqual(map["offset"], "5")
         XCTAssertEqual(map["sort"], "revoked_at_ms:desc")
-        XCTAssertEqual(map["address_format"], "ih58")
     }
 
     func testOfflineRevocationListDecodesMetadata() throws {
@@ -119,12 +108,11 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         }
     }
 
-    func testOfflineBundleProofStatusParamsIncludeCanonicalFormat() throws {
-        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "0xDEADBEEF", addressFormat: "compressed")
+    func testOfflineBundleProofStatusParams() throws {
+        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "0xDEADBEEF")
         let items = try params.queryItems()
         let map = Self.map(from: items)
         XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
-        XCTAssertEqual(map["address_format"], "compressed")
     }
 
     func testOfflineBundleProofStatusParamsRejectsInvalidHex() {
@@ -152,16 +140,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(typed?.version, 1)
         XCTAssertEqual(typed?.proofSumBytes, nil)
         XCTAssertEqual(typed?.metadataKeys, nil)
-    }
-
-    func testAddressFormatValidationFailure() {
-        let params = ToriiOfflineListParams(addressFormat: "canonical-hex")
-        XCTAssertThrowsError(try params.queryItems()) { error in
-            guard case ToriiClientError.invalidPayload(let message) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(message.contains("addressFormat"), "message: \(message)")
-        }
     }
 
     func testOfflineTransferDecodesPlatformSnapshot() throws {
@@ -210,7 +188,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             limit: 20,
             offset: 5,
             sort: "recorded_at_ms:desc",
-            addressFormat: "compressed",
             controllerId: " 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn ",
             receiverId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             bundleIdHex: "0xDEADBEEF",
@@ -224,7 +201,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(map["limit"], "20")
         XCTAssertEqual(map["offset"], "5")
         XCTAssertEqual(map["sort"], "recorded_at_ms:desc")
-        XCTAssertEqual(map["address_format"], "compressed")
         XCTAssertEqual(map["controller_id"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(map["receiver_id"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
         XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
@@ -244,8 +220,7 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             select: ["bundle_id_hex", "tx_id_hex"],
             sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
             pagination: ToriiQueryPagination(limit: 5, offset: 10),
-            fetchSize: 50,
-            addressFormat: "ih58"
+            fetchSize: 50
         )
         let data = try JSONEncoder().encode(envelope)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -258,7 +233,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual((pagination?["limit"] as? NSNumber)?.intValue, 5)
         XCTAssertEqual((pagination?["offset"] as? NSNumber)?.intValue, 10)
         XCTAssertEqual((json["fetch_size"] as? NSNumber)?.intValue, 50)
-        XCTAssertEqual(json["address_format"] as? String, "ih58")
     }
 
     private static func map(from items: [URLQueryItem]) -> [String: String] {

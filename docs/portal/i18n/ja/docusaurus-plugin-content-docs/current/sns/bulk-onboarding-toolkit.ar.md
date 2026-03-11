@@ -34,7 +34,7 @@ CLI は SN-3b ビルダー、CSV は Norito 、 هياكل
 |----------|----------|----------|
 | `label` |とん | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 و UTS-46)。 |
 | `suffix_id` |とん | معرف لاحقة رقمي (عشري او `0x` hex)。 |
-| `owner` |とん | AccountId (IH58 リテラル、オプションの @domain ヒント)。 |
+| `owner` |とん | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |とん | عدد صحيح `1..=255`。 |
 | `payment_asset_id` |とん | صل التسوية (مثل `xor#sora`)。 |
 | `payment_gross` / `payment_net` |とん | عداد صحيحة غير موقعة تمثل وحدات الاصل. |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -235,7 +235,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **メタデータとガバナンス:** JSON インライン セキュリティありがとう
   CSV を使用します。メタデータは、次のとおりです。
 - **コントローラー:** `--default-controllers`。 قدم قوائم
-  コントローラ (مثل `ih58...;ih58...`) は、コントローラを制御します。
+  コントローラ (مثل `i105...;i105...`) は、コントローラを制御します。
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا)
 `error: row 12 term_years must be between 1 and 255`)。セキュリティ `1`

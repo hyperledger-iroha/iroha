@@ -93,16 +93,16 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
 fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
     let owner = value.trim();
     if owner.is_empty() {
-        return Err(eyre!("{field} must be a canonical IH58 account id"));
+        return Err(eyre!("{field} must be a canonical I105 account id"));
     }
     if owner.contains('@') {
         return Err(eyre!(
-            "{field} must not include '@domain'; use canonical IH58 only"
+            "{field} must not include '@domain'; use canonical I105 only"
         ));
     }
 
     let parsed = AccountId::parse_encoded(owner)
-        .map_err(|err| eyre!("{field} must be a canonical IH58 account id: {err}"))?;
+        .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
     Ok(parsed.canonical().to_owned())
 }
 
@@ -115,7 +115,7 @@ fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| eyre!("owner must be a canonical IH58 account id"))?
+        .ok_or_else(|| eyre!("owner must be a canonical I105 account id"))?
         .to_owned();
     let canonical = canonicalize_account_literal(&owner, "owner")?;
     map.insert("owner".to_owned(), json::Value::String(canonical));
@@ -171,7 +171,7 @@ pub struct VoteArgs {
     /// Optional JSON file containing public inputs for ZK voting mode.
     #[arg(long, value_name = "PATH")]
     pub public: Option<std::path::PathBuf>,
-    /// Owner account id for plain voting mode (canonical IH58 account literal; must equal transaction authority).
+    /// Owner account id for plain voting mode (canonical I105 account literal; must equal transaction authority).
     #[arg(long)]
     pub owner: Option<String>,
     /// Locked amount for plain voting mode (string to preserve large integers).
@@ -265,7 +265,7 @@ pub struct VoteZkArgs {
     /// Path to a JSON file with additional public inputs (optional)
     #[arg(long)]
     pub public: Option<std::path::PathBuf>,
-    /// Optional owner hint mirrored into public inputs (canonical IH58 account literal).
+    /// Optional owner hint mirrored into public inputs (canonical I105 account literal).
     #[arg(long)]
     pub owner: Option<String>,
     /// Optional lock amount hint mirrored into public inputs.
@@ -683,12 +683,12 @@ mod tests {
         let compressed = owner
             .to_account_address()
             .expect("address")
-            .to_compressed_sora()
+            .to_i105()
             .expect("compressed");
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(compressed));
         let err = normalize_public_input_owner(&mut map).expect_err("compressed owner");
-        assert!(err.to_string().contains("canonical IH58 account id"));
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 }
 

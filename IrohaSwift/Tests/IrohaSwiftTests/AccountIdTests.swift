@@ -8,7 +8,7 @@ final class AccountIdTests: XCTestCase {
         XCTAssertEqual(AccountId.defaultNetworkPrefix, 0x02F1)
     }
 
-    func testMakeProducesIH58Format() {
+    func testMakeProducesI105Format() {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let accountId = AccountId.make(publicKey: publicKey)
 
@@ -17,35 +17,35 @@ final class AccountIdTests: XCTestCase {
         XCTAssertGreaterThan(accountId.count, 30)
     }
 
-    func testMakeIH58ProducesValidFormat() throws {
+    func testMakeI105ProducesValidFormat() throws {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let accountId = try AccountId.makeIH58(publicKey: publicKey)
+        let accountId = try AccountId.makeI105(publicKey: publicKey)
 
-        // IH58 format should NOT start with ed0120
+        // I105 format should NOT start with ed0120
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
 
         // Should be parseable back
-        // IH58 addresses are base58 encoded, typically 40-50 chars
+        // I105 addresses are base58 encoded, typically 40-50 chars
         XCTAssertGreaterThan(accountId.count, 30)
     }
 
-    func testMakeIH58WithCustomNetworkPrefix() throws {
+    func testMakeI105WithCustomNetworkPrefix() throws {
         let publicKey = Data(repeating: 0xCD, count: 32)
         let customPrefix: UInt16 = 753
 
-        let accountId = try AccountId.makeIH58(publicKey: publicKey, networkPrefix: customPrefix
+        let accountId = try AccountId.makeI105(publicKey: publicKey, networkPrefix: customPrefix
         )
 
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testMakeIH58ThrowsForInvalidPublicKey() {
+    func testMakeI105ThrowsForInvalidPublicKey() {
         let invalidPublicKey = Data(repeating: 0x00, count: 16) // Too short
 
         XCTAssertThrowsError(
-            try AccountId.makeIH58(publicKey: invalidPublicKey)
+            try AccountId.makeI105(publicKey: invalidPublicKey)
         )
     }
 
@@ -70,28 +70,27 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testMakeAndMakeIH58ProduceSameFormat() throws {
+    func testMakeAndMakeI105ProduceSameFormat() throws {
         let publicKey = Data(repeating: 0xEF, count: 32)
-        let domain = "wonderland"
 
         let accountId = AccountId.make(publicKey: publicKey)
-        let ih58AccountId = try AccountId.makeIH58(publicKey: publicKey)
+        let i105AccountId = try AccountId.makeI105(publicKey: publicKey)
 
-        XCTAssertEqual(accountId, ih58AccountId)
+        XCTAssertEqual(accountId, i105AccountId)
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
     }
 
     func testNormalizeForComparisonLeavesDomainSuffixedLiteralsUntouched() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
-        let ih58 = try AccountId.makeIH58(publicKey: publicKey)
+        let i105 = try AccountId.makeI105(publicKey: publicKey)
 
-        XCTAssertEqual(AccountId.normalizeForComparison(ih58), ih58)
-        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@default"), "\(ih58)@default")
-        XCTAssertEqual(AccountId.normalizeForComparison("\(ih58)@WONDERLAND"), "\(ih58)@WONDERLAND")
+        XCTAssertEqual(AccountId.normalizeForComparison(i105), i105)
+        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@default"), "\(i105)@default")
+        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@WONDERLAND"), "\(i105)@WONDERLAND")
 
-        XCTAssertFalse(AccountId.matchesForComparison(ih58, "\(ih58)@default"))
-        XCTAssertFalse(AccountId.matchesForComparison("\(ih58)@default", "\(ih58)@wonderland"))
+        XCTAssertFalse(AccountId.matchesForComparison(i105, "\(i105)@default"))
+        XCTAssertFalse(AccountId.matchesForComparison("\(i105)@default", "\(i105)@wonderland"))
     }
 
     func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {

@@ -28,8 +28,8 @@ I18NI000000003Х пакеттары CLI леджер проходкаһын ҡа
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 

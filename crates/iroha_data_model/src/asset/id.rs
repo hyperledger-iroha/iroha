@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn debug_formats_without_recursion() {
         let kp = KeyPair::random();
-        let domain: DomainId = "domain".parse().unwrap();
+        let _domain: DomainId = "domain".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
         let def: AssetDefinitionId = "xor#domain".parse().unwrap();
         let id = AssetId::new(def, account);
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn asset_id_parse_encoded_roundtrips() {
         let kp = KeyPair::random();
-        let account_domain: DomainId = "wonderland".parse().expect("domain");
+        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
         let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
         let id = AssetId::new(definition, account);
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn asset_id_with_explicit_scope_roundtrips() {
         let kp = KeyPair::random();
-        let account_domain: DomainId = "wonderland".parse().expect("domain");
+        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
         let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
         let id = AssetId::with_scope(
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn asset_id_parse_encoded_rejects_textual_literal() {
         let kp = KeyPair::random();
-        let account_domain: DomainId = "wonderland".parse().expect("domain");
+        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
         let literal = format!("xor#wonderland#{account}");
 
