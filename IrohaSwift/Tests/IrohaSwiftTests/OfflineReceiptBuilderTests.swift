@@ -1248,8 +1248,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             throw OfflineReceiptBuilderError.invalidAccountId(field: "receiver", value: "sample-key")
         }
         let address = try AccountAddress.fromAccount(publicKey: publicKey)
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return ih58
+        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        return i105
     }
 
     private func makeNoritoAssetId(name: String,

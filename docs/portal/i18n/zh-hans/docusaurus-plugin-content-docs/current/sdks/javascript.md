@@ -66,15 +66,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -222,7 +222,7 @@ for (const entry of allowances) {
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -232,7 +232,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -274,7 +274,7 @@ Explorer 遥测为 `/v1/explorer/metrics` 和
 `/v1/explorer/accounts/{account_id}/qr` 端点，以便仪表板可以重播
 为门户提供支持的相同快照。 `getExplorerMetrics()` 标准化
 当路由被禁用时，有效负载并返回 `null`。与它配对
-`getExplorerAccountQr()` 每当您需要 IH58（首选）/sora（第二好的）文字加上内联时
+`getExplorerAccountQr()` 每当您需要 I105（首选）/sora（第二好的）文字加上内联时
 用于共享按钮的 SVG。
 
 ```ts
@@ -289,9 +289,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +297,8 @@ console.log(
 );
 ```
 
-传递 `addressFormat: "compressed"` 镜像资源管理器的默认压缩
-选择器；忽略首选 IH58 输出的覆盖或请求 `ih58_qr`
+传递 `I105` 镜像资源管理器的默认压缩
+选择器；忽略首选 I105 输出的覆盖或请求 `i105_qr`
 当您需要二维码安全版本时。压缩文字是第二好的
 仅 Sora 的 UX 选项。助手总是返回规范标识符，
 所选文字和元数据（网络前缀、QR 版本/模块、错误
@@ -518,8 +516,8 @@ for await (const event of torii.streamEvents({
 - `getUaidPortfolio(uaid, { assetId })` 聚合每个数据空间的余额，
   按规范账户 ID 对资产持有量进行分组；通过 `assetId` 来过滤
   投资组合缩减为单个资产实例。
-- `getUaidBindings(uaid, { addressFormat })` 枚举每个数据空间↔帐户
-  绑定（`addressFormat: "compressed"` 返回 `sora…` 文字）。
+- `getUaidBindings(uaid)` 枚举每个数据空间↔帐户
+  绑定（`I105` 返回 `i105` 文字）。
 - `getUaidManifests(uaid, { dataspaceId })` 返回每个功能清单，
   生命周期状态，以及绑定账户进行审计。对于操作员证据包、清单发布/撤销流程和 SDK 迁移
 指导，遵循通用账户指南 (`docs/source/universal_accounts_guide.md`)
@@ -537,7 +535,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -562,7 +560,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +570,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

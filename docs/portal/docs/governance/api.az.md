@@ -35,7 +35,7 @@ Son nöqtələr
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "pəncərə": { "aşağı": 12345, "yuxarı": 12400 },
-      "authority": "ih58...?",
+      "authority": "i105...?",
       "private_key": "...?"
     }
   - Cavab (JSON):
@@ -44,14 +44,14 @@ Son nöqtələr
 
 Contracts API (yerləşdirmə)
 - POST `/v1/contracts/deploy`
-  - Sorğu: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Sorğu: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Davranış: IVM proqram gövdəsindən `code_hash` və `abi_version` başlığından `abi_hash` hesablayır, sonra `RegisterSmartContractCode` (manifest) və I10040l təqdim edir `.to` bayt) `authority` adından.
   - Cavab: { "ok": doğrudur, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Əlaqədar:
     - GET `/v1/contracts/code/{code_hash}` → saxlanılan manifesti qaytarır
     - GET `/v1/contracts/code-bytes/{code_hash}` → qaytarır `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - Sorğu: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Sorğu: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Davranış: Təchiz edilmiş bayt kodunu yerləşdirir və dərhal `(namespace, contract_id)` xəritəsini `ActivateContractInstance` vasitəsilə aktivləşdirir.
   - Cavab: { "ok": doğru, "ad sahəsi": "tətbiqlər", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -64,11 +64,11 @@ Alias Xidməti
   - Səhvlər: səhv formalaşdırılmış hex girişində HTTP `400`. Torii dekoder xətası mesajı ilə Norito `ValidationFail::QueryFailed::Conversion` zərfini qaytarır.
 - POST `/v1/aliases/resolve`
   - Sorğu: { "ləqəb": "GB82 WEST 1234 5698 7654 32" }
-  - Cavab: { "ləqəb": "GB82WEST12345698765432", "account_id": "ih58...", "indeks": 0, "mənbə": "iso_bridge" }
+  - Cavab: { "ləqəb": "GB82WEST12345698765432", "account_id": "i105...", "indeks": 0, "mənbə": "iso_bridge" }
   - Qeydlər: ISO körpüsünün iş vaxtı quruluşunu tələb edir (`[iso_bridge.account_aliases]`, `iroha_config`). Torii axtarışdan əvvəl boşluq və yuxarı hərfi silməklə ləqəbləri normallaşdırır. Təxəllüs olmadıqda 404, ISO körpüsünün işləmə müddəti deaktiv olduqda 503 qaytarır.
 - POST `/v1/aliases/resolve_index`
   - Sorğu: { "indeks": 0 }
-  - Cavab: { "indeks": 0, "ləqəb": "GB82WEST12345698765432", "account_id": "ih58...", "mənbə": "iso_bridge" }
+  - Cavab: { "indeks": 0, "ləqəb": "GB82WEST12345698765432", "account_id": "i105...", "mənbə": "iso_bridge" }
   - Qeydlər: Alias indeksləri konfiqurasiya qaydasından (0-asaslı) deterministik olaraq təyin edilir. Müştərilər ləqəbli attestasiya hadisələri üçün audit yollarını yaratmaq üçün cavabları oflayn rejimdə keşləyə bilər.
 
 Kod Ölçüsü Cap
@@ -78,7 +78,7 @@ Kod Ölçüsü Cap
   - Operatorlar `SetParameter(Custom)` təqdim edərək `id = "max_contract_code_bytes"` və rəqəmli faydalı yüklə tənzimləyə bilərlər.
 
 - POST `/v1/gov/ballots/zk`
-  - Sorğu: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "public": {…} }
+  - Sorğu: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "public": {…} }
   - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }
   - Qeydlər:
     - Dövrənin ümumi girişlərinə `owner`, `amount` və `duration_blocks` daxil olduqda və sübut konfiqurasiya edilmiş VK-ya qarşı yoxlandıqda, qovşaq I18NI0000010101010101010.00000010 ilə I18NI0000010. İstiqamət gizli qalır (`unknown`); yalnız məbləğ/müddəti yenilənir. Təkrar səsvermələr monotondur: məbləğ və müddət yalnız artır (qovşaq max(məbləğ, əvvəlki məbləğ) və maks.(son, əvvəlki, son) tətbiq edir.
@@ -86,12 +86,12 @@ Kod Ölçüsü Cap
     - Müqavilənin icrası `SubmitBallot` növbəsinə daxil edilməzdən əvvəl `ZK_VOTE_VERIFY_BALLOT`-ə zəng etməlidir; ev sahibləri bir vuruşlu kilidi tətbiq edir.
 
 - POST `/v1/gov/ballots/plain`
-  - Sorğu: { "səlahiyyət": "ih58...", "özəl_açar": "...?", "zəncir_id": "...", "referendum_id": "r1", "sahibi": "ih58...", "məbləğ": "1000", "müddət_bloklar": 6000, "əlamətlər|Naxış"
+  - Sorğu: { "səlahiyyət": "i105...", "özəl_açar": "...?", "zəncir_id": "...", "referendum_id": "r1", "sahibi": "i105...", "məbləğ": "1000", "müddət_bloklar": 6000, "əlamətlər|Naxış"
   - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }
   - Qeydlər: Təkrar səsvermələr yalnız uzadılır - yeni səsvermə bülleteni mövcud kilidin məbləğini və ya müddətini azalda bilməz. `owner` əməliyyat səlahiyyətinə bərabər olmalıdır. Minimum müddət `conviction_step_blocks`-dir.
 
 - POST `/v1/gov/finalize`
-  - Sorğu: { "referendum_id": "r1", "təklif_id": "...64hex", "authority": "ih58...?", "private_key": "...?" }
+  - Sorğu: { "referendum_id": "r1", "təklif_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - Cavab: { "ok": doğrudur, "tx_instructions": [{ "wire_id": "...Referendumun yekunlaşdırılması", "payload_hex": "..." }] }
   - Zəncirvari effekt (cari iskele): təsdiq edilmiş yerləşdirmə təklifinin qüvvəyə minməsi gözlənilən `abi_hash` ilə `code_hash` tərəfindən əsaslanan minimal `ContractManifest` əlavə edir və təklifin Qəbul edildiyini qeyd edir. `code_hash` üçün fərqli `abi_hash` ilə manifest artıq mövcuddursa, qüvvəyə minmə rədd edilir.
   - Qeydlər:
@@ -100,7 +100,7 @@ Kod Ölçüsü Cap
     - İştirakçıların iştirakının yoxlanılmasında yalnız təsdiq+rədd istifadə olunur; bitərəf qalmaq seçkilərdə iştirak sayılmır.
 
 - POST `/v1/gov/enact`
-  - Sorğu: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "aşağı": 0, "yuxarı": 0 }?, "səlahiyyət": "ih58...?", "private_key": "...?" }
+  - Sorğu: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "aşağı": 0, "yuxarı": 0 }?, "səlahiyyət": "i105...?", "private_key": "...?" }
   - Cavab: { "ok": doğrudur, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Qeydlər: Torii imzalanmış əməliyyatı `authority`/`private_key` təqdim edildikdə təqdim edir; əks halda müştərilərin imzalaması və təqdim etməsi üçün skelet qaytarır. Ön görüntü isteğe bağlıdır və hazırda məlumat xarakteri daşıyır.
 
@@ -202,16 +202,16 @@ CLI Köməkçiləri
     - `(namespace, contract_id, code_hash, abi_hash)` üçün qüvvəyə minmiş idarəetmə təklifi qovşağın istifadə etdiyi eyni təklif-id-dən əldə edildiyi kimi mövcuddur.
   - Müqavilə üzrə `results[]` (məsələlər, manifest/kod/təklif xülasələri) və basdırılmadığı halda bir sətirlik xülasə ilə JSON hesabatını çıxarır (`--no-summary`).
   - Qorunan ad məkanlarını yoxlamaq və ya idarəetmə tərəfindən idarə olunan yerləşdirmə iş axınlarını yoxlamaq üçün faydalıdır.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Manifest kvorum qaydalarını təmin etmək üçün isteğe bağlı `gov_manifest_approvers` daxil olmaqla qorunan ad məkanlarına yerləşdirmələri təqdim edərkən istifadə edilən JSON metadata skeletini yayır.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` zaman kilid göstərişləri tələb olunur və hər hansı təqdim edilmiş göstəriş dəstinə `owner`, `amount` və `duration_blocks` daxil edilməlidir.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` zaman kilid göstərişləri tələb olunur və hər hansı təqdim edilmiş göstəriş dəstinə `owner`, `amount` və `duration_blocks` daxil edilməlidir.
   - Kanonik hesab identifikatorlarını təsdiq edir, 32 baytlıq ləğvedici göstərişləri kanonikləşdirir və göstərişləri `public_inputs_json`-də birləşdirir (əlavə ləğvetmələr üçün `--public <path>` ilə).
   - Nullifier sübut öhdəliyindən (ictimai giriş) üstəgəl `domain_tag`, `chain_id` və `election_id`-dən əldə edilir; `--nullifier` təchiz edildikdə sübuta qarşı təsdiqlənir.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI cavabları `tx_instructions[]`-i `payload_fingerprint_hex` və deşifrə edilmiş sahələrlə annotasiya edir ki, aşağı axın alətləri Norito deşifrəsini təkrar tətbiq etmədən skeleti yoxlaya bilsin.
   - Kilid göstərişlərinin təmin edilməsi dövrə eyni dəyərləri ifşa etdikdən sonra qovşağın ZK bülletenləri üçün `LockCreated`/`LockExtended` hadisələrini yaymasına imkan verir.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` kanonik IH58 literallarını qəbul edir; isteğe bağlı `@<domain>` şəkilçiləri yalnız marşrut göstərişləridir.
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` kanonik I105 literallarını qəbul edir; isteğe bağlı `@<domain>` şəkilçiləri yalnız marşrut göstərişləridir.
   - `--lock-amount`/`--lock-duration-blocks` ləqəbləri skript pariteti üçün ZK bayraq adlarını əks etdirir.
   - Kodlanmış təlimat barmaq izi və insan tərəfindən oxuna bilən seçki bülleteni sahələri (`owner`, `amount`, `duration_blocks`, `direction` imzalanmadan əvvəl) daxil olmaqla xülasə çıxış güzgüləri `vote --mode zk`.
 
@@ -232,14 +232,14 @@ Süpürgənin kilidini açın (Operator/Audit)
 - POST `/v1/gov/ballots/zk-v1`
   - Sorğu (v1-stil DTO):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "seçki_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "ih58…?", // kanonik AccountId (IH58 hərfi)
+      "owner": "i105…?", // kanonik AccountId (I105 hərfi)
       "miqdar": "100?",
       "duration_blocks": 6000?,
       "direction": "Bəli|Xeyr|Çəkərən?",
@@ -249,7 +249,7 @@ Süpürgənin kilidini açın (Operator/Audit)
   - Birbaşa `BallotProof` JSON qəbul edir və `CastZkBallot` skeletini qaytarır.
   - Sorğu:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "seçki_id": "ref-1",
@@ -257,7 +257,7 @@ Süpürgənin kilidini açın (Operator/Audit)
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=", // ZK1 və ya H2* konteynerinin base64
         "root_hint": null, // isteğe bağlı 32 bayt hex sətir (uyğunluq kökü)
-        "sahibi": null, // isteğe bağlı kanonik AccountId (IH58 hərfi)
+        "sahibi": null, // isteğe bağlı kanonik AccountId (I105 hərfi)
         "nullifier": null, // isteğe bağlı 32 bayt hex sətir (nullifier işarəsi)
         "miqdar": "100", // isteğe bağlı kilid məbləği işarəsi (onluq sətir)
         "duration_blocks": 6000, // isteğe bağlı kilidləmə müddəti göstərişi

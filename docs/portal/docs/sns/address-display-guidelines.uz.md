@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+description: UX and CLI requirements for I105 vs I105 Sora address presentation (ADDR-6).
 translator: machine-google-reviewed
 ---
 
@@ -25,8 +25,8 @@ Hamyonlar, tadqiqotchilar va SDK namunalari hisob manzillarini o'zgarmas deb his
 foydali yuklar. Android chakana hamyon namunasi
 `examples/android/retail-wallet` endi kerakli UX namunasini namoyish etadi:
 
-- **Ikki nusxa ko'chirish maqsadlari.** Ikkita aniq nusxa ko'chirish tugmalarini yuboring — IH58 (afzal) va
-  siqilgan Sora faqat shakli (`sora…`, ikkinchi eng yaxshi). IH58 har doim tashqaridan baham ko'rish uchun xavfsizdir
+- **Ikki nusxa ko'chirish maqsadlari.** Ikkita aniq nusxa ko'chirish tugmalarini yuboring — I105 (afzal) va
+  siqilgan Sora faqat shakli (`i105`, ikkinchi eng yaxshi). I105 har doim tashqaridan baham ko'rish uchun xavfsizdir
   va QR foydali yukini quvvatlaydi. Siqilgan variant qatorni o'z ichiga olishi kerak
   ogohlantirish, chunki u faqat Sora-xabar ilovalar ichida ishlaydi. Android chakana savdosi
   hamyon namuna simlari ham Materiallar tugmalari va ularning maslahatlari
@@ -40,7 +40,7 @@ foydali yuklar. Android chakana hamyon namunasi
   `default` domeni, operatorlarga qo'shimcha shart emasligini eslatuvchi sarlavha qo'ying.
   Tadqiqotchilar selektorda kanonik domen yorlig'ini ham ta'kidlashlari kerak
   digestni kodlaydi.
-- **IH58 QR foydali yuklari.** QR kodlari IH58 qatorini kodlashi kerak. Agar QR ishlab chiqarish
+- **I105 QR foydali yuklari.** QR kodlari I105 qatorini kodlashi kerak. Agar QR ishlab chiqarish
   bajarilmasa, bo'sh rasm o'rniga aniq xatoni ko'rsating.
 - **Buferdagi xabarlar.** Siqilgan shakldan nusxa olgandan so'ng, tost yoki
   snackbar foydalanuvchilarga faqat Sora va IME buzilishiga moyil ekanligini eslatib turadi.
@@ -63,13 +63,13 @@ maslahatlar va ogohlantirishlar platformalar bo'ylab mos keladi:
 
 ## SDK yordamchilari
 
-Har bir SDK IH58 (afzal) va siqilgan (`sora`, ikkinchi eng yaxshi) ni qaytaradigan qulaylik yordamchisini taqdim etadi.
+Har bir SDK I105 (afzal) va siqilgan (`sora`, ikkinchi eng yaxshi) ni qaytaradigan qulaylik yordamchisini taqdim etadi.
 UI qatlamlari izchil bo'lib qolishi uchun ogohlantirish qatori bilan birga shakllar:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspektori: `inspectAccountId(...)` siqilgan ogohlantirishni qaytaradi
-  string va qo'ng'iroq qiluvchilar `sora…` taqdim etganda uni `warnings` ga qo'shadi
+  string va qo'ng'iroq qiluvchilar `i105` taqdim etganda uni `warnings` ga qo'shadi
   so'zma-so'z, shuning uchun tadqiqotchilar/hamyon asboblar panelida faqat Sora xabarnomasi paydo bo'lishi mumkin
   joylashtirish/validatsiya oqimlari o'rniga faqat ular hosil qilganda
   siqilgan shaklning o'zlari.
@@ -89,7 +89,7 @@ selektor Local-12 yoki xom yukni qayta tahlil qilmasdan registr tomonidan qo'lla
 
 Tadqiqotchilar hamyon telemetriyasi va foydalanish imkoniyatini aks ettirishi kerak:
 
-- Nusxalash tugmalari uchun `data-copy-mode="ih58|compressed|qr"` ni qo'llang, shunda old qismlar foydalanish hisoblagichlarini chiqarishi mumkin
+- Nusxalash tugmalari uchun `data-copy-mode="i105|i105_default|qr"` ni qo'llang, shunda old qismlar foydalanish hisoblagichlarini chiqarishi mumkin
   Torii tomoni `torii_address_format_total` metrikasi bilan birga. Yuqoridagi demo komponenti yuboriladi
   `iroha:address-copy` hodisasi `{mode,timestamp}` bilan - buni analitika/telemetriyaga ulang
   asboblar paneli serverni o'zaro bog'lashi uchun quvur liniyasi (masalan, Segmentga surish yoki NORITO tomonidan qo'llab-quvvatlanadigan kollektor)
@@ -98,7 +98,7 @@ Tadqiqotchilar hamyon telemetriyasi va foydalanish imkoniyatini aks ettirishi ke
   30 kunlik `domain_kind="local12"` noldan foydalanish isbotini bevosita `address_ingest` dan eksport qiling
   Grafana doska.
 - Har bir boshqaruvni aniq `aria-label`/`aria-describedby` ko'rsatmalari bilan bog'lang.
-  literal almashish xavfsiz (`IH58`) yoki faqat Sora (siqilgan `sora`). Yashirin domen sarlavhasini kiriting
+  literal almashish xavfsiz (`I105`) yoki faqat Sora (siqilgan `sora`). Yashirin domen sarlavhasini kiriting
   Ta'rif, shuning uchun yordamchi texnologiya vizual ravishda ko'rsatilgan kontekstni yuzaga keltiradi.
 - Nusxa natijalarini e'lon qiladigan jonli hududni (masalan, `<output aria-live="polite">…</output>`) ko'rsatish va
   Endi Swift/Android namunalariga ulangan VoiceOver/TalkBack xatti-harakatlariga mos keladigan ogohlantirishlar.
@@ -109,7 +109,7 @@ Mahalliy tanlagichlar o'chirilishidan oldin mijoz tomonidan nusxa ko'chirish rej
 ## Mahalliy → Global migratsiya vositalari toʻplami
 
 Avtomatlashtirish uchun [Local → Global Toolkit](local-to-global-toolkit.md) dan foydalaning
-JSON audit hisoboti va o'zgartirilgan afzal qilingan IH58 / operatorlar biriktiradigan ikkinchi eng yaxshi siqilgan (`sora`) ro'yxati
+JSON audit hisoboti va o'zgartirilgan afzal qilingan I105 / operatorlar biriktiradigan ikkinchi eng yaxshi siqilgan (`sora`) ro'yxati
 Tayyorlik chiptalari bilan birga kelgan runbook Grafana ni bog'laydi.
 asboblar paneli va Alertmanager qoidalari qat'iy rejimni kesib o'tadi.
 
@@ -163,13 +163,13 @@ to'liq bayt diagrammasi uchun jadval va `docs/account_structure.md`.
 
 satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
 
-1. `iroha tools address inspect` endi IH58 bilan tuzilgan JSON xulosasini chiqaradi,
+1. `iroha tools address inspect` endi I105 bilan tuzilgan JSON xulosasini chiqaradi,
    siqilgan va kanonik olti burchakli foydali yuklar. Xulosa shuningdek, `domain` ni ham o'z ichiga oladi
    `kind`/`warning` maydonlariga ega ob'ekt va har qanday taqdim etilgan domen orqali aks sado beradi.
    `input_domain` maydoni. `kind` `local12` bo'lsa, CLI ogohlantirishni chop etadi.
    stderr va JSON xulosasi bir xil ko'rsatmalarni aks ettiradi, shuning uchun CI quvurlari va SDKlar
    uni yuzaga keltirishi mumkin. Konvertatsiya qilishni xohlagan vaqtda `legacy  suffix` ga o'ting
-   kodlash `<ih58>@<domain>` sifatida takrorlandi.
+   kodlash `<i105>@<domain>` sifatida takrorlandi.
 2. SDK JavaScript yordamchisi orqali bir xil ogohlantirish/xulosa chiqarishi mumkin:
 
    ```js
@@ -179,13 +179,13 @@ satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  Yordamchi literaldan aniqlangan IH58 prefiksini saqlaydi, agar siz bo'lmasa
+  Yordamchi literaldan aniqlangan I105 prefiksini saqlaydi, agar siz bo'lmasa
   `networkPrefix` ni aniq taqdim eting, shuning uchun standart bo'lmagan tarmoqlar uchun xulosalar
   standart prefiks bilan jimgina qayta ko'rsatmang.
 
-3. `ih58.value` yoki `compressed` dan qayta foydalanish orqali kanonik foydali yukni aylantiring.
+3. `i105.value` yoki `i105_default` dan qayta foydalanish orqali kanonik foydali yukni aylantiring.
    Xulosadagi maydonlarni (yoki `--format` orqali boshqa kodlashni talab qiling). Bular
    strings allaqachon tashqaridan almashish uchun xavfsiz.
 4. Manifestlar, registrlar va mijozlarga tegishli hujjatlarni yangilang
@@ -195,14 +195,14 @@ satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
    `iroha tools address audit --input addresses.txt --network-prefix 753`. Buyruq
    yangi satr bilan ajratilgan harflarni o'qiydi (`#` bilan boshlangan izohlar e'tiborga olinmaydi va
    `--input -` yoki hech qanday bayroq STDIN ishlatmaydi), JSON hisobotini chiqaradi
-   kanonik/afzal IH58/ikkinchi-eng yaxshi siqilgan (`sora`) har bir yozuv uchun xulosalar va ikkala tahlilni ham hisoblaydi
+   kanonik/afzal I105/ikkinchi-eng yaxshi siqilgan (`sora`) har bir yozuv uchun xulosalar va ikkala tahlilni ham hisoblaydi
    keraksiz qatorlarni o'z ichiga olgan axlatxonalar va `strict CI post-check` bilan eshiklarni avtomatlashtirish
    operatorlar CI-da Mahalliy selektorlarni bloklashga tayyor bo'lganda.
 6. Yangi satrdan yangi qatorga qayta yozish kerak bo'lganda, foydalaning
   Mahalliy tanlagichni tuzatish elektron jadvallari uchun foydalaning
   bir o'tishda kanonik kodlashlar, ogohlantirishlar va tahlil xatolarini ta'kidlaydigan `input,status,format,…` CSV ni eksport qilish.
    Yordamchi sukut bo'yicha Lokal bo'lmagan qatorlarni o'tkazib yuboradi, qolgan har bir yozuvni o'zgartiradi
-   so'ralgan kodlashga (IH58 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/hex/JSON) kiritadi va saqlaydi
+   so'ralgan kodlashga (I105 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/hex/JSON) kiritadi va saqlaydi
    `legacy  suffix` o'rnatilganda asl domen. Uni `--allow-errors` bilan bog'lang
    axlatda noto'g'ri shakllangan harflar bo'lsa ham skanerlashni davom ettirish.
 7. CI/lint avtomatizatsiyasi chiqaradigan `ci/check_address_normalize.sh`-ni ishga tushirishi mumkin.

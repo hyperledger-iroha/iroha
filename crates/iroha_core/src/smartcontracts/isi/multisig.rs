@@ -237,7 +237,7 @@ fn multisig_role_for(
             home_domain, suffix,
         )
     };
-    if let Ok(canonical_suffix) = account.canonical_ih58() {
+    if let Ok(canonical_suffix) = account.canonical_i105() {
         if let Ok(role_id) = role_name(&canonical_suffix).parse() {
             return role_id;
         }
@@ -3588,8 +3588,8 @@ mod tests {
         let policy = MultisigPolicy::new(1, members).expect("multisig policy");
         let account = AccountId::new_multisig(policy);
         let canonical = account
-            .canonical_ih58()
-            .expect("large multisig policy should encode into canonical IH58");
+            .canonical_i105()
+            .expect("large multisig policy should encode into canonical I105");
 
         let role_id = multisig_role_for(&domain_id, &account);
         let role_name = role_id.name().to_string();

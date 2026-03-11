@@ -19,8 +19,8 @@ use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
-use iroha_data_model::{account::AccountId, domain::DomainId};
 use norito::{
     decode_from_bytes,
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},

@@ -34,7 +34,7 @@ L'analyseur exige une ligne de cabecalho suivante (a ordem e flexivel) :| Colon
 |--------|-------------|---------------|
 | `label` | Sim | Étiquette sollicitée (cas mixte Aceita ; ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificateur numérique de suffixe (décimal ou `0x` hex). |
-| `owner` | Sim | Chaîne AccountId (littéral IH58 ; indice @domain facultatif) du propriétaire du registre. |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de règlement (par exemple `xor#sora`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades natives do ativo. |
@@ -73,9 +73,9 @@ En cas de réussite, le script est gravé dans un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ En cas de réussite, le script est gravé dans un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -236,7 +236,7 @@ exécution unique de CSV.
   références aux archives sao résolues relatives à la localisation du CSV. Métadonnées
   Aucun objet ne produit une erreur de validation.
 - **Contrôleurs :** cellules en blanc respectant `--default-controllers`. Fornéca
-  listes explicites (par exemple `ih58...;ih58...`) au délégué des utilisateurs nao propriétaire.
+  listes explicites (par exemple `i105...;i105...`) au délégué des utilisateurs nao propriétaire.
 
 Falhas sao reportadas com numeros de linha contextuais (par exemple
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

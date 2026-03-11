@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 |領域|價值|
 |--------|--------|
 |協議標識符| `<repo-yyMMdd-XX>` |
-|託管賬戶 ID | `<ih58...>` |
+|託管賬戶 ID | `<i105...>` |
 |準備時間/日期 | `<custodian ops lead>` |
 |已確認桌面聯繫人 | `<desk lead + counterparty>` |
 |證據目錄| ``artifacts/finance/repo/<slug>/`` |

@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 Для этого необходимо установить `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT`. В комплект поставки входит:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 По словам президента США:

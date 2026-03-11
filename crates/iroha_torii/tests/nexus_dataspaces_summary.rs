@@ -62,10 +62,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
-    let compressed_literal = account_id
+    let i105_literal = account_id
         .to_account_address()
-        .and_then(|address| address.to_compressed_sora())
-        .expect("compressed account literal");
+        .and_then(|address| address.to_i105())
+        .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::dataspaces::summary"));
     let dataspace = DataSpaceId::new(42);
 
@@ -169,7 +169,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/dataspaces/accounts/{}/summary?address_format=compressed",
+                    "/v1/nexus/dataspaces/accounts/{}/summary",
                     urlencoding::encode(&account_literal)
                 ))
                 .body(Body::empty())
@@ -188,7 +188,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let payload: Value = json::from_slice(&body).expect("json payload");
 
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
-    assert_eq!(payload["account"], Value::from(compressed_literal.as_str()));
+    assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
     assert_eq!(payload["totals"]["dataspaces"], Value::from(1));
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
@@ -203,8 +203,8 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(row["accounts"].as_array().expect("accounts").len(), 1);
     assert_eq!(
         row["accounts"][0],
-        Value::from(compressed_literal.as_str()),
-        "address_format should affect account literal rendering"
+        Value::from(i105_literal.as_str()),
+        "dataspace row should render canonical I105 account literal"
     );
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
     assert_eq!(row["portfolio"]["positions"], Value::from(1));
@@ -249,25 +249,6 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     assert!(
         body.contains("account literal must not be empty"),
         "expected empty account literal error, got: {body}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn nexus_dataspaces_summary_endpoint_rejects_unknown_address_format() {
-    let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
-    let (state, kura, local_peer_id) = minimal_state(true);
-    let router = build_test_router(state, &kura, local_peer_id);
-    let account_literal = valid_missing_account_literal();
-    let literal = urlencoding::encode(&account_literal);
-    let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary?address_format=unexpected");
-    let (status, body) = request_summary(router, &uri).await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        body.contains("invalid_address_format") || body.contains("address_format"),
-        "expected invalid address format error, got: {body}"
     );
 }
 

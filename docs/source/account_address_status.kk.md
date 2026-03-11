@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. Шолу
 
-- Бекіту: `fixtures/account/address_vectors.json` (IH58 (қалау) + қысылған (`sora`, екінші ең жақсы) + мультисиг оң/теріс жағдайлар).
+- Бекіту: `fixtures/account/address_vectors.json` (I105 (қалау) + қысылған (`sora`, екінші ең жақсы) + мультисиг оң/теріс жағдайлар).
 - Қолдану аясы: жасырын-әдепкі, Жергілікті-12, Жаһандық тізілім және толық қате таксономиясы бар мультисиг контроллерлерін қамтитын детерминирленген V1 пайдалы жүктемелері.
 - Тарату: Rust деректер үлгісі, Torii, JS/TS, Swift және Android SDK арқылы ортақ; Кез келген тұтынушы ауытқыса, CI сәтсіз аяқталады.
 - Ақиқат көзі: генератор `crates/iroha_data_model/src/account/address/compliance_vectors.rs` ішінде тұрады және `cargo xtask address-vectors` арқылы ашылады.
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | Беттік | Орындау | Ескертпелер |
 |---------|-------------|-------|
-| Rust деректер үлгісі | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON талдайды, канондық пайдалы жүктемелерді қайта құрастырады және IH58 (таңдаулы)/қысылған (`sora`, екінші ең жақсы)/канондық түрлендірулер + құрылымдық қателерді тексереді. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Torii дұрыс емес IH58 (таңдаулы)/қысылған (`sora`, екінші ең жақсы) пайдалы жүктемелерден анық бас тартуы үшін серверлік кодектерді тексереді. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 құрылғылары (IH58 қолайлы/сығымдалған (`sora`) екінші ең жақсы/толық ен) және әрбір теріс жағдай үшін Norito стиліндегі қате кодтарын бекітеді. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple платформаларында IH58 (қалаулы)/қысылған (`sora`, екінші ең жақсы) декодтау, мультисиг пайдалы жүктемелері және қателерді жою жаттығулары. |
+| Rust деректер үлгісі | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON талдайды, канондық пайдалы жүктемелерді қайта құрастырады және I105 (таңдаулы)/қысылған (`sora`, екінші ең жақсы)/канондық түрлендірулер + құрылымдық қателерді тексереді. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Torii дұрыс емес I105 (таңдаулы)/қысылған (`sora`, екінші ең жақсы) пайдалы жүктемелерден анық бас тартуы үшін серверлік кодектерді тексереді. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 құрылғылары (I105 қолайлы/сығымдалған (`sora`) екінші ең жақсы/толық ен) және әрбір теріс жағдай үшін Norito стиліндегі қате кодтарын бекітеді. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple платформаларында I105 (қалаулы)/қысылған (`sora`, екінші ең жақсы) декодтау, мультисиг пайдалы жүктемелері және қателерді жою жаттығулары. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Котлин/Java байламдарының канондық арматураға сәйкес келуін қамтамасыз етеді. |
 
 ### 4. Мониторинг және үздік жұмыс- Күй туралы есеп беру: бұл құжат `status.md` және жол картасы арқылы байланыстырылған, сондықтан апта сайынғы шолулар арматураның денсаулығын тексере алады.

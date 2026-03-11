@@ -89,7 +89,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
    ```bash
    OUT="artifacts/devportal/sorafs/20260219T130012Z"
    TORII_URL="https://torii.stg.sora.net/"
-   AUTHORITY="ih58..."
+   AUTHORITY="i105..."
    KEY_FILE="secrets/docs-admin.key"
    ALIAS_PROOF="secrets/docs.alias.proof"
 

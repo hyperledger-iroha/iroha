@@ -9,18 +9,18 @@ __Prerequisites:__
 - The registrant must have sufficient permissions to create accounts in the multisig domain.
 - Signatory accounts do not need to exist in advance. Missing signatories are materialized during
   registration and tagged with metadata `iroha:created_via = "multisig"`.
-- The CLI expects canonical IH58 account literals for `--account` and `--signatories`. The
+- The CLI expects canonical I105 account literals for `--account` and `--signatories`. The
   multisig home domain is taken from the configured default domain.
 
 __Example usage:__
 
 ```bash
 iroha ledger multisig register \
---account <canonical-ih58-controller> \
+--account <canonical-i105-controller> \
 --signatories \
-<canonical-ih58-signatory-1> \
-<canonical-ih58-signatory-2> \
-<canonical-ih58-signatory-3> \
+<canonical-i105-signatory-1> \
+<canonical-i105-signatory-2> \
+<canonical-i105-signatory-3> \
 --weights 1 2 3 \
 --quorum 3 \
 --transaction-ttl "1y 6M 2w 3d 12h 30m 30s"
@@ -70,10 +70,10 @@ __Example usage:__
 
 ```bash
 echo '"congratulations"' | iroha -o ledger account meta set \
---id <canonical-ih58-multisig> \
+--id <canonical-i105-multisig> \
 --key success_marker \
 | iroha ledger multisig propose \
---account <canonical-ih58-multisig>
+--account <canonical-i105-multisig>
 ```
 
 __Explanation:__
@@ -103,7 +103,7 @@ __Example output:__
       {
         "SetKeyValue": {
           "Account": {
-            "object": "<canonical-ih58-multisig>",
+            "object": "<canonical-i105-multisig>",
             "key": "success_marker",
             "value": "congratulations"
           }
@@ -113,7 +113,7 @@ __Example output:__
     "proposed_at": "2025-02-06T19:59:58Z",
     "expires_in": "1year 6months 17days 12h 26m 39s",
     "approval_path": [
-      "2 -> [1/3] <canonical-ih58-multisig>"
+      "2 -> [1/3] <canonical-i105-multisig>"
     ]
   }
 }
@@ -139,7 +139,7 @@ __Example usage:__
 
 ```bash
 iroha ledger multisig approve \
---account <canonical-ih58-multisig> \
+--account <canonical-i105-multisig> \
 --instructions-hash FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989
 ```
 

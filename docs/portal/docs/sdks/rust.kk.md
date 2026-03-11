@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 беті: ол канондық тіркелгі идентификаторын, әріппен көрсетілген литералды қамтиды
 сұралған пішім, желі префиксі/қателерді түзету метадеректері, QR өлшемдері және
 әмияндар/зерттеушілер тікелей ендіре алатын кірістірілген SVG пайдалы жүктемесі. Өткізіп тастаңыз
-`ExplorerAccountQrOptions` таңдаулы IH58 шығысына әдепкіге немесе орнатуға
-Екінші ең жақсысын алу үшін `address_format: Some(AddressFormat::Compressed)`
-ADDR-6b пайдаланатын `sora…` нұсқасы.
+`ExplorerAccountQrOptions` таңдаулы I105 шығысына әдепкіге немесе орнатуға
+Екінші ең жақсысын алу үшін canonical I105 output
+ADDR-6b пайдаланатын `i105` нұсқасы.
 
 ## 7. Оқиғаларға жазылыңыз
 

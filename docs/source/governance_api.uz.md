@@ -35,7 +35,7 @@ Yakuniy nuqtalar- POST `/v1/gov/proposals/deploy-contract`
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "oyna": { "pastki": 12345, "yuqori": 12400},
-      "avtority": "ih58...?",
+      "avtority": "i105...?",
       "private_key": "...?"
     }
   - Javob (JSON):
@@ -44,14 +44,14 @@ Yakuniy nuqtalar- POST `/v1/gov/proposals/deploy-contract`
 
 Contracts API (joylashtirish)
 - POST `/v1/contracts/deploy`
-  - So'rov: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - So'rov: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Xulq-atvor: IVM dastur tanasidan `code_hash` va `abi_version` sarlavhasidan `abi_hash` ni hisoblaydi, so‘ngra `RegisterSmartContractCode` (manifest) va I10840l ni taqdim etadi `.to` bayt) `authority` nomidan.
   - Javob: { "ok": rost, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Tegishli:
     - GET `/v1/contracts/code/{code_hash}` → saqlangan manifestni qaytaradi
     - `/v1/contracts/code-bytes/{code_hash}` ni oling → `{ code_b64 }`ni qaytaradi
 - POST `/v1/contracts/instance`
-  - So'rov: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - So'rov: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Xulq-atvor: Taqdim etilgan baytekodni joylashtiradi va `(namespace, contract_id)` xaritalashni `ActivateContractInstance` orqali darhol faollashtiradi.
   - Javob: { "ok": rost, "nom maydoni": "ilovalar", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -64,11 +64,11 @@ Taxallus xizmati
   - Xatolar: noto'g'ri tuzilgan hex kiritishda HTTP `400`. Torii dekoder xato xabari bilan Norito `ValidationFail::QueryFailed::Conversion` konvertini qaytaradi.
 - POST `/v1/aliases/resolve`
   - So'rov: { "taxallus": "GB82 WEST 1234 5698 7654 32" }
-  - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "indeks": 0, "manba": "iso_bridge" }
+  - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "indeks": 0, "manba": "iso_bridge" }
   - Eslatmalar: ISO ko'prigining ish vaqti bosqichini talab qiladi (`[iso_bridge.account_aliases]`, `iroha_config`). Torii qidiruvdan oldin boʻshliq va bosh harflarni olib tashlash orqali taxalluslarni normallashtiradi. Taxallus mavjud bo'lmaganda 404 va ISO ko'prigining ishlash vaqti o'chirilganda 503 qaytariladi.
 - POST `/v1/aliases/resolve_index`
   - So'rov: { "indeks": 0 }
-  - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "manba": "iso_bridge" }
+  - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "manba": "iso_bridge" }
   - Eslatmalar: taxallus indekslari konfiguratsiya tartibidan (0-asosli) deterministik tarzda tayinlanadi. Taxallus attestatsiya hodisalari uchun audit izlarini yaratish uchun mijozlar javoblarni oflayn rejimda keshlashi mumkin.Kod o'lchami qopqog'i
 - Maxsus parametr: `max_contract_code_bytes` (JSON u64)
   - Zanjirli kontrakt kodini saqlash uchun ruxsat etilgan maksimal hajmni (baytlarda) boshqaradi.
@@ -76,7 +76,7 @@ Taxallus xizmati
   - Operatorlar `SetParameter(Custom)` ni `id = "max_contract_code_bytes"` va raqamli foydali yukni taqdim etish orqali sozlashlari mumkin.
 
 - POST `/v1/gov/ballots/zk`
-  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
+  - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar:
     - Sxemaning umumiy kirishlari `owner`, `amount` va `duration_blocks` ni oʻz ichiga olgan boʻlsa va isbot sozlangan VK ga qarshi tekshirilsa, tugun Sumeragi bilan Prometheus bilan boshqaruv blokini yaratadi yoki kengaytiradi. Yo'nalish yashirin qoladi (`unknown`), agar ishora qilinmasa; faqat miqdor/muddati yangilanadi. Qayta ovoz berish monotondir: miqdor va amal qilish muddati faqat oshadi (tugun max(summa, oldingi miqdor) va max(muddati, oldingi. muddati) amal qiladi).
@@ -85,10 +85,10 @@ Taxallus xizmati
     - Shartnomaning bajarilishi `SubmitBallot` navbati oldidan `ZK_VOTE_VERIFY_BALLOT` chaqirilishi kerak; xostlar bir martalik mandalni majbur qiladi.
 
 - POST `/v1/gov/ballots/plain`
-  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "ih58...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
+  - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "i105...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar: Qayta ovoz berish faqat uzaytiriladi - yangi byulleten mavjud blokirovka miqdorini yoki amal qilish muddatini kamaytira olmaydi. `owner` tranzaksiya vakolatiga teng bo'lishi kerak. Minimal davomiylik `conviction_step_blocks`.- POST `/v1/gov/finalize`
-  - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "ih58...?", "private_key": "...?" }
+  - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Zanjirdagi effekt (joriy iskala): tasdiqlangan joylashtirish taklifini amalga oshirish kutilgan `abi_hash` bilan `code_hash` tomonidan kalitlangan minimal `ContractManifest` kiritadi va taklifni Qabul qilingan deb belgilaydi. Agar boshqa `abi_hash` bilan `code_hash` uchun manifest allaqachon mavjud bo'lsa, qabul qilish rad etiladi.
   - Eslatmalar:
@@ -97,7 +97,7 @@ Taxallus xizmati
     - Saylov ishtirokini tekshirishda faqat tasdiqlash+rad etishdan foydalaniladi; betaraf bo'lish saylovchilarning ishtirokini hisobga olmaydi.
 
 - POST `/v1/gov/enact`
-  - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "ih58...?", "private_key": "...?" }
+  - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Izohlar: Torii imzolangan bitimni `authority`/`private_key` taqdim etilganda taqdim etadi; aks holda u mijozlar imzolashi va topshirishi uchun skeletni qaytaradi. Preimage ixtiyoriy va hozirda ma'lumotlidir.
 
@@ -135,8 +135,8 @@ Doimiy ro'yxat mavjud bo'lmaganda Torii tomonidan qo'llaniladigan kengash zaxira
   min_turnout = 0
   voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
-  bond_escrow_account = "ih58..."
-  slash_receiver_account = "ih58..."
+  bond_escrow_account = "i105..."
+  slash_receiver_account = "i105..."
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
@@ -153,8 +153,8 @@ GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
 GOV_VOTING_ASSET_ID=xor#sora
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=ih58...
-GOV_SLASH_RECEIVER_ACCOUNT=ih58...
+GOV_BOND_ESCROW_ACCOUNT=i105...
+GOV_SLASH_RECEIVER_ACCOUNT=i105...
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
@@ -189,8 +189,8 @@ RBAC
 - Mijozlar himoyalangan nom maydonlariga moʻljallangan joylashtirishlar uchun tranzaksiya metamaʼlumotlari kalitlarini oʻz ichiga olishi kerak:
   - `gov_namespace`: maqsadli nom maydoni (masalan, `"apps"`)
   - `gov_contract_id`: nomlar maydonidagi mantiqiy shartnoma identifikatori
-- `gov_manifest_approvers`: ih58... hisob identifikatorlarining ixtiyoriy JSON massivi. Agar chiziqli manifest birdan ortiq kvorumni e'lon qilsa, qabul qilish manifest kvorumini qondirish uchun tranzaksiya organi va sanab o'tilgan hisoblarni talab qiladi.
-- Telemetriya `governance_manifest_admission_total{result}` orqali yaxlit qabul hisoblagichlarini ochib beradi, shuning uchun operatorlar muvaffaqiyatli qabullarni `missing_manifest`, `non_ih58..._authority`, `quorum_rejected`, `protected_namespace_rejected`, `protected_namespace_rejected` va I181010 yoʻllaridan ajrata oladilar.
+- `gov_manifest_approvers`: i105... hisob identifikatorlarining ixtiyoriy JSON massivi. Agar chiziqli manifest birdan ortiq kvorumni e'lon qilsa, qabul qilish manifest kvorumini qondirish uchun tranzaksiya organi va sanab o'tilgan hisoblarni talab qiladi.
+- Telemetriya `governance_manifest_admission_total{result}` orqali yaxlit qabul hisoblagichlarini ochib beradi, shuning uchun operatorlar muvaffaqiyatli qabullarni `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, `protected_namespace_rejected`, `protected_namespace_rejected` va I181010 yoʻllaridan ajrata oladilar.
 - Telemetriya ijro yo'lini `governance_manifest_quorum_total{outcome}` (qiymatlari `satisfied` / `rejected`) orqali yuzaga keltiradi, shuning uchun operatorlar etishmayotgan tasdiqlarni tekshirishlari mumkin.
 - Yo'llar o'zlarining manifestlarida chop etilgan nomlar maydoni ruxsat etilgan ro'yxatini ta'minlaydi. `gov_namespace` ni o'rnatadigan har qanday tranzaksiya `gov_contract_id` ni ta'minlashi kerak va nom maydoni manifestning `protected_namespaces` to'plamida paydo bo'lishi kerak. Himoya yoqilgan bo'lsa, ushbu metama'lumotlarsiz `RegisterSmartContractCode` taqdimotlari rad etiladi.
 - `(namespace, contract_id, code_hash, abi_hash)` korteji uchun qabul qilingan boshqaruv taklifi mavjudligini tasdiqlaydi; aks holda tekshirish Ruxsat berilmagan xato bilan bajarilmaydi.
@@ -204,7 +204,7 @@ Runtime Upgrade Hooks
   - `allowed_ids` (satrlar massivi): metadata qiymatlarining ixtiyoriy ruxsat etilgan ro'yxati (qirqib olingandan keyin). Taqdim etilgan qiymat ro'yxatda bo'lmaganda rad etadi.
 - Ilgak mavjud bo'lganda, navbatga kirish tranzaksiya navbatga kirishidan oldin metadata siyosatini amalga oshiradi. Yo'qolgan metama'lumotlar, bo'sh qiymatlar yoki ruxsat etilgan ro'yxatdan tashqari qiymatlar deterministik `NotPermitted` xatosini keltirib chiqaradi.
 - Telemetriya `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` orqali ijro natijalarini kuzatib boradi.
-- Kancani qondiradigan tranzaksiyalar manifest kvorumi talab qiladigan har qanday ih58... tasdiqlari bilan birga `gov_upgrade_id=<value>` metamaʼlumotlarini (yoki manifestda belgilangan kalitni) oʻz ichiga olishi kerak.
+- Kancani qondiradigan tranzaksiyalar manifest kvorumi talab qiladigan har qanday i105... tasdiqlari bilan birga `gov_upgrade_id=<value>` metamaʼlumotlarini (yoki manifestda belgilangan kalitni) oʻz ichiga olishi kerak.
 
 Qulaylik so'nggi nuqtasi
 - POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` to'g'ridan-to'g'ri tugunga qo'llaniladi.
@@ -218,16 +218,16 @@ Qulaylik so'nggi nuqtasi
     - `(namespace, contract_id, code_hash, abi_hash)` uchun qabul qilingan boshqaruv taklifi tugun foydalanadigan bir xil taklif-identifikatori orqali olingan.
   - Har bir shartnoma bo'yicha `results[]` (muammolar, manifest/kod/takliflar xulosalari) va agar bostirilmasa, bir qatorli xulosa bilan JSON hisobotini chiqaradi (`--no-summary`).
   - Himoyalangan nom maydonlarini tekshirish yoki boshqaruv tomonidan boshqariladigan joylashtirish ish oqimlarini tekshirish uchun foydalidir.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Manifest kvorum qoidalarini qondirish uchun ixtiyoriy `gov_manifest_approvers`, jumladan, himoyalangan nomlar maydoniga joylashtirishni yuborishda foydalaniladigan JSON metamaʼlumotlar skeletini chiqaradi.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Kanonik hisob identifikatorlarini tasdiqlaydi, 32 baytlik bekor qiluvchi maslahatlarni kanoniklashtiradi va maslahatlarni `public_inputs_json` ga birlashtiradi (qo'shimcha bekor qilish uchun `--public <path>` bilan).
   - Nullifier tasdiqlovchi majburiyatdan (ommaviy kiritish) va `domain_tag`, `chain_id` va `election_id`dan olingan; `--nullifier` taqdim etilganda isbot bilan tasdiqlangan.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI javoblari `tx_instructions[]` va `payload_fingerprint_hex` va dekodlangan maydonlar bilan izohlanadi, shuning uchun quyi oqim asboblari Norito dekodlashni qayta ishlatmasdan skeletni tekshirishi mumkin.
   - Har qanday blokirovka bo'yicha maslahat berilganda, ZK byulletenlari `owner`, `amount` va `duration_blocks` bilan ta'minlanishi kerak; qisman maslahatlar rad etiladi. Qachon `min_bond_amount > 0`, qulflash bo'yicha maslahatlar talab qilinadi. Yo'nalish ixtiyoriy bo'lib qoladi va faqat maslahat sifatida ko'riladi.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` kanonik IH58 literallarini qabul qiladi; ixtiyoriy `@<domain>` qo'shimchalari faqat marshrutlash bo'yicha maslahatlardir.
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` kanonik I105 literallarini qabul qiladi; ixtiyoriy `@<domain>` qo'shimchalari faqat marshrutlash bo'yicha maslahatlardir.
   - `--lock-amount`/`--lock-duration-blocks` taxalluslari skript pariteti uchun ZK bayroq nomlarini aks ettiradi.
   - `vote --mode zk` ko'rsatmasining xulosasi shifrlangan ko'rsatma barmoq izi va odam o'qiy oladigan saylov byulletenlarini (`owner`, `amount`, `duration_blocks`, `direction` imzolashdan oldin) o'z ichiga oladi.Hodisalar ro'yxati
 - GET `/v1/gov/instances/{ns}` - nom maydoni uchun faol shartnoma misollarini ro'yxatlaydi.
@@ -246,14 +246,14 @@ Qulfni ochish (Operator/Audit)
 - POST `/v1/gov/ballots/zk-v1`
   - So'rov (v1 uslubidagi DTO):
     {
-      "hokimiyat": "ih58...",
+      "hokimiyat": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "ih58…", // kanonik AccountId (IH58 literal; ixtiyoriy @domen maslahati)
+      "owner": "i105…", // kanonik AccountId (I105 literal; ixtiyoriy @domen maslahati)
       "summa": "100?",
       "duration_blocks": 6000?,
       "direction": "Ha|Yo'q|Tixtash kerakmi?",
@@ -263,7 +263,7 @@ Qulfni ochish (Operator/Audit)
   - `BallotProof` JSON-ni to'g'ridan-to'g'ri qabul qiladi va `CastZkBallot` skeletini qaytaradi.
   - Talab:
     {
-      "hokimiyat": "ih58...",
+      "hokimiyat": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
@@ -271,7 +271,7 @@ Qulfni ochish (Operator/Audit)
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=", // ZK1 yoki H2* konteynerining 64 bazasi
         "root_hint": null, // ixtiyoriy 32 baytli hex string (muvofiqlik ildizi)
-        "egasi": null, // ixtiyoriy kanonik AccountId (IH58 literal; ixtiyoriy @domen maslahati)
+        "egasi": null, // ixtiyoriy kanonik AccountId (I105 literal; ixtiyoriy @domen maslahati)
         "nullifier": null, // ixtiyoriy 32 baytlik hex string (nollifier maslahati)
         "summa": "100", // ixtiyoriy blokirovka miqdori bo'yicha maslahat (o'nlik qator)
         "duration_blocks": 6000, // ixtiyoriy blokirovka muddati haqida maslahat
@@ -304,7 +304,7 @@ CastZkBallot tekshirish yo'li
 
 ## Tekshiruvchining noto'g'ri xatti-harakati va qo'shma konsensus
 
-### Slashing va Jailing Ish jarayoniIh58... protokolni buzsa, konsensus Norito kodli `Evidence` chiqaradi. Har bir foydali yuk `EvidenceStore` xotirasiga tushadi va agar ko'rinmasa, WSV tomonidan qo'llab-quvvatlanadigan `consensus_evidence` xaritasida amalga oshiriladi. `sumeragi.npos.reconfig.evidence_horizon_blocks` dan eskiroq yozuvlar (standart `7200` bloklari) rad etiladi, shuning uchun arxiv cheklangan bo'lib qoladi, lekin rad etish operatorlar uchun qayd etiladi. Ufqdagi dalillar qo'shma konsensus bosqichma-bosqich qoidasiga (`mode_activation_height requires next_mode to be set in the same block`), faollashtirish kechikishiga (`sumeragi.npos.reconfig.activation_lag_blocks`, standart `1`) va kesish kechikishiga (`sumeragi.npos.reconfig.slashing_delay_blocks`, standart I00700X) bo'ysunadi. qo'llashdan oldin jarimalar.
+### Slashing va Jailing Ish jarayoniI105... protokolni buzsa, konsensus Norito kodli `Evidence` chiqaradi. Har bir foydali yuk `EvidenceStore` xotirasiga tushadi va agar ko'rinmasa, WSV tomonidan qo'llab-quvvatlanadigan `consensus_evidence` xaritasida amalga oshiriladi. `sumeragi.npos.reconfig.evidence_horizon_blocks` dan eskiroq yozuvlar (standart `7200` bloklari) rad etiladi, shuning uchun arxiv cheklangan bo'lib qoladi, lekin rad etish operatorlar uchun qayd etiladi. Ufqdagi dalillar qo'shma konsensus bosqichma-bosqich qoidasiga (`mode_activation_height requires next_mode to be set in the same block`), faollashtirish kechikishiga (`sumeragi.npos.reconfig.activation_lag_blocks`, standart `1`) va kesish kechikishiga (`sumeragi.npos.reconfig.slashing_delay_blocks`, standart I00700X) bo'ysunadi. qo'llashdan oldin jarimalar.
 
 Tan olingan jinoyatlar `EvidenceKind` ga birma-bir xarita; diskriminantlar barqaror va ma'lumotlar modeli tomonidan amalga oshiriladi:
 
@@ -324,7 +324,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — bir xil `(phase,height,view,epoch)` korteji uchun ih58... imzolangan ziddiyatli xeshlar.
+- **DoublePrepare/DoubleCommit** — bir xil `(phase,height,view,epoch)` korteji uchun i105... imzolangan ziddiyatli xeshlar.
 - **InvalidQc** — agregator shakli deterministik tekshiruvlardan o‘tmagan (masalan, bo‘sh imzo bitmap) QC haqida g‘iybat qildi.
 - **InvalidProposal** — yetakchi tizimli tekshiruvdan o‘tmagan blokni taklif qildi (masalan, qulflangan zanjir qoidasini buzadi).
 - **Tsenzura** — imzolangan topshirish kvitansiyalari hech qachon taklif qilinmagan/tugallanmagan tranzaksiyani ko'rsatadi.
@@ -341,12 +341,12 @@ Boshqaruv dalillar baytlarini kanonik dalil sifatida ko'rib chiqishi kerak:
 1. **Foydali yukni eskirishdan oldin to'plang**. Norito baytlarini balandlik/koʻrish metamaʼlumotlari bilan birga arxivlang.
 2. **Agar kerak bo'lsa, bekor qiling** `CancelConsensusEvidencePenalty` hujjat yuki bilan `slashing_delay_blocks` muddati tugagunga qadar taqdim etish; yozuv `penalty_cancelled` va `penalty_cancelled_at_height` deb belgilangan va hech qanday kesish qo'llanilmaydi.
 3. Referendum yoki sudo koʻrsatmasi (masalan, `Unregister::peer`). Bajarish foydali yukni qayta tasdiqlaydi; noto'g'ri shakllangan yoki eskirgan dalillar deterministik ravishda rad etiladi.
-4. **Keyingi topologiyani rejalashtirish** shunday qilib, qoidabuzar ih58... darhol qayta qo‘shila olmaydi. Odatdagi oqimlar navbati `SetParameter(Sumeragi::NextMode)` va `SetParameter(Sumeragi::ModeActivationHeight)` yangilangan ro'yxat bilan.
+4. **Keyingi topologiyani rejalashtirish** shunday qilib, qoidabuzar i105... darhol qayta qo‘shila olmaydi. Odatdagi oqimlar navbati `SetParameter(Sumeragi::NextMode)` va `SetParameter(Sumeragi::ModeActivationHeight)` yangilangan ro'yxat bilan.
 5. **Audit natijalari** `/v1/sumeragi/evidence` va `/v1/sumeragi/status` orqali dalil hisoblagichning ilg'orligini ta'minlash va boshqaruv olib tashlashni amalga oshirgan.
 
 ### Birgalikda konsensus ketma-ketligi
 
-Qo'shma konsensus, chiquvchi ih58... to'plami yangi to'plam taklif qilishni boshlashdan oldin chegara blokini yakunlashini kafolatlaydi. Ish vaqti qoidani juftlashtirilgan parametrlar orqali amalga oshiradi:- `SumeragiParameter::NextMode` va `SumeragiParameter::ModeActivationHeight` **bir xil blokda** amalga oshirilishi kerak. `mode_activation_height` kamida bir blokli kechikishni ta'minlab, yangilanishni amalga oshirgan blok balandligidan qat'iy kattaroq bo'lishi kerak.
+Qo'shma konsensus, chiquvchi i105... to'plami yangi to'plam taklif qilishni boshlashdan oldin chegara blokini yakunlashini kafolatlaydi. Ish vaqti qoidani juftlashtirilgan parametrlar orqali amalga oshiradi:- `SumeragiParameter::NextMode` va `SumeragiParameter::ModeActivationHeight` **bir xil blokda** amalga oshirilishi kerak. `mode_activation_height` kamida bir blokli kechikishni ta'minlab, yangilanishni amalga oshirgan blok balandligidan qat'iy kattaroq bo'lishi kerak.
 - `sumeragi.npos.reconfig.activation_lag_blocks` (sukut bo'yicha `1`) nol kechikishning oldini oluvchi konfiguratsiya himoyachisi:
 - `sumeragi.npos.reconfig.slashing_delay_blocks` (standart `259200`) konsensusni qisqartirishni kechiktiradi, shuning uchun boshqaruv jazolarni ular qo'llanilishidan oldin bekor qilishi mumkin.
 
@@ -355,13 +355,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Ish vaqti va CLI bosqichli parametrlarni `/v1/sumeragi/params` va `iroha sumeragi params --summary` orqali ochib beradi, shuning uchun operatorlar faollashtirish balandligi va ih58... ro'yxatlarini tasdiqlashlari mumkin.
+- Ish vaqti va CLI bosqichli parametrlarni `/v1/sumeragi/params` va `iroha sumeragi params --summary` orqali ochib beradi, shuning uchun operatorlar faollashtirish balandligi va i105... ro'yxatlarini tasdiqlashlari mumkin.
 - boshqaruvni avtomatlashtirish har doim:
   1. Dalillarga asoslangan olib tashlash (yoki qayta tiklash) to'g'risidagi qarorni yakunlang.
   2. `mode_activation_height = h_current + activation_lag_blocks` bilan keyingi qayta konfiguratsiyani navbatga qo'ying.
   3. `effective_consensus_mode` kutilgan balandlikda aylanguncha monitor `/v1/sumeragi/status`.
 
-ih58...s aylantiruvchi yoki kesishni qo'llaydigan har qanday skript **kechikishsiz faollashtirishga urinmasligi yoki uzatish parametrlarini o'tkazib yubormasligi kerak; bunday operatsiyalar rad etiladi va tarmoqni avvalgi rejimda qoldiradi.
+i105...s aylantiruvchi yoki kesishni qo'llaydigan har qanday skript **kechikishsiz faollashtirishga urinmasligi yoki uzatish parametrlarini o'tkazib yubormasligi kerak; bunday operatsiyalar rad etiladi va tarmoqni avvalgi rejimda qoldiradi.
 
 ## Telemetriya sirtlari
 

@@ -25,7 +25,7 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as IH58 only. Parser inputs must be canonical IH58; domain suffixes (`@domain`), compressed `sora…` literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
+- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
@@ -39,7 +39,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
-- `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical IH58.
+- `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
 - Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.

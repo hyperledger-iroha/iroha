@@ -2,15 +2,15 @@ import XCTest
 @testable import IrohaSwift
 
 final class TransactionInputValidatorTests: XCTestCase {
-    private func ih58(seed: UInt8 = 1,
+    private func i105(seed: UInt8 = 1,
                       domain: String = AccountAddress.defaultDomainName) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        return try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+        return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
     func testValidateRejectsEmptyChainId() throws {
-        let authority = try ih58(seed: 1)
+        let authority = try i105(seed: 1)
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "   ",
                                                    authorityId: authority,
@@ -43,7 +43,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateRejectsMalformedAssetDefinition() throws {
-        let authority = try ih58(seed: 2)
+        let authority = try i105(seed: 2)
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: authority,
@@ -55,7 +55,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateRejectsAssetDefinitionWithReservedCharacters() throws {
-        let authority = try ih58(seed: 3)
+        let authority = try i105(seed: 3)
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: authority,
@@ -67,8 +67,8 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testValidateTrimsWhitespace() throws {
-        let authority = try ih58(seed: 4)
-        let destination = try ih58(seed: 5)
+        let authority = try i105(seed: 4)
+        let destination = try i105(seed: 5)
         let ids = try TransactionInputValidator.validate(
             chainId: " 0000 ",
             authorityId: " \(authority) ",
@@ -96,7 +96,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetTrimsAccountAndDomainIds() throws {
-        let authority = try ih58(seed: 6)
+        let authority = try i105(seed: 6)
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.account("  \(authority)  "))
         XCTAssertEqual(target.objectId, authority)
 
@@ -109,27 +109,27 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(target.objectId, "norito:0a0b")
     }
 
-    func testValidateAcceptsIh58Authority() throws {
+    func testValidateAcceptsI105Authority() throws {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let ih58 = try AccountId.makeIH58(publicKey: publicKey)
+        let i105 = try AccountId.makeI105(publicKey: publicKey)
         let ids = try TransactionInputValidator.validate(chainId: "0000",
-                                                         authorityId: ih58)
-        XCTAssertEqual(ids.authorityId, ih58)
+                                                         authorityId: i105)
+        XCTAssertEqual(ids.authorityId, i105)
     }
 
-    func testValidateAcceptsCompressedAuthorityAndCanonicalizesToIh58() throws {
+    func testValidateAcceptsI105DefaultAuthorityAndCanonicalizesToI105() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAD, count: 32))
-        let compressed = try address.toCompressedSora()
-        let ih58 = try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+        let i105Default = try address.toI105Default()
+        let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let ids = try TransactionInputValidator.validate(chainId: "0000",
-                                                         authorityId: compressed)
-        XCTAssertEqual(ids.authorityId, ih58)
+                                                         authorityId: i105Default)
+        XCTAssertEqual(ids.authorityId, i105)
     }
 
-    func testValidateRejectsIh58WithDomainSuffix() throws {
+    func testValidateRejectsI105WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
-        let ih58 = try AccountId.makeIH58(publicKey: publicKey)
-        let literal = "\(ih58)@wonderland"
+        let i105 = try AccountId.makeI105(publicKey: publicKey)
+        let literal = "\(i105)@wonderland"
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: literal)

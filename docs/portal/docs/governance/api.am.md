@@ -35,21 +35,21 @@ translator: machine-google-reviewed
       "አቢ_ሀሽ"፡ "blake2b32:..." | "… 64ሄክስ",
       "አቢ_ቨርዥን": "1",
       "መስኮት": {"ዝቅተኛ": 12345, "ላይ": 12400},
-      "ስልጣን": "ih58...?",
+      "ስልጣን": "i105...?",
       "የግል_ቁልፍ": "...?"
     }
   ምላሽ (JSON)፡-
     {"እሺ"፡ እውነት፡ "ፕሮፖሳል_መታወቂያ"፡ "…64hex"፣ "tx_instructions": [{ "wire_id": "…", "payload_hex": "..." }] }
   - ማረጋገጫ፡ አንጓዎች `abi_hash` ለቀረበው `abi_version` እና አለመዛመጃዎችን ውድቅ ያድርጉ። ለ `abi_version = "v1"`፣ የሚጠበቀው ዋጋ `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ነው።ኮንትራቶች ኤፒአይ (ተሰማራ)
 - POST `/v1/contracts/deploy`
-  ጥያቄ፡ {"ስልጣን"፡ "ih58..."፣ "የግል_ቁልፍ"፡ "..."፣ "code_b64": "..." }
+  ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "..."፣ "code_b64": "..." }
   - ባህሪ: `code_hash` ከ IVM ፕሮግራም አካል እና `abi_hash` ከ አርዕስት `abi_version` ያሰላል, ከዚያም `RegisterSmartContractCode` (የሚገለጥበት) እና I00NI704 ያቀርባል. `.to` ባይት) በ `authority` ስም።
   ምላሽ፡ {"እሺ"፡ እውነት፡ "code_hash_hex"፡ "..."፣ "አቢ_ሀሽ_ሄክስ"፡ "..." }
   - ተዛማጅ፡
     - GET `/v1/contracts/code/{code_hash}` → የተከማቸ አንጸባራቂ ይመልሳል
     - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }` ይመልሳል
 - POST `/v1/contracts/instance`
-  ጥያቄ፡ {"ስልጣን"፡ "ih58..."፣ "የግል_ቁልፍ"፡ "..."፣ "ስም ቦታ": "መተግበሪያዎች"፣ "ኮንትራት_መታወቂያ"፡ "calc.v1"፣ "code_b64": "..." }
+  ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "..."፣ "ስም ቦታ": "መተግበሪያዎች"፣ "ኮንትራት_መታወቂያ"፡ "calc.v1"፣ "code_b64": "..." }
   - ባህሪ፡ የቀረበውን ባይትኮድ ያሰማራና ወዲያውኑ የ`(namespace, contract_id)` ካርታውን በ`ActivateContractInstance` ያንቀሳቅሰዋል።
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ስም ቦታ"፡ "መተግበሪያዎች"፡ "ኮንትራት_መታወቂያ"፡ "calc.v1"፣ "code_hash_hex"፡ "…"፣ "abi_hash_hex": "..." }
 
@@ -62,11 +62,11 @@ translator: machine-google-reviewed
   - ስህተቶች፡ HTTP `400` በተበላሸ የሄክስ ግቤት ላይ። Torii Norito `ValidationFail::QueryFailed::Conversion` ፖስታ ከዲኮደር ስህተት መልእክት ጋር ይመልሳል።
 - POST `/v1/aliases/resolve`
   - ጥያቄ፡ {"ተለዋጭ ስም"፡ "GB82 WEST 1234 5698 7654 32" }
-  ምላሽ፡ {"ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "ih58..."፣ "ኢንዴክስ"፡ 0፣ "ምንጭ"፡ "ኢሶ_ብሪጅ" }
+  ምላሽ፡ {"ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "i105..."፣ "ኢንዴክስ"፡ 0፣ "ምንጭ"፡ "ኢሶ_ብሪጅ" }
   - ማስታወሻዎች፡ የ ISO ድልድይ አሂድ ጊዜ ዝግጅትን ይፈልጋል (`[iso_bridge.account_aliases]` በ `iroha_config`)። Torii ከመፈተሽ በፊት ነጭ ቦታን እና የላይኛውን መያዣ በመንጠቅ ተለዋጭ ስሞችን መደበኛ ያደርገዋል። ተለዋጭ ስም በማይኖርበት ጊዜ 404 እና 503 የ ISO bridge runtime ሲጠፋ ይመልሳል።
 - POST `/v1/aliases/resolve_index`
   - ጥያቄ፡ {"ኢንዴክስ"፡ 0}
-  ምላሽ፡ {"ኢንዴክስ"፡ 0፣ "ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "ih58..."፣ "ምንጭ"፡ "iso_bridge"}
+  ምላሽ፡ {"ኢንዴክስ"፡ 0፣ "ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "i105..."፣ "ምንጭ"፡ "iso_bridge"}
   - ማስታወሻዎች፡ የአሊያስ ኢንዴክሶች ከውቅረት ቅደም ተከተል (0-ተኮር) በወሰነው ሁኔታ ተመድበዋል። ለተለዋጭ ማረጋገጫ ክስተቶች የኦዲት መንገዶችን ለመገንባት ደንበኞች ከመስመር ውጭ ምላሾችን መሸጎጫ ማድረግ ይችላሉ።
 
 የኮድ መጠን ካፕ
@@ -74,7 +74,7 @@ translator: machine-google-reviewed
   - በሰንሰለት የኮንትራት ኮድ ማከማቻ የሚፈቀደውን ከፍተኛ መጠን (በባይት) ይቆጣጠራል።
   - ነባሪ: 16 ሚቢ. የ `.to` ምስል ርዝመት በማይለዋወጥ ጥሰት ስህተት ከካፒታው ሲያልፍ አንጓዎች `RegisterSmartContractBytes`ን አይቀበሉም።
   - ኦፕሬተሮች `SetParameter(Custom)` ከ `id = "max_contract_code_bytes"` እና የቁጥር ጭነት ጋር በማስገባት ማስተካከል ይችላሉ።- POST `/v1/gov/ballots/zk`
-  ጥያቄ፡- {"ሥልጣን"፡ "ih58..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ቼይን_መታወቂያ"፡ "..."፣ "ምርጫ_መታወቂያ"፡ "e1"፣ "ማስረጃ_b64"፡ "…", "ይፋዊ"፡ {…} }
+  ጥያቄ፡- {"ሥልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ቼይን_መታወቂያ"፡ "..."፣ "ምርጫ_መታወቂያ"፡ "e1"፣ "ማስረጃ_b64"፡ "…", "ይፋዊ"፡ {…} }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }
   - ማስታወሻዎች:
     - የወረዳው የህዝብ ግብአቶች `owner`፣ `owner`፣ `amount` እና `duration_blocks`ን ሲያካትቱ እና ማስረጃው ከተዋቀረው ቪኬ ጋር ሲገናኝ መስቀለኛ መንገዱ የአስተዳደር መቆለፊያን ይፈጥራል ወይም ያራዝመዋል ለ Sumeragi አቅጣጫ ተደብቆ ይቆያል (`unknown`); መጠኑ/የሚያበቃበት ጊዜ ብቻ ተዘምኗል። ድጋሚ-ድምጾች ነጠላ ናቸው፡ መጠኑ እና ጊዜው የሚያበቃው ብቻ ነው የሚጨምረው (መስቀለኛ መንገድ የሚመለከተው ከፍተኛ(መጠን፣ ቀዳሚ መጠን) እና ከፍተኛ(የሚያበቃበት፣ prev.expiry)) ነው።
@@ -82,12 +82,12 @@ translator: machine-google-reviewed
     - የኮንትራት አፈፃፀም `ZK_VOTE_VERIFY_BALLOT` መደወል አለበት ከመግባቱ በፊት `SubmitBallot`; አስተናጋጆች የአንድ-ምት መቀርቀሪያን ያስገድዳሉ።
 
 - ፖስት `/v1/gov/ballots/plain`
-  - ጥያቄ፡ {"ስልጣን"፡ "ih58..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ሰንሰለት_መታወቂያ"፡ "…"፣ "ሪፈረንደም_መታወቂያ"፡ "r1"፣ "ባለቤት"፡ "ih58..."፣ "መጠን"፡ "1000"፣ "ቆይታ_ብሎኮች"፡ 6000፣ "አቅጣጫ"|አብዬ
+  - ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ሰንሰለት_መታወቂያ"፡ "…"፣ "ሪፈረንደም_መታወቂያ"፡ "r1"፣ "ባለቤት"፡ "i105..."፣ "መጠን"፡ "1000"፣ "ቆይታ_ብሎኮች"፡ 6000፣ "አቅጣጫ"|አብዬ
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }
   - ማስታወሻዎች፡ ድጋሚ-ድምጾች የተራዘሙ ብቻ ናቸው - አዲስ የድምጽ መስጫ ወረቀቱ ያለውን የመቆለፊያ መጠን ወይም የአገልግሎት ጊዜው ሊቀንስ አይችልም። `owner` ከግብይቱ ባለስልጣን ጋር እኩል መሆን አለበት። ዝቅተኛው የቆይታ ጊዜ `conviction_step_blocks` ነው።
 
 - POST `/v1/gov/finalize`
-  ጥያቄ፡ {"የህዝበ ውሳኔ"፡ "r1"፣ "proposal_id": "…64hex"፣ "ስልጣን": "ih58…?"፣ "የግል_ቁልፍ"፡ "…?" }
+  ጥያቄ፡ {"የህዝበ ውሳኔ"፡ "r1"፣ "proposal_id": "…64hex"፣ "ስልጣን": "i105…?"፣ "የግል_ቁልፍ"፡ "…?" }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "tx_instructions"፡ [{"wire_id"፡ "…FinalizeReferendum"፣ "payload_hex":"…"}] }
   በሰንሰለት ላይ ተጽእኖ (የአሁኑ ስካፎልድ)፡ የጸደቀ የማሰማራት ፕሮፖዛልን ማፅደቅ በ`code_hash` ከተጠበቀው `abi_hash` ጋር በትንሹ `ContractManifest` ያስገባል እና ፕሮፖዛሉ የፀደቀውን ያመላክታል። ለ`code_hash` የተለየ `abi_hash` ያለው አንጸባራቂ ካለ፣ ህጉ ተቀባይነት አላገኘም።
   - ማስታወሻዎች:
@@ -96,7 +96,7 @@ translator: machine-google-reviewed
     - የመመለሻ ቼኮች ማጽደቅ+ ውድቅ ብቻ ይጠቀማሉ። መታቀብ ለምርጫ አይቆጠርም።
 
 - POST `/v1/gov/enact`
-  ጥያቄ፡- {"ፕሮፖሳል_መታወቂያ"፡"…64hex"፣ "preimage_hash": "…64hex?"፣ "መስኮት"፡ {"ዝቅተኛ"፡ 0፣ "የላይ"፡ 0}?፣ "ስልጣን"፡ "ih58…?"፣ "የግል_ቁልፍ": "…?" }
+  ጥያቄ፡- {"ፕሮፖሳል_መታወቂያ"፡"…64hex"፣ "preimage_hash": "…64hex?"፣ "መስኮት"፡ {"ዝቅተኛ"፡ 0፣ "የላይ"፡ 0}?፣ "ስልጣን"፡ "i105…?"፣ "የግል_ቁልፍ": "…?" }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "tx_instructions"፡ [{"wire_id"፡ "…EnactReferendum"፣ "payload_hex"፡"…"}] }
   - ማስታወሻዎች: Torii `authority`/`private_key` ሲቀርብ የተፈረመውን ግብይት ያቀርባል; አለበለዚያ ደንበኞች እንዲፈርሙ እና እንዲያቀርቡ አጽም ይመልሳል. ቅድመ እይታው አማራጭ እና በአሁኑ ጊዜ መረጃዊ ነው።- `/v1/gov/proposals/{id}` ያግኙ
   መንገድ `{id}`፡ ፕሮፖዛል መታወቂያ ሄክስ (64 ቻርልስ)
@@ -194,16 +194,16 @@ RBAC
     - መስቀለኛ መንገድ በሚጠቀምበት ተመሳሳይ ፕሮፖዛል-መታወቂያ የተገኘ የፀደቀ የአስተዳደር ፕሮፖዛል ለ`(namespace, contract_id, code_hash, abi_hash)` አለ።
   - የJSON ሪፖርት በአንድ ውል ከ`results[]` ጋር ያወጣል (ጉዳዮች፣ የሰነድ መግለጫ/ ኮድ/የፕሮፖዛል ማጠቃለያ) እና የአንድ መስመር ማጠቃለያ እስካልታፈነ ድረስ (`--no-summary`)።
   - የተጠበቁ የስም ቦታዎችን ለመመርመር ወይም በአስተዳደር ቁጥጥር ስር ያሉ የስራ ፍሰቶችን ለማረጋገጥ ጠቃሚ።
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - ስምምነቶችን ወደተጠበቁ የስም ቦታዎች ሲያስገቡ ጥቅም ላይ የዋለውን የJSON ሜታዳታ አጽም ያወጣል፣ ይህም አማራጭ `gov_manifest_approvers` የሰነድ ምልአተ ጉባኤ ሕጎችን ለማሟላት።
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — የመቆለፊያ ፍንጮች ያስፈልጋሉ `min_bond_amount > 0`፣ እና ማንኛውም የቀረበው ፍንጭ ስብስብ `owner`፣ `amount`፣ እና `duration_blocks` ማካተት አለበት።
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — የመቆለፊያ ፍንጮች ያስፈልጋሉ `min_bond_amount > 0`፣ እና ማንኛውም የቀረበው ፍንጭ ስብስብ `owner`፣ `amount`፣ እና `duration_blocks` ማካተት አለበት።
   - የቀኖና መለያ መታወቂያዎችን ያረጋግጣል፣ የ32-ባይት መሻሪያ ፍንጮችን ቀኖናዊ ያደርጋል፣ እና ፍንጮቹን ወደ `public_inputs_json` (ከ`--public <path>` ጋር ለተጨማሪ መሻሮች) ያዋህዳል።
   - አጥፊው ​​ከማስረጃ ቁርጠኝነት (የህዝብ ግብአት) እና `domain_tag`፣ `chain_id`፣ እና `election_id` የተገኘ ነው። `--nullifier` በማረጃው ላይ የተረጋገጠው ሲቀርብ ነው።
   - የአንድ መስመር ማጠቃለያው አሁን ከኢ18NI00000208X የተገኘ ቆራጥ የሆነ `CastZkBallot` ከማንኛውም ዲኮድ የተደረጉ ፍንጮች (`owner`፣ `amount`፣ Prometheus፣Sumeragi)ይገኛል።
   - የ CLI ምላሾች `tx_instructions[]`ን ከ `payload_fingerprint_hex` እና ዲኮድ የተደረጉ መስኮችን ያብራራሉ ስለዚህ የታችኛው ዥረት መሳሪያ Norito ዲኮዲንግ ሳይተገበር አፅሙን ማረጋገጥ ይችላል።
   - የመቆለፊያ ፍንጮችን መስጠት መስቀለኛ መንገድ `LockCreated`/`LockExtended` ክስተቶችን ለ ZK ድምጽ መስጫ ወረቀቶች አንድ ጊዜ ወረዳው ተመሳሳይ እሴቶችን ሲያጋልጥ ያስችለዋል።
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` ቀኖናዊ IH58 ቃል በቃል ይቀበላል; አማራጭ `@<domain>` ቅጥያ ፍንጮችን ብቻ ነው።
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` ቀኖናዊ I105 ቃል በቃል ይቀበላል; አማራጭ `@<domain>` ቅጥያ ፍንጮችን ብቻ ነው።
   - ተለዋጭ ስሞች `--lock-amount`/`--lock-duration-blocks` ለስክሪፕት እኩልነት የZK ባንዲራ ስሞችን ያንፀባርቃሉ።
   - የማጠቃለያ ውፅዓት መስተዋቶች `vote --mode zk` ኢንኮድ የተደረገ የመመሪያ የጣት አሻራ እና በሰው ሊነበቡ የሚችሉ የድምጽ መስጫ ቦታዎች (`owner`፣ Norito፣ `duration_blocks`፣`duration_blocks`፣`direction`)፣ፈጣን ማረጋገጫን በማቅረብ።የምሳሌዎች ዝርዝር
 - GET `/v1/gov/instances/{ns}` - ለስም ቦታ ንቁ የውል ሁኔታዎችን ይዘረዝራል።
@@ -222,14 +222,14 @@ RBAC
 - POST `/v1/gov/ballots/zk-v1`
   - ጥያቄ (v1-ቅጥ DTO):
     {
-      "ስልጣን": "ih58...",
+      "ስልጣን": "i105...",
       "ሰንሰለት_መታወቂያ": "00000000-0000-0000-0000-00000000000",
       "የግል_ቁልፍ": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "ሥር_ፍንጭ"፡ "0x…64hex?"፣
-      "ባለቤት": "ih58…?"፣ // ቀኖናዊ አካውንትአይድ (IH58 በጥሬው)
+      "ባለቤት": "i105…?"፣ // ቀኖናዊ አካውንትአይድ (I105 በጥሬው)
       "መጠን": "100?",
       "የቆይታ_ብሎኮች": 6000?,
       "አቅጣጫ": "አዬ|ናይ|መታቀብ?",
@@ -239,7 +239,7 @@ RBAC
   - `BallotProof` JSON በቀጥታ ይቀበላል እና `CastZkBallot` አጽም ይመልሳል።
   - ጥያቄ፡-
     {
-      "ስልጣን": "ih58...",
+      "ስልጣን": "i105...",
       "ሰንሰለት_መታወቂያ": "00000000-0000-0000-0000-00000000000",
       "የግል_ቁልፍ": "...?",
       "election_id": "ref-1",
@@ -247,7 +247,7 @@ RBAC
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=", // ቤዝ64 የZK1 ወይም H2* መያዣ
         "root_hint"፡ ባዶ፣ // አማራጭ ባለ 32-ባይት ሄክስ ህብረቁምፊ (የብቁነት ስር)
-        "ባለቤት"፡ ባዶ፣ // አማራጭ ቀኖናዊ AccountId (IH58 በጥሬው)
+        "ባለቤት"፡ ባዶ፣ // አማራጭ ቀኖናዊ AccountId (I105 በጥሬው)
         " nullifier"፡ ባዶ፣ // አማራጭ ባለ 32-ባይት የአስራስድስትዮሽ ሕብረቁምፊ (የማሻሻያ ፍንጭ)
         "መጠን": "100", // አማራጭ የመቆለፊያ መጠን ፍንጭ (አስርዮሽ ሕብረቁምፊ)
         "duration_blocks": 6000, // አማራጭ የመቆለፊያ ቆይታ ፍንጭ

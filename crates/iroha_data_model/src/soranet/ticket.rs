@@ -277,7 +277,7 @@ mod tests {
     use crate::{account::AccountId, domain::DomainId};
 
     fn sample_body() -> TicketBodyV1 {
-        let domain = DomainId::from_str("wonderland").expect("static domain is valid");
+        let _domain = DomainId::from_str("wonderland").expect("static domain is valid");
         let issuer_key = KeyPair::from_seed(vec![0_u8; 32], Algorithm::Ed25519);
         let issuer_id = AccountId::new(issuer_key.public_key().clone());
         TicketBodyV1 {

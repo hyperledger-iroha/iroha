@@ -144,15 +144,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -165,9 +164,9 @@ fn download_qr() -> eyre::Result<()> {
 ზედაპირი: მასში შედის ანგარიშის კანონიკური id, სიტყვასიტყვით გადმოცემული the
 მოთხოვნილი ფორმატი, ქსელის პრეფიქსი/შეცდომის გამოსწორების მეტამონაცემები, QR ზომები და
 inline SVG დატვირთვა, რომელიც საფულეებს/გამომძიებლებს შეუძლიათ პირდაპირ ჩასვან. გამოტოვეთ
-`ExplorerAccountQrOptions` ნაგულისხმევად არის სასურველი IH58 გამომავალი ან ნაკრები
-`address_format: Some(AddressFormat::Compressed)` მეორე საუკეთესოს მისაღებად
-`sora…` ვარიანტი, რომელსაც იყენებს ADDR-6b.
+`ExplorerAccountQrOptions` ნაგულისხმევად არის სასურველი I105 გამომავალი ან ნაკრები
+canonical I105 output მეორე საუკეთესოს მისაღებად
+`i105` ვარიანტი, რომელსაც იყენებს ADDR-6b.
 
 ## 7. გამოიწერეთ ღონისძიებები
 

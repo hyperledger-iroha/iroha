@@ -88,7 +88,7 @@ El corredor es `info("Hello from Kotodama")` y syscall `SET_ACCOUNT_DETAIL` para
 
 Para obtener el código de bytes Torii de la CLI. هوية التطوير الافتراضية مشتقة من المفتاح العام في `defaults/client.toml`, لذلك يكون معرّف الحساب:
 ```
-ih58...
+i105...
 ```
 
 Utilice la URL de Torii y el ID de cadena para obtener el siguiente enlace:
@@ -108,7 +108,7 @@ Esta CLI está conectada a Norito, y está conectada a un par. Seleccione Docker
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```Esta es la carga útil JSON contenida en Norito:
 

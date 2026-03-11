@@ -19,9 +19,9 @@ description: Démontre comment un point d'entrée Kotodama peut appeler l'instru
 
 ## باركور دو ريجيستري
 
-- الموافقة على صلاحية العقد (على سبيل المثال `ih58...`) مع النشاط الذي يتم نقله ومنحه الدور `CanTransfer` أو إذن مكافئ.
-- Appelez le point d'entrée `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، مما يعكس طريقة الأتمتة على السلسلة والتي قد تؤدي إلى تغليف المكالمات الساخنة.
-- تحقق من العناصر عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث للتأكد من أن حارس البيانات يتم تسجيله في سياق النقل.
+- الموافقة على صلاحية العقد (على سبيل المثال `i105...`) مع النشاط الذي يتم نقله ومنحه الدور `CanTransfer` أو إذن مكافئ.
+- Appelez le point d'entrée `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `i105...`، مما يعكس طريقة الأتمتة على السلسلة والتي قد تؤدي إلى تغليف المكالمات الساخنة.
+- تحقق من العناصر عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account i105...` وافحص الأحداث للتأكد من أن حارس البيانات يتم تسجيله في سياق النقل.
 
 ## أدلة شركاء SDK
 
@@ -36,8 +36,8 @@ description: Démontre comment un point d'entrée Kotodama peut appeler l'instru
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

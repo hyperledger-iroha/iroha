@@ -35,7 +35,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
 |---------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalise selon Norm v1 et UTS-46). |
 | `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
-| `owner` | Oui | Chaine AccountId (domainless encoded AccountId literal (canonical IH58 only; no @domain suffix)) pour le proprietaire de l'enregistrement. |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
@@ -76,9 +76,9 @@ En cas de succes le script ecrit un manifeste agrege:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ En cas de succes le script ecrit un manifeste agrege:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -252,7 +252,7 @@ auditeurs puissent se concentrer sur une seule execution CSV.
   references a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une erreur de validation.
 - **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `ih58...;ih58...`) quand vous deleguez a des
+  des listes explicites (par exemple `i105...;i105...`) quand vous deleguez a des
   acteurs non owner.
 
 Les echecs sont signales avec des numeros de ligne contextuels (par exemple

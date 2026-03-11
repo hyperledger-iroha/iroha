@@ -9,12 +9,12 @@ from iroha_python.client import ToriiClient
 
 from .helpers import RecordingSession, StubResponse
 
-CANONICAL_AUTHORITY = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
-
-
 def _canonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x11] * 32))
-    return address.to_ih58(0x02F1)
+    return address.to_i105(0x02F1)
+
+
+CANONICAL_AUTHORITY = _canonical_owner_literal()
 
 
 def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
@@ -105,7 +105,7 @@ def test_governance_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical IH58 account id"):
+    with pytest.raises(ValueError, match="canonical I105 account id"):
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -139,7 +139,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical IH58 account id"):
+    with pytest.raises(ValueError, match="canonical I105 account id"):
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -241,7 +241,7 @@ def test_governance_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical IH58 account id"):
+    with pytest.raises(ValueError, match="canonical I105 account id"):
         client.governance_submit_zk_ballot(
             {
                 "authority": CANONICAL_AUTHORITY,

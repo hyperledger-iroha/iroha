@@ -19,9 +19,9 @@ Conecte los hogares con la configuración, el registro de activos y los controle
 
 ## Пошаговый обход реестра
 
-- Tenga en cuenta que esta cuenta de usuario (principal `ih58...`) está almacenada en el SDK de inicio rápido.
+- Tenga en cuenta que esta cuenta de usuario (principal `i105...`) está almacenada en el SDK de inicio rápido.
 - Utilice este vídeo `register_and_mint`, mantenga activada la activa ROSE y escriba 250 ediciones de Alice en una sola transmisión.
-- Asegúrese de que los equilibrios sean `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...`, para poder utilizar datos personales.
+- Asegúrese de que los equilibrios sean `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account i105...`, para poder utilizar datos personales.
 
 ## Связанные руководства SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

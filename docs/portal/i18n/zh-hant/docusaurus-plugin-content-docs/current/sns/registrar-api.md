@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |獲取 | — |獲取當前 `SuffixPolicyV1`（可緩存）。 |
 | `/v1/sns/registrations/{selector}` |獲取 | — |返回當前 `NameRecordV1` + 有效狀態（Active、Grace 等）。 |
 
-**選擇器編碼：** `{selector}` 路徑段接受 IH58（首選）、壓縮（`sora`，第二好）或每個 ADDR-5 的規範十六進制； Torii 通過 `NameSelectorV1` 將其標準化。
+**選擇器編碼：** `{selector}` 路徑段接受 I105（首選）、壓縮（`sora`，第二好）或每個 ADDR-5 的規範十六進制； Torii 通過 `NameSelectorV1` 將其標準化。
 
 **錯誤模型：**所有端點都返回 Norito JSON，其中包含 `code`、`message`、`details`。代碼包括 `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing`。
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -226,7 +226,7 @@ Torii 通過檢查來驗證證明：
 
 1. 客戶端查詢 `/v1/sns/policies/{suffix_id}` 以獲取定價、寬限和可用等級。
 2.客戶端構建`RegisterNameRequestV1`：
-   - `selector` 源自首選 IH58 或次佳壓縮 (`sora`) 標籤。
+   - `selector` 源自首選 I105 或次佳壓縮 (`sora`) 標籤。
    - `term_years` 在政策範圍內。
    - `payment` 引用財務/管家分割轉移。
 3. Torii 驗證：

@@ -34,7 +34,7 @@ Espelha `docs/source/sns/bulk_onboarding_toolkit.md` للمشغلين الخار
 |--------|------------|-----------|
 | `label` | سيم | تسمية الطلب (حالة مختلطة، وهي عبارة عن أداة طبيعية تتوافق مع المعيار v1 e UTS-46). |
 | `suffix_id` | سيم | المعرف الرقمي اللاحق (عشري أو `0x` سداسي عشري). |
-| `owner` | سيم | String AccountId (IH58 حرفيًا؛ تلميح @domain اختياري) يقوم المالك بالتسجيل. |
+| `owner` | سيم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | سيم | انتيرو `1..=255`. |
 | `payment_asset_id` | سيم | قضية التسوية (على سبيل المثال `xor#sora`). |
 | `payment_gross` / `payment_net` | سيم | إن Inteiros لا تمثل سوى وحدات وطنية ذات أهمية. |
@@ -73,9 +73,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -236,7 +236,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   المراجع والملفات ذات الحلول المتعلقة بموقع ملف CSV. البيانات الوصفية
   لا يوجد خطأ في المنتج.
 - **وحدات التحكم:** شاشات بيضاء قابلة للاسترداد `--default-controllers`. فورنيكا
-  القوائم الصريحة (على سبيل المثال `ih58...;ih58...`) لتفويضها إلى المالك.
+  القوائم الصريحة (على سبيل المثال `i105...;i105...`) لتفويضها إلى المالك.
 
 Falhas sao Reportadas com numeros de linha contextuais (على سبيل المثال
 `error: row 12 term_years must be between 1 and 255`). يا سكريبت ساي كوم كوديجو

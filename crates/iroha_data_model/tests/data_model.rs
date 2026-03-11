@@ -8,7 +8,7 @@ use iroha_schema::Ident;
 
 #[test]
 fn transfer_isi_should_be_valid() {
-    let domain: DomainId = "crypto".parse().expect("domain");
+    let _domain: DomainId = "crypto".parse().expect("domain");
     let source_account = AccountId::new(KeyPair::random().public_key().clone());
     let destination_account = AccountId::new(KeyPair::random().public_key().clone());
     let asset_definition_id: AssetDefinitionId = "btc#crypto".parse().expect("asset definition");
@@ -58,7 +58,7 @@ fn role_permission_changed_permission_accessor_exposes_inner_permission() {
 
 #[test]
 fn account_permission_changed_permission_accessor_exposes_inner_permission() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let _domain_id: DomainId = "wonderland".parse().expect("domain");
     let account_id = AccountId::new(KeyPair::random().public_key().clone());
     let account_ref = account_id.to_string();
     let permission = Permission::new(

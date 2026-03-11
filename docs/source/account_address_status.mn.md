@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. Тойм
 
-- Бэхэлгээ: `fixtures/account/address_vectors.json` (IH58 (давуу) + шахсан (`sora`, хоёрдугаарт) + multisig эерэг/сөрөг тохиолдол).
+- Бэхэлгээ: `fixtures/account/address_vectors.json` (I105 (давуу) + шахсан (`sora`, хоёрдугаарт) + multisig эерэг/сөрөг тохиолдол).
 - Хамрах хүрээ: далд-өгөгдмөл, Локал-12, Глобал бүртгэл, алдааны бүрэн ангиллыг агуулсан multisig хянагчдыг хамарсан тодорхойлогч V1 ачаалал.
 - Түгээлт: Rust дата-загвар, Torii, JS/TS, Swift, Android SDK дээр хуваалцсан; Аливаа хэрэглэгч хазайсан тохиолдолд CI амжилтгүй болно.
 - Үнэний эх сурвалж: генератор нь `crates/iroha_data_model/src/account/address/compliance_vectors.rs`-д амьдардаг бөгөөд `cargo xtask address-vectors`-ээр дамжин илэрдэг.
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | Гадаргуу | Хэрэгжүүлэх | Тэмдэглэл |
 |---------|-------------|-------|
-| Rust өгөгдлийн загвар | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON-г задлан шинжилж, каноник ачааллыг сэргээж, IH58 (давуу)/шахсан (`sora`, хоёрдугаарт)/каноник хөрвүүлэлт + бүтцийн алдааг шалгана. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Сервер талын кодлогчийг баталгаажуулдаг тул Torii нь алдаатай IH58 (давуу)/шахсан (`sora`, хоёр дахь шилдэг) ачааллаас тодорхой татгалздаг. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 бэхэлгээ (IH58 илүүд үздэг/шахсан (`sora`) хоёр дахь шилдэг/бүтэн өргөн) ба сөрөг тохиолдол бүрт Norito загварын алдааны кодыг баталгаажуулдаг. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple-ийн платформ дээр IH58 (давуу)/шахсан (`sora`, хоёр дахь шилдэг) код тайлах, олон тооны ачааллын ачаалал болон алдааг арилгах дасгалуудыг хийдэг. |
+| Rust өгөгдлийн загвар | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON-г задлан шинжилж, каноник ачааллыг сэргээж, I105 (давуу)/шахсан (`sora`, хоёрдугаарт)/каноник хөрвүүлэлт + бүтцийн алдааг шалгана. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Сервер талын кодлогчийг баталгаажуулдаг тул Torii нь алдаатай I105 (давуу)/шахсан (`sora`, хоёр дахь шилдэг) ачааллаас тодорхой татгалздаг. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 бэхэлгээ (I105 илүүд үздэг/шахсан (`sora`) хоёр дахь шилдэг/бүтэн өргөн) ба сөрөг тохиолдол бүрт Norito загварын алдааны кодыг баталгаажуулдаг. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple-ийн платформ дээр I105 (давуу)/шахсан (`sora`, хоёр дахь шилдэг) код тайлах, олон тооны ачааллын ачаалал болон алдааг арилгах дасгалуудыг хийдэг. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Котлин/Жава холболтууд нь каноник бэхэлгээтэй нийцэж байгаа эсэхийг баталгаажуулдаг. |
 
 ### 4. Хяналт & Гайхалтай ажил- Статусын тайлагнах: энэ баримт бичиг нь `status.md` болон замын зурагтай холбоотой тул долоо хоног бүрийн тойм нь бэхэлгээний эрүүл мэндийг шалгах боломжтой.

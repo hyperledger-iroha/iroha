@@ -35,7 +35,7 @@ translator: machine-google-reviewed
       "abi_hash": "blake2b32:…" | “…64十六进制”，
       “abi_版本”：“1”，
       “窗口”：{“下”：12345，“上”：12400}，
-      "authority": "ih58...?",
+      "authority": "i105...?",
       “私钥”：“……？”
     }
   - 响应（JSON）：
@@ -44,14 +44,14 @@ translator: machine-google-reviewed
 
 合约 API（部署）
 - 后 `/v1/contracts/deploy`
-  - 请求：{ "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - 请求：{ "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 行为：从 IVM 程序体计算 `code_hash`，从标头 `abi_version` 计算 `abi_hash`，然后提交 `RegisterSmartContractCode`（清单）和 `RegisterSmartContractBytes`（完整的 `.to`）字节）代表`authority`。
   - 响应：{“ok”：true，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
   - 相关：
     - GET `/v1/contracts/code/{code_hash}` → 返回存储的清单
     - 获取 `/v1/contracts/code-bytes/{code_hash}` → 返回 `{ code_b64 }`
 - 后 `/v1/contracts/instance`
-  - 请求：{ "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - 请求：{ "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 行为：部署提供的字节码并立即通过 `ActivateContractInstance` 激活 `(namespace, contract_id)` 映射。
   - 响应：{“ok”：true，“namespace”：“apps”，“contract_id”：“calc.v1”，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
 
@@ -64,11 +64,11 @@ translator: machine-google-reviewed
   - 错误：十六进制输入格式错误时出现 HTTP `400`。 Torii 返回包含解码器错误消息的 Norito `ValidationFail::QueryFailed::Conversion` 信封。
 - 后 `/v1/aliases/resolve`
   - 请求: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - 响应: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - 响应: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - 注意：需要 ISO 桥运行时分段（`[iso_bridge.account_aliases]` 中的 `iroha_config`）。 Torii 通过在查找之前去除空格和大写字母来标准化别名。当别名不存在时返回 404，当 ISO 桥接运行时被禁用时返回 503。
 - 后 `/v1/aliases/resolve_index`
   - 请求：{“索引”：0}
-  - 响应: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - 响应: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - 注意：别名索引是根据配置顺序（从 0 开始）确定性分配的。客户端可以离线缓存响应，以构建别名证明事件的审计跟踪。代码 尺寸上限
 - 自定义参数：`max_contract_code_bytes` (JSON u64)
   - 控制链上合约代码存储的最大允许大小（以字节为单位）。
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
   - 运营商可以通过提交 `SetParameter(Custom)` 和 `id = "max_contract_code_bytes"` 以及数字有效负载来进行调整。
 
 - 后 `/v1/gov/ballots/zk`
-  - 请求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意事项：
     - 当电路的公共输入包括 `owner`、`amount` 和 `duration_blocks`，并且证明根据配置的 VK 进行验证时，节点使用 `owner` 创建或扩展 `election_id` 的治理锁。除非有提示，否则方向保持隐藏（`unknown`）；仅更新金额/到期日。重新投票是单调的：金额和到期日仅增加（节点应用 max(amount, prev.amount) 和 max(expiry, prev.expiry)）。
@@ -85,10 +85,10 @@ translator: machine-google-reviewed
     - 合约执行必须在排队 `SubmitBallot` 之前调用 `ZK_VOTE_VERIFY_BALLOT`；主机强制执行一次性锁存。
 
 - 后 `/v1/gov/ballots/plain`
-  - 请求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意：重新投票只能延长——新的投票不能减少现有锁定的数量或到期时间。 `owner`必须等于交易权限。最短持续时间为 `conviction_step_blocks`。- 后 `/v1/gov/finalize`
-  - 请求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“ih58…？”，“private_key”：“…？” }
+  - 请求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“i105…？”，“private_key”：“…？” }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - 链上效应（当前脚手架）：制定已批准的部署提案会插入由 `code_hash` 键入的最小 `ContractManifest` 和预期的 `abi_hash`，并将提案标记为已实施。如果 `code_hash` 的清单已存在且具有不同的 `abi_hash`，则颁布将被拒绝。
   - 注意事项：
@@ -97,7 +97,7 @@ translator: machine-google-reviewed
     - 投票率检查仅使用批准+拒绝；弃权不计入投票率。
 
 - 后 `/v1/gov/enact`
-  - 请求: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "…?" }
+  - 请求: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注：Torii在提供`authority`/`private_key`时提交签名交易；否则，它会返回一个框架供客户签名和提交。原像是可选的并且当前是信息性的。
 
@@ -135,8 +135,8 @@ translator: machine-google-reviewed
   min_turnout = 0
   voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
-  bond_escrow_account = "ih58..."
-  slash_receiver_account = "ih58..."
+  bond_escrow_account = "i105..."
+  slash_receiver_account = "i105..."
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
@@ -153,8 +153,8 @@ GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
 GOV_VOTING_ASSET_ID=xor#sora
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=ih58...
-GOV_SLASH_RECEIVER_ACCOUNT=ih58...
+GOV_BOND_ESCROW_ACCOUNT=i105...
+GOV_SLASH_RECEIVER_ACCOUNT=i105...
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
@@ -189,8 +189,8 @@ RBAC
 - 客户端必须包含事务元数据密钥才能针对受保护的命名空间进行部署：
   - `gov_namespace`：目标命名空间（例如，`"apps"`）
   - `gov_contract_id`：命名空间内的逻辑合约ID
-- `gov_manifest_approvers`：ih58...帐户 ID 的可选 JSON 数组。当通道清单声明法定人数大于 1 时，准入需要交易权限加上列出的帐户来满足清单法定人数。
-- 遥测通过 `governance_manifest_admission_total{result}` 公开整体准入计数器，以便操作员可以区分 `missing_manifest`、`non_ih58..._authority`、`quorum_rejected`、`protected_namespace_rejected` 和 `runtime_hook_rejected` 路径的成功准入。
+- `gov_manifest_approvers`：i105...帐户 ID 的可选 JSON 数组。当通道清单声明法定人数大于 1 时，准入需要交易权限加上列出的帐户来满足清单法定人数。
+- 遥测通过 `governance_manifest_admission_total{result}` 公开整体准入计数器，以便操作员可以区分 `missing_manifest`、`non_i105..._authority`、`quorum_rejected`、`protected_namespace_rejected` 和 `runtime_hook_rejected` 路径的成功准入。
 - 遥测通过 `governance_manifest_quorum_total{outcome}`（值 `satisfied` / `rejected`）显示执行路径，以便操作员可以审核缺失的批准。
 - 通道强制执行在其清单中发布的命名空间允许列表。任何设置 `gov_namespace` 的事务都必须提供 `gov_contract_id`，并且命名空间必须出现在清单的 `protected_namespaces` 集中。启用保护后，没有此元数据的 `RegisterSmartContractCode` 提交将被拒绝。
 - 准入强制执行元组 `(namespace, contract_id, code_hash, abi_hash)` 存在已颁布的治理提案；否则验证失败并出现 NotPermissed 错误。
@@ -204,7 +204,7 @@ RBAC
   - `allowed_ids`（字符串数组）：可选的元数据值白名单（修剪后）。当提供的值未列出时拒绝。
 - 当挂钩存在时，队列准入会在事务进入队列之前强制执行元数据策略。缺少元数据、空白值或白名单之外的值会产生确定性 `NotPermitted` 错误。
 - 遥测通过 `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` 跟踪执法结果。
-- 满足挂钩的交易必须包括元数据 `gov_upgrade_id=<value>`（或清单定义的密钥）以及清单仲裁所需的任何 ih58... 批准。
+- 满足挂钩的交易必须包括元数据 `gov_upgrade_id=<value>`（或清单定义的密钥）以及清单仲裁所需的任何 i105... 批准。
 
 便利端点
 - POST `/v1/gov/protected-namespaces` — 将 `gov_protected_namespaces` 直接应用于节点。
@@ -218,16 +218,16 @@ RBAC
     - `(namespace, contract_id, code_hash, abi_hash)` 存在已颁布的治理提案，该提案由节点使用的相同提案 ID 散列得出。
   - 输出一份 JSON 报告，其中每个合同包含 `results[]`（问题、清单/代码/提案摘要）以及一行摘要（除非被抑制）（`--no-summary`）。
   - 对于审核受保护的命名空间或验证治理控制的部署工作流程很有用。
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - 发出将部署提交到受保护的命名空间时使用的 JSON 元数据框架，包括用于满足清单仲裁规则的可选 `gov_manifest_approvers`。
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - 验证规范帐户 ID，规范化 32 字节无效提示，并将提示合并到 `public_inputs_json`（使用 `--public <path>` 进行额外覆盖）。
   - 无效符源自证明承诺（公共输入）加上 `domain_tag`、`chain_id` 和 `election_id`； `--nullifier` 已根据提供的证明进行验证。
   - 单行摘要现在显示从编码的 `CastZkBallot` 派生的确定性 `fingerprint=<hex>` 以及任何解码的提示（`owner`、`amount`、`duration_blocks`、`direction`（如果提供））。
   - CLI 响应使用 `payload_fingerprint_hex` 加上解码字段来注释 `tx_instructions[]`，以便下游工具可以验证骨架，而无需重新实现 Norito 解码。
   - 当提供任何锁定提示时，ZK 选票必须提供 `owner`、`amount` 和 `duration_blocks`；部分提示被拒绝。当 `min_bond_amount > 0` 时，需要锁定提示。方向仍然是可选的，并且仅被视为提示。
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` 接受规范的 IH58 文字；可选的 `@<domain>` 后缀仅是路由提示。
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` 接受规范的 I105 文字；可选的 `@<domain>` 后缀仅是路由提示。
   - 别名 `--lock-amount`/`--lock-duration-blocks` 镜像 ZK 标志名称以实现脚本奇偶校验。
   - 摘要输出通过包含编码的指令指纹和人类可读的选票字段（`owner`、`amount`、`duration_blocks`、`direction`）来镜像 `vote --mode zk`，在签署框架之前提供快速确认。实例列表
 - GET `/v1/gov/instances/{ns}` — 列出命名空间的活动合约实例。
@@ -246,14 +246,14 @@ RBAC
 - 后 `/v1/gov/ballots/zk-v1`
   - 请求（v1 样式 DTO）：
     {
-      "权威": "ih58...",
+      "权威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
       “后端”：“halo2/ipa”，
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex？",
-      "owner": "ih58…", // 规范 AccountId（IH58 文字；可选 @domain 提示）
+      "owner": "i105…", // 规范 AccountId（canonical I105 文字；不接受 `@domain` 后缀）
       "金额": "100？",
       “duration_blocks”：6000？，
       "direction": "赞成|反对|弃权？",
@@ -263,7 +263,7 @@ RBAC
   - 直接接受 `BallotProof` JSON 并返回 `CastZkBallot` 骨架。
   - 要求：
     {
-      "权威": "ih58...",
+      "权威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -271,7 +271,7 @@ RBAC
         “后端”：“halo2/ipa”，
         "envelope_bytes": "AAECAwQ=", // ZK1 或 H2* 容器的 base64
         "root_hint": null, // 可选的 32 字节十六进制字符串（资格根）
-        "owner": null, // 可选规范 AccountId（IH58 文字；可选 @domain 提示）
+        "owner": null, // 可选规范 AccountId（canonical I105 文字；不接受 `@domain` 后缀）
         "nullifier": null, // 可选的 32 字节十六进制字符串（nullifier 提示）
         "amount": "100", // 可选的锁定金额提示（十进制字符串）
         "duration_blocks": 6000, // 可选的锁定持续时间提示
@@ -304,7 +304,7 @@ CastZkBallot验证路径
 
 ## 验证者的不当行为和联合共识
 
-### 削减和监禁工作流程每当 ih58... 违反协议时，共识就会发出 Norito 编码的 `Evidence`。每个有效负载都会落在内存中的 `EvidenceStore` 中，如果看不见，则会具体化到 WSV 支持的 `consensus_evidence` 映射中。早于 `sumeragi.npos.reconfig.evidence_horizon_blocks`（默认 `7200` 块）的记录将被拒​​绝，因此存档仍受限制，但会为操作员记录拒绝。范围内的证据遵循联合共识暂存规则（`mode_activation_height requires next_mode to be set in the same block`）、激活延迟（`sumeragi.npos.reconfig.activation_lag_blocks`，默认 `1`）和削减延迟（`sumeragi.npos.reconfig.slashing_delay_blocks`，默认 `259200`），因此治理可以在处罚之前取消处罚。
+### 削减和监禁工作流程每当 i105... 违反协议时，共识就会发出 Norito 编码的 `Evidence`。每个有效负载都会落在内存中的 `EvidenceStore` 中，如果看不见，则会具体化到 WSV 支持的 `consensus_evidence` 映射中。早于 `sumeragi.npos.reconfig.evidence_horizon_blocks`（默认 `7200` 块）的记录将被拒​​绝，因此存档仍受限制，但会为操作员记录拒绝。范围内的证据遵循联合共识暂存规则（`mode_activation_height requires next_mode to be set in the same block`）、激活延迟（`sumeragi.npos.reconfig.activation_lag_blocks`，默认 `1`）和削减延迟（`sumeragi.npos.reconfig.slashing_delay_blocks`，默认 `259200`），因此治理可以在处罚之前取消处罚。
 
 公认的犯罪行为与 `EvidenceKind` 一对一映射；判别式是稳定的并且由数据模型强制执行：
 
@@ -324,7 +324,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — ih58...为相同的 `(phase,height,view,epoch)` 元组签名了冲突的哈希值。
+- **DoublePrepare/DoubleCommit** — i105...为相同的 `(phase,height,view,epoch)` 元组签名了冲突的哈希值。
 - **InvalidQc** — 聚合器传播了其形状未通过确定性检查的提交 QC（例如，空签名者位图）。
 - **InvalidProposal** — 领导者提出了一个未通过结构验证的区块（例如，破坏了锁链规则）。
 - **审查** - 签名的提交收据显示从未提议/提交的交易。
@@ -341,12 +341,12 @@ VRF 处罚在 `activation_lag_blocks` 后自动执行（违法者将被监禁）
 1. **在有效负载过期之前收集**。将原始 Norito 字节与高度/视图元数据一起存档。
 2. **如果需要取消**，在 `slashing_delay_blocks` 失效之前提交带有证据负载的 `CancelConsensusEvidencePenalty`；该记录标记为 `penalty_cancelled` 和 `penalty_cancelled_at_height`，并且不适用削减。
 3. **通过将有效负载嵌入公投或 sudo 指令（例如，`Unregister::peer`）来实施惩罚**。执行重新验证有效负载；格式错误或过时的证据将被确定性地拒绝。
-4. **安排后续拓扑**，以便有问题的 ih58... 无法立即重新加入。具有更新名册的典型流队列 `SetParameter(Sumeragi::NextMode)` 和 `SetParameter(Sumeragi::ModeActivationHeight)`。
+4. **安排后续拓扑**，以便有问题的 i105... 无法立即重新加入。具有更新名册的典型流队列 `SetParameter(Sumeragi::NextMode)` 和 `SetParameter(Sumeragi::ModeActivationHeight)`。
 5. 通过 `/v1/sumeragi/evidence` 和 `/v1/sumeragi/status` 进行**审计结果**，以确保证据反驳取得进展并由治理部门实施删除。
 
 ### 联合共识测序
 
-联合共识保证即将离任的 ih58... 集合在新集合开始提议之前最终确定边界块。运行时通过配对参数强制执行规则：- `SumeragiParameter::NextMode` 和 `SumeragiParameter::ModeActivationHeight` 必须在**同一块**中提交。 `mode_activation_height` 必须严格大于进行更新的块高度，提供至少一个块的滞后。
+联合共识保证即将离任的 i105... 集合在新集合开始提议之前最终确定边界块。运行时通过配对参数强制执行规则：- `SumeragiParameter::NextMode` 和 `SumeragiParameter::ModeActivationHeight` 必须在**同一块**中提交。 `mode_activation_height` 必须严格大于进行更新的块高度，提供至少一个块的滞后。
 - `sumeragi.npos.reconfig.activation_lag_blocks`（默认 `1`）是防止零延迟切换的配置保护：
 - `sumeragi.npos.reconfig.slashing_delay_blocks`（默认 `259200`）延迟共识削减，以便治理可以在处罚实施之前取消处罚。
 
@@ -355,13 +355,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- 运行时和 CLI 通过 `/v1/sumeragi/params` 和 `iroha sumeragi params --summary` 公开分阶段参数，因此操作员可以确认激活高度和 ih58...名册。
+- 运行时和 CLI 通过 `/v1/sumeragi/params` 和 `iroha sumeragi params --summary` 公开分阶段参数，因此操作员可以确认激活高度和 i105...名册。
 - 治理自动化应始终：
   1. 最终确定有证据支持的移除（或恢复）决定。
   2. 使用 `mode_activation_height = h_current + activation_lag_blocks` 对后续重新配置进行排队。
   3. 监视 `/v1/sumeragi/status`，直到 `effective_consensus_mode` 翻转到预期高度。
 
-任何旋转 ih58...s 或应用削减的脚本**不得**尝试零延迟激活或省略切换参数；此类交易将被拒绝，并使网络保持先前的模式。
+任何旋转 i105...s 或应用削减的脚本**不得**尝试零延迟激活或省略切换参数；此类交易将被拒绝，并使网络保持先前的模式。
 
 ## 遥测表面
 

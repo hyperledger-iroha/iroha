@@ -91,7 +91,7 @@ Runner `info("Hello from Kotodama")` لاگ پرنٹ کرتا ہے اور mocked
 
 جب نوڈ ابھی چل رہا ہو، کمپائل شدہ bytecode کو CLI کے ذریعے Torii پر بھیجیں۔ ڈیفالٹ development identity `defaults/client.toml` میں موجود public key سے اخذ ہوتی ہے، اس لئے account ID یہ ہے:
 ```
-ih58...
+i105...
 ```
 
 Torii URL، chain ID اور signing key فراہم کرنے کے لئے config فائل استعمال کریں:
@@ -111,7 +111,7 @@ CLI Norito کے ساتھ ٹرانزیکشن کو encode کرتا ہے، اسے d
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

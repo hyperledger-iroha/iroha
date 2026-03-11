@@ -67,15 +67,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -223,7 +223,7 @@ you already have a signed certificate, call `registerOfflineAllowance` (or
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -233,7 +233,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -275,7 +275,7 @@ Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
 `/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
+`getExplorerAccountQr()` whenever you need I105 literals plus inline
 SVG for share buttons.
 
 ```ts
@@ -290,9 +290,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -300,10 +298,9 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
+Explorer QR helpers now return canonical I105 output by default.
+selectors; omit the override for the preferred I105 output or request `i105_qr`
+when you need the QR-safe variant. The i105-default literal is the Sora-only option for UX. The helper always returns the canonical identifier,
 the selected literal, and metadata (network prefix, QR version/modules, error
 correction tier, and inline SVG), so CI/CD can publish the same payloads that
 the Explorer surfaces without calling bespoke converters.
@@ -519,8 +516,8 @@ canonicalise them before submitting requests:
 - `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
   grouping asset holdings by canonical account IDs; pass `assetId` to filter the
   portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
+- `getUaidBindings(uaid)` enumerates every dataspace ↔ account
+  binding (`I105` returns the `i105` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
   lifecycle status, and bound accounts for auditing.
 
@@ -540,7 +537,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -565,7 +562,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -575,7 +572,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

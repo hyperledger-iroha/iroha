@@ -2,7 +2,7 @@
 id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+description: UX and CLI requirements for I105 vs I105 Sora address presentation (ADDR-6).
 ---
 
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
@@ -16,9 +16,9 @@ Wallets, explorers, and SDK samples must treat account addresses as immutable
 payloads. The Android retail wallet sample in
 `examples/android/retail-wallet` now demonstrates the required UX pattern:
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
+- **Dual copy targets.** Ship two explicit copy buttons—I105 and the
+  i105-default Sora-only form (`i105`). I105 is always safe to share externally
+  and powers the QR payload. The i105-default variant must include an inline
   warning because it only works inside Sora-aware apps. The Android retail
   wallet sample wires both Material buttons and their tooltips in
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
@@ -31,9 +31,9 @@ payloads. The Android retail wallet sample in
   `default` domain, surface a caption reminding operators no suffix is required.
   Explorers should also highlight the canonical domain label when the selector
   encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
+- **I105 QR payloads.** QR codes must encode the I105 string. If QR generation
   fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
+- **Clipboard messaging.** After copying the i105-default form, emit a toast or
   snackbar reminding users that it is Sora-only and prone to IME mangling.
 
 Following these guardrails prevents Unicode/IME corruption and satisfies the
@@ -54,16 +54,16 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
+Each SDK exposes a convenience helper that returns the I105
 forms alongside the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
+- JavaScript inspector: `inspectAccountId(...)` returns the i105-default warning
+  string and appends it to `warnings` whenever callers provide a `i105`
   literal, so explorers/wallet dashboards can surface the Sora-only notice
   during paste/validation flows instead of only when they generate the
-  compressed form themselves.
+  i105-default form themselves.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
 - Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
@@ -80,7 +80,7 @@ selector is Local-12 or registry-backed without re-parsing the raw payload.
 
 Explorers should mirror the wallet telemetry and accessibility work:
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
+- Apply `data-copy-mode="i105|i105_default|qr"` to copy buttons so front-ends can emit usage counters
   alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
   an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
   pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
@@ -89,7 +89,7 @@ Explorers should mirror the wallet telemetry and accessibility work:
   export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
   Grafana board.
 - Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
+  literal is safe to share (`I105`) or Sora-only (i105-default `sora`). Include the implicit-domain caption in
   the description so assistive technology surfaces the same context shown visually.
 - Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
   warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
@@ -100,7 +100,7 @@ client-side copy modes before Local selectors are disabled.
 ## Local → Global migration toolkit
 
 Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
+JSON audit report and the converted preferred I105 list that operators attach
 to readiness tickets, while the accompanying runbook links the Grafana
 dashboards and Alertmanager rules that gate the strict-mode cutover.
 
@@ -156,9 +156,9 @@ Use the CLI workflow documented under ADDR-5:
 
 1. Run `iroha tools address convert <address-or-account_id> --format json`.
    The summary reports `detected_format`, `domain.kind`, and canonical
-   encodings (`ih58`, `compressed`, `canonical_hex`). Inputs must be canonical
-   address literals (IH58 preferred, `sora...`, or canonical hex); `@domain`
-   suffixes are rejected.
+   encodings (`i105`, `i105_default`, `canonical_hex`). Inputs must be canonical
+   address literals (canonical I105 only on strict parser paths); i105-default `sora...`, canonical hex, and `@<domain>`
+   suffixes are rejected on strict parser paths.
 2. SDKs can surface the same summary via JavaScript:
 
    ```js
@@ -168,18 +168,18 @@ Use the CLI workflow documented under ADDR-5:
    if (summary.domain.kind === "local12") {
      console.warn("Local selector detected; migrate to canonical global address.");
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-3. Reuse `ih58.value` or `compressed` from the summary (or request another
+3. Reuse `i105.value` or `i105_default` from the summary (or request another
    encoding via `--format`) in manifests and user-facing docs.
 4. For bulk data sets, run
    `iroha tools address audit --input addresses.txt --network-prefix 753`.
    Audit emits JSON/CSV summaries per row and fails on parse errors by default.
    Use `--allow-errors` only for best-effort scans.
 5. For newline-to-newline rewrites, run
-   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format ih58`.
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
    This rewrites each parsed row to the requested encoding
-   (IH58 preferred/compressed (`sora`) second-best/hex/JSON). Pair with
+   (canonical I105/hex/JSON). Pair with
    `--allow-errors` for malformed dump triage.
 6. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
    Local-selector fixture rows, normalizes them, then audits to ensure zero parse

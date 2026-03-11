@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. ခြုံငုံသုံးသပ်ချက်
 
-- Fixture- `fixtures/account/address_vectors.json` (IH58 (ဦးစားပေး) + compressed (`sora`၊ ဒုတိယအကောင်းဆုံး) + multisig positive/negative case)။
+- Fixture- `fixtures/account/address_vectors.json` (I105 (ဦးစားပေး) + i105-default (`sora`၊ ဒုတိယအကောင်းဆုံး) + multisig positive/negative case)။
 - နယ်ပယ်- သတ်မှတ်ပြဋ္ဌာန်းထားသော V1 ပေးချေမှုများသည် implicit-default, Local-12, Global registry, နှင့် multisig controllers များကို အမှားအယွင်းအစီအစဥ်အပြည့်အစုံဖြင့် လွှမ်းခြုံထားသည်။
 - ဖြန့်ဝေမှု- Rust data-model၊ Torii၊ JS/TS၊ Swift နှင့် Android SDKs တို့တွင် မျှဝေထားသည်။ စားသုံးသူများသွေဖည်ပါက CI ပျက်ကွက်သည်။
 - အမှန်တရား၏ရင်းမြစ်- မီးစက်သည် `crates/iroha_data_model/src/account/address/compliance_vectors.rs` တွင်နေထိုင်ပြီး `cargo xtask address-vectors` မှတဆင့် ဖော်ထုတ်ပါသည်။
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | မျက်နှာပြင် | ပြဋ္ဌာန်း | မှတ်စုများ |
 |---------|----------------|-------|
-| သံချေးဒေ - မော်ဒယ် | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON ကို ပိုင်းခြားစိတ်ဖြာပြီး ကျမ်းဆိုင်ရာ ပေးဆောင်မှုများကို ပြန်လည်တည်ဆောက်ကာ IH58 (ဦးစားပေး)/ ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး)/ canonical ပြောင်းလဲမှုများ + ဖွဲ့စည်းတည်ဆောက်ပုံ အမှားများကို စစ်ဆေးသည်။ |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | ဆာဗာဘက်ခြမ်းကုဒ်ဒစ်များကို မှန်ကန်ကြောင်းသက်သေပြသောကြောင့် Torii သည် ပုံစံမမှန်သော IH58 (ဦးစားပေး)/ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) ပေးဆောင်မှုများကို တိကျစွာ ငြင်းဆိုထားသည်။ |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 တန်ဆာပလာများ (IH58 ဦးစားပေး/ချုံ့ထားသည် (`sora`) ဒုတိယအကောင်းဆုံး/အပြည့်အဝ) နှင့် အနုတ်ကိစ္စတိုင်းအတွက် Norito ပုံစံ အမှားကုဒ်များကို အတည်ပြုသည်။ |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | IH58 (ဦးစားပေး) လေ့ကျင့်ခန်းများ/ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) စကားဝှက်၊ multisig payloads နှင့် Apple ပလပ်ဖောင်းများပေါ်တွင် အမှားအယွင်းများပေါ်နေပါသည်။ |
+| သံချေးဒေ - မော်ဒယ် | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON ကို ပိုင်းခြားစိတ်ဖြာပြီး ကျမ်းဆိုင်ရာ ပေးဆောင်မှုများကို ပြန်လည်တည်ဆောက်ကာ I105 (ဦးစားပေး)/ ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး)/ canonical ပြောင်းလဲမှုများ + ဖွဲ့စည်းတည်ဆောက်ပုံ အမှားများကို စစ်ဆေးသည်။ |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | ဆာဗာဘက်ခြမ်းကုဒ်ဒစ်များကို မှန်ကန်ကြောင်းသက်သေပြသောကြောင့် Torii သည် ပုံစံမမှန်သော I105 (ဦးစားပေး)/ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) ပေးဆောင်မှုများကို တိကျစွာ ငြင်းဆိုထားသည်။ |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 တန်ဆာပလာများ (I105 ဦးစားပေး/ချုံ့ထားသည် (`sora`) ဒုတိယအကောင်းဆုံး/အပြည့်အဝ) နှင့် အနုတ်ကိစ္စတိုင်းအတွက် Norito ပုံစံ အမှားကုဒ်များကို အတည်ပြုသည်။ |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | I105 (ဦးစားပေး) လေ့ကျင့်ခန်းများ/ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) စကားဝှက်၊ multisig payloads နှင့် Apple ပလပ်ဖောင်းများပေါ်တွင် အမှားအယွင်းများပေါ်နေပါသည်။ |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Kotlin/Java ချည်နှောင်မှုများသည် canonical fixture နှင့် လိုက်လျောညီထွေရှိနေစေရန် သေချာစေပါသည်။ |
 
 ### 4. Monitoring & Outstanding အလုပ်- အခြေအနေကို အစီရင်ခံခြင်း- ဤစာရွက်စာတမ်းသည် `status.md` နှင့် လမ်းပြမြေပုံမှ ချိတ်ဆက်ထားသောကြောင့် အပတ်စဉ် သုံးသပ်ချက်များသည် ကြံ့ခိုင်မှုအား စစ်ဆေးနိုင်မည်ဖြစ်သည်။

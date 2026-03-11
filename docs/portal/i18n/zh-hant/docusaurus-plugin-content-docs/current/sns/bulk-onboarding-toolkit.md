@@ -45,7 +45,7 @@ Torii 或 CLI。助手驗證前面的每一行，發出兩個
 |--------|----------|-------------|
 | `label` |是的 |請求的標籤（接受混合大小寫；工具根據 Norm v1 和 UTS-46 進行標準化）。 |
 | `suffix_id` |是的 |數字後綴標識符（十進製或 `0x` 十六進制）。 |
-| `owner` |是的 |註冊所有者的 AccountId 字符串（IH58 文字；可選@domain 提示）。 |
+| `owner` |是的 | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |是的 |整數 `1..=255`。 |
 | `payment_asset_id` |是的 |結算資產（例如 `xor#sora`）。 |
 | `payment_gross` / `payment_net` |是的 |表示資產本機單位的無符號整數。 |
@@ -86,9 +86,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   引用是相對於 CSV 位置解析的。非對像元數據
   產生驗證錯誤。
 - **控制器：** 空白單元符合 `--default-controllers`。提供明確的
-  委派給非所有者時的控制器列表（例如 `ih58...;ih58...`）
+  委派給非所有者時的控制器列表（例如 `i105...;i105...`）
   演員。
 
 使用上下文行號報告失敗（例如

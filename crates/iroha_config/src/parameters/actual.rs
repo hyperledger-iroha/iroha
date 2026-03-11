@@ -622,7 +622,7 @@ pub struct Common {
     pub trusted_peers: WithOrigin<TrustedPeers>,
     /// Default domain label used only when encoding/compressing `AccountAddress` selectors.
     pub default_account_domain_label: WithOrigin<String>,
-    /// IH58 chain discriminant / network prefix applied when encoding addresses.
+    /// I105 chain discriminant / network prefix applied when encoding addresses.
     pub chain_discriminant: WithOrigin<u16>,
 }
 
@@ -4666,7 +4666,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (canonical IH58 literal).
+    /// Optional fee policy: receiver account id (canonical I105 literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -6343,7 +6343,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (canonical IH58 literal).
+    /// Account identifier (canonical I105 literal).
     pub account_id: String,
 }
 

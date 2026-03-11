@@ -95,7 +95,7 @@ pub mod common {
         iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned()
     }
 
-    /// Default chain discriminant / IH58 network prefix (Sora Nexus global).
+    /// Default chain discriminant / I105 network prefix (Sora Nexus global).
     pub const CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     /// Chain discriminant applied when configuration omits an override.
@@ -2844,9 +2844,9 @@ pub mod governance {
     }
 
     fn account_literal_from_account_id(account_id: &AccountId) -> String {
-        // Configuration parsing accepts canonical IH58 account literals.
+        // Configuration parsing accepts canonical I105 account literals.
         account_id
-            .canonical_ih58()
+            .canonical_i105()
             .expect("default governance account literal")
     }
 

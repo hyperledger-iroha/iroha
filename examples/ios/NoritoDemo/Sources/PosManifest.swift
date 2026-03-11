@@ -255,11 +255,11 @@ enum PosManifestLoader {
       return Data(raw.dropFirst(3))
     }
 #if canImport(IrohaSwift)
-    let account = try AccountAddress.fromIH58(normalized, expectedPrefix: nil)
+    let account = try AccountAddress.fromI105(normalized, expectedPrefix: nil)
     let canonical = try account.canonicalBytes()
     return try extractSingleSignatoryKey(canonical)
 #else
-    throw NSError(domain: "PosManifestLoader", code: 8, userInfo: [NSLocalizedDescriptionKey: "IH58 decoding requires IrohaSwift"])
+    throw NSError(domain: "PosManifestLoader", code: 8, userInfo: [NSLocalizedDescriptionKey: "I105 decoding requires IrohaSwift"])
 #endif
   }
 

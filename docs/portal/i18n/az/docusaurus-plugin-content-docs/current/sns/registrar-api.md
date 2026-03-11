@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | — | Cari əldə edin `SuffixPolicyV1` (keşlənə bilər). |
 | `/v1/sns/registrations/{selector}` | GET | — | Cari `NameRecordV1` + effektiv vəziyyəti qaytarır (Aktiv, Grace və s.). |
 
-**Seçicinin kodlaşdırılması:** `{selector}` yol seqmenti ADDR-5 üçün IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex qəbul edir; Torii onu `NameSelectorV1` vasitəsilə normallaşdırır.
+**Seçicinin kodlaşdırılması:** `{selector}` yol seqmenti ADDR-5 üçün I105 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex qəbul edir; Torii onu `NameSelectorV1` vasitəsilə normallaşdırır.
 
 **Xəta modeli:** bütün son nöqtələr `code`, `message`, `details` ilə Norito JSON qaytarır. Kodlara `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` daxildir.
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -226,7 +226,7 @@ Uğursuz çeklər `sns_err_governance_missing` qaytarır.
 
 1. Müştəri qiymətləri, lütfləri və mövcud səviyyələri əldə etmək üçün `/v1/sns/policies/{suffix_id}` sorğusu göndərir.
 2. Müştəri `RegisterNameRequestV1` qurur:
-   - `selector` üstünlük verilən IH58 və ya ikinci ən yaxşı sıxılmış (`sora`) etiketindən əldə edilmişdir.
+   - `selector` üstünlük verilən I105 və ya ikinci ən yaxşı sıxılmış (`sora`) etiketindən əldə edilmişdir.
    - `term_years` siyasət sərhədləri daxilində.
    - `payment` xəzinədarlıq/stüard splitter transferinə istinad edir.
 3. Torii təsdiq edir:

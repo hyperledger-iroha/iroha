@@ -14,7 +14,7 @@ fn main() {
 
     domain_registration_test(config.clone())
         .expect("Domain registration example is expected to work correctly");
-    account_definition_test().expect("Account definition example is expected to work correctly");
+    account_definition_test();
     account_registration_test(config.clone())
         .expect("Account registration example is expected to work correctly");
     asset_registration_test(config.clone())
@@ -71,7 +71,7 @@ fn domain_registration_test(config: Config) -> Result<(), Error> {
     Ok(())
 }
 
-fn account_definition_test() -> Result<(), Error> {
+fn account_definition_test() {
     // #region account_definition_comparison
     use iroha::{crypto::KeyPair, data_model::prelude::AccountId};
 
@@ -79,21 +79,18 @@ fn account_definition_test() -> Result<(), Error> {
     let (public_key, _) = KeyPair::random().into_parts();
     // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
     let longhand_account_id = AccountId::new(public_key.clone());
-    // Create an AccountId instance by parsing the canonical IH58 account address form
+    // Create an AccountId instance by parsing the canonical I105 account address form
     let canonical_account_id = longhand_account_id
-        .canonical_ih58()
-        .expect("Single-key account IDs can be rendered as IH58");
+        .canonical_i105()
+        .expect("Single-key account IDs can be rendered as I105");
     let account_id = AccountId::parse_encoded(&canonical_account_id)
         .map(iroha::account_address::ParsedAccountId::into_account_id)
-        .expect("Valid, because the IH58 payload was generated from a valid AccountId");
+        .expect("Valid, because the I105 payload was generated from a valid AccountId");
 
     // Check that two ways to define an account match
     assert_eq!(account_id, longhand_account_id);
 
     // #endregion account_definition_comparison
-
-    // Finish the test successfully
-    Ok(())
 }
 
 fn account_registration_test(config: Config) -> Result<(), Error> {
@@ -103,7 +100,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
         crypto::KeyPair,
         data_model::{
             metadata::Metadata,
-            prelude::{Account, AccountId, InstructionBox, Register},
+            prelude::{Account, AccountId, DomainId, InstructionBox, Register},
         },
     };
     // #endregion register_account_crates
@@ -120,7 +117,8 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_account_generate
     // Generate a new account
-    let create_account = Register::account(Account::new(account_id));
+    let account_domain: DomainId = "wonderland".parse().expect("valid domain id");
+    let create_account = Register::account(Account::new(account_id.to_account_id(account_domain)));
     // #endregion register_account_generate
 
     // #region register_account_prepare_tx
@@ -201,7 +199,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_define_asset_account
     let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice = AccountId::new(because `wonderland` is a valid domain identifier"),
+    let alice = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("Valid, because this is a valid public key literal"),
@@ -252,7 +250,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // Define the instances of an Asset and Account
     let roses: AssetDefinitionId = "rose#wonderland".parse()
         .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice = AccountId::new(because `wonderland` is a valid domain identifier"),
+    let alice = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("Valid, because this is a valid public key literal"),

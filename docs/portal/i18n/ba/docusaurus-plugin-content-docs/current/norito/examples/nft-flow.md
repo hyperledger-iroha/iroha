@@ -21,7 +21,7 @@ NFT йәшәү циклы аша йөрөп, аҙағы тамамлана: ху
 
 ## Бүләксе проходка
 
-- NFT билдәләмәһен тәьмин итеү (мәҫәлән, I18NI000000007X) өҙөктә ҡулланылған хужа/алыусы иҫәптәре менән бер рәттән бар (`ih58...`, I18NI0000009XX).
+- NFT билдәләмәһен тәьмин итеү (мәҫәлән, I18NI000000007X) өҙөктә ҡулланылған хужа/алыусы иҫәптәре менән бер рәттән бар (`i105...`, I18NI0000009XX).
 - `nft_issue_and_transfer` инеү нөктәһен NFT мәтрүшкәләү өсөн саҡырырға, уны Алисанан Бобҡа күсерергә һәм сығарыуҙы һүрәтләгән метамағлүмәттәр флагын беркетергә.
 - Тикшерергә NFT ледже хәл менән I18NI000000011X йәки SDK эквиваленттары менән тикшерергә күсермәһе, һуңынан раҫлау активты алып ташлау бер тапҡыр яндырыу инструкцияһы йүгерә.
 
@@ -37,11 +37,11 @@ NFT йәшәү циклы аша йөрөп, аҙағы тамамлана: ху
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("ih58...");
+    let owner = account!("i105...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("ih58...");
+    let to = account!("i105...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

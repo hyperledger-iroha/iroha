@@ -49,7 +49,8 @@ payloads without writing bespoke scripts.
 1. [Start the proxy](./try-it.md#start-the-proxy-locally) and set
    `TRYIT_PROXY_PUBLIC_URL` so the widgets know where to send traffic.
 2. Open the **Try it** card on this page or the `/reference/torii-swagger`
-   panel and select an endpoint such as `POST /v1/pipeline/submit`.
+   panel and select an endpoint such as `POST /v1/pipeline/submit`
+   (for MCP/agent flows, use `/reference/torii-mcp` instead).
 3. Switch the **Content-Type** to `application/x-norito`, choose the **Binary**
    editor, and upload `fixtures/norito_rpc/transfer_asset.norito`
    (or any payload listed in

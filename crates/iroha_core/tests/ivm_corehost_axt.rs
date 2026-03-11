@@ -64,7 +64,6 @@ const FIXTURE_VENDOR_ACCOUNT_LITERAL: &str =
     "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
 
 fn fixture_authority() -> AccountId {
-    let domain: DomainId = "wonder".parse().expect("authority domain");
     let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
         .parse()
         .expect("authority public key");

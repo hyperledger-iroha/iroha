@@ -90,15 +90,15 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x3A);
-    final String ih58;
+    final String i105;
     try {
-      ih58 =
+      i105 =
           AccountAddress.fromAccount(publicKey, "ed25519")
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
-    final String authority = ih58;
+    final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -132,15 +132,15 @@ public final class NoritoCodecAdapterTests {
         AccountAddress.MultisigMemberPayload.of(0x01, 2, memberKeyB);
     final AccountAddress.MultisigPolicyPayload policy =
         AccountAddress.MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB));
-    final String ih58;
+    final String i105;
     try {
-      ih58 =
+      i105 =
           AccountAddress.fromMultisigPolicy(policy)
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
     }
-    final String authority = ih58;
+    final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -181,7 +181,7 @@ public final class NoritoCodecAdapterTests {
           .build();
       throw new AssertionError("expected canonical authority identifier rejection");
     } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("IH58 or compressed sora encoded")
+      assert expected.getMessage().contains("canonical I105 encoded")
           : "unexpected error message: " + expected.getMessage();
     }
   }
@@ -189,18 +189,18 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecRejectsNestedDomainAuthorityIdentifier() throws NoritoException {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x7D);
-    final String ih58;
+    final String i105;
     try {
-      ih58 =
+      i105 =
           AccountAddress.fromAccount(publicKey, "ed25519")
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
     try {
       TransactionPayload.builder()
           .setChainId("00000002")
-          .setAuthority(ih58 + "@wonderland@fallback")
+          .setAuthority(i105 + "@wonderland@fallback")
           .setCreationTimeMs(1_735_000_000_456L)
           .setExecutable(Executable.ivm(new byte[] {0x01}))
           .build();
@@ -634,7 +634,7 @@ public final class NoritoCodecAdapterTests {
     Arrays.fill(publicKey, (byte) fillByte);
     try {
       return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);
     }

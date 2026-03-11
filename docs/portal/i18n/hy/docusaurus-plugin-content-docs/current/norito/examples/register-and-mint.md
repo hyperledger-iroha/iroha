@@ -21,9 +21,9 @@ slug: /norito/examples/register-and-mint
 
 ## Լեջերի քայլարշավ
 
-- Համոզվեք, որ նպատակակետ հաշիվը (օրինակ՝ `ih58...`) գոյություն ունի՝ արտացոլելով տեղադրման փուլը յուրաքանչյուր SDK-ի արագ մեկնարկում:
+- Համոզվեք, որ նպատակակետ հաշիվը (օրինակ՝ `i105...`) գոյություն ունի՝ արտացոլելով տեղադրման փուլը յուրաքանչյուր SDK-ի արագ մեկնարկում:
 - Զանգահարեք `register_and_mint` մուտքի կետը, որպեսզի ստեղծեք ROSE ակտիվի սահմանումը և 250 միավոր կտրեք Ալիսին մեկ գործարքում:
-- Ստուգեք մնացորդները `client.request(FindAccountAssets)` կամ `iroha_cli ledger asset list --account ih58...` միջոցով՝ հաստատելու համար, որ դրամահատարանը հաջողվել է:
+- Ստուգեք մնացորդները `client.request(FindAccountAssets)` կամ `iroha_cli ledger asset list --account i105...` միջոցով՝ հաստատելու համար, որ դրամահատարանը հաջողվել է:
 
 ## Առնչվող SDK ուղեցույցներ
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

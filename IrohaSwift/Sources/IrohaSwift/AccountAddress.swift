@@ -5,9 +5,9 @@ public enum AccountAddressError: Error, Equatable {
     case keyPayloadTooLong(Int)
     case invalidHeaderVersion(UInt8)
     case invalidNormVersion(UInt8)
-    case invalidIh58Prefix(UInt16)
+    case invalidI105Prefix(UInt16)
     case hashFailure
-    case invalidIh58Encoding
+    case invalidI105Encoding
     case invalidLength
     case checksumMismatch
     case invalidHexAddress
@@ -21,7 +21,7 @@ public enum AccountAddressError: Error, Equatable {
     case invalidPublicKey
     case unknownCurve(UInt8)
     case unexpectedTrailingBytes
-    case invalidIh58PrefixEncoding(UInt8)
+    case invalidI105PrefixEncoding(UInt8)
     case missingCompressedSentinel
     case compressedTooShort
     case invalidCompressedChar(Character)
@@ -42,12 +42,12 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_INVALID_HEADER_VERSION"
         case .invalidNormVersion:
             return "ERR_INVALID_NORM_VERSION"
-        case .invalidIh58Prefix:
-            return "ERR_INVALID_IH58_PREFIX"
+        case .invalidI105Prefix:
+            return "ERR_INVALID_I105_PREFIX"
         case .hashFailure:
             return "ERR_CANONICAL_HASH_FAILURE"
-        case .invalidIh58Encoding:
-            return "ERR_INVALID_IH58_ENCODING"
+        case .invalidI105Encoding:
+            return "ERR_INVALID_I105_ENCODING"
         case .invalidLength:
             return "ERR_INVALID_LENGTH"
         case .checksumMismatch:
@@ -74,8 +74,8 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_UNKNOWN_CURVE"
         case .unexpectedTrailingBytes:
             return "ERR_UNEXPECTED_TRAILING_BYTES"
-        case .invalidIh58PrefixEncoding:
-            return "ERR_INVALID_IH58_PREFIX_ENCODING"
+        case .invalidI105PrefixEncoding:
+            return "ERR_INVALID_I105_PREFIX_ENCODING"
         case .missingCompressedSentinel:
             return "ERR_MISSING_COMPRESSED_SENTINEL"
         case .compressedTooShort:
@@ -96,18 +96,12 @@ public enum AccountAddressError: Error, Equatable {
     }
 }
 
-public enum AccountAddressFormat: Equatable, Sendable {
-    case ih58
-    case compressed
-    case canonicalHex
-}
-
-/// Structured representation of IH58 (preferred)/sora (second-best) outputs used by wallet/explorer UX.
+/// Structured representation of i105 outputs used by wallet/explorer UX.
 public struct AccountAddressDisplayFormats: Equatable {
-    public let ih58: String
-    public let compressed: String
+    public let i105: String
+    public let i105Default: String
     public let networkPrefix: UInt16
-    public let compressedWarning: String
+    public let i105Warning: String
 }
 
 public struct AccountAddress {
@@ -151,60 +145,36 @@ public struct AccountAddress {
         return AccountAddress(header: header, domain: .default, controller: controller)
     }
 
-    public static func fromIH58(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
+    public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
         let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
         if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
             literal: trimmed,
             expectedPrefix: expectedPrefix
         ) {
-            guard bridged.format == .ih58 else {
-                throw AccountAddressError.unsupportedAddressFormat
-            }
             return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
         }
-        let (prefix, canonical) = try decodeIh58String(trimmed)
-        if let expectedPrefix, prefix != expectedPrefix {
-            throw AccountAddressError.unexpectedNetworkPrefix(expected: expectedPrefix, found: prefix)
-        }
+        let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
         return try AccountAddress.fromCanonicalBytes(canonical)
     }
 
-    public static func fromCompressedSora(_ encoded: String) throws -> AccountAddress {
-        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
-        guard trimmed.hasPrefix(compressedSentinel) else {
-            throw AccountAddressError.missingCompressedSentinel
-        }
-        let canonical = try decodeCompressedString(trimmed)
-        return try AccountAddress.fromCanonicalBytes(canonical)
+    public static func fromI105Default(_ encoded: String) throws -> AccountAddress {
+        try fromI105(encoded, expectedPrefix: AccountId.defaultNetworkPrefix)
     }
 
-    public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> (AccountAddress, AccountAddressFormat) {
+    public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
-        let lowercased = trimmed.lowercased()
-        if lowercased.hasPrefix(compressedSentinel) {
-            return (try AccountAddress.fromCompressedSora(trimmed), .compressed)
-        }
-        if containsCompressedAlphabetBeyondIh58(trimmed) {
-            throw AccountAddressError.missingCompressedSentinel
-        }
-        if lowercased.hasPrefix("0x") {
+        if trimmed.lowercased().hasPrefix("0x") {
             throw AccountAddressError.unsupportedAddressFormat
         }
         if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
             literal: trimmed,
             expectedPrefix: expectedPrefix
         ) {
-            guard bridged.format == .ih58 || bridged.format == .compressed else {
-                throw AccountAddressError.unsupportedAddressFormat
-            }
-            let address = try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
-            return (address, bridged.format)
+            return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
         }
-        let address = try AccountAddress.fromIH58(trimmed, expectedPrefix: expectedPrefix)
-        return (address, .ih58)
+        return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
     }
 
     static func canonicalizeDomainLabel(_ raw: String) throws -> String {
@@ -225,17 +195,6 @@ public struct AccountAddress {
         }
     }
 
-    private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {
-        for character in literal {
-            let symbol = String(character)
-            guard compressedIndex[symbol] != nil else { continue }
-            if ih58Index[symbol] == nil {
-                return true
-            }
-        }
-        return false
-    }
-
     public func canonicalBytes() throws -> Data {
         var bytes = Data()
         bytes.append(header.encode())
@@ -248,28 +207,35 @@ public struct AccountAddress {
         return "0x" + canonical.map { String(format: "%02x", $0) }.joined()
     }
 
-    public func toIH58(networkPrefix: UInt16) throws -> String {
+    public func toI105(networkPrefix: UInt16) throws -> String {
         let canonical = try canonicalBytes()
         if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
             canonicalBytes: canonical,
             networkPrefix: networkPrefix
         ) {
-            return render.ih58
+            return render.i105
         }
-        return try encodeIh58String(prefix: networkPrefix, canonical: canonical)
+        return try encodeI105String(discriminant: networkPrefix, canonical: canonical)
     }
 
-    public func toCompressedSora() throws -> String {
+    public func toI105(chainDiscriminant: UInt16) throws -> String {
+        try toI105(networkPrefix: chainDiscriminant)
+    }
+
+    public func toI105Default() throws -> String {
+        try toI105(chainDiscriminant: AccountId.defaultNetworkPrefix)
+    }
+
+    public func toI105DefaultFullWidth() throws -> String {
         let canonical = try canonicalBytes()
-        return try encodeCompressedString(canonical: canonical)
+        return try encodeI105String(
+            discriminant: AccountId.defaultNetworkPrefix,
+            canonical: canonical,
+            fullWidth: true
+        )
     }
 
-    public func toCompressedSoraFullWidth() throws -> String {
-        let canonical = try canonicalBytes()
-        return try encodeCompressedString(canonical: canonical, fullWidth: true)
-    }
-
-    /// Returns both IH58 (preferred) and compressed (`sora`, second-best) representations plus the UX warning required by
+    /// Returns canonical i105 output plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
@@ -278,17 +244,20 @@ public struct AccountAddress {
             networkPrefix: networkPrefix
         ) {
             return AccountAddressDisplayFormats(
-                ih58: render.ih58,
-                compressed: render.compressed,
+                i105: render.i105,
+                i105Default: render.i105Default,
                 networkPrefix: networkPrefix,
-                compressedWarning: AccountAddress.compressedWarningMessage
+                i105Warning: AccountAddress.i105WarningMessage
             )
         }
         return AccountAddressDisplayFormats(
-            ih58: try encodeIh58String(prefix: networkPrefix, canonical: canonical),
-            compressed: try encodeCompressedString(canonical: canonical),
+            i105: try encodeI105String(discriminant: networkPrefix, canonical: canonical),
+            i105Default: try encodeI105String(
+                discriminant: AccountId.defaultNetworkPrefix,
+                canonical: canonical
+            ),
             networkPrefix: networkPrefix,
-            compressedWarning: AccountAddress.compressedWarningMessage
+            i105Warning: AccountAddress.i105WarningMessage
         )
     }
 
@@ -329,9 +298,9 @@ public struct AccountAddress {
     }
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
-    private static let compressedWarningMessage =
-        "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. " +
-        "Prefer IH58 when sharing with explorers, wallets, or QR codes. See docs/source/sns/address_display_guidelines.md."
+    private static let i105WarningMessage =
+        "I105 addresses are the canonical account literal encoding. " +
+        "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753)."
 }
 
 // MARK: - Internal components
@@ -816,7 +785,7 @@ private enum CurveId: UInt8 {
 
 // MARK: - Encoding helpers
 
-private let ih58Alphabet: [String] = [
+private let i105AsciiAlphabet: [String] = [
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
     "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e",
     "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y",
@@ -835,8 +804,8 @@ private let soraKanaFullwidth: [String] = [
     "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
 ]
 
-private let compressedAlphabet: [String] = ih58Alphabet + soraKana
-private let compressedAlphabetFullwidth: [String] = ih58Alphabet + soraKanaFullwidth
+private let compressedAlphabet: [String] = i105AsciiAlphabet + soraKana
+private let compressedAlphabetFullwidth: [String] = i105AsciiAlphabet + soraKanaFullwidth
 private let compressedIndex: [String: Int] = {
     var mapping = Dictionary(uniqueKeysWithValues: compressedAlphabet.enumerated().map { ($1, $0) })
     for (index, symbol) in compressedAlphabetFullwidth.enumerated() {
@@ -844,75 +813,97 @@ private let compressedIndex: [String: Int] = {
     }
     return mapping
 }()
-private let ih58Index: [String: Int] = Dictionary(uniqueKeysWithValues: ih58Alphabet.enumerated().map { ($1, $0) })
 
 private let compressedSentinel = "sora"
 private let compressedChecksumLength = 6
 private let compressedBase = compressedAlphabet.count
 private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
-private let ih58ChecksumPrefix = Data("IH58PRE".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
 
-private func encodeIh58Prefix(_ prefix: UInt16) throws -> [UInt8] {
-    if prefix <= 63 {
-        return [UInt8(prefix)]
+private let i105DiscriminantSora: UInt16 = 0x02F1
+private let i105DiscriminantTest: UInt16 = 0x0171
+private let i105DiscriminantDev: UInt16 = 0x0000
+private let i105SentinelSora = "sora"
+private let i105SentinelTest = "test"
+private let i105SentinelDev = "dev"
+private let i105SentinelNumericPrefix = "n"
+
+private func i105Sentinel(for discriminant: UInt16) -> String {
+    switch discriminant {
+    case i105DiscriminantSora:
+        return i105SentinelSora
+    case i105DiscriminantTest:
+        return i105SentinelTest
+    case i105DiscriminantDev:
+        return i105SentinelDev
+    default:
+        return "\(i105SentinelNumericPrefix)\(discriminant)"
     }
-    if prefix <= 16_383 {
-        let lower = UInt8((prefix & 0b0011_1111) | 0b0100_0000)
-        let upper = UInt8(prefix >> 6)
-        return [lower, upper]
-    }
-    throw AccountAddressError.invalidIh58Prefix(prefix)
 }
 
-private func decodeIh58Prefix(_ bytes: [UInt8]) throws -> (UInt16, Int) {
-    guard let first = bytes.first else { throw AccountAddressError.invalidLength }
-    if first <= 63 {
-        return (UInt16(first), 1)
+private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substring)? {
+    if encoded.hasPrefix(i105SentinelSora) {
+        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSora.count))
     }
-    if (first & 0b0100_0000) != 0 {
-        guard bytes.count >= 2 else { throw AccountAddressError.invalidIh58PrefixEncoding(first) }
-        let value = (UInt16(bytes[1]) << 6) | UInt16(first & 0b0011_1111)
-        return (value, 2)
+    if encoded.hasPrefix(i105SentinelTest) {
+        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTest.count))
     }
-    throw AccountAddressError.invalidIh58PrefixEncoding(first)
+    if encoded.hasPrefix(i105SentinelDev) {
+        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDev.count))
+    }
+    guard encoded.hasPrefix(i105SentinelNumericPrefix) else { return nil }
+    let tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
+    var digits = ""
+    var index = tail.startIndex
+    while index < tail.endIndex, tail[index].isNumber {
+        digits.append(tail[index])
+        index = tail.index(after: index)
+    }
+    guard !digits.isEmpty, let parsed = UInt16(digits) else { return nil }
+    return (parsed, tail[index...])
 }
 
-private func encodeIh58String(prefix: UInt16, canonical: Data) throws -> String {
-    let prefixBytes = try encodeIh58Prefix(prefix)
-    var body = prefixBytes
-    body.append(contentsOf: canonical)
-    var checksumInput = Data(ih58ChecksumPrefix)
-    checksumInput.append(contentsOf: body)
-    let checksum = Blake2b.hash512(checksumInput)
-    body.append(contentsOf: checksum.prefix(2))
-    let digits = try encodeBaseN(bytes: body, base: 58)
-    return digits.map { ih58Alphabet[$0] }.joined()
-}
-
-private func decodeIh58String(_ encoded: String) throws -> (UInt16, Data) {
+private func decodeI105String(_ encoded: String,
+                              expectedDiscriminant: UInt16? = nil) throws -> (UInt16, Data) {
+    guard let (discriminant, payload) = parseI105SentinelAndPayload(encoded) else {
+        throw AccountAddressError.missingCompressedSentinel
+    }
+    if let expectedDiscriminant, discriminant != expectedDiscriminant {
+        throw AccountAddressError.unexpectedNetworkPrefix(expected: expectedDiscriminant,
+                                                          found: discriminant)
+    }
+    guard payload.count > compressedChecksumLength else {
+        throw AccountAddressError.compressedTooShort
+    }
     var digits: [Int] = []
-    for character in encoded {
-        let symbol = String(character)
-        guard let index = ih58Index[symbol] else {
-            throw AccountAddressError.invalidIh58Encoding
+    for symbol in payload {
+        let key = String(symbol)
+        guard let value = compressedIndex[key] else {
+            throw AccountAddressError.invalidCompressedChar(symbol)
         }
-        digits.append(index)
+        digits.append(value)
     }
-    let bodyBytes = try decodeBaseN(digits: digits, base: 58)
-    guard bodyBytes.count >= 3 else { throw AccountAddressError.invalidLength }
-    let payload = Array(bodyBytes.dropLast(2))
-    let checksumBytes = Array(bodyBytes.suffix(2))
-    let (prefix, prefixLen) = try decodeIh58Prefix(payload)
-    var checksumInput = Data(ih58ChecksumPrefix)
-    checksumInput.append(contentsOf: payload)
-    let expected = Array(Blake2b.hash512(checksumInput).prefix(2))
-    guard checksumBytes.elementsEqual(expected) else {
+    let dataDigits = Array(digits.dropLast(compressedChecksumLength))
+    let checksumDigits = Array(digits.suffix(compressedChecksumLength))
+    let canonicalBytes = try decodeBaseN(digits: dataDigits, base: compressedBase)
+    let expected = compressedChecksumDigits(canonical: Data(canonicalBytes))
+    guard checksumDigits.elementsEqual(expected) else {
         throw AccountAddressError.checksumMismatch
     }
-    let canonical = Data(payload.dropFirst(prefixLen))
-    return (prefix, canonical)
+    return (discriminant, Data(canonicalBytes))
+}
+
+private func encodeI105String(discriminant: UInt16,
+                              canonical: Data,
+                              fullWidth: Bool = false) throws -> String {
+    let digits = try encodeBaseN(bytes: Array(canonical), base: compressedBase)
+    let checksum = compressedChecksumDigits(canonical: canonical)
+    let alphabet = fullWidth ? compressedAlphabetFullwidth : compressedAlphabet
+    var parts = [i105Sentinel(for: discriminant)]
+    parts.append(contentsOf: digits.map { alphabet[$0] })
+    parts.append(contentsOf: checksum.map { alphabet[$0] })
+    return parts.joined()
 }
 
 private func encodeCompressedString(canonical: Data, fullWidth: Bool = false) throws -> String {
@@ -1075,21 +1066,6 @@ private func computeLocalDigest(label: String) -> Data {
     return Data(digest.prefix(12))
 }
 
-extension AccountAddressFormat {
-    init?(bridgeCode: UInt8) {
-        switch bridgeCode {
-        case 0:
-            self = .ih58
-        case 1:
-            self = .compressed
-        case 2:
-            self = .canonicalHex
-        default:
-            return nil
-        }
-    }
-}
-
 extension AccountAddressError {
     struct BridgePayload {
         let code: String
@@ -1128,14 +1104,14 @@ extension AccountAddressError {
             if let value = uInt8Field("value", fields: fields) {
                 return AccountAddressError.invalidNormVersion(value)
             }
-        case "ERR_INVALID_IH58_PREFIX":
+        case "ERR_INVALID_I105_PREFIX":
             if let prefix = uInt16Field("prefix", fields: fields) {
-                return AccountAddressError.invalidIh58Prefix(prefix)
+                return AccountAddressError.invalidI105Prefix(prefix)
             }
         case "ERR_CANONICAL_HASH_FAILURE":
             return AccountAddressError.hashFailure
-        case "ERR_INVALID_IH58_ENCODING":
-            return AccountAddressError.invalidIh58Encoding
+        case "ERR_INVALID_I105_ENCODING":
+            return AccountAddressError.invalidI105Encoding
         case "ERR_INVALID_LENGTH":
             return AccountAddressError.invalidLength
         case "ERR_CHECKSUM_MISMATCH":
@@ -1175,9 +1151,9 @@ extension AccountAddressError {
             }
         case "ERR_UNEXPECTED_TRAILING_BYTES":
             return AccountAddressError.unexpectedTrailingBytes
-        case "ERR_INVALID_IH58_PREFIX_ENCODING":
+        case "ERR_INVALID_I105_PREFIX_ENCODING":
             if let value = uInt8Field("value", fields: fields) {
-                return AccountAddressError.invalidIh58PrefixEncoding(value)
+                return AccountAddressError.invalidI105PrefixEncoding(value)
             }
         case "ERR_MISSING_COMPRESSED_SENTINEL":
             return AccountAddressError.missingCompressedSentinel

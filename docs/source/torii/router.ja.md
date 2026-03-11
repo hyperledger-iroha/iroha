@@ -51,3 +51,7 @@ OpenAPI エンドポイントが利用できない場合、差分処理は自動
 ## 移行ノート
 
 Torii を組み込むプロジェクトは、従来の `Router` を直接操作する実装を `RouterBuilder` ヘルパーへ移行してください。`add_*_routes` から変更済みルーターを返す歴史的なパターンは廃止され、クレート内部ではサポートされなくなりました。
+
+## 参考資料
+
+- `crates/iroha_torii/docs/mcp_api.md` — エージェント/ツール統合向け Torii MCP JSON-RPC 契約（`/v1/mcp`）。

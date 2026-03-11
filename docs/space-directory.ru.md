@@ -161,7 +161,7 @@ POST /v1/space-directory/manifests
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -217,7 +217,7 @@ POST /v1/space-directory/manifests/revoke
 
 ```jsonc
 {
-  "authority": "ih58...",
+  "authority": "i105...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -236,7 +236,7 @@ Torii возвращает `202 Accepted` после постановки тра
 Профили содержат всё необходимое новому валидатору до подключения. Fixture
 `profile/cbdc_lane_profile.json` документирует:
 
-- Эмитента/кворум governance (`ih58...` + ID тикета с evidence).
+- Эмитента/кворум governance (`i105...` + ID тикета с evidence).
 - Набор валидаторов + кворум и защищённые namespaces (`cbdc`, `gov`).
 - DA‑профиль (класс A, список подтверждающих лиц, период ротации).
 - ID группы composability и whitelist, связывающий UAID’ы с capability‑manifest’ами.

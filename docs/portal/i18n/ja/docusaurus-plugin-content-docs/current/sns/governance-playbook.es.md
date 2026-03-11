@@ -63,7 +63,7 @@ listadas en `roadmap.md`, vinculando cada flujo de trabajo con la evidencia,
 |カルタ + anexos KPI | `docs/source/sns/governance_addenda/` |バージョン管理、規約、KPI および CLI 投票に関する決定に関する決定書。 |
 |エスケマ デ レジストロ | [`registry-schema.md`](./registry-schema.md) | Estructuras Norito canonicas (`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`)。 |
 |登録者との契約 | [`registrar-api.md`](./registrar-api.md) |ペイロード REST/gRPC、メトリクス `sns_registrar_status_total` およびガバナンス フックの期待。 |
-|ガイア UX の指示 | [`address-display-guidelines.md`](./address-display-guidelines.md) | canonicos IH58 (preferido) と comprimidos (segunda mejor opcion) のウォレット/エクスプローラーのリフレハドをレンダリングします。 |
+|ガイア UX の指示 | [`address-display-guidelines.md`](./address-display-guidelines.md) | canonicos I105 (preferido) と comprimidos (segunda mejor opcion) のウォレット/エクスプローラーのリフレハドをレンダリングします。 |
 |ドキュメント SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |ホストの決定性の導出、透明性の追跡および警告の監視。 |
 |メモ規制 | `docs/source/sns/regulatory/` | Notas de ingreso jurisdiccional (p. ej.、EU DSA)、acuses de Steward、anexos plantilla。 |
 |ドリルログ | `ops/drill-log.md` |登録は、事前に IR を要求します。 |
@@ -107,7 +107,7 @@ Todas las acciones de gobernanza deben リファレンス al menos un artefacto 
 6. **顧客の漏洩:** 顧客の元帳の記録
    （ウォレット/エクスプローラー）Los fixtures compartidos en 経由
    [`address-display-guidelines.md`](./address-display-guidelines.md)、アセグランド
-   IH58 とコピア/QR の同時実行。
+   I105 とコピア/QR の同時実行。
 
 ### 4.3 改修、事実確認とテソリアの和解
 
@@ -138,11 +138,11 @@ Todas las acciones de gobernanza deben リファレンス al menos un artefacto 
 ### 4.4 コンゲラミエントス、紛争およびアペラシオン|ファセ |ドゥエノ |アクシオンと証拠 | SLA |
 |------|------|--------|-----|
 |フリーズソフトのご相談 |スチュワード / 出張 |プレゼンター チケット `SNS-DF-<id>` は、パゴ、債券、紛争セレクターの参照を含む。 | <= 4 時間以内です。 |
-|チケットdeガーディアン |保護者フンタ | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` は `GuardianFreezeTicketV1` を生成します。 JSON デル チケット en `artifacts/sns/guardian/<id>.json` を保護します。 | <=30 分の ACK、<=2 時間の排出。 |
+|チケットdeガーディアン |保護者フンタ | `sns governance freeze --selector <I105> --reason <text> --until <ts>` は `GuardianFreezeTicketV1` を生成します。 JSON デル チケット en `artifacts/sns/guardian/<id>.json` を保護します。 | <=30 分の ACK、<=2 時間の排出。 |
 |コンセホの承認 |コンセホ・デ・ゴベルナンサ |会議の予定、保護者のチケットと紛争のダイジェストを記録するドキュメンタリー決定。 |プロキシマ セッション デル コンセホ オ ヴォート アシンクロノ。 |
 |裁定パネル |クンプリミエント + スチュワード | `sns governance dispute ballot` 経由で、7 つのジュラドス (セガン ロードマップ) に関するコンボカー パネルが報告されています。事件発生時の追加の通知。 |保証金の保証金 <=7 が保証されています。 |
 |アペラシオン |ガーディアンズ + コンセホ |二重の絆と繰り返しの手続きを忘れないでください。レジストラは、Norito `DisputeAppealV1` y 参照チケット primario を明示します。 |直径10以下|
-|デスコンゲラーと救済策 |レジストラ + リゾルバ操作 | Ejecutar `sns governance unfreeze --selector <IH58> --ticket <id>`、実際の登録者とプロパガーの差分 GAR/リゾルバー。 |インメディアト・デプス・デル・ヴェディクト。 |
+|デスコンゲラーと救済策 |レジストラ + リゾルバ操作 | Ejecutar `sns governance unfreeze --selector <I105> --ticket <id>`、実際の登録者とプロパガーの差分 GAR/リゾルバー。 |インメディアト・デプス・デル・ヴェディクト。 |
 
 Los canones de emencia (congelamientos activados por Guardes <=72 時間) シグエン
 エル ミスモ フルホ ペロ 必要なリビジョン レトロアクティバ デル コンセホとウナ ノタ デ

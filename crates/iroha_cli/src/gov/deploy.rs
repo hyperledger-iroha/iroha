@@ -377,7 +377,7 @@ pub struct DeployMetaArgs {
     pub namespace: String,
     #[arg(long)]
     pub contract_id: String,
-    /// Optional validator account IDs (canonical IH58 account literals) authorizing the deployment alongside the authority.
+    /// Optional validator account IDs (canonical I105 account literals) authorizing the deployment alongside the authority.
     #[arg(long = "approver", value_name = "ACCOUNT")]
     pub approvers: Vec<String>,
 }

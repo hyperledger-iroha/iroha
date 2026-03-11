@@ -252,16 +252,6 @@
             "Permission": {
               "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": {
-                "name": "CanRegisterAssetDefinition"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-              "object": {
                 "name": "CanRegisterAccount"
               }
             }

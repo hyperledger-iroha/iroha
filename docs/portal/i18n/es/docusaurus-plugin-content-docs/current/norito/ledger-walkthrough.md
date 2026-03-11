@@ -25,8 +25,8 @@ IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
 Derivadas de las claves demo:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirma los valores listando las primeras cuentas:

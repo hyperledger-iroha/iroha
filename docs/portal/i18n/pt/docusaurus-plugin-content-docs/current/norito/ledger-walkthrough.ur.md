@@ -26,8 +26,8 @@ Passo a passo [Norito quickstart](./quickstart.md) کی تکمیل کرتا ہے
 اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان IDs de conta سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ pacote de padrões پہلے ہی chaves de demonstração سے اخذ کیے گئے دو contas شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 پہلے چند contas لسٹ کر کے ویلیوز کی تصدیق کریں:

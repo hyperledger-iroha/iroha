@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API（附件、证明者、投票统计）：`zk_app_api.md`
 - Torii ZK 附件/验证者操作手册：`zk/prover_runbook.md`
 - Torii ZK App API 操作指南（附件/证明器；板条箱文档）：`../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/证明生命周期（注册、验证、遥测）：`zk/lifecycle.md`
 - Torii 操作员辅助（可见性端点）：`references/operator_aids.md`
 - Nexus 默认通道快速入门：`quickstart/default_lane.md`

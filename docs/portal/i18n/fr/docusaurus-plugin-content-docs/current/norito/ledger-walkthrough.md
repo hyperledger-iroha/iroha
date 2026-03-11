@@ -25,8 +25,8 @@ IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux c
 issus des cles de demo :
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirmez les valeurs en listant les premiers comptes :

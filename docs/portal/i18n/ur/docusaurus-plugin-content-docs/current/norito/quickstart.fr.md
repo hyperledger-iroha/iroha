@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 نوڈ ابھی بھی چل رہا ہے ، CLI کے ساتھ Torii پر مرتب کردہ بائیک کوڈ بھیجیں۔ پہلے سے طے شدہ ترقی کی شناخت `defaults/client.toml` میں عوامی کلید سے اخذ کی گئی ہے ، لہذا اکاؤنٹ کی شناخت ہے
 ```
-ih58...
+i105...
 ```
 
 URL Torii ، چین ID اور دستخطی کی کلید فراہم کرنے کے لئے کنفیگریشن فائل کا استعمال کریں:```sh
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

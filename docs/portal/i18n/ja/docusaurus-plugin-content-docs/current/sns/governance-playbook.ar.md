@@ -59,7 +59,7 @@ CLI `sns governance ...` ومانيفستات Norito
 |数値 + 数値 KPI | `docs/source/sns/governance_addenda/` | مواثيق موقعة مع تحكم بالنسخ، ومواثيق KPI، وقرارات الحوكمة اليها بتصويتات CLI。 |
 |重要 | [`registry-schema.md`](./registry-schema.md) | Norito (`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`)。 |
 | और देखें [`registrar-api.md`](./registrar-api.md) | REST/gRPC の `sns_registrar_status_total` フック。 |
-| UX 版 | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض IH58 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات。 |
+| UX 版 | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض I105 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات。 |
 | SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |尾行者を追跡します。 |
 | ذكرات تنظيمية | `docs/source/sns/regulatory/` |重要なのは、EU DSA (EU DSA) のスチュワードです。 |
 |ドリル | `ops/drill-log.md` | IR と IR を組み合わせてください。 |
@@ -100,7 +100,7 @@ CLI `sns governance ...` ومانيفستات Norito
    GAR/ゾーン (バージョン 4.5) のリゾルバー。
 6. **افصاح العميل:** حدث دفتر المستخدِم (ウォレット/エクスプローラー) フィクスチャ المشتركة في
    [`address-display-guidelines.md`](./address-display-guidelines.md) ، مع ضمان ان
-   IH58 認証/QR 認証。
+   I105 認証/QR 認証。
 
 ### 4.3 を実行します。- ** 評価:** 評価 30 評価 + 評価 60 評価
   `SuffixPolicyV1`。 60 يوما، تتفعل تلقائيا سلسلة اعادة الفتح
@@ -126,11 +126,11 @@ CLI `sns governance ...` ومانيفستات Norito
 |ログイン | ログインああ | और देखें SLA |
 |----------|----------|----------|-----|
 |ソフト | ソフト |スチュワード/スチュワード | قدم تذكرة `SNS-DF-<id>` مع اثباتات الدفع، مرجع bond النزاع، والمحدد/المحددات المتاثرة. | <=4 時間です。 |
-|ガーディアン | ガーディアンガーディアン | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` は `GuardianFreezeTicketV1`。 JSON は `artifacts/sns/guardian/<id>.json` です。 | ACK は 30 分以内、ACK は 2 時間以内。 |
+|ガーディアン | ガーディアンガーディアン | `sns governance freeze --selector <I105> --reason <text> --until <ts>` は `GuardianFreezeTicketV1`。 JSON は `artifacts/sns/guardian/<id>.json` です。 | ACK は 30 分以内、ACK は 2 時間以内。 |
 |ニュース | ニュースऔर देखें保護者と絆を結ぶ。 |最高のパフォーマンスを見せてください。 |
 |ログインしてください。管理人 + スチュワード | 7 番目のロードマップ (ロードマップ) は、`sns governance dispute ballot` です。ありがとうございます。 | الحكم <=7 ايام بعد ايداع 債券。 |
 | और देखेंガーディアン + 保護者 |債券、債券、債券。 Norito `DisputeAppealV1` を確認してください。 | <=10 時間。 |
-| فك التجميد والمعالجة |解決 + 解決策 | `sns governance unfreeze --selector <IH58> --ticket <id>`、GAR/リゾルバー。 |そうです。 |
+| فك التجميد والمعالجة |解決 + 解決策 | `sns governance unfreeze --selector <I105> --ticket <id>`、GAR/リゾルバー。 |そうです。 |
 
 القوانين الطارئة (تجميدات يطلقها ガーディアン <=72 h) تتبع نفس التدفق لكنها تتطلب
 `docs/source/sns/regulatory/` を確認してください。

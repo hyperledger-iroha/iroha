@@ -90,7 +90,7 @@ O Runner `info("Hello from Kotodama")` é um host zombado e um host zombado `SET
 
 Não há nenhum código de byte para CLI que seja Torii. ڈیفالٹ identidade de desenvolvimento `defaults/client.toml` موجود chave pública سے اخذ ہوتی ہے، اس لئے ID da conta یہ ہے:
 ```
-ih58...
+i105...
 ```
 
 URL Torii, ID da cadeia e chave de assinatura فراہم کرنے کے لئے config فائل استعمال کریں:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

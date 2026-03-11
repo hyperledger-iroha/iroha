@@ -60,7 +60,7 @@ translation_last_reviewed: 2026-02-07
 | Чартер + KPI приложения | `docs/source/sns/governance_addenda/` | התקנות תקנות של מדינות, בריתות KPI ושיטות עבודה, על מערכות CLI-גולוס. |
 | Схема реестра | [`registry-schema.md`](./registry-schema.md) | Канонические структуры Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | רשם Контракт | [`registrar-api.md`](./registrar-api.md) | מטענים של REST/gRPC, מטריות `sns_registrar_status_total` ו- ожидания וו ממשל. |
-| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения IH58 (предпочтительно) ו-сжатые (второй выбор), используемые кошельками/эмксиплоре. |
+| UX-гайд адресов | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические отображения I105 (предпочтительно) ו-сжатые (второй выбор), используемые кошельками/эмксиплоре. |
 | Документы SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Детерминированное вычисление מארח, поток работы transparency tailer ו правила алертов. |
 | Регуляторные мемо | `docs/source/sns/regulatory/` | Заметки приема по юрисдикциям (לדוגמה, האיחוד האירופי DSA), דייל אישורים, шаблонные приложения. |
 | יומן מקדחה | `ops/drill-log.md` | Записи хаос- и IR-репетиций перед выходом из фаз. |
@@ -102,7 +102,7 @@ translation_last_reviewed: 2026-02-07
    состояния GAR/אזור (см. 4.5).
 6. **קלינטסקי רשמית:** Обновите клиентский פנקס חשבונות (ארנק/חוקר) через
    общие גופי в [`address-display-guidelines.md`](./address-display-guidelines.md),
-   убедившись, что IH58 и сжатые отображения совпадают с copy/QR гайдами.
+   убедившись, что I105 и сжатые отображения совпадают с copy/QR гайдами.
 
 ### 4.3 Продления, биллинг и сверка казначейства
 
@@ -131,11 +131,11 @@ translation_last_reviewed: 2026-02-07
 ### 4.4 Заморозки, споры и апелляции| Фаза | Владелец | Действие и доказательства | SLA |
 |------|--------|------------------------|-----|
 | Запрос הקפאה רכה | דייל / поддержка | צור קשר עם `SNS-DF-<id>` עם נדל"ן, ביטוח על אגרות חוב וסלקטרום. | <=4 שעות от поступления. |
-| Guardian тикет | לוח שומר | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` создает `GuardianFreezeTicketV1`. Сохранить JSON ב-`artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות выполнение. |
+| Guardian тикет | לוח שומר | `sns governance freeze --selector <I105> --reason <text> --until <ts>` создает `GuardianFreezeTicketV1`. Сохранить JSON ב-`artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות выполнение. |
 | Ратификация совета | מועצת ממשל | צור או צור קשר עם ביטוח, צור הצעה באמצעות כרטיס אפוטרופוס וספיקת אג"ח לעכל. | Следующее заседание совета или асинхронное голосование. |
 | Арбитражная панель | Комплаенс + דייל | Созвать панель из 7 присяжных (согласно roadmap) с хешированными бюллетенями через `sns governance dispute ballot`. Приложить анонимные квитанции голосов к пакету инцидента. | Вердикт <=7 дней после внесения. |
 | Апелляция | אפוטרופוס + совет | Апелляции удваивают bond и повторяют процесс присяжных; записать манифест Norito `DisputeAppealV1` и сослаться на первичный тикет. | <=10 דני. |
-| Разморозка и ремедиация | רשם + פותר פעולות | בדוק את `sns governance unfreeze --selector <IH58> --ticket <id>`, התקן את הרשם והתקן את ה-Diff GAR/פותר. | Сразу после вердикта. |
+| Разморозка и ремедиация | רשם + פותר פעולות | בדוק את `sns governance unfreeze --selector <I105> --ticket <id>`, התקן את הרשם והתקן את ה-Diff GAR/פותר. | Сразу после вердикта. |
 
 Экстренные каноны (заморозки, инициированные אפוטרופוס <=72 שעות) следуют тому же
 פוטוקו, לא גורם ליצירת קשרים ותקשורים.

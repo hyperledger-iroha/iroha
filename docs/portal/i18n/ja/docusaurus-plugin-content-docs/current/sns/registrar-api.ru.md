@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Получает текущую `SuffixPolicyV1` (кэвируемо)。 |
 | `/v1/sns/registrations/{selector}` |入手 | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (アクティブ、グレース、и т. д.)。 |
 
-**セレクター:** `{selector}` は IH58、圧縮 (`sora`) または 16 進数、ADDR-5; Torii нормализует через `NameSelectorV1`。
+**セレクター:** `{selector}` は I105、圧縮 (`sora`) または 16 進数、ADDR-5; Torii нормализует через `NameSelectorV1`。
 
 **例:** Norito JSON と `code`、`message`、`details`。 `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing`。
 
@@ -163,7 +163,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows

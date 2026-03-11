@@ -65,7 +65,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=ih58... \
+     --authority=i105... \
      --private-key=ed25519:<key>
    ```
 

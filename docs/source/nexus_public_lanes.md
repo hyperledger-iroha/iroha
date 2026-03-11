@@ -244,24 +244,24 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha app nexus lane-report --summary` shows lane catalog entries, manifest
     readiness, and validator modes (stake-elected vs admin-managed) so operators
     can confirm whether staking admission is enabled for a lane.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
     `activation_height`, exit release, slash id) alongside bonded/self stake.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
-      Optional `address_format=ih58|compressed` controls the literal rendering
-      (IH58 preferred; compressed (`sora`) is second-best Sora-only).
+      Optional `canonical I105 literal rendering` controls the literal rendering
+      (canonical I105 output only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
-      `?validator=ih58...` filters the response for dashboards that focus
-      on a single validator; `address_format` applies to all literals.
+      `?validator=i105...` filters the response for dashboards that focus
+      on a single validator; `canonical I105 rendering` applies to all literals.
     - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
-      asset for the requested account. Requires `account=ih58...` and accepts
-      optional `asset_id` and `upto_epoch` filters; `address_format` applies to
+      asset for the requested account. Requires `account=i105...` and accepts
+      optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
@@ -269,11 +269,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "ih58..." } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "i105..." } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "ih58...",
+          "validator": "i105...",
           "release_at_ms": 1730000000000
         }
       }

@@ -30,8 +30,8 @@ IDs de conta que os planos usam. O pacote por defeito inclui duas contas
 Demonstração de Derivadas das Claves:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Confirme os valores listando as primeiras contas:

@@ -35,7 +35,7 @@ translator: machine-google-reviewed
       «abi_hash»: «blake2b32:…» | «…64 hex»,
       "abi_version": "1",
       «պատուհան»: { «ստորին»: 12345, «վերին»՝ 12400 },
-      «հեղինակություն»: «ih58...?»,
+      «հեղինակություն»: «i105...?»,
       "private_key": "...?"
     }
   - Պատասխան (JSON):
@@ -44,14 +44,14 @@ translator: machine-google-reviewed
 
 Contracts API (տեղակայում)
 - ՓՈՍՏ `/v1/contracts/deploy`
-  - Հարցում. { "authority": "ih58...", "private_key": "…", "code_b64": "..." }
+  - Հարցում. { "authority": "i105...", "private_key": "…", "code_b64": "..." }
   - Վարքագիծ. `code_hash`-ը հաշվարկում է IVM ծրագրի մարմնից և `abi_hash`-ը՝ `abi_version` վերնագրից, այնուհետև ներկայացնում է `RegisterSmartContractCode` (մանիֆեստ) և I18084 `.to` բայթ) `authority`-ի անունից:
   - Պատասխան՝ { «ok»: ճշմարիտ, «code_hash_hex»: «…», «abi_hash_hex»: «…» }
   - Առնչվող:
     - GET `/v1/contracts/code/{code_hash}` → վերադարձնում է պահված մանիֆեստը
     - GET `/v1/contracts/code-bytes/{code_hash}` → վերադարձնում է `{ code_b64 }`
 - ՓՈՍՏ `/v1/contracts/instance`
-  - Հարցում. { "authority": "ih58...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Հարցում. { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Վարքագիծ. տեղակայում է մատակարարված բայթ կոդը և անմիջապես ակտիվացնում `(namespace, contract_id)` քարտեզագրումը `ActivateContractInstance`-ի միջոցով:
   - Պատասխան՝ { «ok»: true, «namespace»: «apps», «contract_id»: «calc.v1», «code_hash_hex»: «…», «abi_hash_hex»: «…» }
 
@@ -64,11 +64,11 @@ Alias Service
   - Սխալներ. HTTP `400` սխալ ձևավորված վեցանկյուն մուտքագրման վրա: Torii-ը վերադարձնում է Norito `ValidationFail::QueryFailed::Conversion` ծրար՝ ապակոդավորիչի սխալի հաղորդագրությամբ:
 - ՓՈՍՏ `/v1/aliases/resolve`
   - Հարցում. { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Պատասխան՝ { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Պատասխան՝ { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Ծանոթագրություններ. Պահանջում է ISO կամուրջի գործարկման ժամանակի բեմադրություն (`[iso_bridge.account_aliases]` `iroha_config`-ում): Torii-ը նորմալացնում է փոխանունները՝ նախքան որոնումը հանելով բացատները և վերին պատյանները: Վերադարձնում է 404, երբ կեղծանունը բացակայում է, և 503, երբ ISO կամուրջի գործարկման ժամանակը անջատված է:
 - ՓՈՍՏ `/v1/aliases/resolve_index`
   - Հարցում. { "index": 0 }
-  - Պատասխան՝ { «index»՝ 0, «alias»: «GB82WEST12345698765432», «account_id»: «ih58...», «source»: «iso_bridge» }
+  - Պատասխան՝ { «index»՝ 0, «alias»: «GB82WEST12345698765432», «account_id»: «i105...», «source»: «iso_bridge» }
   - Ծանոթագրություններ. Alias-ի ինդեքսները նշանակվում են դետերմինիստականորեն՝ ըստ կազմաձևման կարգի (0-ի վրա հիմնված): Հաճախորդները կարող են քեշավորել պատասխաններն անցանց՝ կեղծանունների ատեստավորման միջոցառումների համար աուդիտի հետքեր կառուցելու համար:Կոդի չափի գլխարկ
 - Հատուկ պարամետր՝ `max_contract_code_bytes` (JSON u64)
   - Վերահսկում է առավելագույն թույլատրելի չափը (բայթերով) շղթայական պայմանագրային ծածկագրի պահպանման համար:
@@ -76,7 +76,7 @@ Alias Service
   - Օպերատորները կարող են հարմարվել՝ ներկայացնելով `SetParameter(Custom)` `id = "max_contract_code_bytes"` և թվային ծանրաբեռնվածությամբ:
 
 - ՓՈՍՏ `/v1/gov/ballots/zk`
-  - Հարցում. { «հեղինակություն»: «ih58...», «մասնավոր_բանալին»: «…?», «chain_id»: «…», «election_id»: «e1», «proof_b64»: «…», «public»: {…} }
+  - Հարցում. { «հեղինակություն»: «i105...», «մասնավոր_բանալին»: «…?», «chain_id»: «…», «election_id»: «e1», «proof_b64»: «…», «public»: {…} }
   - Պատասխան՝ { «ok»: ճշմարիտ, «ընդունված»: ճշմարիտ, «tx_instructions»: [{…}] }
   - Նշումներ.
     - Երբ սխեմայի հանրային մուտքերը ներառում են `owner`, `amount` և `duration_blocks`, և ապացույցը հաստատում է կազմաձևված VK-ի դեմ, հանգույցը ստեղծում կամ ընդլայնում է կառավարման կողպեք Sumeragi-ով Sumeragi-ով Sumeragi-ով: Ուղղությունը մնում է թաքնված (`unknown`), եթե ակնարկ չկա; թարմացվում է միայն գումարը/ժամկետը: Կրկնակի քվեարկությունները միապաղաղ են. գումարը և ժամկետը միայն ավելանում են (հանգույցը կիրառվում է max(amount, prev.amount) և max(expiry, prev.expiry)):
@@ -85,10 +85,10 @@ Alias Service
     - Պայմանագրի կատարումը պետք է զանգահարի `ZK_VOTE_VERIFY_BALLOT` նախքան `SubmitBallot` հերթագրելը; տանտերերը պարտադրում են մեկ կրակոցի սողնակ:
 
 - ՓՈՍՏ `/v1/gov/ballots/plain`
-  - Հարցում. { «հեղինակություն»: «ih58...», «մասնավոր_բանալին»: «…?», «chain_id»: «…», «referendum_id»: «r1», «սեփականատեր»: «ih58...», «գումարը»: «1000», «տեւողությունը_բլոկները»: 6000, «Aye|Nay»
+  - Հարցում. { «հեղինակություն»: «i105...», «մասնավոր_բանալին»: «…?», «chain_id»: «…», «referendum_id»: «r1», «սեփականատեր»: «i105...», «գումարը»: «1000», «տեւողությունը_բլոկները»: 6000, «Aye|Nay»
   - Պատասխան՝ { «ok»: ճշմարիտ, «ընդունված»: ճշմարիտ, «tx_instructions»: [{…}] }
   - Ծանոթագրություններ. Վերաքվեարկությունները միայն երկարաձգման են. նոր քվեաթերթիկը չի կարող նվազեցնել առկա կողպեքի գումարը կամ ժամկետի ավարտը: `owner`-ը պետք է հավասար լինի գործարքի իրավասությանը: Նվազագույն տևողությունը `conviction_step_blocks` է:- ՓՈՍՏ `/v1/gov/finalize`
-  - Հարցում. { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "ih58...?", "private_key": "...?" }
+  - Հարցում. { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "...?" }
   - Պատասխան՝ { «ok»: true, «tx_instructions»: [{ «wire_id»: «…FinalizeReferendum», «payload_hex»: «…» }] }
   - Շղթայական էֆեկտ (ներկայիս փայտամած). հաստատված տեղակայման առաջարկի ընդունումը ներդնում է `ContractManifest` նվազագույն `code_hash`-ի կողմից ակնկալվող `abi_hash`-ով և նշում է առաջարկը ուժի մեջ է: Եթե ​​`code_hash`-ի համար արդեն գոյություն ունի մանիֆեստ՝ մեկ այլ `abi_hash`-ով, օրենքը մերժվում է:
   - Նշումներ.
@@ -97,7 +97,7 @@ Alias Service
     - Մասնակցության ստուգումները օգտագործում են միայն հաստատել+մերժել; ձեռնպահ մնալը չի ​​հաշվում մասնակցության համար:
 
 - ՓՈՍՏ `/v1/gov/enact`
-  - Հարցում. { «proposal_id»: «…64 hex», «preimage_hash»: «…64 hex?», «window»: { «ներքևում»: 0, «վերին»: 0 }?, «authority»: «ih58...?», «private_key»: «…?» }
+  - Հարցում. { «proposal_id»: «…64 hex», «preimage_hash»: «…64 hex?», «window»: { «ներքևում»: 0, «վերին»: 0 }?, «authority»: «i105...?», «private_key»: «…?» }
   - Պատասխան՝ { «ok»: true, «tx_instructions»: [{ «wire_id»: «…EnactReferendum», «payload_hex»: «…» }] }
   - Ծանոթագրություններ. Torii-ը ներկայացնում է ստորագրված գործարքը, երբ տրամադրվում է `authority`/`private_key`; հակառակ դեպքում այն ​​վերադարձնում է կմախք, որպեսզի հաճախորդները ստորագրեն և ներկայացնեն: Նախնական պատկերը ընտրովի է և ներկայումս տեղեկատվական:
 
@@ -135,8 +135,8 @@ Alias Service
   min_turnout = 0
   voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
-  bond_escrow_account = "ih58..."
-  slash_receiver_account = "ih58..."
+  bond_escrow_account = "i105..."
+  slash_receiver_account = "i105..."
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
@@ -153,8 +153,8 @@ GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
 GOV_VOTING_ASSET_ID=xor#sora
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=ih58...
-GOV_SLASH_RECEIVER_ACCOUNT=ih58...
+GOV_BOND_ESCROW_ACCOUNT=i105...
+GOV_SLASH_RECEIVER_ACCOUNT=i105...
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
@@ -189,8 +189,8 @@ RBAC
 - Հաճախորդները պետք է ներառեն գործարքների մետատվյալների բանալիներ՝ պաշտպանված անվանատարածքները նպատակաուղղված տեղակայման համար.
   - `gov_namespace`. նպատակային անվանատարածք (օրինակ՝ `"apps"`)
   - `gov_contract_id`. տրամաբանական պայմանագրի id անվանման տարածքում
-- `gov_manifest_approvers`. կամընտիր JSON զանգված ih58... հաշվի ID-ներ: Երբ երթուղու մանիֆեստը հայտարարում է մեկից ավելի քվորում, ընդունման համար պահանջվում է գործարքի իրավասության մարմինը գումարած թվարկված հաշիվները՝ բավարարելու մանիֆեստի քվորումը:
-- Telemetry-ն բացահայտում է ամբողջական ընդունման հաշվիչներ `governance_manifest_admission_total{result}`-ի միջոցով, որպեսզի օպերատորները կարողանան տարբերակել հաջողված ընդունելությունները `missing_manifest`, `non_ih58..._authority`, `quorum_rejected`, Prometheus և Prometheus և Prometheus ուղուց:
+- `gov_manifest_approvers`. կամընտիր JSON զանգված i105... հաշվի ID-ներ: Երբ երթուղու մանիֆեստը հայտարարում է մեկից ավելի քվորում, ընդունման համար պահանջվում է գործարքի իրավասության մարմինը գումարած թվարկված հաշիվները՝ բավարարելու մանիֆեստի քվորումը:
+- Telemetry-ն բացահայտում է ամբողջական ընդունման հաշվիչներ `governance_manifest_admission_total{result}`-ի միջոցով, որպեսզի օպերատորները կարողանան տարբերակել հաջողված ընդունելությունները `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, Prometheus և Prometheus և Prometheus ուղուց:
 - Հեռաչափությունը բացահայտում է կիրառման ուղին `governance_manifest_quorum_total{outcome}`-ի միջոցով (`satisfied` / `rejected` արժեքներ), որպեսզի օպերատորները կարողանան ստուգել բացակայող հաստատումները:
 - Գոտիները պարտադրում են իրենց մանիֆեստներում հրապարակված անունների տարածքի թույլտվությունների ցանկը: Ցանկացած գործարք, որը սահմանում է `gov_namespace`, պետք է տրամադրի `gov_contract_id`, իսկ անվանատարածքը պետք է հայտնվի մանիֆեստի `protected_namespaces` հավաքածուում: `RegisterSmartContractCode` ներկայացումները առանց այս մետատվյալների մերժվում են, երբ պաշտպանությունը միացված է:
 - Ընդունումը պահանջում է, որ Կառավարման ընդունված առաջարկ գոյություն ունի բազմակի `(namespace, contract_id, code_hash, abi_hash)`-ի համար; հակառակ դեպքում վավերացումը ձախողվում է NotPermitted սխալով:
@@ -204,7 +204,7 @@ Runtime Upgrade Hooks
   - `allowed_ids` (տողերի զանգված). մետատվյալների արժեքների կամընտիր թույլատրելի ցուցակ (կտրումից հետո): Մերժում է, երբ տրամադրված արժեքը նշված չէ:
 - Երբ կեռիկը առկա է, հերթերի ընդունումը գործադրում է մետատվյալների քաղաքականությունը նախքան գործարքը հերթ մտնելը: Բացակայող մետատվյալները, դատարկ արժեքները կամ թույլատրելի ցուցակից դուրս գտնվող արժեքները առաջացնում են `NotPermitted` որոշիչ սխալ:
 - Հեռաչափությունը հետևում է կիրառման արդյունքներին `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`-ի միջոցով:
-- Կեռիկը բավարարող գործարքները պետք է ներառեն մետատվյալներ `gov_upgrade_id=<value>` (կամ մանիֆեստի կողմից սահմանված բանալի) ի կողքին ih58... մանիֆեստի քվորումով պահանջվող ցանկացած հաստատում:
+- Կեռիկը բավարարող գործարքները պետք է ներառեն մետատվյալներ `gov_upgrade_id=<value>` (կամ մանիֆեստի կողմից սահմանված բանալի) ի կողքին i105... մանիֆեստի քվորումով պահանջվող ցանկացած հաստատում:
 
 Հարմարավետության վերջնակետ
 - POST `/v1/gov/protected-namespaces` — կիրառում է `gov_protected_namespaces` անմիջապես հանգույցի վրա:
@@ -218,16 +218,16 @@ Runtime Upgrade Hooks
     - `(namespace, contract_id, code_hash, abi_hash)`-ի համար գոյություն ունի ընդունված կառավարման առաջարկ, որը ստացվում է նույն առաջարկի ID-ի հաշինգով, որն օգտագործում է հանգույցը:
   - Արտադրում է JSON հաշվետվություն՝ `results[]`-ով յուրաքանչյուր պայմանագրով (խնդիրներ, մանիֆեստներ/ծածկագիր/առաջարկի ամփոփագրեր) գումարած մեկ տողով ամփոփում, եթե այն փակված չէ (`--no-summary`):
   - Օգտակար է պաշտպանված անվանատարածքները ստուգելու կամ կառավարման կողմից վերահսկվող տեղակայման աշխատանքային հոսքերը ստուգելու համար:
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Արտանետում է JSON մետատվյալների կմախքը, որն օգտագործվում է պաշտպանված անվանատարածքներում տեղակայումներ ներկայացնելիս, ներառյալ կամընտիր `gov_manifest_approvers`՝ մանիֆեստի քվորումի կանոնները բավարարելու համար:
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Վավերացնում է կանոնական հաշվի ID-ները, կանոնականացնում է 32 բայթանոց զրոյացնող ակնարկները և ակնարկները միավորում է `public_inputs_json`-ի (`--public <path>`-ի հետ՝ լրացուցիչ վերափոխումների համար):
   - Չեղարկիչը ստացվում է ապացուցման պարտավորությունից (հանրային մուտքագրում) գումարած `domain_tag`, `chain_id` և `election_id`; `--nullifier`-ը վավերացված է ապացույցի համեմատ, երբ մատակարարվում է:
   - Մեկ տողով ամփոփումն այժմ բացահայտում է `fingerprint=<hex>` որոշիչ, որը ստացվում է կոդավորված `CastZkBallot`-ից, ինչպես նաև ցանկացած վերծանված հուշում (`owner`, `amount`, Sumeragi, երբ տրամադրվում է Sumeragi):
   - CLI-ի պատասխանները նշում են `tx_instructions[]` `payload_fingerprint_hex` գումարած վերծանված դաշտերը, այնպես որ հոսանքով ներքևող գործիքավորումը կարող է ստուգել կմախքը՝ առանց Norito վերծանման կրկնակի ներդրման:
   - Երբ որևէ կողպեքի հուշում է տրվում, ZK քվեաթերթիկները պետք է տրամադրեն `owner`, `amount` և `duration_blocks`; մասնակի ակնարկները մերժվում են։ Երբ `min_bond_amount > 0`, կողպման հուշումներ են պահանջվում: Ուղղությունը մնում է ընտրովի և դիտվում է որպես միայն հուշում:
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner`-ն ընդունում է IH58 կանոնական տառերը; կամընտիր `@<domain>` վերջածանցները միայն երթուղային ակնարկներ են:
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner`-ն ընդունում է I105 կանոնական տառերը; կամընտիր `@<domain>` վերջածանցները միայն երթուղային ակնարկներ են:
   - `--lock-amount`/`--lock-duration-blocks` ծածկանունները արտացոլում են ZK դրոշի անունները սցենարների հավասարության համար:
   - Համառոտ ելքային հայելիներ `vote --mode zk`՝ ներառելով կոդավորված հրահանգի մատնահետքը և մարդու կողմից ընթեռնելի քվեաթերթիկների դաշտերը (`owner`, `amount`, `duration_blocks`, Norito.Դեպքերի ցուցակագրում
 - GET `/v1/gov/instances/{ns}` — թվարկում է ակտիվ պայմանագրային օրինակները անվանատարածքի համար:
@@ -246,14 +246,14 @@ Runtime Upgrade Hooks
 - ՓՈՍՏ `/v1/gov/ballots/zk-v1`
   - Հայց (v1-style DTO):
     {
-      «հեղինակություն»: «ih58...»,
+      «հեղինակություն»: «i105...»,
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       «backend»: «halo2/ipa»,
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64 hex?",
-      «սեփականատեր»: «ih58…», // կանոնական AccountId (IH58 բառացի; կամընտիր @domain ակնարկ)
+      «սեփականատեր»: «i105…», // կանոնական AccountId (I105 բառացի; կամընտիր @domain ակնարկ)
       «գումարը»: «100?»,
       «duration_blocks»՝ 6000?,
       «ուղղություն». «Այո|Ոչ|Ձեռնպահ»,
@@ -263,7 +263,7 @@ Runtime Upgrade Hooks
   - Անմիջապես ընդունում է `BallotProof` JSON և վերադարձնում է `CastZkBallot` կմախքը:
   - Հայց.
     {
-      «հեղինակություն»: «ih58...»,
+      «հեղինակություն»: «i105...»,
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
@@ -271,7 +271,7 @@ Runtime Upgrade Hooks
         «backend»: «halo2/ipa»,
         "envelope_bytes": "AAECAwQ=", // base64 ZK1 կամ H2* կոնտեյներով
         «root_hint»: null, // կամընտիր 32 բայթանոց վեցանկյուն տող (իրավասության արմատ)
-        «սեփականատեր»: null, // կամընտիր կանոնական AccountId (IH58 բառացի; կամընտիր @domain ակնարկ)
+        «սեփականատեր»: null, // կամընտիր կանոնական AccountId (I105 բառացի; կամընտիր @domain ակնարկ)
         «չեղյալ»:
         "mount": "100", // կամընտիր կողպեքի գումարի հուշում (տասնորդական տող)
         «duration_blocks»: 6000, // կամընտիր կողպման տևողության հուշում
@@ -304,7 +304,7 @@ CastZkBallot-ի ստուգման ուղի
 
 ## Վավերացնողի սխալ վարքագիծ և համատեղ կոնսենսուս
 
-### Slashing and Jailing WorkflowԿոնսենսուսը թողարկում է Norito կոդավորված `Evidence`, երբ ih58... խախտում է արձանագրությունը: Յուրաքանչյուր օգտակար բեռ ընկնում է հիշողության մեջ գտնվող `EvidenceStore`-ում և, եթե այն չի երևում, նյութականացվում է WSV-ով ապահովված `consensus_evidence` քարտեզում: `sumeragi.npos.reconfig.evidence_horizon_blocks`-ից ավելի հին գրառումները (կանխադրված `7200` բլոկներ) մերժվում են, ուստի արխիվը մնում է սահմանափակված, բայց մերժումը գրանցվում է օպերատորների համար: Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties նախքան դրանք դիմելը:
+### Slashing and Jailing WorkflowԿոնսենսուսը թողարկում է Norito կոդավորված `Evidence`, երբ i105... խախտում է արձանագրությունը: Յուրաքանչյուր օգտակար բեռ ընկնում է հիշողության մեջ գտնվող `EvidenceStore`-ում և, եթե այն չի երևում, նյութականացվում է WSV-ով ապահովված `consensus_evidence` քարտեզում: `sumeragi.npos.reconfig.evidence_horizon_blocks`-ից ավելի հին գրառումները (կանխադրված `7200` բլոկներ) մերժվում են, ուստի արխիվը մնում է սահմանափակված, բայց մերժումը գրանցվում է օպերատորների համար: Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties նախքան դրանք դիմելը:
 
 Ճանաչված իրավախախտումները մեկ առ մեկ քարտեզագրվում են `EvidenceKind`-ին; տարբերակիչները կայուն են և ուժի մեջ են մտնում տվյալների մոդելով.
 
@@ -324,7 +324,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — ih58... ստորագրել է հակասական հեշեր նույն `(phase,height,view,epoch)`-ի համար:
+- **DoublePrepare/DoubleCommit** — i105... ստորագրել է հակասական հեշեր նույն `(phase,height,view,epoch)`-ի համար:
 - **InvalidQc** — ագրեգատորը բամբասել է commit QC-ին, որի ձևը չի կարողանում դետերմինիստական ​​ստուգումներ կատարել (օրինակ՝ դատարկ ստորագրողի բիթքարտեզ):
 - **Invalid Proposal** — առաջնորդն առաջարկել է բլոկ, որը չի հաջողվում կառուցվածքային վավերացմանը (օրինակ՝ խախտում է կողպված շղթայի կանոնը):
 - **Գրաքննություն** — ստորագրված ներկայացման անդորրագրերը ցույց են տալիս գործարք, որը երբեք չի առաջարկվել/կատարվել:
@@ -341,12 +341,12 @@ VRF-ի տույժերը ինքնաբերաբար կիրառվում են `activa
 1. **Հավաքեք օգտակար բեռը**, քանի դեռ այն չի սպառվել: Արխիվացրեք չմշակված Norito բայթերը բարձրության/դիտման մետատվյալների կողքին:
 2. **Անհրաժեշտության դեպքում չեղարկեք**՝ ներկայացնելով `CancelConsensusEvidencePenalty` ապացույցների ծանրաբեռնվածությամբ մինչև `slashing_delay_blocks`-ի ավարտը; գրառումը նշված է `penalty_cancelled` և `penalty_cancelled_at_height`, և կտրվածք չի կիրառվում:
 3. **Բեմադրեք տուգանքը**՝ օգտակար բեռը ներառելով հանրաքվեի կամ սուդոյի հրահանգում (օրինակ՝ `Unregister::peer`): Կատարումը վերահաստատում է օգտակար բեռը. սխալ կամ հնացած ապացույցները մերժվում են դետերմինիստական ​​կարգով:
-4. **Պլանավորեք հետագա տոպոլոգիան**, որպեսզի վիրավորական ih58... անմիջապես չմիանա: Տիպիկ հոսքերի հերթ `SetParameter(Sumeragi::NextMode)` և `SetParameter(Sumeragi::ModeActivationHeight)` թարմացված ցուցակով:
+4. **Պլանավորեք հետագա տոպոլոգիան**, որպեսզի վիրավորական i105... անմիջապես չմիանա: Տիպիկ հոսքերի հերթ `SetParameter(Sumeragi::NextMode)` և `SetParameter(Sumeragi::ModeActivationHeight)` թարմացված ցուցակով:
 5. **Աուդիտի արդյունքները** `/v1/sumeragi/evidence`-ի և `/v1/sumeragi/status`-ի միջոցով՝ ապահովելու համար, որ ապացույցների հաշվառումը կատարելագործված է, և կառավարումն ընդունել է հեռացումը:
 
 ### Համատեղ կոնսենսուսային հաջորդականություն
 
-Համատեղ կոնսենսուսը երաշխավորում է, որ ելքային ih58... հավաքածուն ավարտում է սահմանային բլոկը, նախքան նոր հավաքածուն կսկսի առաջարկել: Գործարկման ժամանակը կիրառում է կանոնը զուգակցված պարամետրերի միջոցով.- `SumeragiParameter::NextMode` և `SumeragiParameter::ModeActivationHeight` պետք է կատարվեն **նույն բլոկում**: `mode_activation_height`-ը պետք է խիստ ավելի մեծ լինի, քան բլոկի բարձրությունը, որն իրականացրել է թարմացումը՝ ապահովելով առնվազն մեկ բլոկի ուշացում:
+Համատեղ կոնսենսուսը երաշխավորում է, որ ելքային i105... հավաքածուն ավարտում է սահմանային բլոկը, նախքան նոր հավաքածուն կսկսի առաջարկել: Գործարկման ժամանակը կիրառում է կանոնը զուգակցված պարամետրերի միջոցով.- `SumeragiParameter::NextMode` և `SumeragiParameter::ModeActivationHeight` պետք է կատարվեն **նույն բլոկում**: `mode_activation_height`-ը պետք է խիստ ավելի մեծ լինի, քան բլոկի բարձրությունը, որն իրականացրել է թարմացումը՝ ապահովելով առնվազն մեկ բլոկի ուշացում:
 - `sumeragi.npos.reconfig.activation_lag_blocks` (լռելյայն `1`) կազմաձևման պահակ է, որը կանխում է զրոյական ուշացումները.
 - `sumeragi.npos.reconfig.slashing_delay_blocks` (կանխադրված `259200`) հետաձգում է կոնսենսուսի կրճատումը, որպեսզի ղեկավարությունը կարողանա չեղարկել տույժերը նախքան դրանք կիրառելը:
 
@@ -355,13 +355,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Գործարկման ժամանակը և CLI-ն ցուցադրում են փուլային պարամետրերը `/v1/sumeragi/params` և `iroha sumeragi params --summary` միջոցով, այնպես որ օպերատորները կարող են հաստատել ակտիվացման բարձրությունները և ih58... ցուցակները:
+- Գործարկման ժամանակը և CLI-ն ցուցադրում են փուլային պարամետրերը `/v1/sumeragi/params` և `iroha sumeragi params --summary` միջոցով, այնպես որ օպերատորները կարող են հաստատել ակտիվացման բարձրությունները և i105... ցուցակները:
 - Կառավարման ավտոմատացումը միշտ պետք է.
   1. Վերջնականացնել ապացույցներով ապահովված հեռացման (կամ վերականգնման) որոշումը:
   2. Հերթագրեք հերթական վերակազմավորումը `mode_activation_height = h_current + activation_lag_blocks`-ով:
   3. `/v1/sumeragi/status` մոնիտորը մինչև `effective_consensus_mode`-ը շրջվի ակնկալվող բարձրության վրա:
 
-Ցանկացած սկրիպտ, որը պտտվում է ih58...s կամ կիրառում է կտրվածք **չպետք է** փորձի զրոյական ուշացումով ակտիվացնել կամ բաց թողնել անջատման պարամետրերը; նման գործարքները մերժվում են և դուրս են գալիս ցանցից նախորդ ռեժիմով:
+Ցանկացած սկրիպտ, որը պտտվում է i105...s կամ կիրառում է կտրվածք **չպետք է** փորձի զրոյական ուշացումով ակտիվացնել կամ բաց թողնել անջատման պարամետրերը; նման գործարքները մերժվում են և դուրս են գալիս ցանցից նախորդ ռեժիմով:
 
 ## Հեռաչափական մակերեսներ
 

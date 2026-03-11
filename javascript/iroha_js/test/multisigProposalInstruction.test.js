@@ -24,12 +24,12 @@ const CONTROLLER_KEY = Buffer.from(
   "B7D3A8A20C1EF77F6C2B7B4AA3AA7B4D52A7B2FAF77F0F45B1A16E7A8E0B3C01",
   "hex",
 );
-const ALICE_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: ALICE_KEY }).toIH58();
-const BOB_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: BOB_KEY }).toIH58();
+const ALICE_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: ALICE_KEY }).toI105();
+const BOB_ID = AccountAddress.fromAccount({ domain: DOMAIN, publicKey: BOB_KEY }).toI105();
 const CONTROLLER_ID = AccountAddress.fromAccount({
   domain: DOMAIN,
   publicKey: CONTROLLER_KEY,
-}).toIH58();
+}).toI105();
 
 const sampleSpec = () =>
   new MultisigSpecBuilder()

@@ -438,18 +438,19 @@ impl PercussionVoice {
                 let body = self.phase.sin();
                 let sub = (self.phase * 0.51).sin() * 0.28;
                 let skin = self.overtone_phase.sin() * self.ring_mix;
-                soft_clip((body + sub + skin * 0.55) * self.amplitude + noise * 0.08)
+                let tone = skin.mul_add(0.55, body + sub);
+                soft_clip(tone.mul_add(self.amplitude, noise * 0.08))
             }
             PercussionInstrument::Shoko => {
                 let body = self.phase.sin() * 0.22;
                 let ring = self.overtone_phase.sin() * self.ring_mix;
-                let sheen = (self.overtone_phase * 1.91 + 0.3).sin() * 0.34;
-                soft_clip((body + ring + sheen) * self.amplitude + noise * 0.03)
+                let sheen = self.overtone_phase.mul_add(1.91, 0.3).sin() * 0.34;
+                soft_clip((body + ring + sheen).mul_add(self.amplitude, noise * 0.03))
             }
             PercussionInstrument::Kakko => {
                 let body = self.phase.sin() * 0.72;
                 let shell = (self.overtone_phase + 0.2).sin() * self.ring_mix;
-                soft_clip((body + shell) * self.amplitude + noise * 0.06)
+                soft_clip((body + shell).mul_add(self.amplitude, noise * 0.06))
             }
         };
 
@@ -1092,7 +1093,7 @@ impl BiwaVoice {
 
         let body = self.phase.sin();
         let overtone = self.overtone_phase.sin() * 0.28;
-        let twang = (self.phase * 2.0 + 0.2).sin() * 0.14;
+        let twang = self.phase.mul_add(2.0, 0.2).sin() * 0.14;
         let attack = self.noise.next() * 0.05 * self.attack_noise;
 
         self.amplitude *= self.amp_decay;
@@ -1103,7 +1104,7 @@ impl BiwaVoice {
             return 0.0;
         }
 
-        soft_clip((body + overtone + twang) * self.amplitude + attack)
+        soft_clip((body + overtone + twang).mul_add(self.amplitude, attack))
     }
 
     fn is_idle(&self) -> bool {
@@ -1282,25 +1283,25 @@ fn soft_clip(sample: f32) -> f32 {
 
 fn reed_wave(phase: f32) -> f32 {
     let fundamental = phase.sin();
-    let second = (phase * 2.0 + 0.08).sin() * 0.46;
-    let third = (phase * 3.0 - 0.05).sin() * 0.21;
+    let second = phase.mul_add(2.0, 0.08).sin() * 0.46;
+    let third = phase.mul_add(3.0, -0.05).sin() * 0.21;
     let fifth = (phase * 5.0).sin() * 0.08;
     soft_clip(fundamental + second + third + fifth)
 }
 
 fn flute_wave(phase: f32) -> f32 {
     let fundamental = phase.sin();
-    let second = (phase * 2.0 + 0.02).sin() * 0.18;
-    let third = (phase * 3.0 - 0.04).sin() * 0.11;
-    let shimmer = (phase * 4.0 + 0.1).sin() * 0.03;
+    let second = phase.mul_add(2.0, 0.02).sin() * 0.18;
+    let third = phase.mul_add(3.0, -0.04).sin() * 0.11;
+    let shimmer = phase.mul_add(4.0, 0.1).sin() * 0.03;
     soft_clip(fundamental + second + third + shimmer)
 }
 
 fn sho_wave(phase: f32, breath_shape: f32) -> f32 {
     let principal = phase.sin();
     let upper = (phase * 2.0).sin() * 0.22;
-    let hollow = (phase * 3.0 + 0.16).sin() * 0.12;
-    let air = (phase * 4.0 - 0.08).sin() * 0.04 * breath_shape;
+    let hollow = phase.mul_add(3.0, 0.16).sin() * 0.12;
+    let air = phase.mul_add(4.0, -0.08).sin() * 0.04 * breath_shape;
     soft_clip(principal + upper + hollow + air)
 }
 

@@ -5,10 +5,7 @@ use std::{path::Path, str::FromStr};
 
 use hex::FromHex;
 use iroha_data_model::{
-    account::{
-        AccountAddress, AccountAddressError, AccountAddressFormat, AccountId, MultisigMember,
-        MultisigPolicy,
-    },
+    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
     name::Name,
 };
@@ -81,13 +78,13 @@ struct Member {
 #[derive(Debug, JsonDeserialize)]
 struct Encodings {
     canonical_hex: String,
-    ih58: Ih58Encoding,
-    compressed: String,
-    compressed_fullwidth: String,
+    i105: I105Encoding,
+    i105_default: String,
+    i105_default_fullwidth: String,
 }
 
 #[derive(Debug, JsonDeserialize)]
-struct Ih58Encoding {
+struct I105Encoding {
     prefix: u16,
     string: String,
 }
@@ -170,73 +167,54 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // IH58 parsing + re-encoding
-    let (parsed_ih58, format_ih58) = AccountAddress::parse_encoded(
-        &case.encodings.ih58.string,
-        Some(case.encodings.ih58.prefix),
+    // I105 parsing + re-encoding
+    let parsed_i105 = AccountAddress::parse_encoded(
+        &case.encodings.i105.string,
+        Some(case.encodings.i105.prefix),
     )
-    .expect("parse_encoded ih58");
-    match format_ih58 {
-        AccountAddressFormat::IH58 { network_prefix } => {
-            assert_eq!(
-                network_prefix, case.encodings.ih58.prefix,
-                "{}: parse_encoded IH58 prefix mismatch",
-                case.case_id
-            );
-        }
-        other => panic!(
-            "{}: parse_encoded IH58 reported unexpected format {other:?}",
-            case.case_id
-        ),
-    }
+    .expect("parse_encoded i105");
     assert_eq!(
-        canonical_bytes(&parsed_ih58),
+        canonical_bytes(&parsed_i105),
         canonical_payload,
-        "{}: parse_encoded IH58 canonical mismatch",
+        "{}: parse_encoded I105 canonical mismatch",
         case.case_id
     );
 
-    let ih58 = AccountAddress::from_ih58(
-        &case.encodings.ih58.string,
-        Some(case.encodings.ih58.prefix),
+    let i105 = AccountAddress::from_i105_for_discriminant(
+        &case.encodings.i105.string,
+        Some(case.encodings.i105.prefix),
     )
-    .expect("IH58 decode");
+    .expect("I105 decode");
     assert_eq!(
-        canonical_bytes(&ih58),
+        canonical_bytes(&i105),
         canonical_payload,
-        "{}: IH58 canonical mismatch",
+        "{}: I105 canonical mismatch",
         case.case_id
     );
     assert_eq!(
-        ih58.to_ih58(default_prefix).expect("IH58 re-encode"),
-        case.encodings.ih58.string,
-        "{}: IH58 re-encode mismatch",
+        i105.to_i105_for_discriminant(default_prefix)
+            .expect("I105 re-encode"),
+        case.encodings.i105.string,
+        "{}: I105 re-encode mismatch",
         case.case_id
     );
 
     // Compressed parse_encoded coverage
-    let (parsed_compressed, format_compressed) =
-        AccountAddress::parse_encoded(&case.encodings.compressed, None)
-            .expect("parse_encoded compressed");
-    assert_eq!(
-        format_compressed,
-        AccountAddressFormat::Compressed,
-        "{}: parse_encoded compressed reported unexpected format",
-        case.case_id
-    );
+    let parsed_compressed = AccountAddress::parse_encoded(&case.encodings.i105_default, None)
+        .expect("parse_encoded i105_default");
     assert_eq!(
         canonical_bytes(&parsed_compressed),
         canonical_payload,
-        "{}: parse_encoded compressed canonical mismatch",
+        "{}: parse_encoded i105_default canonical mismatch",
         case.case_id
     );
 
     // Compressed decoding (half-/full-width)
     for (encoding, label) in [
-        (&case.encodings.compressed, "compressed-half"),
-        (&case.encodings.compressed_fullwidth, "compressed-full"),
+        (&case.encodings.i105_default, "i105_default-half"),
+        (&case.encodings.i105_default_fullwidth, "i105_default-full"),
     ] {
-        let decoded = AccountAddress::from_compressed_sora(encoding)
+        let decoded = AccountAddress::from_i105(encoding)
             .unwrap_or_else(|err| panic!("{label} decode failed: {err}"));
         assert_eq!(
             canonical_bytes(&decoded),
@@ -255,15 +233,16 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
 
 fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
     match case.format.as_str() {
-        "ih58" => {
+        "i105" => {
             let expected_prefix = case.expected_prefix.unwrap_or(default_prefix);
-            let err = AccountAddress::from_ih58(&case.input, Some(expected_prefix))
-                .expect_err("IH58 negative should fail");
+            let err =
+                AccountAddress::from_i105_for_discriminant(&case.input, Some(expected_prefix))
+                    .expect_err("I105 negative should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
-        "compressed" => {
-            let err = AccountAddress::from_compressed_sora(&case.input)
-                .expect_err("compressed negative should fail");
+        "i105_default" => {
+            let err = AccountAddress::from_i105(&case.input)
+                .expect_err("i105_default negative should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
@@ -301,12 +280,12 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
         }
-        "MissingCompressedSentinel" => assert!(
-            matches!(err, AccountAddressError::MissingCompressedSentinel),
-            "{case_id}: expected MissingCompressedSentinel, got {err}"
+        "MissingI105Sentinel" => assert!(
+            matches!(err, AccountAddressError::MissingI105Sentinel),
+            "{case_id}: expected MissingI105Sentinel, got {err}"
         ),
-        "InvalidCompressedChar" => {
-            if let AccountAddressError::InvalidCompressedChar(ch) = err {
+        "InvalidCompressedChar" | "InvalidI105Char" => {
+            if let AccountAddressError::InvalidI105Char(ch) = err {
                 let expected_char = expected
                     .char
                     .as_deref()
@@ -316,7 +295,7 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                     .unwrap_or_default();
                 assert_eq!(expected_char, *ch, "{case_id}: invalid char mismatch");
             } else {
-                panic!("{case_id}: expected InvalidCompressedChar, got {err}");
+                panic!("{case_id}: expected InvalidI105Char, got {err}");
             }
         }
         "InvalidHexAddress" => assert!(

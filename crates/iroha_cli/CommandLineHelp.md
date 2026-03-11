@@ -743,8 +743,8 @@ Transfer ownership of a domain
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Domain name
-* `-f`, `--from <FROM>` — Source account identifier (canonical IH58 literal)
-* `-t`, `--to <TO>` — Destination account identifier (canonical IH58 literal)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
@@ -841,7 +841,7 @@ List account role IDs
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -858,7 +858,7 @@ Grant a role to an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `-r`, `--role <ROLE>` — Role name
 
 
@@ -871,7 +871,7 @@ Revoke a role from an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `-r`, `--role <ROLE>` — Role name
 
 
@@ -898,7 +898,7 @@ List account permissions
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -915,7 +915,7 @@ Grant an account permission using JSON input from stdin
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
@@ -927,7 +927,7 @@ Revoke an account permission using JSON input from stdin
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
@@ -1001,7 +1001,7 @@ Retrieve details of a specific account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
@@ -1013,8 +1013,7 @@ Register an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Canonical domainless account identifier for registration (canonical IH58 literal)
-
+* `-i`, `--id <ID>` — Canonical domainless account identifier for registration (canonical I105 literal)
 * `-d`, `--domain <DOMAIN>` — Domain in which to materialize the account link
 
 
@@ -1027,7 +1026,7 @@ Unregister an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (canonical IH58 literal)
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
 
 
 
@@ -1236,8 +1235,8 @@ Transfer ownership of an asset definition
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
-* `-f`, `--from <FROM>` — Source account identifier (canonical IH58 literal)
-* `-t`, `--to <TO>` — Destination account identifier (canonical IH58 literal)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
@@ -1403,7 +1402,7 @@ Transfer an asset between accounts
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
-* `-t`, `--to <TO>` — Destination account identifier (canonical IH58 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
 
@@ -1533,8 +1532,8 @@ Transfer ownership of NFT
 ###### **Options:**
 
 * `-i`, `--id <ID>` — NFT in the format "name$domain"
-* `-f`, `--from <FROM>` — Source account identifier (canonical IH58 literal)
-* `-t`, `--to <TO>` — Destination account identifier (canonical IH58 literal)
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
 
 
@@ -1898,7 +1897,7 @@ Register a trigger
 * `--instructions-stdin` — Read JSON array of instructions from stdin instead of bytecode path Example: echo "[ {\"Log\": {\"level\": \"INFO\", \"message\": \"hi\"}} ]" | iroha trigger register -i `my_trig` --instructions-stdin
 * `--instructions <PATH>` — Read JSON array of instructions from a file instead of bytecode path
 * `-r`, `--repeats <REPEATS>` — Number of permitted executions (default: indefinitely)
-* `--authority <AUTHORITY>` — Account executing the trigger (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Account executing the trigger (canonical I105 literal)
 * `--filter <FILTER>` — Filter type for the trigger
 
   Default value: `execute`
@@ -1909,7 +1908,7 @@ Register a trigger
 * `--time-period-ms <TIME_PERIOD_MS>` — Period in milliseconds for time filter (optional)
 * `--data-filter <JSON>` — JSON for a `DataEventFilter` to use as filter
 * `--data-domain <DATA_DOMAIN>` — Data filter preset: events within a domain
-* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (canonical IH58 literal)
+* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (canonical I105 literal)
 * `--data-asset <DATA_ASSET>` — Data filter preset: events for an encoded asset (`norito:<hex>`)
 * `--data-asset-definition <DATA_ASSET_DEFINITION>` — Data filter preset: events for an asset definition
 * `--data-role <DATA_ROLE>` — Data filter preset: events for a role
@@ -2186,7 +2185,7 @@ Register a multisig account
 
 ###### **Options:**
 
-* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (canonical IH58 literal)
+* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (canonical I105 literal)
 * `-w`, `--weights <WEIGHTS>` — Relative weights of signatories' responsibilities
 * `-q`, `--quorum <QUORUM>` — Threshold of total weight required for authentication
 * `--account <ACCOUNT>` — Account id to use for the multisig controller. If omitted, a new random domainless account id is generated locally, the private key is discarded, and the registration uses the configured default home domain
@@ -4267,7 +4266,7 @@ Build deploy metadata JSON for protected namespace admission
 
 * `--namespace <NAMESPACE>`
 * `--contract-id <CONTRACT_ID>`
-* `--approver <ACCOUNT>` — Optional validator account IDs (canonical IH58) authorizing the deployment alongside the authority
+* `--approver <ACCOUNT>` — Optional validator account IDs (canonical I105 account literals) authorizing the deployment alongside the authority
 
 
 
@@ -4311,7 +4310,7 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 
 * `--proof-b64 <PROOF_B64>` — Base64-encoded proof for ZK voting mode
 * `--public <PATH>` — Optional JSON file containing public inputs for ZK voting mode
-* `--owner <OWNER>` — Owner account id for plain voting mode (canonical IH58; must equal transaction authority)
+* `--owner <OWNER>` — Owner account id for plain voting mode (canonical I105 account literal; must equal transaction authority)
 * `--amount <AMOUNT>` — Locked amount for plain voting mode (string to preserve large integers)
 * `--duration-blocks <DURATION_BLOCKS>` — Lock duration (in blocks) for plain voting mode
 * `--direction <DIRECTION>` — Ballot direction for plain voting mode: Aye, Nay, or Abstain
@@ -4407,7 +4406,7 @@ Get current sortition council or manage council VRF flows
 * `--alternate-size <ALTERNATE_SIZE>` — Optional number of alternates to keep (defaults to committee size)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to `height/TERM_BLOCKS`
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 
 
@@ -4454,7 +4453,7 @@ Get current sortition council or manage council VRF flows
 * `--alternate-size <ALTERNATE_SIZE>` — Optional number of alternates to keep (defaults to committee size)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to `height/TERM_BLOCKS` (server-side)
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 * `--wait` — Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
 
@@ -4468,9 +4467,9 @@ Get current sortition council or manage council VRF flows
 
 ###### **Options:**
 
-* `--missing <MISSING>` — Account id of the member to replace (canonical IH58 literal)
+* `--missing <MISSING>` — Account id of the member to replace (canonical I105 account literal)
 * `--epoch <EPOCH>` — Optional epoch override; defaults to the latest persisted epoch
-* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
 
 
@@ -4714,7 +4713,7 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
@@ -4729,7 +4728,7 @@ Deploy bytecode, register manifest, and activate a namespace binding in one tran
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--namespace <NAMESPACE>` — Governance namespace to bind (e.g., apps)
 * `--contract-id <ID>` — Contract identifier within the namespace
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
@@ -4788,7 +4787,7 @@ Run an offline simulation of IVM bytecode to see the queued ISIs and header meta
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (canonical IH58 literal)
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key used to sign the simulated transaction
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
@@ -5024,7 +5023,7 @@ Shield public funds into a shielded ledger (demo flow)
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--from <ACCOUNT_ID>` — Account identifier to debit (canonical IH58 literal)
+* `--from <ACCOUNT_ID>` — Account identifier to debit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
 * `--enc-payload <PATH>` — Encrypted recipient payload envelope (Norito bytes). Optional; empty if not provided
@@ -5043,7 +5042,7 @@ Unshield funds from shielded ledger to public (demo flow)
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical IH58 literal)
+* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
 * `--proof-json <PATH>` — Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, `vk_inline{backend,bytes_b64}`, optional `vk_commitment_hex` }
@@ -6250,12 +6249,6 @@ List validators for a public lane with lifecycle hints
 * `--summary` — Render a compact table instead of raw JSON
 
   Default value: `false`
-* `--address-format <ADDRESS_FORMAT>` — Preferred address literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 
 
 
@@ -6274,12 +6267,6 @@ List bonded stake and pending unbonds for a public lane
 * `--summary` — Render a compact table instead of raw JSON
 
   Default value: `false`
-* `--address-format <ADDRESS_FORMAT>` — Preferred address literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 
 
 
@@ -6306,7 +6293,7 @@ Register a stake-elected validator on a public lane
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id to register against
-* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical IH58 literal)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 * `--stake-account <ACCOUNT_ID>` — Optional staking account (defaults to validator)
 * `--initial-stake <AMOUNT>` — Initial self-bond (integer, uses the staking asset scale)
 * `--metadata <PATH>` — Optional metadata JSON (Norito JSON object)
@@ -6322,7 +6309,7 @@ Activate a pending validator once its activation epoch is reached
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the pending validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical IH58 literal)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 
 
 
@@ -6335,7 +6322,7 @@ Schedule or finalize a validator exit
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical IH58 literal)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
 * `--release-at-ms <MILLIS>` — Release timestamp in milliseconds (must not precede current block timestamp)
 
 
@@ -6374,7 +6361,7 @@ Register a subscription plan on an asset definition
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--plan-id <ASSET_DEF_ID>` — Asset definition id where the plan metadata is stored
 * `--plan-json <PATH>` — Path to JSON plan payload (reads stdin when omitted)
@@ -6425,7 +6412,7 @@ Create a subscription and billing trigger
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--subscription-id <NFT_ID>` — Subscription NFT id to register
 * `--plan-id <ASSET_DEF_ID>` — Subscription plan asset definition id
@@ -6478,7 +6465,7 @@ Pause billing for a subscription
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -6494,7 +6481,7 @@ Resume billing for a subscription
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -6510,7 +6497,7 @@ Cancel a subscription and remove its billing trigger
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -6526,7 +6513,7 @@ Undo a scheduled period-end cancellation
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -6542,7 +6529,7 @@ Execute billing immediately
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -6558,7 +6545,7 @@ Record usage for a subscription usage plan
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical IH58 literal)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (canonical I105 account literal)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--unit-key <UNIT_KEY>` — Usage counter key to update
 * `--delta <DELTA>` — Usage increment (must be non-negative)
@@ -7657,12 +7644,6 @@ Fetch manifests for a UAID via Torii
 
 * `--limit <N>` — Maximum number of manifests to return
 * `--offset <N>` — Offset for pagination
-* `--address-format <ADDRESS_FORMAT>` — Preferred account literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 * `--json-out <PATH>` — Optional path where the JSON response will be stored
 
 
@@ -7737,12 +7718,6 @@ Fetch UAID dataspace bindings via Torii
 ###### **Options:**
 
 * `--uaid <UAID>` — UAID literal whose bindings should be fetched
-* `--address-format <ADDRESS_FORMAT>` — Preferred account literal encoding (`ih58` or `compressed`)
-
-  Default value: `ih58`
-
-  Possible values: `ih58`, `compressed`
-
 * `--json-out <PATH>` — Optional path where the JSON response will be stored
 
 
@@ -7775,14 +7750,14 @@ Create a new Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call (e.g. `kaigi`)
 * `--call-name <NAME>` — Call name within the domain (e.g. `daily-sync`)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical IH58 literal)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical I105 account literal)
 * `--title <TITLE>` — Optional human friendly title
 * `--description <DESCRIPTION>` — Optional description for participants
 * `--max-participants <U32>` — Maximum concurrent participants (excluding host)
 * `--gas-rate-per-minute <U64>` — Gas rate charged per minute (defaults to 0)
 
   Default value: `0`
-* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (canonical IH58 literal)
+* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (canonical I105 account literal)
 * `--scheduled-start-ms <U64>` — Optional scheduled start timestamp (milliseconds since epoch)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
@@ -7813,7 +7788,7 @@ Bootstrap a Kaigi session for demos and shareable testing metadata
 
   Default value: `wonderland`
 * `--call-name <NAME>` — Call name within the domain (defaults to a timestamp-based identifier)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical IH58 literal)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (canonical I105 account literal)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
   Default value: `transparent`
@@ -7846,7 +7821,7 @@ Join a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account joining the call (canonical IH58 literal)
+* `--participant <ACCOUNT-ID>` — Participant account joining the call (canonical I105 account literal)
 * `--commitment-hex <HEX>` — Commitment hash (hex) for privacy mode joins
 * `--commitment-alias <COMMITMENT_ALIAS>` — Alias tag describing the commitment (privacy mode)
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate joins (privacy mode)
@@ -7866,7 +7841,7 @@ Leave a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account leaving the call (canonical IH58 literal)
+* `--participant <ACCOUNT-ID>` — Participant account leaving the call (canonical I105 account literal)
 * `--commitment-hex <HEX>` — Commitment hash (hex) identifying the participant in privacy mode
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate leaves (privacy mode)
 * `--nullifier-issued-at-ms <U64>` — Nullifier issuance timestamp (milliseconds since epoch)
@@ -7918,7 +7893,7 @@ Report the health status of a relay used by a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (canonical IH58 literal)
+* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (canonical I105 account literal)
 * `--status <STATUS>` — Observed health status for the relay
 
   Possible values: `healthy`, `degraded`, `unavailable`
@@ -9435,7 +9410,7 @@ Fetch a SNS name record
 
 ###### **Options:**
 
-* `--selector <SELECTOR>` — Selector literal (`label.suffix`). IH58 (preferred)/sora (second-best) inputs are accepted
+* `--selector <SELECTOR>` — Selector literal (`label.suffix`) in canonical I105 form
 
 
 
@@ -9781,7 +9756,7 @@ Developer utilities and diagnostics
 
 ###### **Subcommands:**
 
-* `address` — Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+* `address` — Account address helpers (canonical I105 conversions)
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -9791,7 +9766,7 @@ Developer utilities and diagnostics
 
 ## `iroha tools address`
 
-Account address helpers (IH58 (preferred)/sora (second-best) conversions)
+Account address helpers (canonical I105 conversions)
 
 **Usage:** `iroha tools address <COMMAND>`
 
@@ -9811,19 +9786,19 @@ Convert account addresses between supported textual encodings
 
 ###### **Arguments:**
 
-* `<ADDRESS>` — Address literal to parse (IH58 or `sora…` compressed)
+* `<ADDRESS>` — Address literal to parse (canonical I105 encoded)
 
 ###### **Options:**
 
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
-* `--format <FORMAT>` — Desired output format (defaults to IH58)
+* `--format <FORMAT>` — Desired output format (defaults to I105)
 
-  Default value: `ih58`
+  Default value: `i105`
 
-  Possible values: `ih58`, `compressed`, `canonical-hex`, `json`
+  Possible values: `i105`, `canonical-hex`, `json`
 
 
 
@@ -9837,8 +9812,8 @@ Scan a list of addresses and emit conversion summaries
 ###### **Options:**
 
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
@@ -9861,15 +9836,15 @@ Rewrite newline-separated addresses into canonical encodings
 
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
 * `--output <PATH>` — Write the converted addresses to a file (defaults to STDOUT)
-* `--expect-prefix <PREFIX>` — Require IH58 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting IH58 output
+* `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
 
   Default value: `753`
-* `--format <FORMAT>` — Desired output format (defaults to IH58)
+* `--format <FORMAT>` — Desired output format (defaults to I105)
 
-  Default value: `ih58`
+  Default value: `i105`
 
-  Possible values: `ih58`, `compressed`, `canonical-hex`, `json`
+  Possible values: `i105`, `canonical-hex`, `json`
 
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
 
@@ -10167,3 +10142,4 @@ Show versions and git SHA of client and server
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
+

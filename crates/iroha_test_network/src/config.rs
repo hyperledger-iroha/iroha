@@ -40,7 +40,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
-    asset_definition::CanRegisterAssetDefinition,
     domain::{CanRegisterDomain, CanUnregisterDomain},
     executor::CanUpgradeExecutor,
     parameter::CanSetParameters,
@@ -81,7 +80,7 @@ fn sanitize_strings(value: &mut Value) {
 fn sanitize_account_id(id: &AccountId) -> AccountId {
     let raw = id.to_string();
     if !raw.chars().any(char::is_whitespace) {
-        // Avoid reparsing IH58 addresses unless we actually sanitize.
+        // Avoid reparsing I105 addresses unless we actually sanitize.
         return id.clone();
     }
     let sanitized = sanitize_account_id_str(&raw);
@@ -419,12 +418,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
-            CanRegisterAssetDefinition {
-                domain: test_domain_id.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: wonderland_domain.clone(),
             },
@@ -437,31 +430,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
-            CanRegisterAssetDefinition {
-                domain: wonderland_domain.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAssetDefinition {
-                domain: garden_domain.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAssetDefinition {
-                domain: wonderland_domain.clone(),
-            },
-            genesis_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
-                domain: and_domain_id.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAssetDefinition {
                 domain: and_domain_id.clone(),
             },
             alice_id.clone(),
@@ -748,7 +717,6 @@ fn apply_preexec_nexus_overrides(
     nexus_config: Option<&ActualNexus>,
     block_policies: Option<&DaProofPolicyBundle>,
 ) -> Result<(), Report> {
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let gas_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let gas_account = gas_account_id.to_string();
 
@@ -1422,7 +1390,7 @@ mod tests {
             opaque_ids: Vec::new(),
         };
         let asset_domain = asset_definition_id.domain().clone();
-        let controller_domain = controller.domain().clone();
+        let controller_domain = asset_domain.clone();
         let mut domains = vec![Domain::new(asset_domain.clone()).build(&genesis_account)];
         if controller_domain != asset_domain {
             domains.push(Domain::new(controller_domain).build(&genesis_account));
@@ -1850,9 +1818,7 @@ mod tests {
 
     #[test]
     fn minimal_genesis_contains_fixture_accounts() {
-        use iroha_data_model::{
-            Identifiable, domain::DomainId, isi::RegisterBox, transaction::Executable,
-        };
+        use iroha_data_model::{Identifiable, isi::RegisterBox, transaction::Executable};
 
         init_instruction_registry();
 
@@ -1860,7 +1826,6 @@ mod tests {
             topology: iroha_primitives::unique_vec::UniqueVec<PeerId>,
             pops: Vec<GenesisTopologyEntry>,
         ) {
-            let garden_domain: DomainId = "garden_of_live_flowers".parse().expect("garden domain");
             let (block, _, _, _) = build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
@@ -1881,7 +1846,7 @@ mod tests {
                         }
                         if let Some(RegisterBox::Account(isi)) =
                             instr.as_any().downcast_ref::<RegisterBox>()
-                            && isi.object().id().domain() == &garden_domain
+                            && isi.object().id().signatory() == CARPENTER_KEYPAIR.public_key()
                         {
                             saw_carpenter = true;
                             continue;

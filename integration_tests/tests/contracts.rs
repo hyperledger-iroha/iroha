@@ -9,7 +9,6 @@ use iroha::data_model::prelude::*;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
 use iroha_test_network::NetworkBuilder;
-use norito::codec::Encode;
 use reqwest::StatusCode;
 
 fn hex32(hash: &Hash) -> String {
@@ -58,10 +57,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
-    let authority_literal = format!(
-        "norito:{}",
-        hex::encode((&*iroha_test_samples::ALICE_ID).encode())
-    );
+    let authority_literal = iroha_test_samples::ALICE_ID.to_string();
     let manifest = ContractManifest {
         code_hash: Some(code_hash),
         abi_hash: None,

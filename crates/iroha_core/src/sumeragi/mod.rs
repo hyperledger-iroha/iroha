@@ -40,9 +40,21 @@ use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
-/// Stack size reserved for the consensus worker thread to handle deep recursion safely.
-const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+/// Default stack size reserved for consensus worker threads to handle deep recursion safely.
+const DEFAULT_SUMERAGI_STACK_SIZE_BYTES: usize = 256 * 1024 * 1024;
+/// Refuse overrides below the historical fixed size because the validation path
+/// has already been observed to overflow smaller stacks in production.
+const MIN_SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+
+fn sumeragi_stack_size_bytes() -> usize {
+    std::env::var(SUMERAGI_STACK_SIZE_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|bytes| *bytes >= MIN_SUMERAGI_STACK_SIZE_BYTES)
+        .unwrap_or(DEFAULT_SUMERAGI_STACK_SIZE_BYTES)
+}
 
 /// Build a named Sumeragi thread with an explicit stack-size budget.
 ///
@@ -51,7 +63,7 @@ const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::Builder {
     std::thread::Builder::new()
         .name(name.into())
-        .stack_size(SUMERAGI_STACK_SIZE_BYTES)
+        .stack_size(sumeragi_stack_size_bytes())
 }
 
 #[cfg(test)]

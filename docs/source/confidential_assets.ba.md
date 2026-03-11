@@ -279,7 +279,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "ih58...",
+    authority: "i105...",
     assetDefinitionId: "rose#wonderland",
     zkParameters: {
       commit_params: "vk_shield",
@@ -444,7 +444,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "ih58...",
+    authority: "i105...",
     assetDefinitionId: "rose#wonderland",
     zkParameters: {
       commit_params: "vk_shield",

@@ -19,9 +19,9 @@ Démontrez la création de domaines avec autorisations, l'enregistrement d'actif
 
 ## Parcours du registre
 
-- Assurez-vous que le compte de destination (par exemple `ih58...`) existe, en reflétant la phase de mise en place dans chaque SDK de démarrage rapide.
+- Assurez-vous que le compte de destination (par exemple `i105...`) existe, en reflétant la phase de mise en place dans chaque SDK de démarrage rapide.
 - Invoquez le point d'entrée `register_and_mint` pour créer la définition d'actif ROSE et frapper 250 unités pour Alice en une seule transaction.
-- Vérifiez les ventes via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` pour confirmer que la frappe est réussie.
+- Vérifiez les ventes via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account i105...` pour confirmer que la frappe est réussie.
 
 ## Guides SDK associés
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

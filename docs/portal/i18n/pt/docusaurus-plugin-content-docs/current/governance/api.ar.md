@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64 hexadecimal",
       "abi_versão": "1",
       "janela": { "inferior": 12345, "superior": 12400 },
-      "autoridade": "ih58…?",
+      "autoridade": "i105…?",
       "chave_privada": "...?"
     }
   - Nome (JSON):
@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 
 Função da API (implantar)
 -POSTO `/v1/contracts/deploy`
-  - Nome: { "autoridade": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Nome: { "autoridade": "i105...", "private_key": "...", "code_b64": "..." }
   - Nome: `code_hash` de جسم برنامج IVM e `abi_hash` de ترويسة `abi_version`, ثم يرسل `RegisterSmartContractCode` (manifesto) e `RegisterSmartContractBytes` (ou seja, `.to`) não em `authority`.
   - Palavra: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - É isso:
     - GET `/v1/contracts/code/{code_hash}` -> يعيد manifesto المخزن
     - GET `/v1/contracts/code-bytes/{code_hash}` -> Obter `{ code_b64 }`
 -POSTO `/v1/contracts/instance`
-  - Nome: { "autoridade": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Nome: { "autoridade": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - السلوك: ينشر البايتات المقدمة ويُفعل فورا ربط `(namespace, contract_id)` عبر `ActivateContractInstance`.
   - الرد: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -61,11 +61,11 @@ Função da API (implantar)
   - Código: HTTP `400` não é hexadecimal. O Torii é o Norito `ValidationFail::QueryFailed::Conversion` que pode ser usado para decodificar.
 -POSTO `/v1/aliases/resolve`
   - Nome: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Nome: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - Nome: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Modelo: Ponte ISO instalada (`[iso_bridge.account_aliases]` para `iroha_config`). O Torii pode ser usado para remover o erro e o erro. 404 عندما يكون الاسم غير موجود و503 عندما يكون runtime الخاص بـ ISO bridge معطلا.
 -POSTO `/v1/aliases/resolve_index`
   - Nome: { "índice": 0 }
-  - Nome: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - Nome: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - ملاحظات: مؤشرات الاسماء تعين بشكل حتمي حسب ترتيب التكوين (baseado em 0). يمكن للعملاء تخزين الردود offline لبناء مسارات تدقيق لاحداث atestado الخاصة بالاسماء.حد حجم الكود
 - Código de configuração: `max_contract_code_bytes` (JSON u64)
   - يتحكم في الحد الاقصى المسموح (بالبايت) لتخزين كود العقود على السلسلة.
@@ -73,7 +73,7 @@ Função da API (implantar)
   - Coloque o `SetParameter(Custom)` no lugar do `id = "max_contract_code_bytes"` e instale-o.
 
 -POSTO `/v1/gov/ballots/zk`
-  - الطلب: { "autoridade": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - الطلب: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - الرد: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Como:
     - عندما تتضمن المدخلات العامة للدائرة `owner` و`amount` و`duration_blocks`, وتتحقق البرهان من VK Você pode usar um bloqueio de bloqueio para `election_id` ou `owner`. تبقى الاتجاهات مخفية (`unknown`), ويتم تحديث quantidade/validade é. É monotônico: quantidade e expiração é igual a (quantidade anterior, expiração) e max(expiry, prev.expiry)).
@@ -81,12 +81,12 @@ Função da API (implantar)
     - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` é o mesmo que `SubmitBallot`; ويفرض المضيفون trava لمرة واحدة.
 
 -POSTO `/v1/gov/ballots/plain`
-  - الطلب: { "autoridade": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim | Não | Abstenção" }
+  - الطلب: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim | Não | Abstenção" }
   - الرد: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - ملاحظات: اعادات التصويت تمتد فقط - لا يمكن لballot جديد تقليل quantidade e expiração لقفل موجود. Não use `owner` para evitar problemas. O código é `conviction_step_blocks`.
 
 -POSTO `/v1/gov/finalize`
-  - Nome: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…?", "private_key": "...?" }
+  - Nome: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - الرد: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - الاثر على السلسلة (الهيكل الحالي): تنفيذ اقتراح implantar معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة Promulgado. Este manifesto pode ser `code_hash` ou `abi_hash`, mas não é possível.
   - Como:
@@ -95,7 +95,7 @@ Função da API (implantar)
     - فحوصات comparecimento تستخدم aprovar + rejeitar فقط؛ abster-se de aumentar a participação.
 
 -POSTO `/v1/gov/enact`
-  - Nome: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…?", "private_key": "...?" }
+  - Nome: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Nome: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Método: يقدم Torii المعاملة الموقعة عندما تتوفر `authority`/`private_key`; Não há nada de errado com isso. A pré-imagem é exibida e exibida.
 
@@ -195,15 +195,15 @@ Endpoint para
     - يوجد اقتراح حوكمة promulgado للتركيبة `(namespace, contract_id, code_hash, abi_hash)` مشتق بنفس hashing proposto-id الذي تستخدمه العقدة.
   - Use JSON como `results[]` para definir (problemas, como manifesto/código/proposta) بالاضافة الى ملخص سطر واحد الا اذا Não use (`--no-summary`).
   - مفيد لتدقيق namespaces المحمية او التحقق من تدفقات deploy الخاضعة للحوكمة.
--`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+-`iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - Use JSON para metadados para implementar os namespaces de implantação do `gov_manifest_approvers`. O quórum do manifesto.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0`, e o número de telefone que você usa é o `min_bond_amount > 0`; Use `owner`, `amount` e `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0`, e o número de telefone que você usa é o `min_bond_amount > 0`; Use `owner`, `amount` e `duration_blocks`.
   - Valida IDs de contas canônicas, canoniza dicas de nulificador de 32 bytes e mescla as dicas em `public_inputs_json` (com `--public <path>` para substituições adicionais).
   - O anulador é derivado do compromisso de prova (entrada pública) mais `domain_tag`, `chain_id` e `election_id`; `--nullifier` é validado em relação à prova quando fornecido.
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع dicas المففككة (`owner`, `amount`, `duration_blocks`, `direction`).
   - ردود CLI تضع تعليقات على `tx_instructions[]` ou `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق O código de segurança do dispositivo é Norito.
   - Dicas de bloqueio para bloqueio يسمح للعقدة باصدار احداث `LockCreated`/`LockExtended` para cédulas ZK بمجرد ان تكشف Não há problema.
--`iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+-`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Aliases `--lock-amount`/`--lock-duration-blocks` تعكس اسماء flags الخاصة بـ ZK لتحقيق تماثل السكربتات.
   - ناتج الملخص يعكس `vote --mode zk` باضافة impressão digital للتعليمة المشفرة وحقول cédula المقروءة (`owner`, `amount`, `duration_blocks`, `direction`).
 
@@ -224,21 +224,21 @@ Endpoint para
 -POSTO `/v1/gov/ballots/zk-v1`
   - الطلب (DTO نمط v1):
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",
       "back-end": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "proprietário": "ih58…?",
+      "proprietário": "i105…?",
       "anulador": "blake2b32:...64hex?"
     }
   - الرد: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (recurso: `zk-ballot`)
   - O JSON `BallotProof` é processado e o `CastZkBallot`.
   - الطلب:
     {
-      "autoridade": "ih58...",
+      "autoridade": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "chave_privada": "...?",
       "election_id": "ref-1",

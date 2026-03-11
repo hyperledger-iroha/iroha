@@ -86,7 +86,7 @@ Base64 དངུལ་སྤྲོད་འབབ་ཁུངས།
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority ih58... \
+  --authority i105... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

@@ -17,8 +17,8 @@ importar ExplorerAddressCard desde '@site/src/components/ExplorerAddressCard';
 
 يجب ان تتعامل المحافظ والمستكشفات وامثلة SDK مع عناوين الحساب كحمولات ثابتة لا
 تغير. يعرض مثال محفظة Android في
-`examples/android/retail-wallet` Configuración UX:- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
-  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
+`examples/android/retail-wallet` Configuración UX:- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: I105 (المفضل) والصيغة
+  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). I105 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
   تطبيقات واعية بـ Sora. مثال Android يربط زري Material y تلميحاتهما في
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, y يطابق
@@ -31,7 +31,7 @@ importar ExplorerAddressCard desde '@site/src/components/ExplorerAddressCard';
 - **اشارات النطاق الافتراضي الضمني.** عندما يشير المحدد الى النطاق الضمني
   `default`، اعرض توضيحا يذكر المشغلين بان لا حاجة لاي لاحقة. يجب على
   المستكشفات ايضا تمييز تسمية النطاق القانونية عندما يشفر المحدد resumen.
-- **حمولات QR IH58.** يجب ان ترمز رموز QR سلسلة IH58. اذا فشل توليد QR، اعرض
+- **حمولات QR I105.** يجب ان ترمز رموز QR سلسلة I105. اذا فشل توليد QR، اعرض
   خطا واضحا بدلا من صورة فارغة.
 - **رسائل الحافظة.** بعد نسخ الصيغة المضغوطة، ارسل roast او snackbar يذكر
   المستخدمين انها خاصة بـ Sora ومعرضة لتشويه IME.
@@ -52,7 +52,7 @@ Utilice Unicode/IME y utilice el código ADDR-6
 
 ## SDK de aplicaciones
 
-El SDK incluye el IH58 y la interfaz de usuario del dispositivo.
+El SDK incluye el I105 y la interfaz de usuario del dispositivo.
 Nombre:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -75,7 +75,7 @@ JavaScript incluye `selector` y `domainSummary` (`tag`, `digest_hex`,
 
 
 
-يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="ih58|compressed|qr"` على ازرار النسخ حتى تتمكن الواجهات
+يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
   الامامية من اصدار عدادات الاستخدام بالتوازي مع مقياس Torii
   `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
   `iroha:address-copy` o `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -85,7 +85,7 @@ JavaScript incluye `selector` y `domainSummary` (`tag`, `digest_hex`,
   مراجعات تقاعد Local-12 من تصدير دليل 30 يوم `domain_kind="local12"` مباشرة من
   Aquí `address_ingest` o Grafana.
 - اربط كل عنصر تحكم بتلميحات `aria-label`/`aria-describedby` مميزة تشرح ما اذا
-  كانت السلسلة امنة للمشاركة (IH58) او خاصة بـ Sora (مضغوطة). ادرج تسمية
+  كانت السلسلة امنة للمشاركة (I105) او خاصة بـ Sora (مضغوطة). ادرج تسمية
   النطاق الضمني في الوصف حتى تعرض تقنيات المساعدة نفس السياق المرئي.
 - وفر منطقة اعلان حية (مثل `<output aria-live="polite">...</output>`) تعلن
   نتائج النسخ والتحذيرات، بما يطابق سلوك VoiceOver/TalkBack الموصل بالفعل في
@@ -98,7 +98,7 @@ JavaScript incluye `selector` y `domainSummary` (`tag`, `digest_hex`,
 
 استخدم [عدة Local -> Global](local-to-global-toolkit.md) لادارة تدقيق وتحويل
 محددات Local القديمة. يصدر المساعد تقرير تدقيق JSON y المحولة
-IH58/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية, بينما يربط دليل التشغيل
+I105/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية, بينما يربط دليل التشغيل
 Utilice Grafana y Alertmanager para realizar la transición.## مرجع سريع للتخطيط الثنائي (ADDR-1a)
 
 عندما تعرض SDK ادوات متقدمة للعناوين (المفتشون، تلميحات التحقق، بناة manifest)،
@@ -146,13 +146,13 @@ Esta es la interfaz de usuario y los SDK que aparecen en los siguientes enlaces:
 
 ## فرض الصيغ القانونية
 
-يجب على المشغلين الذين يحولون ترميزات Local القديمة الى IH58 قانوني او سلاسل
-Utilice la CLI para acceder a ADDR-5:1. `iroha tools address inspect` Establece un código JSON en el IH58 y el código fuente.
+يجب على المشغلين الذين يحولون ترميزات Local القديمة الى I105 قانوني او سلاسل
+Utilice la CLI para acceder a ADDR-5:1. `iroha tools address inspect` Establece un código JSON en el I105 y el código fuente.
    والـ hexadecimal القانوني. El cable de alimentación es `domain` o `kind`/`warning`.
    Esta es la versión `input_domain`. عندما يكون `kind` y `local12`
    Instalar CLI en stderr y JSON y ejecutar CI y CI.
    SDK aquí. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
-   كـ `<ih58>@<domain>`.
+   كـ `<i105>@<domain>`.
 2. Utilice los SDK para utilizar JavaScript:
 
    ```js
@@ -162,10 +162,10 @@ Utilice la CLI para acceder a ADDR-5:1. `iroha tools address inspect` Establece 
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  يحافظ المساعد على بادئة IH58 المكتشفة من literal ما لم تقدم `networkPrefix`
-  صراحة, لذا لا تعاد صياغة الملخصات للشبكات غير الافتراضية بصمت مع بادئة افتراضية.3. حول الحمولة القانونية عبر اعادة استخدام حقول `ih58.value` او `compressed`
+  يحافظ المساعد على بادئة I105 المكتشفة من literal ما لم تقدم `networkPrefix`
+  صراحة, لذا لا تعاد صياغة الملخصات للشبكات غير الافتراضية بصمت مع بادئة افتراضية.3. حول الحمولة القانونية عبر اعادة استخدام حقول `i105.value` او `i105_default`
    من الملخص (او اطلب ترميزا اخر عبر `--format`). هذه السلاسل امنة بالفعل
    للمشاركة خارجيا.
 4. حدث manifiesta والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ
@@ -174,14 +174,14 @@ Utilice la CLI para acceder a ADDR-5:1. `iroha tools address inspect` Establece 
    `iroha tools address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
    literales مفصولة باسطر جديدة (التعليقات التي تبدا بـ `#` يتم تجاهلها، و
    `--input -` (al igual que STDIN) y archivos JSON
-   قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
+   قانونية/I105/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
    الاتمتة عبر `strict CI post-check` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
 6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
   لملفات الجداول الخاصة بمعالجة محددات Local, استخدم
   Archivo CSV `input,status,format,...` Configuración y configuración
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
-  ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON), y ويحافظ على
+  ويحول كل ادخال متبق الى الترميز المطلوب (I105/مضغوط/hex/JSON), y ويحافظ على
   النطاق الاصلي عندما يتم تعيين `legacy  suffix`. Fuente de `--allow-errors`
   لمواصلة الفحص حتى عند وجود literales تالفة.
 7. Instale CI/lint en el archivo `ci/check_address_normalize.sh` para obtener más información
@@ -220,6 +220,6 @@ El producto `domain_kind="local12"` tiene una duración de 30 días.
 
 > **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
-> من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
+> من تحويل محددات Local القديمة الى صيغ I105/مضغوطة قانونية قبل حظر Local-8/Local-12
 > على red principal. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية
 > بحزمة دليل الاصدار.

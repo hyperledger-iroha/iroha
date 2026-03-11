@@ -106,7 +106,7 @@ translation_last_reviewed: 2025-11-14
 - **Risk intake** – `POST /v1/fraud/query` принимает payload по схеме
   `RiskQuery`:
   - `query_id` (`[u8; 32]`, hex‑кодировка)
-  - `subject` (`AccountId`, `domainless encoded literal; IH58 preferred, compressed sora accepted`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (tagged‑enum, соответствующий `RiskOperation`; JSON‑поле
     `type` отражает вариант enum’а)
   - `related_asset` (`AssetId`, необязательный)

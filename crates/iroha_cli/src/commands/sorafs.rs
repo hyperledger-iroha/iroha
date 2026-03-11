@@ -10388,7 +10388,7 @@ impl GatewayDenylistRecord {
                 if trimmed.is_empty() {
                     return Err(eyre!("`account_id` must not be empty"));
                 }
-                // Validate as a strict canonical IH58 account literal.
+                // Validate as a strict canonical I105 account literal.
                 resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
@@ -12083,11 +12083,11 @@ mod tests {
         let account = AccountId::new(public_key);
         let address = AccountAddress::from_account_id(&account).expect("address from account");
         let canonical = address.canonical_hex().expect("canonical hex");
-        let ih58 = address
-            .to_ih58(address::chain_discriminant())
-            .expect("ih58 encode");
-        let compressed = address.to_compressed_sora().expect("compressed encode");
-        (canonical, ih58, compressed)
+        let i105 = address
+            .to_i105_for_discriminant(address::chain_discriminant())
+            .expect("i105 encode");
+        let non_canonical_i105 = address.to_i105().expect("i105 encode");
+        (canonical, i105, non_canonical_i105)
     }
 
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {
@@ -12278,21 +12278,21 @@ mod tests {
     }
 
     #[test]
-    fn gateway_denylist_record_accepts_ih58_literals() {
-        let (_, ih58, _) = sample_account_literals();
-        let record = denylist_record_for_account(&ih58);
+    fn gateway_denylist_record_accepts_i105_literals() {
+        let (_, i105, _) = sample_account_literals();
+        let record = denylist_record_for_account(&i105);
         record
             .validate(&resolve_account_literal)
-            .expect("ih58 literal accepted");
+            .expect("i105 literal accepted");
     }
 
     #[test]
-    fn gateway_denylist_record_rejects_compressed_literals() {
-        let (_, _, compressed) = sample_account_literals();
-        let record = denylist_record_for_account(&compressed);
+    fn gateway_denylist_record_rejects_non_canonical_i105_literals() {
+        let (_, _, non_canonical_i105) = sample_account_literals();
+        let record = denylist_record_for_account(&non_canonical_i105);
         assert!(
             record.validate(&resolve_account_literal).is_err(),
-            "compressed literal should be rejected"
+            "non-canonical I105 literal should be rejected"
         );
     }
 

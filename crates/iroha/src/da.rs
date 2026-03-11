@@ -1707,8 +1707,8 @@ mod tests {
             potr_bonus_pool: XorAmount::from_micro(25_000),
             egress_credit_per_gib: XorAmount::from_micro(12_000),
         };
-        let wonderland_domain: DomainId = "wonderland".parse().expect("domain");
-        let sora_domain: DomainId = "sora".parse().expect("domain");
+        let _wonderland_domain: DomainId = "wonderland".parse().expect("domain");
+        let _sora_domain: DomainId = "sora".parse().expect("domain");
 
         let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
         let payer = AccountId::new(payer_key.public_key().clone());

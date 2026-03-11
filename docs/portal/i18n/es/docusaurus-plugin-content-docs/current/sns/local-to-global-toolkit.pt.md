@@ -16,7 +16,7 @@ Esta página espelha `docs/source/sns/local_to_global_toolkit.md` del mono-repo.
 
 - `scripts/address_local_toolkit.sh` encapsula una CLI `iroha` para producir:
   - `audit.json` -- dijo estructurada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literalmente IH58 (preferido) / comprimido (`sora`) (segunda melhor opcao) convertidos para cada selector de dominio Local.
+  - `normalized.txt` -- literalmente I105 (preferido) / comprimido (`sora`) (segunda melhor opcao) convertidos para cada selector de dominio Local.
 - Combine el script con el panel de ingesta de enderecos (`dashboards/grafana/address_ingest.json`)
   E as regs do Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para probar que o cutover Local-8 /
   Local-12 y seguro. Observe os Paineis de colisao Local-8 e Local-12 e os alertas
@@ -28,12 +28,12 @@ Esta página espelha `docs/source/sns/local_to_global_toolkit.md` del mono-repo.
 ## Uso
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Opciones:
 
-- `--format compressed (`sora`)` para decir `sora...` en vez de IH58.
+- `--format I105` para decir `sora...` en vez de I105.
 - `domainless output (default)` para emisión literaria sin dominio.
 - `--audit-only` para iniciar una etapa de conversación.
 - `--allow-errors` para continuar a varredura cuando aparecen líneas malformadas (igual al comportamiento de CLI).O script escreve os caminhos dos artefatos al final da execucao. Anexe os dos archivos ao

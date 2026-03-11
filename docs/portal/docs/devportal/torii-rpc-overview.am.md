@@ -58,6 +58,7 @@ curl \
 1. [ተኪውን ጀምር](./try-it.md#start-the-proxy-locally) እና አዘጋጅ
    `TRYIT_PROXY_PUBLIC_URL` ስለዚህ መግብሮቹ ትራፊክ የት እንደሚልኩ ያውቃሉ።
 2. ** ሞክሩት *** ካርዱን በዚህ ገጽ ወይም `/reference/torii-swagger` ይክፈቱ
+   For MCP/agent flows, use `/reference/torii-mcp`.
    ፓነል እና እንደ `POST /v1/pipeline/submit` ያለ የመጨረሻ ነጥብ ይምረጡ።
 3. **የይዘት አይነት** ወደ `application/x-norito` ይቀይሩ፣ **ሁለትዮሽ** ይምረጡ።
    አርታዒ፣ እና `fixtures/norito_rpc/transfer_asset.norito` ስቀል

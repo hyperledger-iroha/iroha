@@ -3439,7 +3439,6 @@ pub fn generate_gateway_attestation(options: GatewayAttestOptions) -> Result<(),
         signer_literal,
         Some(iroha_data_model::account::address::chain_discriminant()),
     )
-    .map(|(address, _)| address)
     .map_err(|err| format!("invalid signer account `{}`: {err}", signer_literal))?;
 
     let bundle = integration_tests::sorafs_gateway_conformance::generate_attestation(
@@ -5837,12 +5836,11 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
 }
 
 fn pin_fixture_alice() -> AccountId {
-    let domain: DomainId = "sora".parse().expect("valid domain");
     let public_key: PublicKey =
         "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
             .parse()
             .expect("valid public key");
-    AccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 pub fn run_adoption_check(

@@ -212,24 +212,24 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
                 sampleKey,
                 "ed25519"
             )
-            val networkPrefix = AccountAddress.DEFAULT_IH58_PREFIX
+            val networkPrefix = AccountAddress.DEFAULT_I105_DISCRIMINANT
             val formats = accountAddress.displayFormats(networkPrefix)
             AddressDisplay(
-                ih58 = formats.ih58,
-                compressed = formats.compressed,
-                compressedWarning = formats.compressedWarning,
+                i105 = formats.i105,
+                i105Default = formats.i105Default,
+                i105Warning = formats.i105Warning,
                 defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
                 implicitDefault = true,
                 networkPrefix = formats.networkPrefix
             )
         } catch (ex: AccountAddressException) {
             AddressDisplay(
-                ih58 = "address-unavailable",
-                compressed = "sora-unavailable",
-                compressedWarning = AccountAddress.compressedWarningMessage(),
+                i105 = "address-unavailable",
+                i105Default = "sora-unavailable",
+                i105Warning = AccountAddress.i105WarningMessage(),
                 defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
                 implicitDefault = true,
-                networkPrefix = AccountAddress.DEFAULT_IH58_PREFIX
+                networkPrefix = AccountAddress.DEFAULT_I105_DISCRIMINANT
             )
         }
     }
@@ -241,9 +241,9 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     )
 
     data class AddressDisplay(
-        val ih58: String,
-        val compressed: String,
-        val compressedWarning: String,
+        val i105: String,
+        val i105Default: String,
+        val i105Warning: String,
         val defaultDomain: String,
         val implicitDefault: Boolean,
         val networkPrefix: Int
@@ -301,7 +301,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         try {
             val params = OfflineListParams.builder()
                 .limit(5L)
-                .addressFormat("canonical")
                 .build()
             val response = offlineClient.listRevocations(params).await()
             val items = response.items().map { it.toDisplay() }

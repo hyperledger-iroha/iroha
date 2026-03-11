@@ -20,7 +20,7 @@ translation_last_reviewed: 2025-11-18
 روڈ میپ لنک: **ADDR-6/ADDR-7 — UX اور سیکیورٹی ایکسیپٹینس معیارات**
 
 یہ رن بک اس آپریشنل ردِعمل کی وضاحت کرتی ہے جب Torii، SDKs، یا والٹ سطح پر
-IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `ChecksumMismatch`) رپورٹ
+I105/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `ChecksumMismatch`) رپورٹ
 ہوں۔ یہ
 [`address_security_review.md`](./address_security_review.md)،
 [`address_display_guidelines.md`](./address_display_guidelines.md)، اور

@@ -23,9 +23,7 @@ use iroha::{
     query::QueryError,
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
-use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, asset_definition::CanRegisterAssetDefinition,
-};
+use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use toml::Value as TomlValue;
@@ -687,7 +685,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let (seller_id, seller_keypair) = gen_account_in("company");
         let (buyer_id, buyer_keypair) = gen_account_in("company");
         let exchange_domain: DomainId = "exchange".parse().expect("domain should be valid");
-        let crypto_domain: DomainId = "crypto".parse().expect("domain should be valid");
+        let company_domain: DomainId = "company".parse().expect("domain should be valid");
         let rate_def: AssetDefinitionId = "btc/eth#exchange"
             .parse()
             .expect("asset definition should be valid");
@@ -706,21 +704,9 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .with_genesis_instruction(register::domain("exchange"))
             .with_genesis_instruction(register::domain("company"))
             .with_genesis_instruction(register::domain("crypto"))
-            .with_genesis_instruction(register::account(dex_id.clone()))
-            .with_genesis_instruction(register::account(seller_id.clone()))
-            .with_genesis_instruction(register::account(buyer_id.clone()))
-            .with_genesis_instruction(Grant::account_permission(
-                CanRegisterAssetDefinition {
-                    domain: exchange_domain.clone(),
-                },
-                ALICE_ID.clone(),
-            ))
-            .with_genesis_instruction(Grant::account_permission(
-                CanRegisterAssetDefinition {
-                    domain: crypto_domain.clone(),
-                },
-                ALICE_ID.clone(),
-            ));
+            .with_genesis_instruction(register::account(dex_id.clone(), exchange_domain.clone()))
+            .with_genesis_instruction(register::account(seller_id.clone(), company_domain.clone()))
+            .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()));
 
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
@@ -890,9 +876,10 @@ fn transfer_asset_definition() -> Result<()> {
     let asset_definition_id: AssetDefinitionId = "asset#wonderland".parse().expect("Valid");
 
     let mut builder = quiet_network_builder();
+    let domain_id: DomainId = "domain".parse().expect("domain should be valid");
     builder = builder
         .with_genesis_instruction(register::domain("domain"))
-        .with_genesis_instruction(register::account(new_owner_id.clone()));
+        .with_genesis_instruction(register::account(new_owner_id.clone(), domain_id.clone()));
 
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
@@ -963,9 +950,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer());
 
         let mut builder = quiet_network_builder();
+        let domain_id: DomainId = "domain".parse().expect("domain should be valid");
         builder = builder
             .with_genesis_instruction(register::domain("domain"))
-            .with_genesis_instruction(register::account(dest_id.clone()));
+            .with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
 
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
@@ -1265,8 +1253,8 @@ mod register {
         Register::domain(Domain::new(id.parse().expect("should parse to DomainId")))
     }
 
-    pub fn account(id: AccountId) -> Register<Account> {
-        Register::account(Account::new(id))
+    pub fn account(id: AccountId, domain: DomainId) -> Register<Account> {
+        Register::account(Account::new(id.to_account_id(domain)))
     }
 }
 

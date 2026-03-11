@@ -19,9 +19,9 @@ Você pode fazer isso sem precisar de mais nada.
 
 ## جولة دفتر الأستاذ
 
-- Você pode usar o software (como `ih58...`) para instalar o SDK no SDK.
+- Você pode usar o software (como `i105...`) para instalar o SDK no SDK.
 - Verifique o valor `register_and_mint` para usar o ROSE 250 e resolva o problema.
-- Verifique se o `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` está funcionando.
+- Verifique se o `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account i105...` está funcionando.
 
 ## O SDK está disponível
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

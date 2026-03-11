@@ -21,7 +21,7 @@ static SHARED_METRICS: LazyLock<Mutex<Arc<Metrics>>> =
 /// Canonical literals for a single well-known account used in tx query tests.
 #[allow(dead_code)]
 pub struct AccountLiterals {
-    /// IH58 canonical literal.
+    /// I105 canonical literal.
     pub canonical: String,
     /// Compressed literal.
     pub compressed: String,
@@ -33,7 +33,7 @@ pub static TX_QUERY_ACCOUNT: LazyLock<AccountLiterals> = LazyLock::new(|| {
     let account = ALICE_ID.clone();
     let compressed = account
         .to_account_address()
-        .and_then(|addr| addr.to_compressed_sora())
+        .and_then(|addr| addr.to_i105())
         .expect("compressed literal should encode");
     AccountLiterals {
         canonical: account.to_string(),

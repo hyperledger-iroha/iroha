@@ -264,7 +264,7 @@ object PosManifestLoader {
             return raw.copyOfRange(3, raw.size)
         }
         try {
-            val decoded = AccountAddress.fromIH58(address, null)
+            val decoded = AccountAddress.fromI105(address, null)
             return extractSingleSignatoryKey(decoded.canonicalBytes())
         } catch (ex: AccountAddressException) {
             throw IllegalArgumentException("failed to parse operator account", ex)

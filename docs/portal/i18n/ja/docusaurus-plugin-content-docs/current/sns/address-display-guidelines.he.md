@@ -29,8 +29,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 ペイロードとして扱う必要があります。`examples/android/retail-wallet` に
 あるAndroidの小売ウォレットサンプルは、必要なUXパターンを示します:
 
-- **二つのコピー先。** 明示的なコピー按钮を二つ用意します: IH58
-  (推奨) とSora専用の圧縮形式(`sora...`、次善)。IH58は常に外部共有に安全で、
+- **二つのコピー先。** 明示的なコピー按钮を二つ用意します: I105
+  (推奨) とSora専用の圧縮形式(`sora...`、次善)。I105は常に外部共有に安全で、
   QRのペイロードになります。圧縮形式はSora対応アプリ内でしか動かない
   ため、インライン警告を必ず付けます。AndroidサンプルはMaterialの
   両ボタンとツールチップを
@@ -45,7 +45,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
   ドメインを指す場合、サフィックス不要であることを示すキャプション
   を表示します。エクスプローラは、セレクタがdigestをエンコードして
   いるときに正規ドメインラベルも強調してください。
-- **IH58 QRペイロード。** QRコードはIH58文字列をエンコードする必要が
+- **I105 QRペイロード。** QRコードはI105文字列をエンコードする必要が
   あります。QR生成が失敗した場合は、空白画像ではなく明示的なエラーを
   表示します。
 - **クリップボード通知。** 圧縮形式をコピーした後、Sora専用でIMEに
@@ -70,7 +70,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 ## SDKヘルパー
 
-各SDKはIH58と圧縮形式に加え、警告文字列を返す便利ヘルパーを公開して
+各SDKはI105と圧縮形式に加え、警告文字列を返す便利ヘルパーを公開して
 おり、UI層で一貫性を保てます:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -97,7 +97,7 @@ UI層でエンコードロジックを再実装せず、これらのヘルパー
 エクスプローラはウォレットのテレメトリとアクセシビリティ実装を
 反映すべきです:
 
-- コピー按钮に `data-copy-mode="ih58|compressed|qr"` を付け、フロントエンド
+- コピー按钮に `data-copy-mode="i105|i105_default|qr"` を付け、フロントエンド
   がToriiの `torii_address_format_total` と並行して使用カウンタを出せる
   ようにします。上のデモコンポーネントは `{mode,timestamp}` 付きの
   `iroha:address-copy` イベントを発火します。これを分析/テレメトリ
@@ -107,7 +107,7 @@ UI層でエンコードロジックを再実装せず、これらのヘルパー
   同じフィードに反映し、Local-12廃止レビューが `address_ingest` Grafana
   ボードから `domain_kind="local12"` の30日証跡を出力できるようにします。
 - 各コントロールに個別の `aria-label`/`aria-describedby` を付け、共有に
-  安全か(IH58) Sora専用か(圧縮)を説明します。暗黙ドメインのキャプションを
+  安全か(I105) Sora専用か(圧縮)を説明します。暗黙ドメインのキャプションを
   説明に含め、支援技術が視覚と同じ文脈を提示するようにします。
 - `<output aria-live="polite">...</output>` のようなライブリージョンを
   用意し、コピー結果と警告を通知します。Swift/Androidサンプルに実装済み
@@ -120,7 +120,7 @@ UI層でエンコードロジックを再実装せず、これらのヘルパー
 
 [Local -> Global toolkit](local-to-global-toolkit.md) を使って、レガシーな
 Localセレクタの監査と変換を自動化します。ヘルパーはJSON監査レポートと
-変換済みIH58/圧縮リストの両方を出力し、オペレータはそれをreadiness
+変換済みI105/圧縮リストの両方を出力し、オペレータはそれをreadiness
 チケットに添付します。付属のrunbookは、strictモードのcutoverをゲート
 するGrafanaダッシュボードとAlertmanagerルールにリンクします。
 
@@ -172,15 +172,15 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
 
 ## 正規形式の強制
 
-レガシーなLocalエンコードを正規IH58または圧縮文字列に変換する
+レガシーなLocalエンコードを正規I105または圧縮文字列に変換する
 オペレータは、ADDR-5で文書化されたCLIフローに従ってください:
 
-1. `iroha tools address inspect` はIH58、圧縮、正規hexペイロードを含む構造化
+1. `iroha tools address inspect` はI105、圧縮、正規hexペイロードを含む構造化
    JSONサマリを出力します。サマリには `kind`/`warning` を持つ `domain`
    オブジェクトが含まれ、`input_domain` を通じて提供されたドメインも
    反映されます。`kind` が `local12` の場合、CLIはstderrに警告を出し、
    JSONサマリも同じ注意を反映してCIパイプラインやSDKが表示できるよう
-   にします。変換されたエンコードを `<ih58>@<domain>` として再現したい
+   にします。変換されたエンコードを `<i105>@<domain>` として再現したい
    場合は `legacy  suffix` を付けます。
 2. SDKはJavaScriptヘルパーで同じ警告/サマリを表示できます:
 
@@ -191,13 +191,13 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  ヘルパーはリテラルから検出したIH58プレフィックスを保持し、
+  ヘルパーはリテラルから検出したI105プレフィックスを保持し、
   `networkPrefix` を明示的に与えない限り、非デフォルトネットワークの
   サマリを既定プレフィックスで再描画しません。
 
-3. 正規ペイロードはサマリの `ih58.value` または `compressed` を再利用
+3. 正規ペイロードはサマリの `i105.value` または `i105_default` を再利用
    して変換します(または `--format` で別エンコードを要求)。これらの
    文字列は外部共有に安全です。
 4. マニフェスト、レジストリ、顧客向け文書を正規形式で更新し、
@@ -205,7 +205,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
 5. 大量データセットでは
    `iroha tools address audit --input addresses.txt --network-prefix 753` を実行します。
    コマンドは改行区切りリテラル(先頭が `#` のコメントは無視、`--input -`
-   またはフラグ無しでSTDINを使用)を読み、各エントリの正規/IH58/圧縮
+   またはフラグ無しでSTDINを使用)を読み、各エントリの正規/I105/圧縮
    サマリを含むJSONレポートを生成し、パースエラーとLocalドメイン警告を
    カウントします。ゴミ行を含むレガシーdumpを監査する場合は
    `--allow-errors` を使い、CIでLocalセレクタをブロックできる段階になったら
@@ -214,7 +214,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
   を使用します。Localセレクタの是正スプレッドシートには
   を使い、`input,status,format,...` CSVを出力して正規エンコード、警告、
   パース失敗を一度に可視化します。ヘルパーはデフォルトで非Local行を
-  スキップし、残りのエントリを要求エンコード(IH58/圧縮/hex/JSON)へ
+  スキップし、残りのエントリを要求エンコード(I105/圧縮/hex/JSON)へ
   変換し、`legacy  suffix` 指定時は元のドメインを保持します。
   `--allow-errors` と併用して、不正リテラルを含むdumpでもスキャンを
   続行してください。
@@ -260,6 +260,6 @@ cutover時のウォレット/エクスプローラリリースノートに次の
 > **Addresses:** `iroha tools address normalize` ヘルパーを
 > 追加し、CI (`ci/check_address_normalize.sh`) に接続しました。これにより、
 > ウォレット/エクスプローラのパイプラインがLocal-8/Local-12がmainnetで
-> ブロックされる前に、レガシーLocalセレクタを正規IH58/圧縮形式へ
+> ブロックされる前に、レガシーLocalセレクタを正規I105/圧縮形式へ
 > 変換できます。任意のカスタムエクスポートはこのコマンドを実行し、
 > 正規化リストをリリース証跡バンドルに添付してください。

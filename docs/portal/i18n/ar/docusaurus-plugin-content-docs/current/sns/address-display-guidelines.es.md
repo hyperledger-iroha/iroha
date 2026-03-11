@@ -18,9 +18,9 @@ translation_last_reviewed: 2026-02-07
 
 يجب أن تتبع الأقراص والمستكشفين ونماذج SDK الاتجاهات
 cuenta como payloads inmutables. مثال التجزئة على Android en
-`examples/android/retail-wallet` الآن يعرض مستفيد تجربة المستخدم المطلوبة:- **أهداف النسخ.** أرسل أزرار النسخ الواضحة: IH58
+`examples/android/retail-wallet` الآن يعرض مستفيد تجربة المستخدم المطلوبة:- **أهداف النسخ.** أرسل أزرار النسخ الواضحة: I105
   (المفضل) والطريقة المشتركة فقط مع Sora (`sora...`، الخيار الأفضل الثاني).
-  IH58 آمن دائمًا لمشاركة حمولة QR وشحنها خارجيًا. لا بديل
+  I105 آمن دائمًا لمشاركة حمولة QR وشحنها خارجيًا. لا بديل
   يجب أن تشتمل الصفقة على إعلان خطي لأنه يعمل فقط في الداخل
   التطبيقات التي تدعم Sora. مثال التجزئة على Android
   Conecta ambos botones Material y sus tooltips en
@@ -35,7 +35,7 @@ cuenta como payloads inmutables. مثال التجزئة على Android en
   السيطرة الضمنية على `default`، قم بتسجيل التسمية التوضيحية على المشغلين
   que no se requiere sufijo. يجب على المستكشفين أيضًا إعادة توجيه الآداب
   De Dominio Canonica When the Selector Codifica Un Digest.
-- **QR IH58.** تحتاج رموز QR إلى تشفير سلسلة IH58. سي لا جيل
+- **QR I105.** تحتاج رموز QR إلى تشفير سلسلة I105. سي لا جيل
   يفشل QR، ويظهر خطأ صريح في مكان صورة بيضاء.
 - **Messajeria del portapapeles.** بعد نسخ صيغة الاشتراك، أرسلهاخبز محمص أو شريط للوجبات الخفيفة يسجله المستخدمون وحدهم ويعرضونه عليهم
   تشويه بواسطة IME.
@@ -59,7 +59,7 @@ cuenta como payloads inmutables. مثال التجزئة على Android en
 
 ## مساعدات SDK
 
-يوفر كل SDK مساعدًا مريحًا من خلال تطوير تنسيقات IH58 y
+يوفر كل SDK مساعدًا مريحًا من خلال تطوير تنسيقات I105 y
 يتم دمجها مع سلسلة الإعلانات للحفاظ على واجهة المستخدم الخاصة بها
 يتسق:
 
@@ -84,7 +84,7 @@ cuenta como payloads inmutables. مثال التجزئة على Android en
 
 
 يجب على المستكشفين أن يستكشفوا عمل القياس عن بعد وإمكانية الوصول إليه
-الألف:- تطبيق `data-copy-mode="ih58|compressed|qr"` على أزرار النسخ لذلك
+الألف:- تطبيق `data-copy-mode="i105|i105_default|qr"` على أزرار النسخ لذلك
   يمكن للواجهات الأمامية أن تطلق قواطع تستخدم جنبًا إلى جنب مع المقياس Torii
   `torii_address_format_total`. العنصر التجريبي السابق يرسل حدثًا
   `iroha:address-copy` مع `{mode,timestamp}`: قم بتوصيل هذا إلى خط الأنابيب الخاص بك
@@ -96,7 +96,7 @@ cuenta como payloads inmutables. مثال التجزئة على Android en
   اختبار لمدة 30 يومًا `domain_kind="local12"` مباشرة من الطاولة
   `address_ingest` من Grafana.
 - التحكم في كل وحدة مع مسارات `aria-label`/`aria-describedby` المتميزة التي
-  توضيح ما إذا كان الحرفي آمنًا للمشاركة (IH58) أو Sora فقط
+  توضيح ما إذا كان الحرفي آمنًا للمشاركة (I105) أو Sora فقط
   (كومبريميدو). قم بتضمين التسمية التوضيحية الخاصة بالسيادة الضمنية في الوصف الخاص بالفقرة
   التكنولوجيا المساعدة لها نفس السياق البصري.
 - عرض منطقة حية (على سبيل المثال، `<output aria-live="polite">...</output>`)
@@ -109,7 +109,7 @@ cuenta como payloads inmutables. مثال التجزئة على Android en
 
 استخدم [toolkit Local -> Global](local-to-global-toolkit.md) لأتمتة
 مراجعة وتحويل المحددات المحلية. المساعد ينبعث تانتو ش
-Reporte de Auditoria JSON as the lista converter IH58/comprimida que los
+Reporte de Auditoria JSON as the lista converter I105/comprimida que los
 يقوم المشغلون بإضافة تذاكر الاستعداد أثناء تشغيل الدليل
 يتم إرفاق لوحات المعلومات المصاحبة لـ Grafana وأنظمة Alertmanager التي
 التحكم في القطع بشكل مقيد.
@@ -162,14 +162,14 @@ payload bit: │version  │ class  │  norm  │ext │
 
 ## فورزار فورماس canonicas
 
-المشغلون الذين يقومون بتحويل الرموز المحلية المسجلة إلى IH58 Canon
-يجب أن تتبع السلاسل المضمنة تدفق CLI الموثق في ADDR-5:1. `iroha tools address inspect` الآن قم باستئناف إنشاء JSON مع IH58،
+المشغلون الذين يقومون بتحويل الرموز المحلية المسجلة إلى I105 Canon
+يجب أن تتبع السلاسل المضمنة تدفق CLI الموثق في ADDR-5:1. `iroha tools address inspect` الآن قم باستئناف إنشاء JSON مع I105،
    يشتمل على حمولات عرافة Canonicos. تتضمن السيرة الذاتية أيضًا هدفًا
    `domain` مع الحرمين `kind`/`warning` ويمثل أي سلطة متناسبة
    عبر إل كامبو `input_domain`. عندما `kind` هو `local12`، يقوم CLI بطباعة واحدة
    يُظهر الإعلان القياسي والسيرة الذاتية JSON نفس الدليل الذي يناسبهم
    يمكن عرض خطوط أنابيب CI ومجموعات SDK. باسا `legacy  suffix`
-   أريد أن يتم تحويل الكود إلى `<ih58>@<domain>`.
+   أريد أن يتم تحويل الكود إلى `<i105>@<domain>`.
 2. يمكن لمجموعات SDK إظهار نفس الإعلان/الاستئناف عبر المساعد
    جافا سكريبت:
 
@@ -180,13 +180,13 @@ payload bit: │version  │ class  │  norm  │ext │
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  يحافظ المساعد على تهيئة IH58 المكتشفة حرفيًا على أقل تقدير
+  يحافظ المساعد على تهيئة I105 المكتشفة حرفيًا على أقل تقدير
   النسب بشكل صريح `networkPrefix`، من أجل السير الذاتية
   لا يتم إعادة العرض افتراضيًا ولا يتم إعادة عرضه بشكل صامت وفقًا للإعدادات المسبقة
-  عيب.3. قم بتحويل حمولة Canon إلى إعادة استخدام الحقول `ih58.value` o
-   `compressed` للسيرة الذاتية (أو طلب ترميز آخر عبر `--format`). إستاس
+  عيب.3. قم بتحويل حمولة Canon إلى إعادة استخدام الحقول `i105.value` o
+   `i105_default` للسيرة الذاتية (أو طلب ترميز آخر عبر `--format`). إستاس
    سلسلة من السلاسل آمنة للمشاركة خارجيًا.
 4. تحديث البيانات والسجلات والمستندات الخاصة بالعميل مع
    الشكل الكنسي وإشعار العناصر المتناقضة التي يتم عرضها على المحددات المحلية
@@ -195,7 +195,7 @@ payload bit: │version  │ class  │  norm  │ext │
    `iroha tools address audit --input addresses.txt --network-prefix 753`. الكوماندو
    lee literales separados por nueva linea (التعليقات التي تتضمن `#` se
    جاهل، `--input -` أو علامة usa STDIN)، قم بإصدار تقرير JSON con
-   السير الذاتية canonicos/IH58/comprimidos لكل مدخل، وتسجيل الأخطاء
+   السير الذاتية canonicos/I105/comprimidos لكل مدخل، وتسجيل الأخطاء
    تحليل وإعلانات النطاق المحلي. الولايات المتحدة الأمريكية `--allow-errors` مقالب المدقق
    الموروثة التي تحتوي على قاع الأسرة، وتمنع الأتمتة مع
    `strict CI post-check` عندما يكون لدى المشغلين قوائم للحظر
@@ -205,7 +205,7 @@ payload bit: │version  │ class  │  norm  │ext │
   لتصدير ملف CSV `input,status,format,...` لعرض الكودات
   الكتب الكنسية والإعلانات والتحليلات في خطوة واحدة فقط.
    المساعد لا يحذف الملفات محليًا بسبب الخلل، حيث يتم تحويل كل جزء منها إلى مكان آخر
-   بالترميز المطلوب (IH58/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي cuando se usa `legacy  suffix`. كومبينالو كون `--allow-errors` الفقرة
+   بالترميز المطلوب (I105/comprimido/hex/JSON)، والحفاظ على السيادةالأصلي cuando se usa `legacy  suffix`. كومبينالو كون `--allow-errors` الفقرة
    قم بالمسح المستمر حتى عندما يحتوي التفريغ على صيغ حرفية سيئة.
 7. يمكن تشغيل CI/lint تلقائيًا `ci/check_address_normalize.sh`,
    ما هي المحددات الإضافية المحلية لـ `fixtures/account/address_vectors.json`،
@@ -248,6 +248,6 @@ ADDR-7 يوضح أن `domain_kind="local12"` دائم على مدار الوقت
 نشر القطع:> **الاتجاهات:** انضم إلى المساعد `iroha tools address normalize`
 > وقم بالاتصال بـ CI (`ci/check_address_normalize.sh`) لخطوط الأنابيب
 > يمكن للمستكشفين/المستكشفين تحويل المحددات المحلية إلى أشكال
-> Canonicas IH58/comprimidas antes de que Local-8/Local-12 تم حظرها على الشبكة الرئيسية.
+> Canonicas I105/comprimidas antes de que Local-8/Local-12 تم حظرها على الشبكة الرئيسية.
 > تحديث أي تصدير مخصص لتنفيذ الأمر
 > قم بإضافة قائمة التطبيع إلى حزمة أدلة الإصدار.

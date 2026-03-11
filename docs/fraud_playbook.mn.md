@@ -85,7 +85,7 @@ translator: machine-google-reviewed
 
 - **Эрсдэлийн хэмжээ** – `POST /v1/fraud/query` нь `RiskQuery` схемийг хүлээн зөвшөөрдөг:
   - `query_id` (`[u8; 32]`, зургаан өнцөгт кодлогдсон)
-  - `subject` (`AccountId`, каноник IH58 үсэг; нэмэлт `@<domain>` зөвлөмж эсвэл бусад нэр)
+  - `subject` (`AccountId`, каноник I105 үсэг; нэмэлт `@<domain>` зөвлөмж эсвэл бусад нэр)
   - `operation` (`RiskOperation`-д тохирох тоон шошготой; JSON `type`
     ялгагч нь тооллын хувилбарыг тусгадаг)
   - `related_asset` (`AssetId`, нэмэлт)

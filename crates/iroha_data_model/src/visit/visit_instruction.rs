@@ -279,7 +279,7 @@ mod tests {
             }
         }
 
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let validator = AccountId::new(key_pair.public_key().clone());
         let instruction = RegisterPublicLaneValidator::new(

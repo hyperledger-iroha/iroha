@@ -14,7 +14,7 @@ título: Cumplimiento de direcciones de cuenta
 description: Resumo do fluxo de trabalho do fixture ADDR-2 e como os equipamentos do SDK são mantidos sincronizados.
 ---
 
-O pacote canônico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58 (preferencial), compactado (`sora`, segundo melhor; meia/largura total), multiassinatura e negativo. Cada superfície do SDK + Torii é usada no mesmo JSON para detectar qualquer derivação do codec antes de iniciar a produção. Esta página reflete o resumo do estado interno (`docs/source/account_address_status.md` no repositório raiz) para que os leitores do portal consultem o fluxo sem buscar no mono-repo.
+O pacote canônico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures I105 (preferencial), compactado (`sora`, segundo melhor; meia/largura total), multiassinatura e negativo. Cada superfície do SDK + Torii é usada no mesmo JSON para detectar qualquer derivação do codec antes de iniciar a produção. Esta página reflete o resumo do estado interno (`docs/source/account_address_status.md` no repositório raiz) para que os leitores do portal consultem o fluxo sem buscar no mono-repo.
 
 ## Regenerar ou verificar o pacote
 
@@ -45,7 +45,7 @@ cada vez que muda o dispositivo, o gerador ou os documentos para alertar os revi
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Cada chicote faz round-trip de bytes canônicos + IH58 + codificações comprimidas e verifica que os códigos de erro estilo Norito coincidem com o fixture para os casos negativos.
+Cada chicote faz round-trip de bytes canônicos + I105 + codificações comprimidas e verifica que os códigos de erro estilo Norito coincidem com o fixture para os casos negativos.
 
 ## Necessita automatização?
 

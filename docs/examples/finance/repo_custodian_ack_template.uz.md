@@ -29,7 +29,7 @@ to'ldirgichlarni o'rnating va faylni bo'limda tasvirlangan boshqaruv paketining 
 | Maydon | Qiymat |
 |-------|-------|
 | Shartnoma identifikatori | `<repo-yyMMdd-XX>` |
-| Saqlovchi hisob identifikatori | `<ih58...>` |
+| Saqlovchi hisob identifikatori | `<i105...>` |
 | Tayyorlangan / sana | `<custodian ops lead>` |
 | Ish stolidagi kontaktlar tan olingan | `<desk lead + counterparty>` |
 | Dalillar katalogi | ``artifacts/finance/repo/<slug>/`` |

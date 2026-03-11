@@ -91,8 +91,7 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertEqual(signingKey.algorithm, .ed25519)
 
         let publicKey = try signingKey.publicKey()
-        let (address, format) = try AccountAddress.parseEncoded(authorityId, expectedPrefix: 753)
-        XCTAssertEqual(format, .ih58)
+        let address = try AccountAddress.parseEncoded(authorityId, expectedPrefix: 753)
         guard let controller = address.singleControllerInfo() else {
             return XCTFail("expected single-key controller in authority_id")
         }

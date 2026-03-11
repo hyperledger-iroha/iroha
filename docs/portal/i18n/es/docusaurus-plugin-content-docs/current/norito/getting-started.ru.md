@@ -69,7 +69,7 @@ Para establecer un contrato, instale el dispositivo en la CLI. Consulte el autor
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority ih58... \
+  --authority i105... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

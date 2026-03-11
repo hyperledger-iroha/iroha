@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 ---
 
 ቀኖናዊው ADDR-2 ጥቅል (`fixtures/account/address_vectors.json`) ይቀርጻል።
-IH58 (ተመራጭ)፣ የታመቀ (`sora`፣ ሁለተኛ-ምርጥ፣ ግማሽ/ሙሉ ስፋት)፣ ባለብዙ ፊርማ እና አሉታዊ ቋሚዎች።
+I105 (ተመራጭ)፣ የታመቀ (`sora`፣ ሁለተኛ-ምርጥ፣ ግማሽ/ሙሉ ስፋት)፣ ባለብዙ ፊርማ እና አሉታዊ ቋሚዎች።
 ማንኛውም የኤስዲኬ + I18NT0000004X ወለል በተመሳሳዩ JSON ላይ ስለሚመረኮዝ ማንኛውንም ኮዴክ ማግኘት እንድንችል
 ምርቱን ከመድረሱ በፊት ይንሸራተቱ. ይህ ገጽ የውስጣዊ ሁኔታን አጭር ያንጸባርቃል
 (በስር ማከማቻ ውስጥ `docs/source/account_address_status.md`) ስለዚህ ፖርታል
@@ -48,7 +48,7 @@ cargo xtask address-vectors --verify
 | ስዊፍት ኤስዲኬ | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | አንድሮይድ ኤስዲኬ | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-እያንዳንዱ የዙር ጉዞዎች ቀኖናዊ ባይት + IH58 + የተጨመቁ (`sora`፣ ሁለተኛ-ምርጥ) ኢንኮዲንግ እና
+እያንዳንዱ የዙር ጉዞዎች ቀኖናዊ ባይት + I105 + የተጨመቁ (`sora`፣ ሁለተኛ-ምርጥ) ኢንኮዲንግ እና
 የ Norito-style የስህተት ኮዶች ከአሉታዊ ጉዳዮች ጋር መያዛቸውን ያረጋግጣል።
 
 ## አውቶማቲክ ይፈልጋሉ?

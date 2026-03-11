@@ -36,7 +36,7 @@ SN-3b 決定論的 CSV-to-Norito ビルダー Torii CLI
 |----------|----------|---------------|
 | `label` |はい |要求されたラベル (大文字と小文字の混合が受け入れられます。ツール Norm v1 اور UTS-46 کے مطابق 正規化 کرتا ہے)。 |
 | `suffix_id` |はい |数値サフィックス識別子 (10 進数、`0x` 16 進数)。 |
-| `owner` |はい |登録所有者。AccountId 文字列 (IH58 リテラル、オプションの @domain ヒント)。 |
+| `owner` |はい | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |はい |整数 `1..=255`。 |
 | `payment_asset_id` |はい |決済資産 (`xor#sora`)。 |
 | `payment_gross` / `payment_net` |はい |符号なし整数は資産固有の単位を表します。 |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   CSV の場所を参照します。 相対解決。非オブジェクトメタデータ
   検証エラー دیتا ہے۔
 - **コントローラー:** セル `--default-controllers` 名誉 کرتے ہیں۔非所有者
-  アクター、デリゲート、明示的コントローラー リスト、 (مثال `ih58...;ih58...`)۔
+  アクター、デリゲート、明示的コントローラー リスト、 (مثال `i105...;i105...`)۔
 
 失敗コンテキスト行番号レポート ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`)。スクリプト検証エラー

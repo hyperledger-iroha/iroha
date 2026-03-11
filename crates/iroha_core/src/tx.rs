@@ -2212,13 +2212,13 @@ fn collect_manifest_approvals(
 ) -> Result<BTreeSet<String>, TransactionRejectionReason> {
     let mut approvals = BTreeSet::new();
     let authority = tx.authority();
-    let authority_ih58 = authority.canonical_ih58().map_err(|err| {
+    let authority_i105 = authority.canonical_i105().map_err(|err| {
         reject_lane_policy(
             alias,
-            format!("failed to encode authority `{authority}` as ih58: {err}"),
+            format!("failed to encode authority `{authority}` as i105: {err}"),
         )
     })?;
-    approvals.insert(authority_ih58);
+    approvals.insert(authority_i105);
 
     let metadata = tx.metadata();
     let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
@@ -2241,7 +2241,7 @@ fn collect_manifest_approvals(
         let canonical = if let Ok(account) = AccountId::parse_encoded(trimmed)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         {
-            account.canonical_ih58().map_err(|err| {
+            account.canonical_i105().map_err(|err| {
                 reject_lane_policy(
                     alias,
                     format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
@@ -2249,13 +2249,16 @@ fn collect_manifest_approvals(
             })?
         } else {
             let prefix = iroha_data_model::account::address::chain_discriminant();
-            let address = IrohaAccountAddress::from_ih58(trimmed, Some(prefix)).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
-                )
-            })?;
-            address.to_ih58(prefix).map_err(|err| {
+            let address = IrohaAccountAddress::from_i105_for_discriminant(trimmed, Some(prefix))
+                .map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
+                        ),
+                    )
+                })?;
+            address.to_i105_for_discriminant(prefix).map_err(|err| {
                 reject_lane_policy(
                     alias,
                     format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
@@ -2273,13 +2276,13 @@ fn canonical_manifest_validators(
 ) -> Result<BTreeSet<String>, TransactionRejectionReason> {
     let mut validators = BTreeSet::new();
     for validator in &rules.validators {
-        let ih58 = validator.canonical_ih58().map_err(|err| {
+        let i105 = validator.canonical_i105().map_err(|err| {
             reject_lane_policy(
                 alias,
-                format!("failed to encode validator `{validator}` as ih58: {err}"),
+                format!("failed to encode validator `{validator}` as i105: {err}"),
             )
         })?;
-        validators.insert(ih58);
+        validators.insert(i105);
     }
     Ok(validators)
 }

@@ -16,7 +16,7 @@ Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` はモノレポ
 
 - `scripts/address_local_toolkit.sh` の CLI `iroha` 製品のカプセル化:
   - `audit.json` -- `iroha tools address audit --format json` の説明。
-  - `normalized.txt` -- literais IH58 (preferido) / 圧縮 (`sora`) (segunda melhor opcao) ローカルの変換セレクター。
+  - `normalized.txt` -- literais I105 (preferido) / 圧縮 (`sora`) (segunda melhor opcao) ローカルの変換セレクター。
 - スクリプトとダッシュボードのエンジェストの結合 (`dashboards/grafana/address_ingest.json`)
   Local-8 / カットオーバーのプロバー キューとして Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) を実行します。
   Local-12 e セグロ。 Local-8 および Local-12 の OS アラートを観察してください。
@@ -28,12 +28,12 @@ Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` はモノレポ
 ## うそ
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 オペコ:
 
-- `--format compressed (`sora`)` は `sora...` と IH58 を比較しました。
+- `--format I105` は `sora...` と I105 を比較しました。
 - `domainless output (default)` パラエミミール・リタライス・セム・ドミニオ。
 - `--audit-only` は、会話に関する質問です。
 - `--allow-errors` は、引き続き不正な不正行為を実行します (CLI のイグアル アオ コンポルタメント)。

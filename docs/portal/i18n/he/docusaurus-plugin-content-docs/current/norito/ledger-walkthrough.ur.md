@@ -26,8 +26,8 @@ slug: /norito/ledger-walkthrough
 מספר חשבונות `$ADMIN_ACCOUNT` או `$RECEIVER_ACCOUNT` ומזהי חשבון קודמים ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:

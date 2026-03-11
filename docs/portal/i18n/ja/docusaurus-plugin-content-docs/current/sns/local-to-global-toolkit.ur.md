@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI はラップをラップします。
   - `audit.json` -- `iroha tools address audit --format json` 構造化出力
-  - `normalized.txt` -- ローカル ドメイン セレクター IH58 (`sora`、2 番目に優れた) リテラル
+  - `normalized.txt` -- ローカル ドメイン セレクター I105 (`sora`、2 番目に優れた) リテラル
 - アドレス取り込みダッシュボード (`dashboards/grafana/address_ingest.json`)
   アラートマネージャー ルール (`dashboards/alerts/address_ingest_rules.yml`) のルール (`dashboards/alerts/address_ingest_rules.yml`)
   Local-8 / Local-12 のカットオーバーローカル-8 ローカル-12 衝突パネル
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## ああ
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 回答:
 
-- `--format compressed` IH58 の出力 `sora...` の出力
+- `--format i105` I105 の出力 `sora...` の出力
 - `domainless output (default)` تاکہ 裸のリテラル نکلیں۔
 - `--audit-only` 変換ステップ
 - `--allow-errors` 不正な行行です (CLI 動作) (CLI 動作) (CLI 動作)

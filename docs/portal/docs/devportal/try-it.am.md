@@ -95,6 +95,7 @@ npm run start
 የሚከተሉት ክፍሎች እነዚህን እሴቶች ከ`docusaurus.config.js` ያንብቡ፡
 
 - ** Swagger UI *** - በ `/reference/torii-swagger` ላይ የቀረበ; ቅድመ-ይፈቅዳል
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   ተሸካሚ እቅድ ማስመሰያ ሲኖር፣ ጥያቄዎችን በ`X-TryIt-Client` መለያ ይሰጣል፣
   `X-TryIt-Auth` ያስገባል እና ጥሪዎችን በፕሮክሲው በኩል በድጋሚ ይጽፋል
   `TRYIT_PROXY_PUBLIC_URL` ተቀናብሯል።

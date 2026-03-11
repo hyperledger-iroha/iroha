@@ -116,14 +116,11 @@ pub(super) fn multisig_home_domain<V: Execute + Visit + ?Sized>(
 
 fn multisig_role_for(home_domain: &DomainId, account: &AccountId) -> RoleId {
     let suffix = account
-        .canonical_ih58()
+        .canonical_i105()
         .unwrap_or_else(|_| HashOf::new(account).to_string());
-    format!(
-        "{MULTISIG_SIGNATORY}{DELIMITER}{}{DELIMITER}{}",
-        home_domain, suffix,
-    )
-    .parse()
-    .unwrap()
+    format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}")
+        .parse()
+        .unwrap()
 }
 
 pub(super) fn is_multisig<V: Execute + Visit + ?Sized>(
@@ -132,10 +129,9 @@ pub(super) fn is_multisig<V: Execute + Visit + ?Sized>(
 ) -> Result<bool, ValidationFail> {
     match load_account_metadata(account, &spec_key(), executor) {
         Ok(_) => Ok(true),
-        Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(_))))
-        | Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(_)))) => {
-            Ok(false)
-        }
+        Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Account(_) | FindError::MetadataKey(_),
+        ))) => Ok(false),
         Err(err) => Err(err),
     }
 }

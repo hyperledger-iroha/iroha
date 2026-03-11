@@ -61,7 +61,7 @@ N1 سے پہلے آپریٹر کے مقصد سے ایک ہی حوالہ شیئر
 | خط + addenda kpi | `docs/source/sns/governance_addenda/` | سی ایل آئی کے ووٹوں کے ذریعہ حوالہ کردہ ورژن کنٹرول ، کے پی آئی معاہدوں اور گورننس کے فیصلوں کے ساتھ خطوط پر دستخط ہوئے۔ |
 | رجسٹری اسکیما | [`registry-schema.md`] (./registry-schema.md) | کیننیکل Norito ڈھانچے (`NameRecordV1` ، `SuffixPolicyV1` ، `RevenueAccrualEventV1`)۔ |
 | رجسٹرار معاہدہ | [`registrar-api.md`] (./registrar-api.md) | REST/GRPC پے لوڈز ، `sns_registrar_status_total` میٹرکس اور گورننس ہک کی توقعات۔ |
-| ایڈریس یو ایکس گائیڈ | [`address-display-guidelines.md`] (./address-display-guidelines.md) | کیننیکل IH58 (ترجیحی) اور کمپریسڈ (دوسرا بہترین) رینڈرز بٹوے/ایکسپلورر کے ذریعہ ظاہر ہوتا ہے۔ |
+| ایڈریس یو ایکس گائیڈ | [`address-display-guidelines.md`] (./address-display-guidelines.md) | کیننیکل I105 (ترجیحی) اور کمپریسڈ (دوسرا بہترین) رینڈرز بٹوے/ایکسپلورر کے ذریعہ ظاہر ہوتا ہے۔ |
 | دستاویزات soradns/gar | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | عین مطابق میزبان مشتق ، شفافیت کے درزی کے بہاؤ اور انتباہ کے قواعد۔ |
 | ریگولیٹری میموز | `docs/source/sns/regulatory/` | دائرہ اختیار (جیسے EU DSA) کے ذریعہ اندراج کے نوٹ ، اسٹیورڈ کے اعترافات ، ٹیمپلیٹ منسلکات۔ |
 | ڈرل لاگ | `ops/drill-log.md` | فیز سے باہر ہونے سے پہلے درکار افراتفری اور IR ٹیسٹوں کا ریکارڈ۔ |
@@ -97,11 +97,11 @@ N1 سے پہلے آپریٹر کے مقصد سے ایک ہی حوالہ شیئر
 | مرحلہ | ذمہ دار | عمل اور ثبوت | SLA |
 | ------ | --------------- | ------------------ | ----- |
 | نرم آرڈر منجمد | اسٹیورڈ/سپورٹ | ادائیگی ، تنازعہ بانڈ ریفرنس اور متاثرہ سلیکٹر (زبانیں) کے ثبوت کے ساتھ ٹکٹ `SNS-DF-<id>` کھولیں۔ | <= 4 H آمد سے۔ |
-| ٹکٹ گارڈین | گارڈین کونسل | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` `GuardianFreezeTicketV1` تیار کرتا ہے۔ `artifacts/sns/guardian/<id>.json` میں ٹکٹ JSON اسٹور کریں۔ | <= 30 منٹ ACK ، <= 2 H عملدرآمد۔ |
+| ٹکٹ گارڈین | گارڈین کونسل | `sns governance freeze --selector <I105> --reason <text> --until <ts>` `GuardianFreezeTicketV1` تیار کرتا ہے۔ `artifacts/sns/guardian/<id>.json` میں ٹکٹ JSON اسٹور کریں۔ | <= 30 منٹ ACK ، <= 2 H عملدرآمد۔ |
 | کونسل کی توثیق | گورننس کونسل | جمے کو منظور یا مسترد کریں ، ٹکٹ گارڈین اور تنازعہ بانڈ ڈائجسٹ کے لنک کے ساتھ دستاویز کے فیصلے کو منظور کریں۔ | اگلا کونسل کا اجلاس یا غیر متزلزل ووٹ۔ |
 | ثالثی پینل | تعمیل + اسٹیورڈ | `sns governance dispute ballot` کے ذریعے بیلٹ ہیش کے ساتھ 7 جورز (روڈ میپ کے مطابق) کا ایک پینل طلب کریں۔ واقعہ کے پیکٹ میں گمنام ووٹنگ کی رسیدیں منسلک کریں۔ | ورڈکٹ <= بانڈ ڈپازٹ کے 7 دن بعد۔ |
 | اپیل | گارڈین + مشورہ | اپیلیں بانڈ کو دوگنا اور جیوری کے عمل کو دہراتی ہیں۔ مینیفیسٹ Norito `DisputeAppealV1` اور حوالہ پرائمری ٹکٹ کو رجسٹر کریں۔ | <= 10 دن۔ |
-| پگھلا اور علاج | رجسٹر + حل کے اختیارات | `sns governance unfreeze --selector <IH58> --ticket <id>` چلائیں ، رجسٹرار کی حیثیت کو اپ ڈیٹ کریں اور GAR/Resolver Diff کو پروپیگنڈا کریں۔ | فیصلے کے فورا بعد |
+| پگھلا اور علاج | رجسٹر + حل کے اختیارات | `sns governance unfreeze --selector <I105> --ticket <id>` چلائیں ، رجسٹرار کی حیثیت کو اپ ڈیٹ کریں اور GAR/Resolver Diff کو پروپیگنڈا کریں۔ | فیصلے کے فورا بعد |
 
 ایمرجنسی کینن (سرپرست <= 72 H کے ذریعہ متحرک منجمد) اسی کی پیروی کریں
 بہاؤ ، لیکن ریٹرویکٹیو بورڈ کے جائزے اور شفافیت کے نوٹ کی ضرورت ہوتی ہے

@@ -46,12 +46,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::space_directory"));
     let account_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let account_id = AccountId::new(account_key.public_key().clone());
-    let compressed_literal = {
-        account_id
-            .to_account_address()
-            .and_then(|address| address.to_compressed_sora())
-            .expect("compressed literal")
-    };
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
@@ -199,29 +193,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         Value::from(account_id.to_string())
     );
 
-    // Compressed address_format rewrites account literals.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?address_format=compressed"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let doc: Value = json::from_slice(&body).expect("manifest payload");
-    let entries = doc["manifests"].as_array().expect("array of manifests");
-    assert_eq!(
-        entries[0]["accounts"][0],
-        Value::from(compressed_literal.as_str())
-    );
-
-    // Bindings endpoint respects address_format.
+    // Bindings endpoint returns canonical account literals.
     let app = torii.api_router_for_tests();
     let resp = app
         .oneshot(
@@ -242,30 +214,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     assert_eq!(
         dataspaces[0]["accounts"][0],
         Value::from(account_id.to_string())
-    );
-
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}?address_format=compressed"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("bindings compressed response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bindings_compressed = resp.into_body().collect().await.unwrap().to_bytes();
-    let bindings_doc: Value =
-        json::from_slice(&bindings_compressed).expect("bindings payload compressed");
-    let dataspaces = bindings_doc["dataspaces"]
-        .as_array()
-        .expect("dataspaces array");
-    assert_eq!(
-        dataspaces[0]["accounts"][0],
-        Value::from(compressed_literal.as_str())
     );
 
     // Dataspace filter excludes unknown ids.

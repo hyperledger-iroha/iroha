@@ -28,9 +28,9 @@ const NETWORK_PREFIX: u16 = 753;
 struct PositiveEncodings {
     canonical_hex: String,
     canonical_bytes: Vec<u8>,
-    ih58: String,
-    compressed: String,
-    compressed_fullwidth: String,
+    i105: String,
+    i105_default: String,
+    i105_default_fullwidth: String,
 }
 
 struct SingleCase {
@@ -98,7 +98,7 @@ fn canonical_bytes(hex_value: &str) -> Vec<u8> {
 }
 
 fn selector_value() -> Value {
-    // Canonical IH58 payloads are globally scoped and no longer embed domain selectors.
+    // Canonical I105 payloads are globally scoped and no longer embed domain selectors.
     json_obj!({ "kind": "default" })
 }
 
@@ -144,22 +144,22 @@ fn controller_multisig_value(policy: &MultisigPolicy) -> Value {
 fn encodings(address: &AccountAddress) -> PositiveEncodings {
     let canonical_hex = canonical_hex(address);
     let canonical_bytes = canonical_bytes(&canonical_hex);
-    let ih58 = address
-        .to_ih58(NETWORK_PREFIX)
-        .expect("IH58 encoding must succeed");
-    let compressed = address
-        .to_compressed_sora()
-        .expect("compressed encoding must succeed");
-    let compressed_fullwidth = address
-        .to_compressed_sora_fullwidth()
-        .expect("fullwidth compressed encoding must succeed");
+    let i105 = address
+        .to_i105_for_discriminant(NETWORK_PREFIX)
+        .expect("I105 encoding must succeed");
+    let i105_default = address
+        .to_i105()
+        .expect("i105_default encoding must succeed");
+    let i105_default_fullwidth = address
+        .to_i105_fullwidth()
+        .expect("fullwidth i105_default encoding must succeed");
 
     PositiveEncodings {
         canonical_hex,
         canonical_bytes,
-        ih58,
-        compressed,
-        compressed_fullwidth,
+        i105,
+        i105_default,
+        i105_default_fullwidth,
     }
 }
 
@@ -183,12 +183,12 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
         "controller": controller_single_value(&public_key),
         "encodings": json_obj!({
             "canonical_hex": encodings.canonical_hex.clone(),
-            "ih58": json_obj!({
+            "i105": json_obj!({
                 "prefix": NETWORK_PREFIX,
-                "string": encodings.ih58.clone(),
+                "string": encodings.i105.clone(),
             }),
-            "compressed": encodings.compressed.clone(),
-            "compressed_fullwidth": encodings.compressed_fullwidth.clone(),
+            "i105_default": encodings.i105_default.clone(),
+            "i105_default_fullwidth": encodings.i105_default_fullwidth.clone(),
         })
     });
 
@@ -260,12 +260,12 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 "controller": controller_multisig_value(&policy),
                 "encodings": json_obj!({
                     "canonical_hex": encodings.canonical_hex.clone(),
-                    "ih58": json_obj!({
+                    "i105": json_obj!({
                         "prefix": NETWORK_PREFIX,
-                        "string": encodings.ih58.clone(),
+                        "string": encodings.i105.clone(),
                     }),
-                    "compressed": encodings.compressed.clone(),
-                    "compressed_fullwidth": encodings.compressed_fullwidth.clone(),
+                    "i105_default": encodings.i105_default.clone(),
+                    "i105_default_fullwidth": encodings.i105_default_fullwidth.clone(),
                 })
             });
 
@@ -284,11 +284,11 @@ fn error_to_json(err: &AccountAddressError) -> Value {
             "expected": *expected,
             "found": *found,
         }),
-        AccountAddressError::MissingCompressedSentinel => {
-            json_obj!({ "kind": "MissingCompressedSentinel" })
+        AccountAddressError::MissingI105Sentinel => {
+            json_obj!({ "kind": "MissingI105Sentinel" })
         }
-        AccountAddressError::InvalidCompressedChar(ch) => json_obj!({
-            "kind": "InvalidCompressedChar",
+        AccountAddressError::InvalidI105Char(ch) => json_obj!({
+            "kind": "InvalidI105Char",
             "char": ch.to_string(),
         }),
         AccountAddressError::InvalidHexAddress => {
@@ -377,30 +377,32 @@ pub fn compliance_vectors_json() -> Value {
     let mut positive_cases = vec![single_default.value.clone(), single_treasury.value.clone()];
     positive_cases.extend(multisig_cases.iter().map(|case| case.value.clone()));
 
-    let ih58_checksum = mutate_last_char(&single_default.encodings.ih58, 'z');
-    let err_checksum = AccountAddress::from_ih58(&ih58_checksum, Some(NETWORK_PREFIX)).unwrap_err();
+    let i105_checksum = mutate_last_char(&single_default.encodings.i105, 'z');
+    let err_checksum =
+        AccountAddress::from_i105_for_discriminant(&i105_checksum, Some(NETWORK_PREFIX))
+            .unwrap_err();
 
-    let ih58_wrong_prefix = single_default
+    let i105_wrong_prefix = single_default
         .address
-        .to_ih58(NETWORK_PREFIX + 1)
-        .expect("IH58 encoding must succeed");
+        .to_i105_for_discriminant(NETWORK_PREFIX + 1)
+        .expect("I105 encoding must succeed");
     let err_prefix =
-        AccountAddress::from_ih58(&ih58_wrong_prefix, Some(NETWORK_PREFIX)).unwrap_err();
+        AccountAddress::from_i105_for_discriminant(&i105_wrong_prefix, Some(NETWORK_PREFIX))
+            .unwrap_err();
 
-    let compressed_missing = single_default
+    let i105_default_missing = single_default
         .encodings
-        .compressed
+        .i105_default
         .strip_prefix("sora")
         .unwrap()
         .to_string();
-    let err_missing = AccountAddress::from_compressed_sora(&compressed_missing).unwrap_err();
+    let err_missing = AccountAddress::from_i105(&i105_default_missing).unwrap_err();
 
-    let compressed_bad_char = replace_nth_char(&single_default.encodings.compressed, 6, 'A');
-    let err_bad_char = AccountAddress::from_compressed_sora(&compressed_bad_char).unwrap_err();
+    let i105_default_bad_char = replace_nth_char(&single_default.encodings.i105_default, 6, 'A');
+    let err_bad_char = AccountAddress::from_i105(&i105_default_bad_char).unwrap_err();
 
-    let compressed_bad_checksum = mutate_last_char(&single_default.encodings.compressed, 'ﾇ');
-    let err_bad_checksum =
-        AccountAddress::from_compressed_sora(&compressed_bad_checksum).unwrap_err();
+    let i105_default_bad_checksum = mutate_last_char(&single_default.encodings.i105_default, 'ﾇ');
+    let err_bad_checksum = AccountAddress::from_i105(&i105_default_bad_checksum).unwrap_err();
 
     let canonical_invalid = canonical_invalid_hex(&single_default.encodings);
     let err_invalid_hex = AccountAddress::parse_encoded(&canonical_invalid, None).unwrap_err();
@@ -419,40 +421,40 @@ pub fn compliance_vectors_json() -> Value {
 
     let negative_cases = vec![
         json_obj!({
-            "case_id": "ih58-checksum-mismatch",
-            "format": "ih58",
-            "note": "Checksum tampering on IH58 alias for the default-domain vector.",
-            "input": ih58_checksum,
+            "case_id": "i105-checksum-mismatch",
+            "format": "i105",
+            "note": "Checksum tampering on I105 alias for the default-domain vector.",
+            "input": i105_checksum,
             "expected_prefix": NETWORK_PREFIX,
             "expected_error": error_to_json(&err_checksum),
         }),
         json_obj!({
-            "case_id": "ih58-prefix-mismatch",
-            "format": "ih58",
+            "case_id": "i105-prefix-mismatch",
+            "format": "i105",
             "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX.",
-            "input": ih58_wrong_prefix,
+            "input": i105_wrong_prefix,
             "expected_prefix": NETWORK_PREFIX,
             "expected_error": error_to_json(&err_prefix),
         }),
         json_obj!({
-            "case_id": "compressed-missing-sentinel",
-            "format": "compressed",
+            "case_id": "i105_default-missing-sentinel",
+            "format": "i105_default",
             "note": "Missing required sora sentinel prefix.",
-            "input": compressed_missing,
+            "input": i105_default_missing,
             "expected_error": error_to_json(&err_missing),
         }),
         json_obj!({
-            "case_id": "compressed-invalid-character",
-            "format": "compressed",
-            "note": "Introduces ASCII 'A' outside the Sora compressed alphabet.",
-            "input": compressed_bad_char,
+            "case_id": "i105_default-invalid-character",
+            "format": "i105_default",
+            "note": "Introduces ASCII 'A' outside the Sora I105-default alphabet.",
+            "input": i105_default_bad_char,
             "expected_error": error_to_json(&err_bad_char),
         }),
         json_obj!({
-            "case_id": "compressed-checksum-mismatch",
-            "format": "compressed",
+            "case_id": "i105_default-checksum-mismatch",
+            "format": "i105_default",
             "note": "Checksum nibble replaced to trigger Bech32m verification failure.",
-            "input": compressed_bad_checksum,
+            "input": i105_default_bad_checksum,
             "expected_error": error_to_json(&err_bad_checksum),
         }),
         json_obj!({

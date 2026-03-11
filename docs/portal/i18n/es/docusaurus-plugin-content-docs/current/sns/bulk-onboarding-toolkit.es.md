@@ -33,7 +33,7 @@ El analizador requiere la siguiente fila de encabezado (el orden es flexible):| 
 |---------|-----------|-------------|
 | `label` | Sí | Etiqueta solicitada (se acepta mayus/minus; la herramienta normaliza según Norma v1 y UTS-46). |
 | `suffix_id` | Si | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
-| `owner` | Si | Cadena AccountId (literal IH58; sugerencia @dominio opcional) para el propietario del registro. |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Activo de liquidación (por ejemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |
@@ -72,9 +72,9 @@ En caso de éxito el guión escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En caso de éxito el guión escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ corrida de CSV.
   referencias a archivos se resuelven relativa a la ubicación del CSV. Metadatos
   que ningún objeto sea produce un error de validación.
 - **Controladores:** celdas en blanco respetan `--default-controllers`. proporción
-  listas de controlador explícitas (por ejemplo `ih58...;ih58...`) al delegar a
+  listas de controlador explícitas (por ejemplo `i105...;i105...`) al delegar a
   actores sin dueño.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

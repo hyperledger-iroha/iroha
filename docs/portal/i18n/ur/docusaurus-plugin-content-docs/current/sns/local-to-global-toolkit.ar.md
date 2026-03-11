@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` کے CLI کو آؤٹ پٹ میں لپیٹتا ہے:
   - `audit.json` - `iroha tools address audit --format json` کی باقاعدہ آؤٹ پٹ۔
-  - `normalized.txt` - لٹرلز IH58 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا آپشن) مقامی رینج سے ہر سلیکٹر کے لئے تبدیل کیا گیا۔
+  - `normalized.txt` - لٹرلز I105 (ترجیحی) / کمپریسڈ (`sora`) (دوسرا آپشن) مقامی رینج سے ہر سلیکٹر کے لئے تبدیل کیا گیا۔
 - انجسٹ ایڈریس پینل (`dashboards/grafana/address_ingest.json`) کے ساتھ اسکرپٹ کا استعمال کریں
   اور الرٹ مینجر قواعد (`dashboards/alerts/address_ingest_rules.yml`) یہ ثابت کرنے کے لئے کہ کٹ اوور لوکل -8/
   مقامی 12 سیکیورٹی۔ لوکل -8 اور لوکل -12 کریش پلیٹوں اور انتباہات کی نگرانی کریں
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## استعمال
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 اختیارات:
 
-- `--format compressed (`SORA`)` `sora...` سے باہر IH58 کی بجائے باہر نکلیں۔
+- `--format i105 (`SORA`)` `sora...` سے باہر I105 کی بجائے باہر نکلیں۔
 - `domainless output (default)` بغیر دائرہ کار کے لغوی جاری کرنا۔
 - تبادلوں کے قدم کو چھوڑنے کے لئے `--audit-only`۔
 - `--allow-errors` برقرار رکھنے کے لئے جب خراب قطاریں نمودار ہوتی ہیں (سی ایل آئی سلوک سے مماثل)۔

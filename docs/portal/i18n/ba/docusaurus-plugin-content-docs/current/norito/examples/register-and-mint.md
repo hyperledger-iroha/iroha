@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Бүләксе проходка
 
-- Тәғәйенләү иҫәбенә (мәҫәлән, `ih58...`) бар, һәр SDK caverstar-ҙа ҡуйыу фазаһын көҙгөләй.
+- Тәғәйенләү иҫәбенә (мәҫәлән, `i105...`) бар, һәр SDK caverstar-ҙа ҡуйыу фазаһын көҙгөләй.
 - `register_and_mint` инеү нөктәһен ROSE активтарын билдәләү һәм 250 берәмектәрҙе бер транзакцияла Алисаға булдырыу өсөн саҡырыу.
 - `client.request(FindAccountAssets)` йәки I18NI0000000010X аша баланстарҙы тикшерергә, мәтрүшкә уңышҡа өлгәште.
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

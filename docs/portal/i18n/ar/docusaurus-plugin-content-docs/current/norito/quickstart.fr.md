@@ -86,7 +86,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ## 4. احصل على الرمز الثانوي عبر Toriiأثناء المضي قدمًا في عملية التنفيذ، قم بإرسال الكود الثانوي إلى Torii مع CLI. معرف التطوير الافتراضي مشتق من المفتاح العام في `defaults/client.toml`، دونك معرف الحساب هو
 ```
-ih58...
+i105...
 ```
 
 استخدم ملف التكوين لتزويد عنوان URL Torii ومعرف السلسلة ومفتاح التوقيع:
@@ -106,7 +106,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

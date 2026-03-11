@@ -129,15 +129,14 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    AddressFormat, Client, ClientConfiguration, ExplorerAccountQrOptions,
+    Client, ClientConfiguration, ExplorerAccountQrOptions,
 };
 
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "ih58...",
+        "i105...",
         Some(ExplorerAccountQrOptions {
-            address_format: Some(AddressFormat::Compressed),
         }),
     )?;
     println!("Canonical literal: {}", snapshot.literal);
@@ -146,7 +145,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical account id، مطلوبہ فارمیٹ میں literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔ `ExplorerAccountQrOptions` چھوڑنے سے preferred IH58 آؤٹ پٹ ملتا ہے، یا `address_format: Some(AddressFormat::Compressed)` سیٹ کریں تاکہ ADDR-6b میں استعمال ہونے والا `sora…` ویریئنٹ ملے۔
+`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical account id، مطلوبہ فارمیٹ میں literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔ `ExplorerAccountQrOptions` چھوڑنے سے preferred I105 آؤٹ پٹ ملتا ہے، یا canonical I105 output سیٹ کریں تاکہ ADDR-6b میں استعمال ہونے والا `i105` ویریئنٹ ملے۔
 
 ## 7. ایونٹس سبسکرائب کریں
 

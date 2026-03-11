@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "窓": { "下": 12345, "上": 12400 },
-      "権限": "ih58…?",
+      "権限": "i105…?",
       "秘密キー": "...?"
     }
   - 応答 (JSON):
@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 
 契約 API (デプロイ)
 - POST `/v1/contracts/deploy`
-  - リクエスト: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - リクエスト: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 動作: IVM پروگرام باڈی سے `code_hash` اور ヘッダー `abi_version` سے `abi_hash` نکالتا ہے، پھر `RegisterSmartContractCode` (マニフェスト) `RegisterSmartContractBytes` (`.to` バイト) `authority` طرف سے سبمٹ کرتا ہے۔
   - 応答: { "ok": true、"code_hash_hex": "..."、"abi_hash_hex": "..." }
   - 関連:
     - GET `/v1/contracts/code/{code_hash}` -> マニフェスト ذخیرہ شدہ マニフェスト واپس کرتا ہے
     - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - リクエスト: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - リクエスト: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 動作: バイトコード デプロイメント `ActivateContractInstance` マッピング `(namespace, contract_id)` マッピング
   - 応答: { "ok": true、"namespace": "apps"、"contract_id": "calc.v1"、"code_hash_hex": "..."、"abi_hash_hex": "..." }エイリアスサービス
 - POST `/v1/aliases/voprf/evaluate`
@@ -59,11 +59,11 @@ translation_last_reviewed: 2026-02-07
   - エラー: 不正な形式の 16 進数入力 HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` エンベロープ اور デコーダ エラー メッセージ واپس کرتا ہے۔
 - POST `/v1/aliases/resolve`
   - リクエスト: { "エイリアス": "GB82 WEST 1234 5698 7654 32" }
-  - 応答: { "エイリアス": "GB82WEST12345698765432"、"アカウントID": "ih58..."、"インデックス": 0、"ソース": "iso_bridge" }
+  - 応答: { "エイリアス": "GB82WEST12345698765432"、"アカウントID": "i105..."、"インデックス": 0、"ソース": "iso_bridge" }
   - 注: ISO ブリッジ ランタイム ステージング (`iroha_config` の `[iso_bridge.account_aliases]`)۔ Torii ホワイトスペース ہٹا کر اور 大文字 بنا کر ルックアップ کرتا ہے۔エイリアス نہ ہو تو 404 اور ISO ブリッジ ランタイム بند ہو تو 503 دیتا ہے۔
 - POST `/v1/aliases/resolve_index`
   - リクエスト: { "インデックス": 0 }
-  - 応答: { "index": 0、"alias": "GB82WEST12345698765432"、"account_id": "ih58..."、"source": "iso_bridge" }
+  - 応答: { "index": 0、"alias": "GB82WEST12345698765432"、"account_id": "i105..."、"source": "iso_bridge" }
   - 注: エイリアス インデックスの構成順序 مطابق 決定的 طریقے سے assign ہوتے ہیں (0 ベース)۔オフライン キャッシュ エイリアス構成証明イベント 監査証跡
 
 コードサイズの上限
@@ -73,7 +73,7 @@ translation_last_reviewed: 2026-02-07
   - 演算子 `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور 数値ペイロード دے کر ایڈجسٹ کر سکتے ہیں۔
 
 - POST `/v1/gov/ballots/zk`
-  - リクエスト: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - リクエスト: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 注:
     - 回路のパブリック入力 `owner`、`amount`、`duration_blocks` 証明構成された VK ノードの検証`election_id` ガバナンス ロック セキュリティ ロック方向 چھپی رہتی ہے (`unknown`);数量/有効期限 اپڈیٹ ہوتے ہیں۔再投票単調 ہیں: 金額 期限切れ صرف بڑھتے ہیں (node max(amount, prev.amount) اور max(expiry, prev.expiry) لگاتا ہے)۔
@@ -81,19 +81,19 @@ translation_last_reviewed: 2026-02-07
     - 契約の実行 `SubmitBallot` エンキュー سے پہلے `ZK_VOTE_VERIFY_BALLOT` کال کرنا لازم ہے؛ホストはワンショット ラッチを強制します
 
 - POST `/v1/gov/ballots/plain`
-  - リクエスト: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - リクエスト: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 注: 再投票は延長のみです - 投票用紙のロック、金額、有効期限、有効期限`owner` トランザクション権限 برابر ہونا چاہئے۔ `conviction_step_blocks` ہے۔
 
 - POST `/v1/gov/finalize`
-  - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58...?", "private_key": "...?" }
+  - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - 応答: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - オンチェーン効果 (現在のスキャフォールド): 提案のデプロイ、制定、`code_hash` キー付き最小 `ContractManifest` 、 شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور 提案 成立 ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` والا マニフェスト پہلے سے ہو تو 制定案拒否 ہوتا ہے۔
   - 注:
     - ZK 選挙 契約パス `FinalizeElection` 接続 `ZK_VOTE_VERIFY_TALLY` 接続ホストはワンショット ラッチを強制します`FinalizeReferendum` ZK 国民投票 否決 ہے 選挙集計確定 جائے۔
     - 自動終了 `h_end` 単純な住民投票 承認/拒否の発行 کرتا ہے؛ ZK 住民投票終了 فہتے ہیں جب تک 最終集計提出 نہ ہو اور `FinalizeReferendum` 実行 نہ ہو۔
     - 投票率チェック承認+拒否棄権投票率 میں شمار نہیں ہوتا۔- POST `/v1/gov/enact`
-  - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "ih58…?"、 "private_key": "...?" }
+  - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "i105…?"、 "private_key": "...?" }
   - 応答: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注: `authority`/`private_key` فراہم ہوں تو Torii 署名済みトランザクション سبمٹ کرتا ہے؛スケルトン واپس کرتا ہے جسے کلائنٹ سائن اور سبمٹ کرے۔プリ画像 اختیاری اور فی الحال معلوماتی ہے۔
 
@@ -195,15 +195,15 @@ CLI ヘルパー
     - `(namespace, contract_id, code_hash, abi_hash)` 制定されたガバナンス提案 موجود ہے جو اسی 提案 ID ハッシュ化 سے 導出 ہوتا ہے جو ノード استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (問題、マニフェスト/コード/提案の概要) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ) ہو)۔
   - 保護された名前空間 監査 ガバナンス管理されたデプロイ ワークフロー 管理
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - 保護された名前空間のデプロイメント JSON メタデータ スケルトン オプションの `gov_manifest_approvers` マニフェスト クォーラム ルール پوری ہوں۔
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر ロックのヒント لازم ہیں، اور فراہم کیے گئے کسی بھی ヒント سیٹ میں `owner`、`amount` 、 `duration_blocks` 、 شامل ہونا ضروری ہے۔
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر ロックのヒント لازم ہیں، اور فراہم کیے گئے کسی بھی ヒント سیٹ میں `owner`、`amount` 、 `duration_blocks` 、 شامل ہونا ضروری ہے۔
   - 正規アカウント ID を検証し、32 バイトの nullifier ヒントを正規化し、ヒントを `public_inputs_json` (追加のオーバーライド用に `--public <path>`) にマージします。
   - 無効化子は、証明コミットメント (パブリック入力) に `domain_tag`、`chain_id`、および `election_id` を加えたものから導出されます。 `--nullifier` は、提供されたときに証明に対して検証されます。
   - 決定的 `fingerprint=<hex>` エンコードされた `CastZkBallot` 解読されたヒントの導出(`owner`、`amount`、`duration_blocks`、`direction` جب فراہم ہوں)۔
   - CLI 応答 `tx_instructions[]` `payload_fingerprint_hex` デコードされたフィールドの注釈付け ダウンストリーム ツールのスケルトン Norito デコードの検証ありがとうございます
   - ロックのヒント ノード ZK の投票結果 `LockCreated`/`LockExtended` イベントが放出される 回路の値が公開される
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` エイリアス ZK フラグ کے ناموں کو ミラー کرتے ہیں تاکہ スクリプト パリティ ہو۔
   - 概要出力 `vote --mode zk` エンコードされた命令フィンガープリント、読み取り可能な投票フィールド (`owner`、`amount`、`duration_blocks`、`direction`) ہے، جس سے 署名 سے پہلے فوری تصدیق ہو جاتی ہے۔
 
@@ -222,14 +222,14 @@ CLI ヘルパー
 - POST `/v1/gov/ballots/zk-v1`
   - リクエスト (v1 スタイル DTO):
     {
-      "権限": "ih58...",
+      "権限": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "秘密キー": "...?",
       "election_id": "ref-1",
       "バックエンド": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "オーナー": "ih58…?",
+      "オーナー": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
   - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
@@ -238,7 +238,7 @@ CLI ヘルパー
   - `BallotProof` JSON 文字列 `CastZkBallot` スケルトン واپس کرتا ہے۔
   - リクエスト:
     {
-      "権限": "ih58...",
+      "権限": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "秘密キー": "...?",
       "election_id": "ref-1",

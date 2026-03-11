@@ -14,7 +14,7 @@ titre : Соответствие адресов аккаунтов
 description : Le processus de développement du luminaire ADDR-2 et la synchronisation du SDK de commande.
 ---
 
-Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) comprend les appareils IH58 (de préférence), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatif. Vous pouvez utiliser SDK + Torii pour utiliser Odin et JSON afin d'exploiter votre codec dans votre produit. Cette page indique le statut de l'entreprise (`docs/source/account_address_status.md` dans le référentiel de fichiers), ce que le portail peut utiliser pour le flux de travail Il n'y a aucun moyen de s'acheter en mono-repo.
+Le paquet canonique ADDR-2 (`fixtures/account/address_vectors.json`) comprend les appareils I105 (de préférence), compressé (`sora`, deuxième meilleur ; demi/pleine largeur), multisignature et négatif. Vous pouvez utiliser SDK + Torii pour utiliser Odin et JSON afin d'exploiter votre codec dans votre produit. Cette page indique le statut de l'entreprise (`docs/source/account_address_status.md` dans le référentiel de fichiers), ce que le portail peut utiliser pour le flux de travail Il n'y a aucun moyen de s'acheter en mono-repo.
 
 ## Prégénération ou livraison de paquets
 
@@ -43,7 +43,7 @@ Ici, vous trouverez des appareils, des générateurs ou des documents, qui ne de
 | Torii (serveur) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | SDK JavaScript | `javascript/iroha_js/test/address.test.js` |
 | SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Ce harnais permet d'aller-retour en canonique avec un bateau + IH58 + un code et une vérification, ce code pour le style Norito est adapté au luminaire для négatif кейсов.
+| SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |Ce harnais permet d'aller-retour en canonique avec un bateau + I105 + un code et une vérification, ce code pour le style Norito est adapté au luminaire для négatif кейсов.
 
 ## Est-il possible d'automatiser ?
 

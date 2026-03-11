@@ -58,7 +58,7 @@ necessarias, tableros de instrumentos y caminos de escalada.
 | Carta + adenda KPI | `docs/source/sns/governance_addenda/` | Cartas assinadas con control de versao, convenios KPI y decisiones de gobierno referenciadas por votos da CLI. |
 | Esquema del registro | [`registry-schema.md`](./registry-schema.md) | Estructuras canónicas Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato del registrador | [`registrar-api.md`](./registrar-api.md) | Cargas útiles REST/gRPC, métricas `sns_registrar_status_total` y expectativas de gancho de gobernanza. |
-| Guía UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas IH58 (preferido) y comprimidas (segunda melhor opcao) refletidas por wallets/explorers. |
+| Guía UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas I105 (preferido) y comprimidas (segunda melhor opcao) refletidas por wallets/explorers. |
 | Documentos SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivacao deterministica de hosts, fluxo do tailer de transparencia e gras de alerta. |
 | Memos regulatorios | `docs/source/sns/regulatory/` | Notas de entrada por jurisdicao (ex. EU DSA), agradecimientos de administrador, anexos de plantilla. |
 | Registro de perforación | `ops/drill-log.md` | Registro de ensayos de caos e IR requeridos antes de dichas de fase. |
@@ -97,7 +97,7 @@ acima para que auditores reconstruam o rastro de decisión em 24 horas.
    acción o tailer de transparencia do resolver para confirmar que o novo estado
    GAR/zone se propagou (veja 4.5).
 6. **Divulgacao al cliente:** Actualizar el libro mayor voltado al cliente (billetera/explorador)
-   a través de accesorios del sistema operativo compartidos en [`address-display-guidelines.md`](./address-display-guidelines.md),Garantizando que renderizacoes IH58 y comprimidos corresponden a orientaciones de copia/QR.
+   a través de accesorios del sistema operativo compartidos en [`address-display-guidelines.md`](./address-display-guidelines.md),Garantizando que renderizacoes I105 y comprimidos corresponden a orientaciones de copia/QR.
 
 ### 4.3 Renovações, cobranca e reconciliacao da tesouraria- **Fluxo de renovacao:** Registradores aplicam a janela de graca de 30 días + janela
   de redencao de 60 días especificados en `SuffixPolicyV1`. Apos 60 días, un
@@ -124,11 +124,11 @@ acima para que auditores reconstruam o rastro de decisión em 24 horas.
 | Fase | Responsavel | Acao y evidencia | Acuerdo de Nivel de Servicio |
 |------|-------------|------------------|-----|
 | Pedido de congelación suave | Mayordomo / suporte | Abrir ticket `SNS-DF-<id>` com provas de pago, referencia do bond de disputa e seletor(es) afetados. | <=4 h desde la entrada. |
-| Guardián de entradas | Guardián del Consejo | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` producto `GuardianFreezeTicketV1`. Armazene o JSON del ticket en `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de ejecución. |
+| Guardián de entradas | Guardián del Consejo | `sns governance freeze --selector <I105> --reason <text> --until <ts>` producto `GuardianFreezeTicketV1`. Armazene o JSON del ticket en `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de ejecución. |
 | Ratificaçao do conselho | Consejo de Gobierno | Aprovar ou rejeitar congelamentos, documentar decisao com link ao ticket guardian e digest do bond de disputa. | Próxima sesión del consejo o voto assincrono. |
 | Panel de arbitraje | Conformidad + azafata | Convocar dolor de 7 jurados (hoja de ruta conforme) con cédulas hasheadas vía `sns governance dispute ballot`. Anexar recibos de voto anonimizados al paquete de incidente. | Veredito <=7 días apos deposito do bond. |
 | Apelacao | Guardián + consejo | Apelacoes dobram o bond e repetem o processo de jurados; manifiesto del registrador Norito `DisputeAppealV1` e referenciar ticket primario. | <=10 días. |
-| Descongelar y remediar | Registrador + operaciones de resolución | Ejecute `sns governance unfreeze --selector <IH58> --ticket <id>`, actualice el estado del registrador y propague diferencias GAR/resolver. | Inmediatamente apos o veredito. |Canones de emergencia (congelamentos aficionados por guardian <=72 h) seguem o mesmo
+| Descongelar y remediar | Registrador + operaciones de resolución | Ejecute `sns governance unfreeze --selector <I105> --ticket <id>`, actualice el estado del registrador y propague diferencias GAR/resolver. | Inmediatamente apos o veredito. |Canones de emergencia (congelamentos aficionados por guardian <=72 h) seguem o mesmo
 fluxo, mas exigem revisao retroativa do conselho e uma nota de transparencia em
 `docs/source/sns/regulatory/`.
 

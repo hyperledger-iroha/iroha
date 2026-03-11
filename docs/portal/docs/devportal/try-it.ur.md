@@ -78,6 +78,7 @@ npm run start
 یہ components `docusaurus.config.js` سے values پڑھتے ہیں:
 
 - **Swagger UI** - `/reference/torii-swagger` پر render ہوتا ہے؛ token موجود ہونے پر bearer scheme کو pre-authorise کرتا ہے، requests کو `X-TryIt-Client` سے tag کرتا ہے، `X-TryIt-Auth` inject کرتا ہے، اور `TRYIT_PROXY_PUBLIC_URL` سیٹ ہونے پر calls کو پروکسی کے ذریعے rewrite کرتا ہے۔
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
 - **RapiDoc** - `/reference/torii-rapidoc` پر render ہوتا ہے؛ token فیلڈ کو mirror کرتا ہے، Swagger panel جیسے headers reuse کرتا ہے، اور URL configure ہونے پر خودکار طور پر proxy کو target کرتا ہے۔
 - **Try it console** - API overview page میں embedded ہے؛ custom requests بھیجنے، headers دیکھنے، اور response bodies inspect کرنے دیتا ہے۔
 

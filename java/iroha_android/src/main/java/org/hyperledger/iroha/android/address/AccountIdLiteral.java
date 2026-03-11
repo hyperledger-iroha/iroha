@@ -10,13 +10,13 @@ public final class AccountIdLiteral {
   /**
    * Normalizes an encoded account identifier.
    *
-   * <p>Accepted formats are IH58 and compressed sora addresses. Legacy account identifiers with an
-   * {@code @domain} suffix are rejected.
+   * <p>Accepted format is canonical I105. Legacy account identifiers with an {@code @domain}
+   * suffix are rejected.
    *
    * @param accountId account identifier string
    * @return normalized encoded account identifier
    */
-  public static String extractIh58Address(final String accountId) {
+  public static String extractI105Address(final String accountId) {
     final String value = Objects.requireNonNull(accountId, "accountId").trim();
     if (value.isEmpty()) {
       throw new IllegalArgumentException("accountId must not be blank");
@@ -28,7 +28,7 @@ public final class AccountIdLiteral {
       AccountAddress.parseEncoded(value, null);
       return value;
     } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalArgumentException("accountId must be IH58 or compressed sora encoded", ex);
+      throw new IllegalArgumentException("accountId must be canonical I105 encoded", ex);
     }
   }
 }

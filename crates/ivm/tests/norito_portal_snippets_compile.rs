@@ -138,9 +138,7 @@ const ACCOUNT_A_LITERAL: &str = "6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JA
 const ACCOUNT_B_LITERAL: &str = "6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb";
 
 fn parse_account_literal(raw: &str) -> ScopedAccountId {
-    ScopedAccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("valid encoded account literal")
+    ScopedAccountId::parse_encoded(raw).expect("valid encoded account literal")
 }
 
 #[derive(Default)]

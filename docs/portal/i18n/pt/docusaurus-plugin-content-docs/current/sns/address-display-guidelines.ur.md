@@ -19,8 +19,8 @@ importar ExplorerAddressCard de '@site/src/components/ExplorerAddressCard';
 Android کی ریٹیل والٹ مثال
 `examples/android/retail-wallet` میں مطلوبہ UX پیٹرن دکھایا گیا ہے:
 
-- **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: IH58 (ترجیحی) اور صرف Sora والا
-  کمپریسڈ فارم (`sora...`, segundo melhor). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
+- **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: I105 (ترجیحی) اور صرف Sora والا
+  کمپریسڈ فارم (`sora...`, segundo melhor). I105 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
   carga útil کمپریسڈ فارم میں inline وارننگ لازمی ہے کیونکہ یہ صرف
   Consciente de Sora Android مثال دونوں Material بٹنز اور ٹول ٹپس
   کو `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` میں
@@ -34,7 +34,7 @@ Android کی ریٹیل والٹ مثال
   ہو تو ایک legenda دکھائیں جو آپریٹرز کو یاد دلائے کہ sufixo درکار نہیں۔
   ایکسپلوررز کو بھی canonical ڈومین لیبل ہائی لائٹ کرنا چاہیے جب seletor
   codificação digest کرے۔
-- **Cargas úteis QR IH58۔** QR کوڈز کو Codificação de string IH58 کرنا چاہیے۔ QR
+- **Cargas úteis QR I105۔** QR کوڈز کو Codificação de string I105 کرنا چاہیے۔ QR
   geração ناکام ہو تو خالی تصویر کے بجائے واضح erro دکھائیں۔
 - **کلپ بورڈ پیغام۔** کمپریسڈ فارم کاپی کرنے کے بعد torradas یا lanchonete دکھائیں
   جو صارفین کو یاد دلائے کہ یہ صرف Sora ہے اور IME سے خراب ہو سکتا ہے۔
@@ -57,7 +57,7 @@ O que você precisa saber sobre o seu negócio:
 
 ## Ajudantes do SDK
 
-ہر SDK ایک سہولت helper فراہم کرتا ہے جو IH58 اور کمپریسڈ فارم کے ساتھ وارننگ
+ہر SDK ایک سہولت helper فراہم کرتا ہے جو I105 اور کمپریسڈ فارم کے ساتھ وارننگ
 string دیتا ہے تاکہ UI لیئرز مستقل رہیں:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -80,7 +80,7 @@ auxiliar `domainSummary` com carga útil `selector` (`tag`, `digest_hex`, `regis
 
 ایکسپلوررز کو والٹ کی telemetria e acessibilidade کے کام کو espelho کرنا چاہیے:
 
-- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`sora`)|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
+- کاپی بٹنز پر `data-copy-mode="i105|I105|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
   میٹرک `torii_address_format_total` کے ساتھ contadores de uso نکال سکیں۔ اوپر والا
   ڈیمو کمپوننٹ `{mode,timestamp}` کے ساتھ `iroha:address-copy` ایونٹ بھیجتا ہے؛
   Um pipeline de análise/telemetria (segmento de segmento ou coletor apoiado por NORITO)
@@ -90,7 +90,7 @@ auxiliar `domainSummary` com carga útil `selector` (`tag`, `digest_hex`, `regis
   ریٹائرمنٹ ریویوز `address_ingest` Grafana بورڈ سے براہ راست 30 dias por semana
   `domain_kind="local12"` برآمد کر سکیں۔
 - ہر کنٹرول کے لئے الگ `aria-label`/`aria-describedby` ہنٹس دیں جو بتائیں کہ
-  literal شیئر کرنے کے لئے محفوظ ہے (IH58) یا صرف Sora (کمپریسڈ)۔ ضمنی ڈومین
+  literal شیئر کرنے کے لئے محفوظ ہے (I105) یا صرف Sora (کمپریسڈ)۔ ضمنی ڈومین
   legenda کو descrição میں شامل کریں تاکہ tecnologia assistiva وہی سیاق دکھائے
   Isso é tudo o que você precisa saber
 - ایک região ativa (مثلاً `<output aria-live="polite">...</output>`) رکھیں جو کاپی
@@ -104,7 +104,7 @@ seletores کے غیر فعال ہونے سے پہلے Ingestão Torii e modos de
 ## Local -> Kit de ferramentas de migração global
 
 Seletores locais کی auditoria e conversão خودکار ہو۔ auditoria JSON auxiliar
-IH58/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز bilhetes de preparação کے ساتھ منسلک
+I105/کمپریسڈ لسٹ دونوں بناتا ہے جنہیں آپریٹرز bilhetes de preparação کے ساتھ منسلک
 کرتے ہیں, جبکہ متعلقہ runbook Grafana dashboards e Alertmanager قواعد کو لنک
 کرتا ہے جو transição de modo estrito کو portão کرتے ہیں۔
 
@@ -156,12 +156,12 @@ Diagrama de bytes کے لئے `docs/account_structure.md` دیکھیں۔
 
 O fluxo de trabalho CLI do ADDR-5 é o seguinte:
 
-1. `iroha tools address inspect` para IH58, کمپریسڈ, e cargas úteis hexadecimais canônicas کے ساتھ
+1. `iroha tools address inspect` para I105, کمپریسڈ, e cargas úteis hexadecimais canônicas کے ساتھ
    resumo JSON estruturado resumo `kind`/`warning` e `domain`
    آبجیکٹ بھی ہوتے ہیں اور `input_domain` کے ذریعے دیے گئے ڈومین کو بھی echo
    کرتا ہے۔ Use `kind` `local12` e CLI stderr para usar como JSON
    resumo وہی رہنمائی دہراتا ہے تاکہ Pipelines CI e SDKs اسے superfície کر سکیں۔
-   جب بھی آپ convert شدہ codificação کو `<ih58>@<domain>` کی صورت میں replay کرنا
+   جب بھی آپ convert شدہ codificação کو `<i105>@<domain>` کی صورت میں replay کرنا
    چاہیں ou `legacy  suffix` دیں۔
 2. SDKs اسی وارننگ/summary e JavaScript helper کے ذریعے دکھا سکتے ہیں:
 
@@ -172,13 +172,13 @@ O fluxo de trabalho CLI do ADDR-5 é o seguinte:
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed (`sora`));
+   console.log(summary.i105.value, summary.I105);
    ```
-  literal auxiliar سے detectar کیا گیا Prefixo IH58 محفوظ رکھتا ہے جب تک آپ
+  literal auxiliar سے detectar کیا گیا Prefixo I105 محفوظ رکھتا ہے جب تک آپ
   `networkPrefix` é um produto de alta qualidade اس لئے redes não padrão کے
   resumos خاموشی سے prefixo padrão کے ساتھ دوبارہ render نہیں ہوتے۔
 
-3. carga útil canônica کو `ih58.value` یا `compressed (`sora`)` فیلڈز سے reutilização کر کے تبدیل
+3. carga útil canônica کو `i105.value` یا `I105` فیلڈز سے reutilização کر کے تبدیل
    کریں (یا `--format` کے ذریعے دوسری codificação مانگیں)۔ یہ strings پہلے سے
    بیرونی شیئرنگ کے لئے محفوظ ہیں۔
 4. manifestos, registros e documentos voltados para o cliente e canônicos فارم سے اپ ڈیٹ
@@ -188,14 +188,14 @@ O fluxo de trabalho CLI do ADDR-5 é o seguinte:
    `iroha tools address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
    literais separados por nova linha پڑھتی ہے ( `#` سے شروع ہونے والے comentários نظرانداز
    ہوتے ہیں, اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے), ہر
-   اندراج کے لئے resumos canônicos/IH58 (ترجیحی)/comprimidos (`sora`) (`sora`, segundo melhor) کے ساتھ JSON رپورٹ بناتی
+   اندراج کے لئے resumos canônicos/I105 (ترجیحی)/comprimidos (`sora`) (`sora`, segundo melhor) کے ساتھ JSON رپورٹ بناتی
    linhas ہوں تو `--allow-errors` استعمال کریں, اور جب آپریٹرز Seletores locais کو
    CI میں بلاک کرنے کے لئے تیار ہوں تو `strict CI post-check` سے آٹومیشن گیٹ کریں۔
 6. Como reescrever nova linha para nova linha
   Planilhas de remediação do seletor local
   استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو codificações canônicas,
   avisos e falhas de análise ajudante ڈیفالٹ طور پر
-  linhas não locais چھوڑ دیتا ہے، باقی entradas کو مطلوبہ codificação (IH58 ترجیحی/comprimido (`sora`) segundo melhor/hex/JSON)
+  linhas não locais چھوڑ دیتا ہے، باقی entradas کو مطلوبہ codificação (I105 ترجیحی/comprimido (`sora`) segundo melhor/hex/JSON)
   میں بدلتا ہے، اور `legacy  suffix` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   کے ساتھ جوڑیں تاکہ خراب literais e dumps پر بھی scan جاری رہے۔
 7. Automação CI/lint `ci/check_address_normalize.sh` چلا سکتی ہے، جو

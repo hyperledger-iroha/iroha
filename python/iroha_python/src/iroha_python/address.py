@@ -4,29 +4,30 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from enum import Enum, IntEnum
+from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 DEFAULT_DOMAIN_NAME = "default"
 
 LOCAL_DOMAIN_KEY = b"SORA-LOCAL-K:v1"
-IH58_CHECKSUM_PREFIX = b"IH58PRE"
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
-COMPRESSED_SENTINEL = "sora"
-COMPRESSED_CHECKSUM_LEN = 6
+I105_SENTINEL_SORA = "sora"
+I105_SENTINEL_TEST = "test"
+I105_SENTINEL_DEV = "dev"
+I105_NUMERIC_SENTINEL_PREFIX = "n"
+I105_CHECKSUM_LEN = 6
 BECH32M_CONST = 0x2BC830A3
-IH58_CHECKSUM_BYTES = 2
-COMPRESSED_WARNING = (
-    "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. "
-    "Prefer IH58 when sharing with explorers, wallets, or QR codes. See docs/source/sns/address_display_guidelines.md."
-)
-COMPRESSED_WARNING = (
-    "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. "
-    "Prefer IH58 when sharing with explorers, wallets, or QR codes."
+DEFAULT_CHAIN_DISCRIMINANT = 0x02F1
+CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
+CHAIN_DISCRIMINANT_TEST = 0x0171
+CHAIN_DISCRIMINANT_DEV = 0x0000
+I105_WARNING = (
+    "I105 addresses are the canonical account literal encoding. "
+    "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753)."
 )
 
-IH58_ALPHABET: Tuple[str, ...] = (
+I105_ASCII_ALPHABET: Tuple[str, ...] = (
     "1",
     "2",
     "3",
@@ -137,21 +138,13 @@ SORA_KANA: Tuple[str, ...] = (
     "ｽ",
 )
 
-COMPRESSED_ALPHABET: Tuple[str, ...] = IH58_ALPHABET + SORA_KANA
-COMPRESSED_BASE = len(COMPRESSED_ALPHABET)
-COMPRESSED_INDEX = {symbol: idx for idx, symbol in enumerate(COMPRESSED_ALPHABET)}
-IH58_INDEX = {symbol: idx for idx, symbol in enumerate(IH58_ALPHABET)}
+I105_ALPHABET: Tuple[str, ...] = I105_ASCII_ALPHABET + SORA_KANA
+I105_BASE = len(I105_ALPHABET)
+I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
 
 
 class AccountAddressError(ValueError):
     """Raised when an address cannot be parsed or encoded."""
-
-
-class AccountAddressFormat(Enum):
-    """Textual format used to render or parse an address."""
-
-    IH58 = "ih58"
-    COMPRESSED = "compressed"
 
 
 class AddressClass(IntEnum):
@@ -368,25 +361,16 @@ class AccountAddress:
         return cls(header=header, domain=domain, controller=controller)
 
     @classmethod
-    def from_ih58(
-        cls, encoded: str, expected_prefix: Optional[int] = None
+    def from_i105(
+        cls, encoded: str, expected_discriminant: Optional[int] = None
     ) -> "AccountAddress":
-        prefix, payload = decode_ih58_string(encoded)
-        if expected_prefix is not None and prefix != expected_prefix:
-            raise AccountAddressError(
-                f"unexpected IH58 network prefix: expected {expected_prefix}, found {prefix}"
-            )
+        payload = decode_i105_string(encoded, expected_discriminant=expected_discriminant)
         return cls.from_canonical_bytes(payload)
 
     @classmethod
-    def from_compressed_sora(cls, encoded: str) -> "AccountAddress":
-        canonical = decode_compressed_string(encoded)
-        return cls.from_canonical_bytes(canonical)
-
-    @classmethod
     def parse_encoded(
-        cls, address: str, expected_prefix: Optional[int] = None
-    ) -> Tuple["AccountAddress", AccountAddressFormat]:
+        cls, address: str, expected_discriminant: Optional[int] = None
+    ) -> "AccountAddress":
         token = address.strip()
         if not token:
             raise AccountAddressError("invalid length for address payload")
@@ -394,16 +378,9 @@ class AccountAddress:
             raise AccountAddressError("account id must not include '@domain'")
         if token.startswith(("0x", "0X")):
             raise AccountAddressError(
-                "canonical hex account literals are not accepted; use IH58 or sora compressed forms"
+                "canonical hex account literals are not accepted; use canonical I105 forms"
             )
-        if token.startswith(COMPRESSED_SENTINEL):
-            parsed = cls.from_compressed_sora(token)
-            return parsed, AccountAddressFormat.COMPRESSED
-        try:
-            parsed = cls.from_ih58(token, expected_prefix=expected_prefix)
-            return parsed, AccountAddressFormat.IH58
-        except AccountAddressError as err:
-            raise AccountAddressError("unsupported address format") from err
+        return cls.from_i105(token, expected_discriminant=expected_discriminant)
 
     def canonical_bytes(self) -> bytes:
         out = bytearray()
@@ -415,20 +392,15 @@ class AccountAddress:
     def canonical_hex(self) -> str:
         return "0x" + self.canonical_bytes().hex()
 
-    def to_ih58(self, network_prefix: int) -> str:
-        return encode_ih58_string(network_prefix, self.canonical_bytes())
+    def to_i105(self, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> str:
+        return encode_i105_string(self.canonical_bytes(), discriminant=discriminant)
 
-    def to_compressed_sora(self) -> str:
-        return encode_compressed_string(self.canonical_bytes())
-
-    def display_formats(self, network_prefix: int = 753) -> Mapping[str, object]:
-        ih58 = self.to_ih58(network_prefix)
-        compressed = self.to_compressed_sora()
+    def display_formats(self, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> Mapping[str, object]:
+        i105 = self.to_i105(discriminant)
         return {
-            "ih58": ih58,
-            "compressed": compressed,
-            "network_prefix": network_prefix,
-            "compressed_warning": COMPRESSED_WARNING,
+            "i105": i105,
+            "chain_discriminant": discriminant,
+            "i105_warning": I105_WARNING,
         }
 
     def __str__(self) -> str:
@@ -440,92 +412,85 @@ def compute_local_digest(label: str) -> bytes:
     return mac.digest()[:12]
 
 
-def encode_ih58_prefix(prefix: int) -> bytes:
-    if prefix < 0 or prefix > 0x3FFF:
-        raise AccountAddressError(f"invalid IH58 prefix: {prefix}")
-    if prefix <= 63:
-        return bytes([prefix])
-    lower = (prefix & 0b0011_1111) | 0b0100_0000
-    upper = prefix >> 6
-    return bytes([lower, upper])
+def i105_sentinel_for_discriminant(discriminant: int) -> str:
+    if discriminant == CHAIN_DISCRIMINANT_SORA:
+        return I105_SENTINEL_SORA
+    if discriminant == CHAIN_DISCRIMINANT_TEST:
+        return I105_SENTINEL_TEST
+    if discriminant == CHAIN_DISCRIMINANT_DEV:
+        return I105_SENTINEL_DEV
+    return f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}"
 
 
-def decode_ih58_prefix(buffer: bytes) -> Tuple[int, int]:
-    if not buffer:
-        raise AccountAddressError("invalid length for IH58 payload")
-    first = buffer[0]
-    if first <= 63:
-        return first, 1
-    if first & 0b0100_0000:
-        if len(buffer) < 2:
-            raise AccountAddressError("invalid length for IH58 payload")
-        second = buffer[1]
-        value = ((second & 0xFF) << 6) | (first & 0b0011_1111)
-        return value, 2
-    raise AccountAddressError(f"invalid IH58 prefix encoding: {first}")
+def i105_discriminant_from_sentinel(encoded: str) -> Optional[int]:
+    sentinels = (
+        (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
+        (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
+        (CHAIN_DISCRIMINANT_DEV, I105_SENTINEL_DEV),
+    )
+    for discriminant, sentinel in sentinels:
+        if encoded.startswith(sentinel):
+            return discriminant
+    if not encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
+        return None
+    index = len(I105_NUMERIC_SENTINEL_PREFIX)
+    while index < len(encoded) and encoded[index].isdigit():
+        index += 1
+    if index == len(I105_NUMERIC_SENTINEL_PREFIX):
+        return None
+    try:
+        return int(encoded[1:index])
+    except ValueError:
+        return None
 
 
-def encode_ih58_string(prefix: int, canonical: bytes) -> str:
-    body = bytearray(encode_ih58_prefix(prefix))
-    body.extend(canonical)
-    checksum_input = IH58_CHECKSUM_PREFIX + body
-    checksum = hashlib.blake2b(checksum_input, digest_size=64).digest()
-    body.extend(checksum[:IH58_CHECKSUM_BYTES])
-    digits = encode_base_n(bytes(body), 58)
-    return "".join(IH58_ALPHABET[d] for d in digits)
+def strip_i105_sentinel(encoded: str, expected_discriminant: Optional[int] = None) -> str:
+    expected = (
+        DEFAULT_CHAIN_DISCRIMINANT
+        if expected_discriminant is None
+        else expected_discriminant
+    )
+    sentinel = i105_sentinel_for_discriminant(expected)
+    if encoded.startswith(sentinel):
+        return encoded[len(sentinel) :]
+    found = i105_discriminant_from_sentinel(encoded)
+    if found is not None:
+        raise AccountAddressError(
+            f"unexpected I105 chain discriminant: expected {expected}, found {found}"
+        )
+    raise AccountAddressError(
+        "I105 address is missing the expected chain-discriminant sentinel"
+    )
 
 
-def decode_ih58_string(encoded: str) -> Tuple[int, bytes]:
-    digits: List[int] = []
-    for ch in encoded:
-        try:
-            digits.append(IH58_INDEX[ch])
-        except KeyError as exc:
-            raise AccountAddressError("invalid IH58 base58 encoding") from exc
-    body = decode_base_n(digits, 58)
-    if len(body) < 1 + IH58_CHECKSUM_BYTES:
-        raise AccountAddressError("invalid length for IH58 payload")
-    payload = body[:-IH58_CHECKSUM_BYTES]
-    checksum_bytes = body[-IH58_CHECKSUM_BYTES:]
-    prefix, prefix_len = decode_ih58_prefix(payload)
-    checksum_input = IH58_CHECKSUM_PREFIX + payload
-    expected = hashlib.blake2b(checksum_input, digest_size=64).digest()[:IH58_CHECKSUM_BYTES]
-    if checksum_bytes != expected:
-        raise AccountAddressError("IH58 checksum mismatch")
-    canonical = payload[prefix_len:]
-    return prefix, canonical
-
-
-def encode_compressed_string(canonical: bytes) -> str:
-    digits = encode_base_n(canonical, COMPRESSED_BASE)
-    checksum = compressed_checksum_digits(canonical)
-    pieces = [COMPRESSED_SENTINEL]
-    pieces.extend(COMPRESSED_ALPHABET[digit] for digit in digits)
-    pieces.extend(COMPRESSED_ALPHABET[digit] for digit in checksum)
+def encode_i105_string(canonical: bytes, *, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> str:
+    digits = encode_base_n(canonical, I105_BASE)
+    checksum = i105_checksum_digits(canonical)
+    pieces = [i105_sentinel_for_discriminant(discriminant)]
+    pieces.extend(I105_ALPHABET[digit] for digit in digits)
+    pieces.extend(I105_ALPHABET[digit] for digit in checksum)
     return "".join(pieces)
 
 
-def decode_compressed_string(encoded: str) -> bytes:
-    if not encoded.startswith(COMPRESSED_SENTINEL):
-        raise AccountAddressError("compressed address must start with sora sentinel")
-    payload = encoded[len(COMPRESSED_SENTINEL) :]
-    if len(payload) <= COMPRESSED_CHECKSUM_LEN:
-        raise AccountAddressError("compressed address is too short")
-    digits = [compressed_digit(symbol) for symbol in payload]
-    data_digits = digits[:-COMPRESSED_CHECKSUM_LEN]
-    checksum_digits = digits[-COMPRESSED_CHECKSUM_LEN:]
-    canonical = decode_base_n(data_digits, COMPRESSED_BASE)
-    expected = compressed_checksum_digits(canonical)
+def decode_i105_string(encoded: str, *, expected_discriminant: Optional[int] = None) -> bytes:
+    payload = strip_i105_sentinel(encoded, expected_discriminant=expected_discriminant)
+    if len(payload) <= I105_CHECKSUM_LEN:
+        raise AccountAddressError("I105 address too short")
+    digits = [i105_digit(symbol) for symbol in payload]
+    data_digits = digits[:-I105_CHECKSUM_LEN]
+    checksum_digits = digits[-I105_CHECKSUM_LEN:]
+    canonical = decode_base_n(data_digits, I105_BASE)
+    expected = i105_checksum_digits(canonical)
     if list(expected) != checksum_digits:
-        raise AccountAddressError("compressed checksum mismatch")
+        raise AccountAddressError("I105 checksum mismatch")
     return canonical
 
 
-def compressed_digit(symbol: str) -> int:
+def i105_digit(symbol: str) -> int:
     try:
-        return COMPRESSED_INDEX[symbol]
+        return I105_INDEX[symbol]
     except KeyError as exc:
-        raise AccountAddressError(f"invalid compressed alphabet symbol: {symbol}") from exc
+        raise AccountAddressError(f"invalid I105 alphabet symbol: {symbol}") from exc
 
 
 def encode_base_n(data: bytes, base: int) -> List[int]:
@@ -622,15 +587,15 @@ def expand_hrp(hrp: str) -> List[int]:
 def bech32m_checksum(data: Sequence[int]) -> List[int]:
     values = expand_hrp("snx")
     values.extend(data)
-    values.extend([0] * COMPRESSED_CHECKSUM_LEN)
+    values.extend([0] * I105_CHECKSUM_LEN)
     polymod = bech32_polymod(values) ^ BECH32M_CONST
     return [
-        (polymod >> (5 * (COMPRESSED_CHECKSUM_LEN - 1 - i))) & 0x1F
-        for i in range(COMPRESSED_CHECKSUM_LEN)
+        (polymod >> (5 * (I105_CHECKSUM_LEN - 1 - i))) & 0x1F
+        for i in range(I105_CHECKSUM_LEN)
     ]
 
 
-def compressed_checksum_digits(canonical: bytes) -> List[int]:
+def i105_checksum_digits(canonical: bytes) -> List[int]:
     base32_digits = convert_to_base32(canonical)
     return bech32m_checksum(base32_digits)
 
@@ -638,7 +603,6 @@ def compressed_checksum_digits(canonical: bytes) -> List[int]:
 __all__ = [
     "AccountAddress",
     "AccountAddressError",
-    "AccountAddressFormat",
     "DEFAULT_DOMAIN_NAME",
-    "COMPRESSED_WARNING",
+    "I105_WARNING",
 ]

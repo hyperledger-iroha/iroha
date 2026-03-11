@@ -14,7 +14,7 @@ título: امتثال عنوان الحساب
 description: ملخص سير عمل fixture ADDR-2 وكيف تبقى فرق SDK متزامنة.
 ---
 
-O modelo ADDR-2 (`fixtures/account/address_vectors.json`) possui fixtures IH58 e compactados (`sora`, segundo melhor; meia/largura total) e multiassinatura e negativo. Você pode usar o SDK + Torii para obter o JSON que você precisa e o codec no qual você está trabalhando. Faça o download do cartão de crédito (`docs/source/account_address_status.md` no site da empresa) Você pode usar o mono-repo para fazer isso.
+O modelo ADDR-2 (`fixtures/account/address_vectors.json`) possui fixtures I105 e compactados (`sora`, segundo melhor; meia/largura total) e multiassinatura e negativo. Você pode usar o SDK + Torii para obter o JSON que você precisa e o codec no qual você está trabalhando. Faça o download do cartão de crédito (`docs/source/account_address_status.md` no site da empresa) Você pode usar o mono-repo para fazer isso.
 
 ## اعادة توليد او التحقق من الحزمة
 
@@ -45,7 +45,7 @@ Não há nenhum dispositivo elétrico e um dispositivo de fixação para o carro
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-كل arnês يجري ida e volta للبايتات القياسية + IH58 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق fixture للحالات السلبية.
+كل arnês يجري ida e volta للبايتات القياسية + I105 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق fixture للحالات السلبية.
 
 ## هل تحتاج الى اتمتة؟
 

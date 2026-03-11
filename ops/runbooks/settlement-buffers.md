@@ -85,7 +85,7 @@ If sponsor balances are insufficient or AMM depth is degraded:
 1. Confirm breaker reason from router logs (`CIRCUIT_BREAKER_ACTIVE`, `AMM_DEPTH_DEGRADED`, etc.).
 2. Ensure XOR-only mode is active while breaker is engaged.
 3. Work with DEX governance to restore liquidity; capture `lane_settlement_commitments` snapshots before and after the breaker clears.
-4. Once two consecutive TWAMM slices execute with `address_format=ih58` receipts and lag <500 ms, clear the incident and document approvals.
+4. Once two consecutive TWAMM slices execute with canonical-I105 receipts and lag <500 ms, clear the incident and document approvals.
 
 ### Step 6 — Logging & Evidence
 

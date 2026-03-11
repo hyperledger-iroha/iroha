@@ -225,7 +225,7 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Prelude macros provide shorter aliases and inline validation for these constructors:
-- `account!("ih58...")`, `account_id!("ih58...")`
+- `account!("i105...")`, `account_id!("i105...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

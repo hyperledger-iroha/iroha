@@ -2517,7 +2517,7 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .unwrap();

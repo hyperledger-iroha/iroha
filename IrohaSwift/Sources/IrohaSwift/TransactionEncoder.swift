@@ -22,7 +22,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must be encoded-only (IH58 preferred, compressed accepted) with no whitespace (received '\(value)')."
+            return "Account id for \(field) must be encoded-only (i105) with no whitespace (received '\(value)')."
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
@@ -98,8 +98,8 @@ struct TransactionInputValidator {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
         do {
-            let (address, _) = try AccountAddress.parseEncoded(trimmed, expectedPrefix: nil)
-            return try address.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+            let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: nil)
+            return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
@@ -801,9 +801,9 @@ struct SwiftTransactionEncoder {
                 "owner must be a canonical account id"
             )
         }
-        let (address, format): (AccountAddress, AccountAddressFormat)
+        let address: AccountAddress
         do {
-            (address, format) = try AccountAddress.parseEncoded(
+            address = try AccountAddress.parseEncoded(
                 trimmed,
                 expectedPrefix: 0x02F1
             )
@@ -812,13 +812,8 @@ struct SwiftTransactionEncoder {
                 "owner must be a canonical account id"
             )
         }
-        guard format == .ih58 else {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
-            )
-        }
-        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        return ih58
+        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        return i105
     }
 
     private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {

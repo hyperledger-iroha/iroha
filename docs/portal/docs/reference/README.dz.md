@@ -22,6 +22,7 @@ translator: machine-google-reviewed
 - **I18NT0000004X I18NT000000000X*** – I18NI0000000010X ལག་ལེན་འཐབ་སྟེ་ གསར་ཤོས་ I18NT0000005X REST ཁྱད་ཚད་འདི་སྟོནམ་ཨིན།
   Redoc. `npm run sync-openapi -- --version=current --latest` དང་མཉམ་དུ་ ཁྱད་ཚད་བསྐྱར་བཟོ་འབད།
   I18NI000000012X གིས་ པར་ལེན་འདི་ ལོ་རྒྱུས་ཐོན་རིམ་ཁ་སྐོང་ནང་ འདྲ་བཤུས་རྐྱབ་ནི་ལུ་ འདྲ་བཤུས་བརྐྱབ་ནི།)
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
 - **རིམ་སྒྲིག་ཐིག་ཁྲམ་ཚུ་** ཚད་བཟུང་ཐོ་གཞུང་ཆ་ཚང་ནང་བཞག་ཡོདཔ་ཨིན།
   `docs/source/references/configuration.md`. དྲྭ་ཚིགས་འདི་གིས་ རང་བཞིན་ནང་འདྲེན་འབད་མ་ཚུགས་ཚུན་ཚོད་ གཞི་བསྟུན་འབད།
   སྔོན་སྒྲིག་དང་མཐའ་འཁོར་གནས་སོར་ཚུ་གི་དོན་ལུ་ མཱརཀ་ཌའོན་ཡིག་སྣོད་།

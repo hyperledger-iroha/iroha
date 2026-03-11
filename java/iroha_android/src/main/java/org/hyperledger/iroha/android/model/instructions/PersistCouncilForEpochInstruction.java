@@ -179,7 +179,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
     }
 
     public Builder addMember(final String accountId) {
-      this.members.add(AccountIdLiteral.extractIh58Address(accountId));
+      this.members.add(AccountIdLiteral.extractI105Address(accountId));
       return this;
     }
 
@@ -191,7 +191,7 @@ public final class PersistCouncilForEpochInstruction implements InstructionTempl
     }
 
     public Builder addAlternate(final String accountId) {
-      this.alternates.add(AccountIdLiteral.extractIh58Address(accountId));
+      this.alternates.add(AccountIdLiteral.extractI105Address(accountId));
       return this;
     }
 

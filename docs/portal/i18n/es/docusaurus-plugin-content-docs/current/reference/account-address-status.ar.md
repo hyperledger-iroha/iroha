@@ -14,7 +14,7 @@ título: امتثال عنوان الحساب
 descripción: Utilice el dispositivo ADDR-2 y conecte el SDK.
 ---
 
-Nombre del producto ADDR-2 (`fixtures/account/address_vectors.json`) Incluye accesorios IH58 y comprimidos (`sora`, segundo mejor; ancho medio/completo) y multifirma y negativo. Utilice SDK + Torii para crear un códec JSON y un código fuente. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
+Nombre del producto ADDR-2 (`fixtures/account/address_vectors.json`) Incluye accesorios I105 y comprimidos (`sora`, segundo mejor; ancho medio/completo) y multifirma y negativo. Utilice SDK + Torii para crear un códec JSON y un código fuente. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
 
 ## اعادة توليد او التحقق من الحزمة
 
@@ -45,7 +45,7 @@ Banderas:
 | SDK rápido | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK de Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-كل arnés يجري ida y vuelta للبايتات القياسية + IH58 + الترميزات المضغوطة ويتحقق من اكواد الخطأ بنمط Norito تطابق accesorio للحالات السلبية.
+كل arnés يجري ida y vuelta للبايتات القياسية + I105 + الترميزات المضغوطة ويتحقق من اكواد الخطأ بنمط Norito تطابق accesorio للحالات السلبية.
 
 ## هل تحتاج الى اتمتة؟يمكن لادوات الاصدار برمجة تحديثات accesorio عبر المساعد
 `scripts/account_fixture_helper.py`, الذي يجلب او يتحقق من الحزمة القياسية دون خطوات نسخ/لصق:

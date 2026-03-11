@@ -96,7 +96,7 @@ address-manifest-<REVISION>/
    - Записи `global_domain` ДОЛЖНЫ включать `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - Записи `local_alias` ДОЛЖНЫ содержать 12‑байтный digest, сформированный Norm v1
      (проверьте `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`;
-     JSON‑сводка отражает домен через `input_domain`, а `legacy  suffix` воспроизводит кодировку как `<ih58>@<domain>` для манифестов).
+     JSON‑сводка отражает домен через `input_domain`, а `legacy  suffix` воспроизводит кодировку как `<i105>@<domain>` для манифестов).
    - Записи `tombstone` ДОЛЖНЫ ссылаться на точный selector, подлежащий выводу,
      и содержать поля `reason_code`, `ticket`, `replaces_sequence`.
 
@@ -132,7 +132,7 @@ address-manifest-<REVISION>/
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **Черновик записи манифеста.** Добавьте JSON‑запись вида:
@@ -178,7 +178,7 @@ address-manifest-<REVISION>/
     в один digest. Приостановите промо манифеста, запустите
     `scripts/address_local_toolkit.sh` для проверки маппинга digest и
     согласуйте с governance Nexus до переиздания записи.
-  - `AddressInvalidRatioSlo` — предупреждает, когда доля неверных IH58/сжатых
+  - `AddressInvalidRatioSlo` — предупреждает, когда доля неверных I105/сжатых
     отправок (за исключением Local‑8/strict‑mode отказов) превышает 0,1 % SLO
     на протяжении 10 минут. Проверьте `torii_address_invalid_total` по контексту/причине
     и согласуйте с SDK‑командой до повторного включения strict‑mode.

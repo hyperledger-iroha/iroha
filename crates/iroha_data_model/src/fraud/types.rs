@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn risk_query_encodes() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let asset_id = AssetId::of(asset_def, account_id.clone());
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn governance_export_encodes() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let voting_asset = AssetId::of(asset_def, account_id);

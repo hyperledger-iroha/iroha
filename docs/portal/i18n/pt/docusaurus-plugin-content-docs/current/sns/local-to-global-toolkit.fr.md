@@ -16,7 +16,7 @@ Esta página reflete `docs/source/sns/local_to_global_toolkit.md` do mono-repo. 
 
 - `scripts/address_local_toolkit.sh` encapsula o CLI `iroha` para produzir:
   - `audit.json` – estrutura de saída de `iroha tools address audit --format json`.
-  - `normalized.txt` - literatura IH58 (preferir) / compactada (`sora`) (segunda escolha) convertida para cada seletor de domínio local.
+  - `normalized.txt` - literatura I105 (preferir) / compactada (`sora`) (segunda escolha) convertida para cada seletor de domínio local.
 - Associar o script ao painel de administração de endereços (`dashboards/grafana/address_ingest.json`)
   e as regras Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para provar que o corte Local-8 /
   Local-12 fica ao sul. Monitore os painéis de colisão Local-8 e Local-12 e os alertas
@@ -28,12 +28,12 @@ Esta página reflete `docs/source/sns/local_to_global_toolkit.md` do mono-repo. 
 ## Uso
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Opções:
 
-- `--format compressed (`sora`)` para a saída `sora...` em vez de IH58.
+- `--format I105` para a saída `sora...` em vez de I105.
 - `domainless output (default)` para emetre des literaux nus.
 - `--audit-only` para ignorar a etapa de conversão.
 - `--allow-errors` para continuar a varredura quando as linhas mal formadas forem detectadas (corresponde ao comportamento da CLI).

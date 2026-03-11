@@ -15,7 +15,7 @@ title: امتثال عنوان الحساب
 description: ملخص سير عمل fixture ADDR-2 وكيف تبقى فرق SDK متزامنة.
 ---
 
-الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures IH58 و compressed (`sora`, second-best; half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
+الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures I105 و i105-default (`sora`; half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.
 
 ## اعادة توليد او التحقق من الحزمة
 
@@ -46,7 +46,7 @@ Flags:
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-كل harness يجري round-trip للبايتات القياسية + IH58 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق fixture للحالات السلبية.
+كل harness يجري round-trip للبايتات القياسية + I105 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق fixture للحالات السلبية.
 
 ## هل تحتاج الى اتمتة؟
 

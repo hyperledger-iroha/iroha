@@ -14,7 +14,7 @@ titre : امتثال عنوان الحساب
 description : Il s'agit du luminaire ADDR-2 et du SDK.
 ---
 
-Le ADDR-2 (`fixtures/account/address_vectors.json`) est compatible avec les appareils IH58 et compressé (`sora`, deuxième meilleur ; demi/pleine largeur) et multisignature et négatif. Utilisez le SDK + Torii pour JSON comme support pour le codec et le codec. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من Il s'agit d'un mono-repo.
+Le ADDR-2 (`fixtures/account/address_vectors.json`) est compatible avec les appareils I105 et compressé (`sora`, deuxième meilleur ; demi/pleine largeur) et multisignature et négatif. Utilisez le SDK + Torii pour JSON comme support pour le codec et le codec. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من Il s'agit d'un mono-repo.
 
 ## اعادة توليد او التحقق من الحزمة
 
@@ -45,7 +45,7 @@ Il s'agit d'un match et d'un match de football.
 | SDK Swift | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | SDK Android | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-كل harnais يجري round-trip للبايتات القياسية + IH58 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق luminaire للحالات السلبية.
+كل harnais يجري round-trip للبايتات القياسية + I105 + الترميزات المضغوطة ويتحقق من ان اكواد الخطأ بنمط Norito تطابق luminaire للحالات السلبية.
 
 ## هل تحتاج الى اتمتة؟يمكن لادوات الاصدار برمجة تحديثات luminaire عبر المساعد
 `scripts/account_fixture_helper.py`, l'article est également disponible pour les articles à prix abordables :

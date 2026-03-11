@@ -20,7 +20,7 @@ title: Conformite des adresses de compte
 description: Resume du workflow du fixture ADDR-2 et de la synchronisation des equipes SDK.
 ---
 
-Le bundle canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture des fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature et negatifs. Chaque surface SDK + Torii s'appuie sur le meme JSON afin de detecter toute derive de codec avant la production. Cette page reflete le brief de statut interne (`docs/source/account_address_status.md` dans le depot racine) pour que les lecteurs du portail puissent consulter le workflow sans fouiller le mono-repo.
+Le bundle canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture des fixtures I105 and i105-default (`sora`; half/full width), multisignature et negatifs. Chaque surface SDK + Torii s'appuie sur le meme JSON afin de detecter toute derive de codec avant la production. Cette page reflete le brief de statut interne (`docs/source/account_address_status.md` dans le depot racine) pour que les lecteurs du portail puissent consulter le workflow sans fouiller le mono-repo.
 
 ## Regenerer ou verifier le bundle
 
@@ -51,7 +51,7 @@ chaque fois que le fixture, le generateur ou les docs changent afin d'alerter im
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Chaque harness fait un aller-retour des octets canoniques + IH58 + encodages compresses et verifie que les codes d'erreur de style Norito correspondent au fixture pour les cas negatifs.
+Chaque harness fait un aller-retour des octets canoniques + I105 + encodages compresses et verifie que les codes d'erreur de style Norito correspondent au fixture pour les cas negatifs.
 
 ## Besoin d'automatisation ?
 

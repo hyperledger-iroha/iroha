@@ -86,6 +86,10 @@ The following components read these values from `docusaurus.config.js`:
   bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
   injects `X-TryIt-Auth`, and rewrites calls through the proxy when
   `TRYIT_PROXY_PUBLIC_URL` is set.
+- **MCP reference** — `/reference/torii-mcp`; documents JSON-RPC usage for
+  `/v1/mcp` (`initialize`, `tools/list`, `tools/call`, async job polling).
+  Use this for agent integrations because MCP is not modeled as OpenAPI
+  operations.
 - **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
   reuses the same headers as the Swagger panel, and targets the proxy
   automatically when the URL is configured.

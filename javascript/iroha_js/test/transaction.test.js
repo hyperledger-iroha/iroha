@@ -19,8 +19,8 @@ import { makeNativeTest } from "./helpers/native.js";
 const BASE_URL = "http://localhost:8080";
 const AUTHORITY_ID_RAW =
   "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
-const AUTHORITY_ID = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
-const AUTHORITY_ID_INPUT = ih58FromEd25519AccountId(AUTHORITY_ID_RAW);
+const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
+const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const CANONICAL_ASSET_ID_INPUT =
   "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
@@ -32,8 +32,8 @@ const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const NEW_ACCOUNT_ID_RAW =
   "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
-const NEW_ACCOUNT_ID = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
-const NEW_ACCOUNT_ID_INPUT = ih58FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
+const NEW_ACCOUNT_ID = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
+const NEW_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
 const NODE_CAPABILITIES = {
@@ -60,12 +60,12 @@ const NODE_CAPABILITIES = {
 };
 const test = makeNativeTest(baseTest);
 
-function ih58FromEd25519AccountId(raw) {
+function i105FromEd25519AccountId(raw) {
   const trimmed = raw.trim();
   const atIndex = trimmed.lastIndexOf("@");
   if (atIndex === -1) {
     const { address } = AccountAddress.parseEncoded(trimmed);
-    return address.toIH58();
+    return address.toI105();
   }
   const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
   const domain = trimmed.slice(atIndex + 1).trim();
@@ -74,7 +74,7 @@ function ih58FromEd25519AccountId(raw) {
   }
   const publicKeyHex = signatory.slice(6);
   const publicKey = Buffer.from(publicKeyHex, "hex");
-  return AccountAddress.fromAccount({ domain, publicKey }).toIH58();
+  return AccountAddress.fromAccount({ domain, publicKey }).toI105();
 }
 
 test("hashSignedTransaction delegates to native binding and returns hex", () => {
@@ -607,7 +607,7 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
   const captures = [];
   const secondAccountIdRaw =
     "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm";
-  const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
+  const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
@@ -891,8 +891,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   const captures = [];
   const secondAccountIdRaw =
     "6cmzPVPX86ciDcsUqr72LcRWgsSERqXqGjJQBUKCsLfodfx5S5NEEsA";
-  const secondAccountId = ih58FromEd25519AccountId(secondAccountIdRaw);
-  const secondAccountIdInput = ih58FromEd25519AccountId(secondAccountIdRaw);
+  const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
+  const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {

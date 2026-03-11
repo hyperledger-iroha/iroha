@@ -58,7 +58,7 @@ async fn offline_revocations_list_supports_filtering_and_sorting() {
         .expect("fixture with note");
     let filter_json = json::to_string(&exists_filter("note")).expect("serialize filter");
     let uri = format!(
-        "/v1/offline/revocations?address_format=canonical&sort=issuer_id:asc&filter={}",
+        "/v1/offline/revocations?sort=issuer_id:asc&filter={}",
         encode(&filter_json)
     );
 
@@ -92,7 +92,7 @@ async fn offline_revocations_list_supports_filtering_and_sorting() {
     assert_eq!(
         item["issuer_display"].as_str(),
         Some(note_fixture.issuer_literal.as_str()),
-        "canonical address_format should match IH58 literal"
+        "issuer display should match canonical i105 literal"
     );
     assert_eq!(
         item["note"].as_str(),
@@ -106,7 +106,7 @@ async fn offline_revocations_list_supports_filtering_and_sorting() {
 }
 
 #[tokio::test]
-async fn offline_revocations_query_respects_address_format_and_sort() {
+async fn offline_revocations_query_respects_sorting() {
     let harness = build_revocation_harness();
     let mut fixtures = harness.fixtures.clone();
     fixtures.sort_by_key(|fixture| fixture.revoked_at_ms);
@@ -125,7 +125,6 @@ async fn offline_revocations_query_respects_address_format_and_sort() {
     envelope_map.insert("sort".into(), Value::Array(vec![Value::Object(sort_entry)]));
     envelope_map.insert("pagination".into(), Value::Object(pagination));
     envelope_map.insert("fetch_size".into(), Value::from(32u64));
-    envelope_map.insert("address_format".into(), Value::from("compressed"));
     let envelope = Value::Object(envelope_map);
 
     let resp = harness
@@ -154,8 +153,8 @@ async fn offline_revocations_query_respects_address_format_and_sort() {
         assert_eq!(item["revoked_at_ms"].as_u64(), Some(fixture.revoked_at_ms));
         assert_eq!(
             item["issuer_display"].as_str(),
-            Some(fixture.issuer_compressed.as_str()),
-            "compressed address_format should emit sora literal"
+            Some(fixture.issuer_i105.as_str()),
+            "issuer display should emit canonical i105 literal"
         );
         let metadata_present = item
             .as_object()
@@ -182,7 +181,7 @@ struct RevocationTestHarness {
 struct SeededRevocation {
     verdict_hex: String,
     issuer_literal: String,
-    issuer_compressed: String,
+    issuer_i105: String,
     reason: OfflineVerdictRevocationReason,
     note: Option<String>,
     revoked_at_ms: u64,
@@ -462,7 +461,7 @@ fn make_seeded(seed: &RevocationSeed, revoked_at_ms: u64) -> SeededRevocation {
     SeededRevocation {
         verdict_hex: hex::encode(seed.revocation.verdict_id.as_ref()),
         issuer_literal: issuer_literal.clone(),
-        issuer_compressed: compressed_literal(&seed.certificate.controller),
+        issuer_i105: i105_literal(&seed.certificate.controller),
         reason: seed.revocation.reason,
         note: seed.revocation.note.clone(),
         revoked_at_ms,
@@ -470,10 +469,10 @@ fn make_seeded(seed: &RevocationSeed, revoked_at_ms: u64) -> SeededRevocation {
     }
 }
 
-fn compressed_literal(account_id: &AccountId) -> String {
+fn i105_literal(account_id: &AccountId) -> String {
     account_id
         .to_account_address()
-        .and_then(|address| address.to_compressed_sora())
+        .and_then(|address| address.to_i105())
         .unwrap_or_else(|_| account_id.to_string())
 }
 

@@ -15,8 +15,6 @@ extern "C" {
 #endif
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
-#define CONNECT_ACCOUNT_ADDRESS_FORMAT_IH58 0
-#define CONNECT_ACCOUNT_ADDRESS_FORMAT_COMPRESSED 1
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
 #define CONNECT_NORITO_ERR_OFFLINE_RECEIVER -300
 #define CONNECT_NORITO_ERR_OFFLINE_ASSET -301
@@ -35,7 +33,6 @@ int32_t connect_norito_account_address_parse(
     uint8_t expected_prefix_present,
     uint8_t** out_canonical_ptr,
     unsigned long* out_canonical_len,
-    uint8_t* out_detected_format,
     uint16_t* out_network_prefix,
     uint8_t** out_error_json_ptr,
     unsigned long* out_error_json_len);
@@ -46,8 +43,8 @@ int32_t connect_norito_account_address_render(
     uint16_t network_prefix,
     uint8_t** out_canonical_hex_ptr,
     unsigned long* out_canonical_hex_len,
-    uint8_t** out_ih58_ptr,
-    unsigned long* out_ih58_len,
+    uint8_t** out_i105_ptr,
+    unsigned long* out_i105_len,
     uint8_t** out_compressed_ptr,
     unsigned long* out_compressed_len,
     uint8_t** out_compressed_full_ptr,

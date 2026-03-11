@@ -58,7 +58,7 @@ listadas en `roadmap.md`, vinculando كل تدفق من العمل مع الأد
 | كارتا + أنيكسوس KPI | `docs/source/sns/governance_addenda/` | مذكرات الشركات مع التحكم في الإصدار، واتفاقيات مؤشرات الأداء الرئيسية، وقرارات الإدارة المرجعية بناءً على تصويتات CLI. |
 | Esquema de Registro | [`registry-schema.md`](./registry-schema.md) | الهياكل الأساسية Norito canonicas (`NameRecordV1`، `SuffixPolicyV1`، `RevenueAccrualEventV1`). |
 | عقد التسجيل | [`registrar-api.md`](./registrar-api.md) | الحمولات النافعة REST/gRPC ومقاييس `sns_registrar_status_total` وخطاف الإدارة المتوقع. |
-| دليل تجربة المستخدم | [`address-display-guidelines.md`](./address-display-guidelines.md) | تم إصدار Canonicos IH58 (المفضل) والاشتراكات (الخيار الأفضل الثاني) من قبل المحافظ/المستكشفين. |
+| دليل تجربة المستخدم | [`address-display-guidelines.md`](./address-display-guidelines.md) | تم إصدار Canonicos I105 (المفضل) والاشتراكات (الخيار الأفضل الثاني) من قبل المحافظ/المستكشفين. |
 | مستندات SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)، [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | الاشتقاق الحتمي للمضيفين، تدفق تخصيص الشفافية وأنظمة التنبيهات. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | Notas de ingreso jurisdiccional (p. ej., EU DSA), acuses desteward, anexos plantilla. |
 | سجل الحفر | `ops/drill-log.md` | سجل طلبات البحث و IR المطلوبة قبل البدء بالخطوة. |
@@ -99,7 +99,7 @@ listadas en `roadmap.md`, vinculando كل تدفق من العمل مع الأد
    تم نشر منطقة GAR/zone الجديدة (الإصدار 4.5).
 6. **إفصاح العميل:** تحديث دفتر الأستاذ الموجه للعميل
    (المحفظة/المستكشف) عبر los Installations compartidos en[`address-display-guidelines.md`](./address-display-guidelines.md)، آمن
-   تتوافق أجهزة IH58 المقدمة والمشتملة مع دليل النسخ/QR.
+   تتوافق أجهزة I105 المقدمة والمشتملة مع دليل النسخ/QR.
 
 ### 4.3 تجديدات وتفتيت وتسوية الهياكل- **تدفق التجديد:** يطبق المسجلون النوافذ بفضل الشكر
   30 يومًا + تخفيض 60 يومًا محددًا في `SuffixPolicyV1`. بعد 60
@@ -127,11 +127,11 @@ listadas en `roadmap.md`, vinculando كل تدفق من العمل مع الأد
 ### 4.4 المراسلات والمنازعات والمكالمات| فاس | دوينو | العمل والأدلة | جيش تحرير السودان |
 |-------|-------|------------------|-----|
 | طلب التجميد الناعم | ستيوارد / سوبورتي | تقديم التذكرة `SNS-DF-<id>` مع التحقق من الدفع، ومراجعة سندات النزاع والمحدد (المحددات) المتأثرة. | <=4 ساعات من الإدخال. |
-| تذكرة الوصي | مجلس الحراس | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` ينتج `GuardianFreezeTicketV1`. حماية التذكرة JSON على `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة قذف. |
+| تذكرة الوصي | مجلس الحراس | `sns governance freeze --selector <I105> --reason <text> --until <ts>` ينتج `GuardianFreezeTicketV1`. حماية التذكرة JSON على `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة قذف. |
 | التصديق على النصيحة | مستشار الحكومة | Aprobar o rechazar congelamientos، وثيقة القرار المضمن في تذكرة الوصي وملخص رابطة النزاع. | الجلسة القادمة للمشورة أو التصويت غير المتزامن. |
 | لوحة التحكيم | الولاء + ستيوارد | لوحة استدعاء مكونة من 7 جورادوس (خريطة الطريق الثانية) مع سلاسل من الرصاص عبر `sns governance dispute ballot`. إضافة إيصالات صوتية مجهولة المصدر إلى حزمة الأحداث. | الحكم <=7 أيام بعد إيداع السندات. |
 | أبيلاسيون | الحراس + المستشار | الالتماسات تكرر السند وتكرر عملية التحكيم؛ يوضح المسجل Norito `DisputeAppealV1` والتذكرة المرجعية الأولية. | <=10 دياس. |
-| إزالة الخلل والعلاج | المسجل + عمليات الحل | قم بتشغيل `sns governance unfreeze --selector <IH58> --ticket <id>`، وقم بتحديث حالة المسجل ونشر اختلافات GAR/resolver. | على الفور بعد صدور الحكم. |قوانين الطوارئ (التجميد النشط للمراقبين <= 72 ساعة) متواصلة
+| إزالة الخلل والعلاج | المسجل + عمليات الحل | قم بتشغيل `sns governance unfreeze --selector <I105> --ticket <id>`، وقم بتحديث حالة المسجل ونشر اختلافات GAR/resolver. | على الفور بعد صدور الحكم. |قوانين الطوارئ (التجميد النشط للمراقبين <= 72 ساعة) متواصلة
 نفس التدفق ولكنه يتطلب مراجعة بأثر رجعي للمشورة ومذكرة
 الشفافية في `docs/source/sns/regulatory/`.
 

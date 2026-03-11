@@ -86,7 +86,7 @@ Le coureur imprime le journal `info("Hello from Kotodama")` et exécute l'appel 
 
 ## 4. Envoyez le bytecode via ToriiAvec le nœud également, envoyez le bytecode compilé à Torii à l'aide de la CLI. L'identité de développement par défaut est dérivée de la clé publique en `defaults/client.toml`, car l'ID de compte est
 ```
-ih58...
+i105...
 ```
 
 Utilisez le fichier de configuration pour spécifier l'URL de Torii, l'ID de chaîne et la clé de l'entreprise :
@@ -106,7 +106,7 @@ Utilisez le même profil de la CLI pour obtenir les détails du compte qui écri
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

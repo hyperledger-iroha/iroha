@@ -141,9 +141,9 @@ ledger projection that triggered the payment.
    ```bash
   sorafs reserve ledger \
     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account ih58... \
-    --treasury-account ih58... \
-    --reserve-account ih58... \
+    --provider-account i105... \
+    --treasury-account i105... \
+    --reserve-account i105... \
     --asset-definition xor#sora \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```

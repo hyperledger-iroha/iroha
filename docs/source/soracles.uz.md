@@ -133,7 +133,7 @@ For tooling:
   return Norito-ready instruction objects for inclusion in transactions.
 
 These fixtures use the canonical hash literal form (`hash:...#...`), uppercase
-signatures, and IH58 provider IDs derived from deterministic ed25519 keys (e.g.,
+signatures, and I105 provider IDs derived from deterministic ed25519 keys (e.g.,
 `34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA`).
 
 For social/PII-bearing feeds, `ObservationValue::from_hash`, `from_keyed_hash`,

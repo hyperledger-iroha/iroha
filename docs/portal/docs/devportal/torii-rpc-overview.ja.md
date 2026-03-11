@@ -41,6 +41,7 @@ SDK 別のガイド:
 
 1. [プロキシを起動](./try-it.md#start-the-proxy-locally)し、`TRYIT_PROXY_PUBLIC_URL` を設定してウィジェットが送信先を把握できるようにします。
 2. このページの **Try it** カードか `/reference/torii-swagger` パネルを開き、`POST /v1/pipeline/submit` などのエンドポイントを選択します。
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. **Content-Type** を `application/x-norito` に切り替え、**Binary** エディタを選択し、`fixtures/norito_rpc/transfer_asset.norito` をアップロードします（または `fixtures/norito_rpc/transaction_fixtures.manifest.json` に記載の任意のペイロード）。
 4. OAuth device-code ウィジェットまたは手動トークン欄で bearer token を提供します（`TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` を設定するとプロキシは `X-TryIt-Auth` の上書きを許可します）。
 5. リクエストを送信し、Torii が `fixtures/norito_rpc/schema_hashes.json` に記載の `schema_hash` を返すことを確認します。一致するハッシュは、ブラウザ/プロキシ経由でも Norito ヘッダーが保持されたことを示します。

@@ -19,9 +19,9 @@ source : crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## Пошаговый обход реестра
 
-- Assurez-vous que le compte de démarrage (par exemple `ih58...`) soit disponible à l'étape suivante du SDK de démarrage rapide.
+- Assurez-vous que le compte de démarrage (par exemple `i105...`) soit disponible à l'étape suivante du SDK de démarrage rapide.
 - Vous avez choisi `register_and_mint` pour pouvoir exploiter l'action ROSE et gagner 250 éditions pour Alice dans une nouvelle transition.
-- Vérifiez les soldes correspondant à `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` pour pouvoir modifier votre compte.
+- Vérifiez les soldes correspondant à `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account i105...` pour pouvoir modifier votre compte.
 
 ## SDK de démarrage rapide
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ih58...");
+    let to = account!("i105...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

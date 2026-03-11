@@ -20,6 +20,7 @@ translator: machine-google-reviewed
 - **Norito кодектеріне шолу** – `reference/norito-codec.md` беделдіге тікелей сілтеме жасайды
   Портал кестесі толтырылып жатқан кезде `norito.md` сипаттамасы.
 - **Torii OpenAPI** – `/reference/torii-openapi` соңғы Torii REST спецификациясын пайдаланады.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   Redoc. `npm run sync-openapi -- --version=current --latest` көмегімен ерекшелікті қалпына келтіріңіз (қосу
   Суретті қосымша тарихи нұсқаларға көшіру үшін `--mirror=<label>`).
 - **Конфигурация кестелері** – Толық параметрлер каталогы сақталады

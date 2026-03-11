@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
 | `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Активный, Грейс, الخ). |
 
-**Селектор выбора:** `{selector}` для IH58 или шестнадцатеричного формата ADDR-5; Torii — это `NameSelectorV1`.
+**Селектор выбора:** `{selector}` для I105 или шестнадцатеричного формата ADDR-5; Torii — это `NameSelectorV1`.
 
 **Открытие:** при использовании Norito JSON для `code`, `message`, `details`. Доступны `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -160,7 +160,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner ih58... \
+  --new-owner i105... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Torii добавлен в раздел:
 
 1. Установите флажок `/v1/sns/policies/{suffix_id}` для получения дополнительной информации о Грейс.
 2. Для `RegisterNameRequestV1`:
-   - `selector` находится на этикетке IH58 (открыто) и (отсутствует).
+   - `selector` находится на этикетке I105 (открыто) и (отсутствует).
    - `term_years` добавлен в программу.
    - `payment` находится в сплиттере/стюарде.
 3. Torii Код:

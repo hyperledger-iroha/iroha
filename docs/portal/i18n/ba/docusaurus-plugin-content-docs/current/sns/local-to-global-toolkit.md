@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - I18NI000000006X I18NI000000007X CLI етештереү өсөн урап:
   - `audit.json` — структуралы сығыш `iroha tools address audit --format json`.
-  - `normalized.txt` — IH58 / икенсе иң яҡшы ҡыҫылған үҙгәртелгән (I18NI0000000011X) һәр урындағы домен селекторы өсөн тура һүҙлеләр.
+  - `normalized.txt` — I105 / икенсе иң яҡшы ҡыҫылған үҙгәртелгән (I18NI0000000011X) һәр урындағы домен селекторы өсөн тура һүҙлеләр.
 - Сценарийҙы парлы приборҙар таҡтаһы (`dashboards/grafana/address_ingest.json`) менән парлаштырырға
   һәм иҫкәртмәндәр ҡағиҙәләре (`dashboards/alerts/address_ingest_rules.yml`) урындағы-8 /
   Урындағы-12 өҙөклөк хәүефһеҙ. Урындағы-8 һәм урындағы-12 бәрелеш панелдәрен ҡарағыҙ плюс
@@ -32,12 +32,12 @@ scripts/address_local_toolkit.sh \
   --input fixtures/address/local_digest_examples.txt \
   --output-dir artifacts/address_migration \
   --network-prefix 753 \
-  --format ih58
+  --format i105
 ```
 
 Варианттар:
 
-- IH58 урынына I18NI0000000018X өсөн I18NI000000017X.
+- I105 урынына I18NI0000000018X өсөн I18NI000000017X.
 - I18NI000000019X X Xea mare литералдар сығарыу өсөн.
 - `--audit-only` конверсия аҙымын үткәреү өсөн.
 - `--allow-errors` сканерлауҙы һаҡлау өсөн, ҡасан дөрөҫ формалаштырылған рәттәр барлыҡҡа килә (CLI тәртибенә тап килә).

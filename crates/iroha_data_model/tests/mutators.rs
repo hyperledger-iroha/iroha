@@ -31,7 +31,7 @@ fn domain_metadata_mut_and_set_owned_by() {
 #[test]
 fn asset_definition_mutators_metadata_mintable_owner() {
     // Build an AssetDefinition and exercise mutators
-    let domain_id: DomainId = "land".parse().expect("valid");
+    let _domain_id: DomainId = "land".parse().expect("valid");
     let asset_def_id: AssetDefinitionId = "rose#land".parse().expect("valid asset id");
 
     // Create an owner account in the same domain

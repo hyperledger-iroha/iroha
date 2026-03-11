@@ -95,7 +95,7 @@ Last update: 2026-02-07
 - Integration tests: rebuilt the test-network `iroha3d` binary and reran address-canonicalisation account transaction checks; both tests passed. Tests: `CARGO_TARGET_DIR=target/iroha-test-network cargo build -p irohad --release --bin iroha3d` (warning: unused `suppress_pow_broadcast` in `crates/irohad/src/main.rs`), `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test address_canonicalisation account_transactions_ -- --nocapture` (ok).
 - Repo ISI dispatch: handle `RepoInstructionBox` (and margin call) in core/executor instruction dispatch so boxed repo instructions execute; added unit coverage in `iroha_core` and `iroha_executor`. Tests: `cargo test -p iroha_core repo_instruction_box_executes_via_instruction_dispatch -- --nocapture` (warnings: unused `mut` in `crates/iroha_core/src/kura.rs:7051`, `crates/iroha_core/src/smartcontracts/isi/staking.rs:2552`, `crates/iroha_core/src/state.rs:22969`); `cargo test -p iroha_executor visit_instruction_dispatches_repo_instruction_box -- --nocapture` (ok). Full workspace tests not run.
 - Offline allowances: create deterministic escrow accounts when `offline.enabled` metadata is set via `SetKeyValue<AssetDefinition>`; added coverage for the metadata update path and refreshed offline allowance translations + offline topup helper README to document the requirement. Tests: `cargo test -p iroha_core set_asset_definition_offline_enabled_creates_escrow_account -- --nocapture` (failed: existing `iroha_p2p` compile error in `crates/iroha_p2p/src/peer.rs:2155`, missing `DecodeFromSlice` bound). Full workspace tests not run (user requested).
-- CLI: route tools/address output through text mode so IH58/CSV conversions land on stdout; command errors now embed underlying messages; updated DA rent-quote smoke expectations and incentives-state account literal checks. Tests: `cargo test -p iroha_cli` (ok).
+- CLI: route tools/address output through text mode so I105/CSV conversions land on stdout; command errors now embed underlying messages; updated DA rent-quote smoke expectations and incentives-state account literal checks. Tests: `cargo test -p iroha_cli` (ok).
 - Build: `cargo build --workspace` (ok; warnings about unused gpuzstd_metal functions, `izanami` dead-code `stake_escrow`/`slash_sink`, and `irohad` dead-code `suppress_pow_broadcast`).
 - P2P: derive Norito slice decoding for the peer run message wrapper to satisfy `Pload` bounds and add a decode-from-slice roundtrip unit test. Tests not run (not requested).
 - P2P: add Norito slice decoding for `RelayMessage` to satisfy Pload bounds and add a roundtrip decode unit test. Tests not run (not requested).
@@ -136,10 +136,10 @@ Last update: 2026-02-07
 - Localnet 1/5 TPS profiling (4 peers, 60s) for permissioned + NPoS using kagami localnet + `iroha ledger transaction ping --no-wait` with `LOG_FILTER=iroha_core::sumeragi::main_loop=debug`; artifacts in `/tmp/iroha-localnet-*-prof`.
 - Throughput/commit_time: perm 1 tps (67 approved, ~1.12 tps, commit_time_ms 1644), perm 5 tps (307 approved, ~5.12 tps, commit_time_ms 1436), npos 1 tps (69 approved, ~1.15 tps, commit_time_ms 1309), npos 5 tps (307 approved, ~5.12 tps, commit_time_ms 4894).
 - Validation timing bottlenecks: `execution_tx_ms` dominates (avg ms perm 1/5 = 1.92/6.09, npos 1/5 = 2.36/4.59) with access/overlay/apply next; stateless validation grows at 5 tps; NPoS 5 tps shows elevated commit_time_ms + view_change_install_total 4.
-- Mochi: composer/vault/egui now emit explicit account/asset literals (IH58@domain), pin-manifest fixtures updated to match current Norito JSON shape, Torii event/block fixtures regenerated, and kagami/supervisor tests adjusted for updated stub logging; `cargo test -p mochi-core` (ok). Workspace tests not run (user requested no full workspace tests).
+- Mochi: composer/vault/egui now emit explicit account/asset literals (I105@domain), pin-manifest fixtures updated to match current Norito JSON shape, Torii event/block fixtures regenerated, and kagami/supervisor tests adjusted for updated stub logging; `cargo test -p mochi-core` (ok). Workspace tests not run (user requested no full workspace tests).
 - Sumeragi: cache the vote roster before replaying cached QCs after `BlockCreated` so deferred precommit QCs can apply once the payload arrives. Tests: `cargo test -p iroha_core block_created_applies_cached_precommit_qc -- --nocapture` (ok).
 - Sumeragi: split the snapshot-roster BlockCreated coverage into quorum vs non-quorum paths (pending stored without quorum, commit QC rebuilt with quorum) using mode-aware PRF context. Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib block_created_stores_pending_without_commit_quorum -- --nocapture`, `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib block_created_rebuilds_qc_with_snapshot_roster -- --nocapture` (ok; existing unused-`mut` warnings).
-- Multisig: fall back to hash-based role suffixes when IH58 encoding fails for large policies; JSON AccountId now falls back to a `norito:` hex literal for large multisig accounts; added targeted coverage in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` and `crates/iroha_data_model/src/account.rs`.
+- Multisig: fall back to hash-based role suffixes when I105 encoding fails for large policies; JSON AccountId now falls back to a `norito:` hex literal for large multisig accounts; added targeted coverage in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` and `crates/iroha_data_model/src/account.rs`.
 - Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core multisig_approval_weight_sum_does_not_overflow -- --nocapture` (ok); `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_data_model account_id_json_roundtrip_large_multisig_uses_norito_literal -- --nocapture` timed out during compilation.
 - Pipeline overlay AXT test: build pointer-ABI TLVs with headered Norito payloads (`norito::to_bytes`) so decode paths accept them; `cargo test -p iroha_core overlay_rejects_axt_without_policy_entries -- --nocapture` (ok; warnings about unused `padded` in `norito` and unused `mut` in `iroha_core`).
 - Sumeragi tests: switched QC-status tests in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` that use `qc_status_test_guard` to `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` to avoid current-thread deadlocks with the blocking test lock.
@@ -726,7 +726,7 @@ Last update: 2026-02-07
 - Tests: not run (not requested).
 - Swift OfflineWallet: add top-up helpers (issue+register) and a public verdict-cache helper for issue responses; Swift docs updated and unit coverage added.
 - Tests: `swift test --filter OfflineWalletTopUpTests` (ok).
-- Account structure SDK alignment docs: translated `docs/account_structure_sdk_alignment.*.md` (ar/es/fr/he/ja/pt/ru/ur) to remove the pending stubs and reflect the IH58 rollout guidance.
+- Account structure SDK alignment docs: translated `docs/account_structure_sdk_alignment.*.md` (ar/es/fr/he/ja/pt/ru/ur) to remove the pending stubs and reflect the I105 rollout guidance.
 - Tests: not run (docs-only change).
 - RS16 erasure coding: AVX2 path now uses vectorized log/exp table gathers for `gf_mul`, and NEON path uses a vectorized bit-serial `gf_mul` loop; added table/NEON coverage.
 - Tests: not run (not requested).
@@ -846,7 +846,7 @@ Last update: 2026-02-07
 - Sumeragi localnet smoke: extend test client TTL for `permissioned_localnet_reaches_100_blocks`, restore the TTL env even when a network run is skipped, and move soak DA timeout multipliers to `sumeragi.advanced.da.*` so the tests match the streamlined config surface.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (ok). `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (ok). `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (timed out after 20m; progress continued with min_non_empty ~146 and queue_size hovering ~205–225; network dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_eFE2vf`).
 
-- Torii VK POST integration: encode `authority` via `AccountId` JSON (IH58 + domain suffix) and pass `ExposedPrivateKey` directly so zk vk register/update tests don't depend on domain-selector resolution; fixes `vk_register_update_return_202` returning 400.
+- Torii VK POST integration: encode `authority` via `AccountId` JSON (I105 + domain suffix) and pass `ExposedPrivateKey` directly so zk vk register/update tests don't depend on domain-selector resolution; fixes `vk_register_update_return_202` returning 400.
 - Tests: not run (user-reported failure only).
 
 - Norito stream seq iterator: map `UnexpectedEof` during sequence length decoding to `LengthMismatch` so short seq headers fail deterministically.
@@ -1294,7 +1294,7 @@ Last update: 2026-02-07
 - SoraFS dispute test helper now uses `UptimeBreach` (no replication order required) so duplicate/insert dispute tests stay valid after enforcing replication-order IDs for `ReplicationShortfall`.
 - Tests: not run (local cargo invocations were terminated with SIGTERM in this environment; no other processes were stopped).
 
-- SoraFS capacity declarations: resolve owner metadata via world-aware account literal parsing with canonical-literal fallback; add IH58-owner regression coverage for selector-free state.
+- SoraFS capacity declarations: resolve owner metadata via world-aware account literal parsing with canonical-literal fallback; add I105-owner regression coverage for selector-free state.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-owner CARGO_BUILD_JOBS=1 cargo test -p iroha_core --lib smartcontracts::isi::sorafs::sorafs_tests::register_capacity_declaration_inserts_record -- --nocapture` (killed by signal 15 in this environment; other cargo tests were already running).
 
 - SoraFS telemetry: enforce replay protection whenever a nonce is provided (even when `require_nonce=false`), add coverage for optional-nonce replays, and clarify nonce policy semantics in config/docs.
@@ -1311,16 +1311,16 @@ Last update: 2026-02-07
 
 - Kura budget test: include baseline on-disk overhead when setting the storage limit in `store_block_reclaims_retired_storage_when_budget_exceeded` so retired bytes are the only overage.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core kura::tests::store_block_reclaims_retired_storage_when_budget_exceeded -- --nocapture` (killed by signal 15 in this environment).
-- Governance manifest quorum approvals now accept IH58-only `gov_manifest_approvers` entries by canonicalizing approvals/validators to IH58 and matching without requiring a domain-selector resolver.
+- Governance manifest quorum approvals now accept I105-only `gov_manifest_approvers` entries by canonicalizing approvals/validators to I105 and matching without requiring a domain-selector resolver.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core queue::tests::governance_manifest_enforces_quorum_metadata -- --nocapture` (timed out after 20m; process killed by signal 15 during build).
 - Tests: `cargo test -p iroha_core queue::tests::governance_manifest_enforces_quorum_metadata -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45535`).
 
 - Staking ISI: apply the transaction before committing the block so CancelConsensusEvidencePenalty persists `penalty_cancelled`.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::cancel_consensus_evidence_penalty_marks_record -- --nocapture` (not rerun after resolving the `crates/iroha_core/src/kura.rs:6103` compile error; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
-- Account literal parsing: when the selector registry is missing, resolve IH58 addresses by matching encoded account addresses already in WSV; add coverage for the selector-free path (unblocks staking reward claims that rely on IH58-only fee-sink literals).
+- Account literal parsing: when the selector registry is missing, resolve I105 addresses by matching encoded account addresses already in WSV; add coverage for the selector-free path (unblocks staking reward claims that rely on I105-only fee-sink literals).
 - Tests: `cargo test -p iroha_core claim_rewards_transfers_and_marks_epoch -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490` persist).
-- Tests: `cargo test -p iroha_core parse_account_literal_resolves_ih58_without_selector_registry -- --nocapture` (ok; same warnings).
+- Tests: `cargo test -p iroha_core parse_account_literal_resolves_i105_without_selector_registry -- --nocapture` (ok; same warnings).
 
 - Tests: update integration test config layers to use nested Sumeragi keys (`sumeragi.collectors.*`, `sumeragi.da.*`, `sumeragi.npos.*`, `sumeragi.advanced.pacemaker.*`, `sumeragi.advanced.rbc.*`, `sumeragi.advanced.queues.*`) and migrate the asset test’s manual config table to the same layout (RBC session TTL now expressed in ms). The legacy-key normalization unit test remains the only place using old keys on purpose.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
@@ -1340,14 +1340,14 @@ Last update: 2026-02-07
 - Tests: `cargo test -p iroha_core build_balance_proof_rejects_fractional_value -- --nocapture` (failed to compile: borrow checker error in `crates/iroha_core/src/smartcontracts/isi/world.rs:11190` about mutable borrow of `stx` while `params` is borrowed; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - Block sync tests: guard precommit signer history with the commit-history test lock so cached-QC checks stay stable under parallel runs.
 - Tests: `cargo test -p iroha_core block_sync::message::filter_tests::filter_blocks_retains_cached_qc_even_with_signer_mismatch -- --nocapture` (not rerun after replacing `domain_selectors.clear()` with `Default::default()` in `crates/iroha_core/src/block.rs`; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
-- Staking rewards: parse `nexus.fees.fee_sink_account_id` via world-aware account literal resolution so IH58-only literals with domain selectors are accepted during reward recording/claims; add `claim_rewards_accepts_ih58_fee_sink` coverage.
+- Staking rewards: parse `nexus.fees.fee_sink_account_id` via world-aware account literal resolution so I105-only literals with domain selectors are accepted during reward recording/claims; add `claim_rewards_accepts_i105_fee_sink` coverage.
 - Tests: `cargo test -p iroha_core claim_rewards_ -- --nocapture` (failed to compile: borrow checker error in `crates/iroha_core/src/smartcontracts/isi/world.rs:11190` about mutable borrow of `stx` while `params` is borrowed; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - Staking snapshot test now expects topology widening for active validators and renames the case to match the documented behavior.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::stake_snapshot_widens_missing_validator_from_topology -- --nocapture` (failed to compile: borrow checker error in `crates/iroha_core/src/smartcontracts/isi/world.rs:11190` about mutable borrow of `stx` while `params` is borrowed; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - World ISI test: clone parameters before mutating `stx` in `register_peer_applies_key_policy_defaults` to satisfy the borrow checker.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::stake_snapshot_widens_missing_validator_from_topology -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 - NPoS localnet 1 Hz rerun (debug + block-queue priority fix, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260125T094329Z` (ports 33080/34337); genesis `block_time_ms=1000`, `commit_time_ms=1500`, config defaults, `RUST_LOG=warn,iroha_core::sumeragi=debug`; 100x1 Hz `ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260125T094329Z.jsonl` (ping log `ping_1hz_20260125T094329Z.log`). `commit_qc.height` 1->9 (+8 over 120 samples), `view_change_install_total` +5 (`missing_qc_total` +2, `missing_payload_total` +0, `stake_quorum_timeout_total` +2), `missing_block_fetch.total` +61, `pending_rbc.bytes` max 34271 (sessions max 1), `stash_ready_init_missing_total` 14, `stash_deliver_init_missing_total` 7.
-- Staking: resolve `stake_escrow_account_id`/`slash_sink_account_id` via world-aware account literal parsing (accepts IH58-only literals once domain selectors are registered); added stake-context coverage to lock this in.
+- Staking: resolve `stake_escrow_account_id`/`slash_sink_account_id` via world-aware account literal parsing (accepts I105-only literals once domain selectors are registered); added stake-context coverage to lock this in.
 - Tests: `cargo test -p iroha_core unregister_peer -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 
@@ -1364,11 +1364,11 @@ Last update: 2026-02-07
 - Tests: `cargo test -p iroha_core --lib smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (ok; warning about unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 - Tests: `cargo test -p iroha_core smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (failed: `crates/iroha_core/tests/ivm_corehost_domain.rs` test binary killed by SIGKILL after rebuild; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 
-- Permission summary account parsing: accept IH58-with-domain literals in `parse_account_literal_with_world` so permission payloads resolve account IDs; added coverage for the IH58 `@domain` literal path.
+- Permission summary account parsing: accept I105-with-domain literals in `parse_account_literal_with_world` so permission payloads resolve account IDs; added coverage for the I105 `@domain` literal path.
 - Tests: `cargo test -p iroha_core permission_summary_resolves_accounts_from_payload` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
-- Tests: `cargo test -p iroha_core parse_account_literal_accepts_ih58_with_domain_suffix` (ok; same warnings).
+- Tests: `cargo test -p iroha_core parse_account_literal_accepts_i105_with_domain_suffix` (ok; same warnings).
 
-- AccountId parsing: guard the chain discriminant in the encoded-literals-with-domain test to avoid cross-test IH58 prefix races.
+- AccountId parsing: guard the chain discriminant in the encoded-literals-with-domain test to avoid cross-test I105 prefix races.
 - Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (ok).
 
 - Curve registry alignment test now accepts the `bls` feature gate listed in the published registry.
@@ -1383,7 +1383,7 @@ Last update: 2026-02-07
 - AXT replay-ledger state tests now encode `AxtDescriptor`/`DataSpaceId` TLVs with Norito headers so `AXT_BEGIN` decoding succeeds after restart/prune flows.
 - Tests: `cargo test -p iroha_core axt_replay_ledger -- --nocapture` (state replay-ledger tests ok; `axt_replay_ledger_persists_through_kura_replay` failed in `crates/iroha_core/tests/ivm_corehost_axt.rs` with `UnknownDataspace(DataSpaceId(99))`).
 
-- AccountId/AssetId JSON now serialize with explicit `@domain` suffixes (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding no longer depends on a domain-selector resolver; updated Norito JSON migration notes and id-json regression expectations.
+- AccountId/AssetId JSON now serialize with explicit `@domain` suffixes (e.g., `I105@domain`, `asset##I105@domain`) so decoding no longer depends on a domain-selector resolver; updated Norito JSON migration notes and id-json regression expectations.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_round_trips_through_norito_json -- --nocapture` (ok).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_defaults_optional_fields_when_missing_in_json -- --nocapture` (ok).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json account_id_json_uses_explicit_domain_suffix -- --nocapture` (ok).
@@ -1408,10 +1408,10 @@ Last update: 2026-02-07
 - Instruction registry handles now use `Arc` in `iroha_data_model::isi` to avoid borrowed guards and the Rust 2024 lifetime error during builds.
 - Tests: `CARGO_BUILD_JOBS=4 RUSTFLAGS='-C debuginfo=0' cargo test -p iroha_core --lib smartcontracts::isi::account_admission::tests::implicit_creation_fee_is_enforced_and_charged -- --nocapture` (ok; warning about unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45341`).
 
-- Governance manifest test helper now formats validator literals as `<ih58-address>@<domain>` so manifest parsing exercises the AccountAddress path (avoids alias/public-key ambiguity).
+- Governance manifest test helper now formats validator literals as `<i105-address>@<domain>` so manifest parsing exercises the AccountAddress path (avoids alias/public-key ambiguity).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-manifest-test CARGO_BUILD_JOBS=1 cargo test -p iroha_core governance::manifest::tests::manifests_allow_validator_reuse_across_lanes -- --nocapture` (timed out after 20m during rebuild).
 
-- Governance manifest unit tests now format validator literals as `<public_key>@<domain>` so manifest parsing in `iroha_core` does not depend on domain-selector resolution for IH58 strings.
+- Governance manifest unit tests now format validator literals as `<public_key>@<domain>` so manifest parsing in `iroha_core` does not depend on domain-selector resolution for I105 strings.
 - Tests: `cargo test -p iroha_core governance::manifest::tests::manifest_parses_validators_and_namespaces -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45341`).
 
 - Instruction registry test override now clones the registry instead of returning a borrowed guard, fixing the Rust 2024 missing-lifetime error in `iroha_data_model::isi::instruction_registry`; `InstructionRegistry` is `Clone` to support the test override.
@@ -1493,7 +1493,7 @@ Last update: 2026-02-07
 - Subscription billing host test: validate trigger metadata/plan decoding before billing, gate `SpecializedAction` imports behind `cfg(test)`, and expose the domain-selector resolver guard for reuse in nested tests.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-subscription cargo test -p iroha_core subscription_bill_fixed_plan_transfers_and_reschedules -- --nocapture` (ok).
 
-- Subscription IVM host tests: install a domain-selector resolver for subscription test domains so IH58 account IDs in subscription metadata decode correctly; applied in subscription billing/usage host tests.
+- Subscription IVM host tests: install a domain-selector resolver for subscription test domains so I105 account IDs in subscription metadata decode correctly; applied in subscription billing/usage host tests.
 - Tests: `cargo test -p iroha_core subscription_record_usage_updates_metadata -- --nocapture` (ok).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-subscription cargo test -p iroha_core subscription_bill_ -- --nocapture` (ok).
 
@@ -1601,7 +1601,7 @@ Last update: 2026-02-07
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-pipeline cargo test -p iroha_core sumeragi::main_loop::commit::tests::execute_commit_work_emits_pipeline_events_before_state_apply -- --nocapture` (ok).
 - Sumeragi commit-work tests: use deterministic mock timestamps for genesis transactions to avoid clock-skew rejections in `execute_commit_work_*` tests.
 - Tests: `cargo test -p iroha_core execute_commit_work_ -- --nocapture` (target tests ok; command hit the 20m timeout while running filtered binaries).
-- State tests: build `AssetId` directly in `capture_exec_witness_stashes_reads_and_writes` to avoid IH58 account parsing that depends on domain-selector resolution.
+- State tests: build `AssetId` directly in `capture_exec_witness_stashes_reads_and_writes` to avoid I105 account parsing that depends on domain-selector resolution.
 - Tests: `cargo test -p iroha_core state::tests::capture_exec_witness_stashes_reads_and_writes -- --nocapture` (passed; command hit the 20m timeout while running filtered binaries; build directory lock from other active cargo tests).
 - Sumeragi: seed the genesis commit roster after block 1 commit so DA/RBC has roster evidence even when genesis is persisted after actor init; added `commit_outcome_seeds_genesis_commit_roster_after_commit` coverage.
 - State tests: fix `da_pin_intents_drop_missing_owner_accounts` to derive the primary `lane_id` from the runtime lane catalog.
@@ -1653,7 +1653,7 @@ Last update: 2026-02-07
 - Petal stream: added Rust framing + CLI `ops offline petal` encode/decode + sakura wind renderer, JS/Swift/Android encoder/decoder + scan helpers (CameraX/AVFoundation), and docs for petal handoff.
 - Torii pipeline status: scope the state view during queue checks to avoid writer-preferred lock deadlocks before fallback state lookups.
 - Tests: not run (not requested).
-- Snapshots: install domain-selector resolver during snapshot reads so IH58 account IDs for non-default domains deserialize; remove the restart-peer snapshot cleanup and add coverage for resolver install.
+- Snapshots: install domain-selector resolver during snapshot reads so I105 account IDs for non-default domains deserialize; remove the restart-peer snapshot cleanup and add coverage for resolver install.
 - Tests: `cargo test -p iroha_core snapshot_read_installs_domain_selector_resolver -- --nocapture` (ok).
 - Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
 - Tests: `cargo test --workspace` failed (rustc E0428: duplicate `mod tests` in `crates/iroha_config/src/parameters/actual.rs`).
@@ -1688,7 +1688,7 @@ Last update: 2026-02-07
 - NPoS localnet 1 Hz rerun (release + NPoS timeouts/collectors, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T065327Z` (ports 29680/33980); genesis NPoS timeouts propose/prevote/precommit/commit/da/agg=300/500/700/900/800/100, `collectors_k=4`, `redundant_send_r=4`, config `sumeragi.advanced.da.availability_timeout_multiplier=2` + `sumeragi.advanced.da.quorum_timeout_multiplier=2`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_timeouts_collectors_20260124T065327Z.jsonl` (ping log `ping_1hz_timeouts_collectors_20260124T065327Z.log`). `commit_qc.height` 1->42 (+41 over 120 samples), `view_change_install_total` +7 (`missing_qc_total` +6), `missing_payload_total` +0, `missing_block_fetch.total` +14, `pending_rbc.bytes` max 220 (sessions max 1); cadence still below 1 Hz.
 - NPoS localnet 1 Hz rerun (release + RBC TTL + missing-block fallback, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T121035Z` (ports 29880/34180); genesis `block_time_ms=1000`, `commit_time_ms=1500`, NPoS timeouts propose/prevote/precommit/commit/da/agg=500/800/1100/1500/1400/200, config `sumeragi.advanced.da.availability_timeout_multiplier=3` + `sumeragi.advanced.da.quorum_timeout_multiplier=3`, `sumeragi.advanced.rbc.pending_ttl_ms=120000`, `sumeragi.advanced.rbc.session_ttl_ms=240000`, `sumeragi.recovery.missing_block_signer_fallback_attempts=0`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260124T121035Z.jsonl` (ping log `ping_1hz_20260124T121035Z.log`). `commit_qc.height` 1->64 (+63 over 120 samples), `view_change_install_total` +0, `missing_qc_total` +0, `missing_payload_total` +0, `stake_quorum_timeout_total` +0, `missing_block_fetch.total` +15, `pending_rbc.bytes` max 2708 (sessions max 1); cadence improved but still below 1 Hz.
 - NPoS localnet 1 Hz rerun (release + higher commit/NPoS timeouts, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T113118Z` (ports 29780/34080); genesis `block_time_ms=1000`, `commit_time_ms=1500`, NPoS timeouts propose/prevote/precommit/commit/da/agg=500/800/1100/1500/1400/200, `k_aggregators=4`, `redundant_send_r=4`, config `sumeragi.advanced.da.availability_timeout_multiplier=3` + `sumeragi.advanced.da.quorum_timeout_multiplier=3`; 100x1 Hz `iroha3 ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260124T113118Z_retry2.jsonl` (ping log `ping_1hz_20260124T113118Z_retry2.log`). `commit_qc.height` 53->53 (+0 over 120 samples), `view_change_install_total` +0 (started at 18; missing_payload_total=13, missing_qc_total=3, stake_quorum_timeout_total=1), `missing_block_fetch.total` +1433, `pending_rbc.bytes` max 0 (sessions max 0); peer logs show repeated missing_payload view changes at height 54 with stake quorum but missing block payload.
-- Genesis: install domain-selector resolver when loading genesis JSON so domainless IH58 account IDs parse; added unit coverage.
+- Genesis: install domain-selector resolver when loading genesis JSON so domainless I105 account IDs parse; added unit coverage.
 - Tests: `cargo test -p iroha_genesis --lib parse_genesis_installs_domain_selector_resolver -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - NPoS localnet 1 Hz rerun (debug, 4 peers): `/tmp/iroha-localnet-npos-1hz-20260123T132039Z` (ports 29084/33341); 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260123T132039Z.jsonl` (ping log `ping_1hz_20260123T132039Z.log`). `commit_qc.height` 1->14 (+13 over 363 samples), `view_change_install_total` +3 (stake_quorum_timeout/missing_qc), `pending_rbc.bytes` max 1260 (sessions max 2); cadence still below 1 Hz.
@@ -1802,8 +1802,8 @@ Last update: 2026-02-07
 - Localnet baseline (same run). 12 min 50 TPS with 1s `/metrics` sampling -> `commit_qc.height` 103->248 over 745s (avg block interval 5.14s), avg tx/block 137.3 (~26.7 TPS), view-change log entries 46. Metrics: `metrics_peer0_50tps_12min.log`. Load log: `load_50tps_12min.log`.
 - Localnet drain-cap (NPoS, 7 peers, 753ms, telemetry=extended, `worker_iteration_drain_budget_cap_ms=150`): `/private/tmp/iroha-localnet-7peer-run162-npos-cap150` (25680/26600). 50 TPS for 100 blocks with 1s `/metrics` sampling -> `commit_qc.height` 0->103 over 530s (avg block interval 5.15s), avg tx/block 142.6 (~27.7 TPS), view-change log entries 336. Metrics: `metrics_peer0_50tps_100blocks.log`. Load log: `load_50tps_100blocks.log`.
 - Localnet drain-cap (same run). 12 min 50 TPS with 1s `/metrics` sampling -> `commit_qc.height` 103->249 over 742s (avg block interval 5.08s), avg tx/block 157.3 (~30.9 TPS), view-change log entries 336. Metrics: `metrics_peer0_50tps_12min.log`. Load log: `load_50tps_12min.log`.
-- Account parsing: allow base58-like alias labels to resolve when IH58 parsing fails with a checksum mismatch; added unit coverage for alias resolution.
-- Integration tests: validate IH58 authorities via `AccountAddress::parse_encoded` and wait for the account to appear in accounts queries before alias/compressed filter assertions.
+- Account parsing: allow base58-like alias labels to resolve when I105 parsing fails with a checksum mismatch; added unit coverage for alias resolution.
+- Integration tests: validate I105 authorities via `AccountAddress::parse_encoded` and wait for the account to appear in accounts queries before alias/compressed filter assertions.
 - Tests: `cargo test -p iroha_data_model from_str_resolves_base58_like_alias -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation account_transactions_get_supports_address_format -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation account_transactions_query_supports_address_format -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (ok).
 - Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet27 cargo build --release -p iroha_kagami -p irohad -p iroha_cli` (ok).
 - Localnet (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run159-npos` (25280/26200). 50 TPS for 100 blocks with 1s `/metrics` sampling -> `commit_qc.height` 2->99 over 460s (avg block interval 4.74s), avg tx/block 206 (~43 TPS), `view_change_install_total=0`, pacemaker deferrals `active_pending=70`, `rbc_backlog=70`, pending blocks total 1, tx queue depth 450. Metrics: `metrics_peer0_50tps_100blocks.log`. Load log: `load_50tps_100blocks.log`.
@@ -1861,11 +1861,11 @@ Last update: 2026-02-07
 - Localnet (permissioned, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run154-perm` (24780/25700). 100 TPS for 120s -> height 5, peer0 view changes 9 (`missing_qc_total=7`, `quorum_timeout_total=2`), `tx_queue.depth=11522`, `sumeragi_pending_blocks_total` max 0, `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.8s (4 commits). Metrics: `metrics-sumeragi-load.log`.
 - Tests: not run (localnet-only focus per request).
 - Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
-- Docs: aligned governance API translations with IH58 account_id responses and `--owner ih58...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
-- Docs: switched Soranet incentive packet beneficiary example to canonical IH58 account ids.
+- Docs: aligned governance API translations with I105 account_id responses and `--owner i105...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
+- Docs: switched Soranet incentive packet beneficiary example to canonical I105 account ids.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).
-- Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
+- Docs: refreshed account ID/identity references to canonical I105 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
 - Tests: not run (docs/sample edits only).
 - CLI: fixed peer list for `FindPeers` (PeerId output), added helper test, and resolved clap arg-id collisions in Space Directory scaffolds + SoraFS token helpers; regenerated `crates/iroha_cli/CommandLineHelp.md`.
 - Docs: `cargo run -p iroha_cli --bin iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md` (ok).
@@ -2104,7 +2104,7 @@ Last update: 2026-02-07
 - Tests: not run (SDK updates only).
 - Tests: `npm test` (failed; multiple JS test failures including `address_inspect`, `isoBridge`, `toriiClient`, `validationError`, and `transactionFixturesParity` suites).
 - Tests: `swift test` (failed; 45 failures/35 unexpected, first failure `TransactionEncoderValidationTests.testCastZkBallotAcceptsCanonicalHints` with `nativeBridgeError(.authority)`).
-- Docs/UX strings: clarified IH58 as the preferred account format and `sora` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
+- Docs/UX strings: clarified I105 as the preferred account format and `sora` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
 - Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
 - Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
 - Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
@@ -2113,14 +2113,14 @@ Last update: 2026-02-07
 - Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change failed in the sandbox (loopback bind `Operation not permitted`); rerun needed outside the sandbox.
 - SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
-- SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.
+- SoraFS incentives state: embed domain hints so I105 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.
 - Accounts/UAID: enforce UAID->account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
 - Account address parsing: accept full-width `ｓｏｒａ` sentinel for compressed Sora literals alongside ASCII `sora`.
 - Tests: `cargo test -p iroha_data_model compressed_fullwidth_sentinel_accepts` (ok; waited for build dir lock).
 - CLI account literals: resolve account identifiers through `/v1/accounts/resolve` across commands (contracts, DA/SoraFS ledgers, Kaigi, staking, ZK, subscriptions, offline filters, multisig/trigger inputs) and refresh CLI harness tests to use canonical account IDs.
 - CLI SNS/SoraFS: catalog policy verification and gateway denylist validation now resolve account literals via `/v1/accounts/resolve`; vote CLI tests use canonical fixtures.
 - Offline receipts: added `OfflineSpendReceipt::invoice_id()` accessor + unit test and switched executor validation/tests to use it so non-transparent builds compile.
-- Roadmap: added account identity refactor tasks (IH58-only canonical IDs, alias/UAID unification, PII-safe tokens, no compatibility shims).
+- Roadmap: added account identity refactor tasks (I105-only canonical IDs, alias/UAID unification, PII-safe tokens, no compatibility shims).
 - SoraFS config: added `sorafs.repair`/`sorafs.gc` defaults and wiring, updated defaults/samples (`defaults/nexus`, `configs/soranexus/testus`), plus config docs (all locales).
 - SoraFS repair status: added deterministic sorted/filtered status listing (status/provider filters) and a global list endpoint; OpenAPI updated.
 - SoraFS repair workers: added claim/heartbeat/complete/fail endpoints with idempotency + lease validation, NodeHandle/repair scheduler tracking, OpenAPI entries, and repair plan doc updates.

@@ -108,7 +108,7 @@ mod tests {
     use crate::prelude::{AccountId, Algorithm, DomainId, KeyPair};
 
     fn sample_account() -> AccountId {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }
@@ -251,7 +251,7 @@ mod json_tests {
 
     #[test]
     fn register_public_lane_validator_json_roundtrip() {
-        let domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
+        let _domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
         let validator_key = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
         let stake_key = KeyPair::from_seed(vec![0xA2; 32], Algorithm::Ed25519);
         let validator = AccountId::new(validator_key.public_key().clone());
@@ -273,7 +273,7 @@ mod json_tests {
 
     #[test]
     fn activate_public_lane_validator_json_roundtrip() {
-        let domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
+        let _domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
         let validator_key = KeyPair::from_seed(vec![0xB1; 32], Algorithm::Ed25519);
         let validator = AccountId::new(validator_key.public_key().clone());
         let isi = ActivatePublicLaneValidator::new(LaneId::new(2), validator);

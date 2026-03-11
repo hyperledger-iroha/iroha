@@ -79,8 +79,8 @@ fn canonical_abi_hex() -> String {
 
 fn governance_escrow_account_literal() -> String {
     ALICE_ID
-        .canonical_ih58()
-        .expect("alice account id should encode to canonical ih58")
+        .canonical_i105()
+        .expect("alice account id should encode to canonical i105")
 }
 
 fn tune_client_timeouts(client: &mut Client) {
@@ -1013,7 +1013,11 @@ async fn setup_hostile_fixture(
             attackers
                 .iter()
                 .chain(honest.iter())
-                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
+                .map(|(account_id, _)| {
+                    Register::account(Account::new(
+                        account_id.to_account_id("wonderland".parse().expect("wonderland domain")),
+                    ))
+                }),
         )
         .wrap_err("register hostile-fixture accounts")?;
     for (account_id, _) in attackers.iter().chain(honest.iter()) {
@@ -1202,6 +1206,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let reject_referendum_id = reject_proposal_id_hex.clone();
 
     let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
+    let wonderland_domain: DomainId = "wonderland".parse()?;
     let asset_def_id: AssetDefinitionId = GOV_ASSET_ID.parse()?;
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))
@@ -1237,11 +1242,11 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
-        .submit_all(
-            citizens
-                .iter()
-                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
-        )
+        .submit_all(citizens.iter().map(|(account_id, _)| {
+            Register::account(Account::new(
+                account_id.to_account_id(wonderland_domain.clone()),
+            ))
+        }))
         .wrap_err("register citizen accounts")?;
     for (account_id, _) in &citizens {
         wait_for_account_registration(&alice, account_id, Duration::from_secs(180))
@@ -1249,7 +1254,9 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
     }
     alice
-        .submit(Register::account(Account::new(outsider_id.clone())))
+        .submit(Register::account(Account::new(
+            outsider_id.to_account_id(wonderland_domain.clone()),
+        )))
         .wrap_err("register outsider account for negative authorization tests")?;
     wait_for_account_registration(&alice, &outsider_id, Duration::from_secs(180))
         .await

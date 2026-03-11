@@ -917,11 +917,11 @@ For higher-level walkthroughs, see:
 
 - **Accounts:** `getAssets`, `getTransactions` (both accept optional `assetId` filters),
   attachment upload/list/delete, trigger management, and general query envelopes. The
-  `getExplorerAccountQr(accountId:addressFormat:)`
+  `getExplorerAccountQr(accountId:)`
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
-  preferred IH58 or second-best compressed (`sora`) QR payloads without reimplementing the renderer
-  (omit the format to use IH58 or pass `.compressed` for the Sora-only `sora` literal).
+  preferred I105 QR payloads without reimplementing the renderer
+  (omit the format to use I105 or use canonical I105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
@@ -993,7 +993,7 @@ For higher-level walkthroughs, see:
   snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
   directly into `TxBuilder` to produce signed transactions.
 
-> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept IH58 (preferred)/sora (second-best)/canonical literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically so wallets can forward whatever selector they display without manual escaping.
+> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept I105/canonical literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically so wallets can forward whatever selector they display without manual escaping.
 
 Upcoming work (tracked under IOS3) includes governance endpoints, additional query
 builders, and WebSocket/SSE subscribers shared with Android/JS.
@@ -1001,7 +1001,7 @@ builders, and WebSocket/SSE subscribers shared with Android/JS.
 ### Rendering account addresses
 
 Swift mirrors the Rust/JS/Python helpers via `AccountAddress`. When building wallet or explorer
-UI, prefer the dual-format view mandated in [`docs/source/sns/address_display_guidelines.md`](../../sns/address_display_guidelines.md):
+UI, use the canonical format described in [`docs/source/sns/address_display_guidelines.md`](../../sns/address_display_guidelines.md):
 
 ```swift
 let address = try AccountAddress.fromAccount(
@@ -1010,9 +1010,7 @@ let address = try AccountAddress.fromAccount(
 )
 let formats = address.displayFormats(networkPrefix: 753)
 
-print("IH58", formats.ih58)
-print("Compressed", formats.compressed)
-print("Warning", formats.compressedWarning)
+print("I105", formats.i105)
 ```
 
 Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
@@ -1020,17 +1018,15 @@ or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when
 Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
 secp256k1 requires 33 bytes when enabled), and reject empty keys.
 
-Show IH58 as the preferred copy/share target (and QR payload), treat the compressed `sora…`
-form as second-best alongside the warning, and highlight when the implicit `default` domain is in use. This keeps
+Show I105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
 Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.
 
 To embed the share-ready SVG exposed by ADDR-6b, call
-`ToriiClient.getExplorerAccountQr(accountId:addressFormat:)` and reuse the inline payload:
+`ToriiClient.getExplorerAccountQr(accountId:)` and reuse the inline payload:
 
 ```swift
 let qr = try await torii.getExplorerAccountQr(
-    accountId: formats.ih58,
-    addressFormat: .compressed
+    accountId: formats.i105,
 )
 print("SVG payload", qr.svg)
 ```
@@ -1060,7 +1056,7 @@ guard
 else { return }
 
 var register = ToriiVerifyingKeyRegisterRequest(
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: "ed0120...",
     backend: "halo2/ipa",
     name: "vk_main",

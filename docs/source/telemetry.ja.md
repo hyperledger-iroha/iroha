@@ -149,7 +149,7 @@ Norito-RPC トランスポート向けのメトリクス要件は `docs/source/t
 - `torii_http_request_duration_seconds_bucket{content_type,method}` — コンテントタイプ別のレイテンシー比較に使用。
 - `torii_http_response_bytes_total{content_type,method,status}` — ペイロードサイズのドリフト検知。
 - `torii_norito_decode_failures_total{payload_kind,reason}` — マジック不一致や CRC エラーなどデコード失敗の理由別カウンタ。
-- `torii_address_invalid_total{surface,reason}` / `torii_address_local8_total{surface}` — Norito 経由でも IH58/圧縮エラーを表す。
+- `torii_address_invalid_total{surface,reason}` / `torii_address_local8_total{surface}` — Norito 経由でも I105/圧縮エラーを表す。
 - 既存の `torii_active_connections_total{scheme}` と `torii_pre_auth_reject_total{reason}` に `scheme="norito_rpc"` ラベルを必ず加えてください。
 
 アラートルールは `dashboards/alerts/torii_norito_rpc_rules.yml`（テスト: `dashboards/alerts/tests/torii_norito_rpc_rules.test.yml`）に定義されています。

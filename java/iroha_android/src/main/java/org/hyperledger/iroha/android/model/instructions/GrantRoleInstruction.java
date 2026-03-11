@@ -90,7 +90,7 @@ public final class GrantRoleInstruction implements InstructionTemplate {
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          AccountIdLiteral.extractIh58Address(
+          AccountIdLiteral.extractI105Address(
               Objects.requireNonNull(destinationAccountId, "destinationAccountId"));
       return this;
     }

@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 ---
 
 规范的 ADDR-2 捆绑包 (`fixtures/account/address_vectors.json`) 捕获
-IH58（首选）、压缩（`sora`，第二好；半角/全角）、多重签名和负固定装置。
+I105（首选）、压缩（`sora`，第二好；半角/全角）、多重签名和负固定装置。
 每个 SDK + Torii 表面都依赖于相同的 JSON，因此我们可以检测任何编解码器
 在投入生产之前就发生了漂移。此页面反映了内部状态简介
 （根存储库中的`docs/source/account_address_status.md`）所以门户
@@ -50,7 +50,7 @@ CI 工作流程**地址向量漂移**运行 `cargo xtask address-vectors --verif
 |斯威夫特 SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 |安卓SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-每个线束往返规范字节 + IH58 + 压缩（`sora`，第二好的）编码和
+每个线束往返规范字节 + I105 + 压缩（`sora`，第二好的）编码和
 检查 Norito 类型的错误代码是否与负面情况下的夹具一致。
 
 ## 需要自动化吗？

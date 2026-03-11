@@ -29,6 +29,7 @@ Ushbu indeks IVM, Kotodama va IVM-birinchi quvur liniyasi uchun asosiy dizayn va
 - ZK App API (ilovalar, prover, ovozlar soni): `zk_app_api.md`
 - Torii ZK qo'shimchalari/prover runbook: `zk/prover_runbook.md`
 - Torii ZK App API operator qo'llanmasi (ilovalar/prover; sandiq hujjati): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof hayot aylanishi (ro'yxatga olish, tekshirish, telemetriya): `zk/lifecycle.md`
 - Torii Operator yordamchilari (ko'rinish uchun oxirgi nuqtalar): `references/operator_aids.md`
 - Nexus standart chiziqli tezkor ishga tushirish: `quickstart/default_lane.md`

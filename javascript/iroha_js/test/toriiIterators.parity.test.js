@@ -70,7 +70,7 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
   assert.equal(requests.length, 1, "invalid filter must not issue fetch calls");
 });
 
-test("iterateAccountAssets paginates with addressFormat and maxItems", async () => {
+test("iterateAccountAssets paginates with maxItems", async () => {
   let callCount = 0;
   const expectedPath = `/v1/accounts/${encodeURIComponent(FIXTURE_ACCOUNT_ID)}/assets`;
   const firstAssetId = "norito:deadbeef";
@@ -78,7 +78,7 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, expectedPath);
-    assert.equal(parsed.searchParams.get("address_format"), "compressed");
+    assert.equal(parsed.searchParams.get("canonical_i105"), null);
     const offset = Number(parsed.searchParams.get("offset") ?? 0);
     const items =
       offset === 0
@@ -96,7 +96,6 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
   for await (const holding of client.iterateAccountAssets(FIXTURE_ACCOUNT_ID, {
     pageSize: 1,
     maxItems: 2,
-    addressFormat: "compressed",
   })) {
     seen.push(holding.asset_id);
   }

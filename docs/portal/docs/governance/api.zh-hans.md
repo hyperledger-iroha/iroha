@@ -35,7 +35,7 @@ translator: machine-google-reviewed
       "abi_hash": "blake2b32:…" | “…64十六进制”，
       “abi_版本”：“1”，
       “窗口”：{“下”：12345，“上”：12400}，
-      "authority": "ih58…?",
+      "authority": "i105…?",
       “私钥”：“……？”
     }
   - 响应（JSON）：
@@ -44,14 +44,14 @@ translator: machine-google-reviewed
 
 合约 API（部署）
 - 后 `/v1/contracts/deploy`
-  - 请求：{ "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - 请求：{ "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 行为：从 IVM 程序体计算 `code_hash`，从标头 `abi_version` 计算 `abi_hash`，然后提交 `RegisterSmartContractCode`（清单）和 `RegisterSmartContractBytes`（完整的 `.to`）字节）代表`authority`。
   - 响应：{“ok”：true，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
   - 相关：
     - GET `/v1/contracts/code/{code_hash}` → 返回存储的清单
     - 获取 `/v1/contracts/code-bytes/{code_hash}` → 返回 `{ code_b64 }`
 - 后 `/v1/contracts/instance`
-  - 请求：{ "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - 请求：{ "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 行为：部署提供的字节码并立即通过 `ActivateContractInstance` 激活 `(namespace, contract_id)` 映射。
   - 响应：{“ok”：true，“namespace”：“apps”，“contract_id”：“calc.v1”，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
 
@@ -64,11 +64,11 @@ translator: machine-google-reviewed
   - 错误：十六进制输入格式错误时出现 HTTP `400`。 Torii 返回包含解码器错误消息的 Norito `ValidationFail::QueryFailed::Conversion` 信封。
 - 后 `/v1/aliases/resolve`
   - 请求: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - 响应: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - 响应: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - 注意：需要 ISO 桥运行时分段（`[iso_bridge.account_aliases]` 中的 `iroha_config`）。 Torii 通过在查找之前去除空格和大写字母来标准化别名。当别名不存在时返回 404，当 ISO 桥接运行时被禁用时返回 503。
 - 后 `/v1/aliases/resolve_index`
   - 请求：{“索引”：0}
-  - 响应: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - 响应: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - 注意：别名索引是根据配置顺序（从 0 开始）确定性分配的。客户端可以离线缓存响应，以构建别名证明事件的审计跟踪。
 
 代码 尺寸上限
@@ -78,7 +78,7 @@ translator: machine-google-reviewed
   - 运营商可以通过提交 `SetParameter(Custom)` 和 `id = "max_contract_code_bytes"` 以及数字有效负载来进行调整。
 
 - 后 `/v1/gov/ballots/zk`
-  - 请求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意事项：
     - 当电路的公共输入包括 `owner`、`amount` 和 `duration_blocks`，并且证明根据配置的 VK 进行验证时，节点使用 `owner` 创建或扩展 `election_id` 的治理锁。方向保持隐藏（`unknown`）；仅更新金额/到期日。重新投票是单调的：金额和到期日仅增加（节点应用 max(amount, prev.amount) 和 max(expiry, prev.expiry)）。
@@ -86,12 +86,12 @@ translator: machine-google-reviewed
     - 合约执行必须在排队 `SubmitBallot` 之前调用 `ZK_VOTE_VERIFY_BALLOT`；主机强制执行一次性锁存。
 
 - 后 `/v1/gov/ballots/plain`
-  - 请求：{ "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意：重新投票只能延长——新的投票不能减少现有锁定的数量或到期时间。 `owner`必须等于交易权限。最短持续时间为 `conviction_step_blocks`。
 
 - 后 `/v1/gov/finalize`
-  - 请求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“ih58…？”，“private_key”：“…？” }
+  - 请求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“i105…？”，“private_key”：“…？” }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - 链上效应（当前脚手架）：制定已批准的部署提案会插入由 `code_hash` 键入的最小 `ContractManifest` 和预期的 `abi_hash`，并将提案标记为已实施。如果 `code_hash` 的清单已存在且具有不同的 `abi_hash`，则颁布将被拒绝。
   - 注意事项：
@@ -100,7 +100,7 @@ translator: machine-google-reviewed
     - 投票率检查仅使用批准+拒绝；弃权不计入投票率。
 
 - 后 `/v1/gov/enact`
-  - 请求：{“proposal_id”：“…64hex”，“preimage_hash”：“…64hex？”，“window”：{“lower”：0，“upper”：0}？，“authority”：“ih58…？”，“private_key”：“…？” }
+  - 请求：{“proposal_id”：“…64hex”，“preimage_hash”：“…64hex？”，“window”：{“lower”：0，“upper”：0}？，“authority”：“i105…？”，“private_key”：“…？” }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注：Torii在提供`authority`/`private_key`时提交签名交易；否则，它会返回一个框架供客户签名和提交。原像是可选的并且当前是信息性的。
 
@@ -202,16 +202,16 @@ CLI 助手
     - `(namespace, contract_id, code_hash, abi_hash)` 存在已颁布的治理提案，该提案是通过节点使用的相同提案 ID 散列得出的。
   - 输出一份 JSON 报告，其中每个合同包含 `results[]`（问题、清单/代码/提案摘要）以及一行摘要（除非被抑制）（`--no-summary`）。
   - 对于审核受保护的命名空间或验证治理控制的部署工作流程很有用。
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - 发出将部署提交到受保护的命名空间时使用的 JSON 元数据框架，包括用于满足清单仲裁规则的可选 `gov_manifest_approvers`。
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — 当 `min_bond_amount > 0` 时需要锁定提示，并且任何提供的提示集必须包括 `owner`、`amount` 和 `duration_blocks`。
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — 当 `min_bond_amount > 0` 时需要锁定提示，并且任何提供的提示集必须包括 `owner`、`amount` 和 `duration_blocks`。
   - 验证规范帐户 ID，规范化 32 字节无效提示，并将提示合并到 `public_inputs_json`（使用 `--public <path>` 进行额外覆盖）。
   - 无效符源自证明承诺（公共输入）加上 `domain_tag`、`chain_id` 和 `election_id`； `--nullifier` 已根据提供的证明进行验证。
   - 单行摘要现在显示从编码的 `CastZkBallot` 派生的确定性 `fingerprint=<hex>` 以及任何解码的提示（`owner`、`amount`、`duration_blocks`、`direction`（如果提供））。
   - CLI 响应使用 `payload_fingerprint_hex` 加上解码字段来注释 `tx_instructions[]`，以便下游工具可以验证骨架，而无需重新实现 Norito 解码。
   - 一旦电路公开相同的值，提供锁定提示允许节点为 ZK 选票发出 `LockCreated`/`LockExtended` 事件。
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` 接受规范的 IH58 文字；可选的 `@<domain>` 后缀仅是路由提示。
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` 接受规范的 I105 文字；可选的 `@<domain>` 后缀仅是路由提示。
   - 别名 `--lock-amount`/`--lock-duration-blocks` 镜像 ZK 标志名称以实现脚本奇偶校验。
   - 摘要输出通过包含编码的指令指纹和人类可读的选票字段（`owner`、`amount`、`duration_blocks`、`direction`）来镜像 `vote --mode zk`，在签署框架之前提供快速确认。
 
@@ -232,14 +232,14 @@ CLI 助手
 - 后 `/v1/gov/ballots/zk-v1`
   - 请求（v1 样式 DTO）：
     {
-      "权威": "ih58...",
+      "权威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
       “后端”：“halo2/ipa”，
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex？",
-      "owner": "ih58…?", // 规范 AccountId（IH58 文字）
+      "owner": "i105…?", // 规范 AccountId（I105 文字）
       "金额": "100？",
       “duration_blocks”：6000？，
       "direction": "赞成|反对|弃权？",
@@ -249,7 +249,7 @@ CLI 助手
   - 直接接受 `BallotProof` JSON 并返回 `CastZkBallot` 骨架。
   - 要求：
     {
-      "权威": "ih58...",
+      "权威": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -257,7 +257,7 @@ CLI 助手
         “后端”：“halo2/ipa”，
         "envelope_bytes": "AAECAwQ=", // ZK1 或 H2* 容器的 base64
         "root_hint": null, // 可选的 32 字节十六进制字符串（资格根）
-        "owner": null, // 可选的规范 AccountId（IH58 文字）
+        "owner": null, // 可选的规范 AccountId（I105 文字）
         "nullifier": null, // 可选的 32 字节十六进制字符串（nullifier 提示）
         "amount": "100", // 可选的锁定金额提示（十进制字符串）
         "duration_blocks": 6000, // 可选的锁定持续时间提示

@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "ih58...",
+  destinationAccountId: "i105...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "ih58...",
+  authority: "i105...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -223,7 +223,7 @@ for (const entry of allowances) {
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_ih58>",
+  authority: "<account_i105>",
   privateKeyHex: alicePrivateKey,
   certificate: draftCertificate,
 });
@@ -233,7 +233,7 @@ console.log(topUp.registration.certificate_id_hex);
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<account_ih58>",
+    authority: "<account_i105>",
     privateKeyHex: alicePrivateKey,
     certificate: draftCertificate,
   },
@@ -275,7 +275,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 `/v1/explorer/accounts/{account_id}/qr` اختتامی نکات تاکہ ڈیش بورڈز دوبارہ چلاسکیں
 وہی سنیپ شاٹس جو پورٹل کو طاقت دیتے ہیں۔ `getExplorerMetrics()` کو معمول بناتا ہے
 جب راستہ غیر فعال ہوتا ہے تو پے لوڈ اور واپسی `null`۔ اس کے ساتھ جوڑ
-`getExplorerAccountQr()` جب بھی آپ کو IH58 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
+`getExplorerAccountQr()` جب بھی آپ کو I105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
 شیئر بٹنوں کے لئے ایس وی جی۔
 
 ```ts
@@ -290,9 +290,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("ih58...", {
-  addressFormat: "compressed",
-});
+const qr = await torii.getExplorerAccountQr("i105...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -300,8 +298,8 @@ console.log(
 );
 ```
 
-پاسنگ `addressFormat: "compressed"` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
-سلیکٹرز ؛ ترجیحی IH58 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `ih58_qr` کی درخواست کریں
+پاسنگ `I105` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
+سلیکٹرز ؛ ترجیحی I105 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `i105_qr` کی درخواست کریں
 جب آپ کو QR-SAFE مختلف قسم کی ضرورت ہو۔ کمپریسڈ لفظی دوسرا بہترین ہے
 UX کے لئے صرف SORA- آپشن۔ مددگار ہمیشہ کیننیکل شناخت کنندہ کو لوٹاتا ہے ،
 منتخب لفظی ، اور میٹا ڈیٹا (نیٹ ورک کا سابقہ ​​، QR ورژن/ماڈیول ، خرابی
@@ -515,8 +513,8 @@ for await (const event of torii.streamEvents({
 درخواستیں جمع کروانے سے پہلے ان کو کیننیکلائز کریں:- `getUaidPortfolio(uaid, { assetId })` مجموعی طور پر توازن فی ڈیٹا اسپیس ،
   کیننیکل اکاؤنٹ IDs کے ذریعہ اثاثوں کے حصول کو گروپ کرنا ؛ فلٹر کرنے کے لئے `assetId` پاس کریں
   ایک ہی اثاثہ مثال کے طور پر پورٹ فولیو۔
-- `getUaidBindings(uaid, { addressFormat })` ہر ڈیٹا اسپیس ↔ اکاؤنٹ کی گنتی کرتا ہے
-  بائنڈنگ (`addressFormat: "compressed"` `sora…` لفظی لوٹاتا ہے)۔
+- `getUaidBindings(uaid)` ہر ڈیٹا اسپیس ↔ اکاؤنٹ کی گنتی کرتا ہے
+  بائنڈنگ (`I105` `i105` لفظی لوٹاتا ہے)۔
 - `getUaidManifests(uaid, { dataspaceId })` ہر صلاحیت کو ظاہر کرتا ہے ،
   لائف سائیکل کی حیثیت ، اور آڈٹ کے لئے پابند اکاؤنٹس۔
 
@@ -536,7 +534,7 @@ portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });
 
-const bindings = await torii.getUaidBindings(uaid, { addressFormat: "compressed" });
+const bindings = await torii.getUaidBindings(uaid, {} );
 console.log("bindings", bindings.dataspaces);
 
 const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
@@ -561,7 +559,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -571,7 +569,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "ih58...",
+    authority: "i105...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

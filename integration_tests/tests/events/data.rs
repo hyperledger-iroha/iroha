@@ -131,11 +131,12 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
 
     // Register role
     let role_id = "TEST_ROLE_EVENTS".parse::<RoleId>()?;
+    let wonderland_domain: DomainId = "wonderland".parse()?;
     let permission_1 = CanModifyAccountMetadata {
         account: ALICE_ID.clone(),
     };
     let permission_2 = CanModifyDomainMetadata {
-        domain: ALICE_ID.domain().clone(),
+        domain: wonderland_domain,
     };
     let role = Role::new(role_id.clone(), ALICE_ID.clone())
         .add_permission(permission_1.clone())

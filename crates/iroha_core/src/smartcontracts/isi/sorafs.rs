@@ -4301,7 +4301,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn capacity_declaration_accepts_ih58_owner_literal_without_registry() {
+    fn capacity_declaration_accepts_i105_owner_literal_without_registry() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -4324,7 +4324,7 @@ mod sorafs_tests {
 
         RegisterCapacityDeclaration { record }
             .execute(&alice(), &mut stx)
-            .expect("register declaration with IH58 owner");
+            .expect("register declaration with I105 owner");
 
         assert!(stx.world.capacity_declarations.get(&provider).is_some());
     }

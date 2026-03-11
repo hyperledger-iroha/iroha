@@ -8,6 +8,8 @@ source_hash: a37b7ca6ae1aa64e6289ecc44b48ef29c1c884abc039123c1a03b9c35b2e7120
 source_last_modified: "2026-01-22T15:38:30.655980+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
+id: node-operations-pt
+slug: /sorafs/node-operations-pt
 ---
 
 :::nota Fonte Canônica

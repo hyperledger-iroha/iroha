@@ -26,8 +26,8 @@ Voici la procédure pas à pas [démarrage rapide Norito] (./quickstart.md) pour
 Il s'agit d'un `$ADMIN_ACCOUNT` et d'un `$RECEIVER_ACCOUNT` pour les identifiants de compte et les identifiants de compte. ensemble de valeurs par défaut avec 3 clés de démonstration et 3 comptes pour les comptes :
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 پہلے چند comptes لسٹ کر کے ویلیوز کی تصدیق کریں:

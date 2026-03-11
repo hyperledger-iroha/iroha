@@ -82,12 +82,12 @@ pub fn prehashed(mut hash: [u8; Self::LENGTH]) -> Self {
 | Content-Type | varies | `application/x-norito` |
 | Accept | varies | `application/json` |
 
-### 3. extractIh58Address() - REST API Compatibility
+### 3. extractI105Address() - REST API Compatibility
 
-New Iroha API rejects `@domain` suffix in URL paths. Added helper to extract IH58 address:
+New Iroha API rejects `@domain` suffix in URL paths. Added helper to extract I105 address:
 
 ```kotlin
-fun extractIh58Address(accountId: AccountId): String {
+fun extractI105Address(accountId: AccountId): String {
     val value = accountId.toString()
     val atIndex = value.lastIndexOf('@')
     require(atIndex > 0) { "Invalid account ID format: $value" }
@@ -106,7 +106,7 @@ Updated `TransactionPayloadAdapter` to encode authority as AccountId struct (dom
 | Ed25519 Blake2b hash | ❌ | ❌ | ✅ | **Critical - needs upstream** |
 | `/transaction` endpoint | ❌ | ❌ | ✅ | May need upstream |
 | ConstVec decode fix | ❌ | ✅ | N/A | Rust-side, merge to i23 |
-| extractIh58Address | ❌ | ❌ | ✅ | New API compatibility |
+| extractI105Address | ❌ | ❌ | ✅ | New API compatibility |
 | AccountId struct encoding | ? | ? | ✅ | Needs verification |
 
 ## Recommendations

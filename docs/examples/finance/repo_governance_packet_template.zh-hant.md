@@ -64,7 +64,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
 
 |託管人 |文件| SHA-256 |筆記|
 |------------|------|---------|--------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` |簽署的 SLA 涵蓋託管窗口、路由賬戶和鑽探聯繫人。 |
+| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` |簽署的 SLA 涵蓋託管窗口、路由賬戶和鑽探聯繫人。 |
 
 > 將確認信息存儲在其他證據旁邊 (`artifacts/finance/repo/<slug>/`)
 > 所以 `scripts/repo_evidence_manifest.py` 將文件記錄在同一棵樹中

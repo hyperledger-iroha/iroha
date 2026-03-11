@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 الوصف: يكمل التدفق تركيب ADDR-2 كمعدات SDK متزامنة.
 ---
 
-حزمة Canonico ADDR-2 (`fixtures/account/address_vectors.json`) تركيبات الالتقاط IH58 (المفضل)، مضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، توقيع متعدد وسالب. يستخدم كل سطح SDK + Torii أو نفس JSON لاكتشاف أي انحراف في برنامج الترميز قبل البدء في الإنتاج. توضح هذه الصفحة الحالة الداخلية الموجزة (`docs/source/account_address_status.md` في المستودع الرئيسي) حتى يتمكن القراء من مراجعة البوابة أو التدفق دون الأوعية الدموية أو المستودع الأحادي.
+حزمة Canonico ADDR-2 (`fixtures/account/address_vectors.json`) تركيبات الالتقاط I105 (المفضل)، مضغوطة (`sora`، ثاني أفضل؛ نصف/عرض كامل)، توقيع متعدد وسالب. يستخدم كل سطح SDK + Torii أو نفس JSON لاكتشاف أي انحراف في برنامج الترميز قبل البدء في الإنتاج. توضح هذه الصفحة الحالة الداخلية الموجزة (`docs/source/account_address_status.md` في المستودع الرئيسي) حتى يتمكن القراء من مراجعة البوابة أو التدفق دون الأوعية الدموية أو المستودع الأحادي.
 
 ## تجديد أو التحقق من الحزمة
 
@@ -43,7 +43,7 @@ cargo xtask address-vectors --verify
 | Torii (الخادم) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | جافا سكريبت SDK | `javascript/iroha_js/test/address.test.js` |
 | سويفت SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |كل تسخير سريع ذهابًا وإيابًا لوحدات البايت Canonicos + IH58 + الترميزات المضمنة والتحقق من عدم وجود رموز خطأ على النمط Norito كتركيبة للحالات السلبية.
+| أندرويد SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |كل تسخير سريع ذهابًا وإيابًا لوحدات البايت Canonicos + I105 + الترميزات المضمنة والتحقق من عدم وجود رموز خطأ على النمط Norito كتركيبة للحالات السلبية.
 
 ## ما هي دقة السيارة؟
 

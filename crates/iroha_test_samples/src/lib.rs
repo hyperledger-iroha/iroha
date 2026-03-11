@@ -105,7 +105,8 @@ mod calibration_tests {
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
         let expected_key = KeyPair::from_seed(hash_bytes.to_vec(), Algorithm::default());
-        let expected_account = AccountId::new(expected_account);
+        let expected_account = AccountId::new(expected_key.public_key().clone());
+        assert_eq!(account, expected_account);
         assert_eq!(key_pair.public_key(), expected_key.public_key());
 
         set_calibration_seed_override(None);

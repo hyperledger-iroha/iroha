@@ -22,6 +22,7 @@ translator: machine-google-reviewed
 - *I18NT00000000004X I18NT00000000000** – I18NI000000010X Torii REST спецификацияһын ҡулланып, һуңғы Int .
   Рек. Регенерациялау спец менән I18NI000000011X (өҫтәү
   `--mirror=<label>` снимокты өҫтәмә тарихи версияларға күсерергә).
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
 - **Конфигурация таблицалары** – Тулы параметр каталогы 1990 йылда һаҡлана.
   `docs/source/references/configuration.md`. Порталға тиклем авто-импорт, һылтанма, тип судно
   Markdown файл өсөн теүәл ғәҙәттәгесә һәм тирә-яҡ мөхит өҫтөнлөк итә.

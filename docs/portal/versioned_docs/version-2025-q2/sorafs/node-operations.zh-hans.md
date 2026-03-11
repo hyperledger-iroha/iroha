@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a37b7ca6ae1aa64e6289ecc44b48ef29c1c884abc039123c1a03b9c35b2e7120
 source_last_modified: "2026-01-22T14:35:36.900283+00:00"
 translation_last_reviewed: 2026-02-07
-id: node-operations
+id: node-operations-zh-hans
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
 translator: machine-google-reviewed
+slug: /sorafs/node-operations-zh-hans
 ---
 
 :::注意规范来源

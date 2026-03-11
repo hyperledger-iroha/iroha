@@ -20253,6 +20253,7 @@ pub fn replay_blocks_from_kura_range(
                     &mut voting_block,
                     false,
                     replay_skip_block_signatures,
+                    replay_skip_block_signatures,
                 )
                 .unpack(|_| {})
             };

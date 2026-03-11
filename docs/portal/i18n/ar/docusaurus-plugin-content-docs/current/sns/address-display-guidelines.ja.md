@@ -28,8 +28,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 تتغير. يعرض مثال محفظة Android في
 `examples/android/retail-wallet` نمط UX المطلوب:
 
-- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
-  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
+- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: I105 (المفضل) والصيغة
+  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). I105 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
   تطبيقات واعية بـ Sora. مثال Android يربط زري Material وتلميحاتهما في
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، ويطابق
@@ -42,7 +42,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 - **اشارات النطاق الافتراضي الضمني.** عندما يشير المحدد الى النطاق الضمني
   `default`، اعرض توضيحا يذكر المشغلين بان لا حاجة لاي لاحقة. يجب على
   المستكشفات ايضا تمييز تسمية النطاق القانونية عندما يشفر المحدد digest.
-- **حمولات QR IH58.** يجب ان ترمز رموز QR سلسلة IH58. اذا فشل توليد QR، اعرض
+- **حمولات QR I105.** يجب ان ترمز رموز QR سلسلة I105. اذا فشل توليد QR، اعرض
   خطا واضحا بدلا من صورة فارغة.
 - **رسائل الحافظة.** بعد نسخ الصيغة المضغوطة، ارسل toast او snackbar يذكر
   المستخدمين انها خاصة بـ Sora ومعرضة لتشويه IME.
@@ -65,7 +65,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 ## مساعدات SDK
 
-كل SDK يوفر مساعدا يعيد صيغتي IH58 والمضغوطة مع سلسلة التحذير حتى تبقى طبقات UI
+كل SDK يوفر مساعدا يعيد صيغتي I105 والمضغوطة مع سلسلة التحذير حتى تبقى طبقات UI
 متسقة:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -90,7 +90,7 @@ JavaScript ايضا حمولة `selector` على `domainSummary` (`tag`, `digest
 
 يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:
 
-- طبق `data-copy-mode="ih58|compressed|qr"` على ازرار النسخ حتى تتمكن الواجهات
+- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
   الامامية من اصدار عدادات الاستخدام بالتوازي مع مقياس Torii
   `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
   `iroha:address-copy` مع `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -100,7 +100,7 @@ JavaScript ايضا حمولة `selector` على `domainSummary` (`tag`, `digest
   مراجعات تقاعد Local-12 من تصدير دليل 30 يوم `domain_kind="local12"` مباشرة من
   لوحة `address_ingest` في Grafana.
 - اربط كل عنصر تحكم بتلميحات `aria-label`/`aria-describedby` مميزة تشرح ما اذا
-  كانت السلسلة امنة للمشاركة (IH58) او خاصة بـ Sora (مضغوطة). ادرج تسمية
+  كانت السلسلة امنة للمشاركة (I105) او خاصة بـ Sora (مضغوطة). ادرج تسمية
   النطاق الضمني في الوصف حتى تعرض تقنيات المساعدة نفس السياق المرئي.
 - وفر منطقة اعلان حية (مثل `<output aria-live="polite">...</output>`) تعلن
   نتائج النسخ والتحذيرات، بما يطابق سلوك VoiceOver/TalkBack الموصل بالفعل في
@@ -113,7 +113,7 @@ JavaScript ايضا حمولة `selector` على `domainSummary` (`tag`, `digest
 
 استخدم [عدة Local -> Global](local-to-global-toolkit.md) لادارة تدقيق وتحويل
 محددات Local القديمة. يصدر المساعد تقرير تدقيق JSON والقائمة المحولة
-IH58/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية، بينما يربط دليل التشغيل
+I105/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية، بينما يربط دليل التشغيل
 لوحات Grafana وقواعد Alertmanager التي تضبط cutover في الوضع الصارم.
 
 ## مرجع سريع للتخطيط الثنائي (ADDR-1a)
@@ -163,15 +163,15 @@ payload bit: │version  │ class  │  norm  │ext │
 
 ## فرض الصيغ القانونية
 
-يجب على المشغلين الذين يحولون ترميزات Local القديمة الى IH58 قانوني او سلاسل
+يجب على المشغلين الذين يحولون ترميزات Local القديمة الى I105 قانوني او سلاسل
 مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:
 
-1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
+1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع I105 والحمولة المضغوطة
    والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` مع حقول `kind`/`warning`
    ويعكس اي نطاق مقدم عبر الحقل `input_domain`. عندما يكون `kind` هو `local12`
    تطبع CLI تحذيرا على stderr ويعكس ملخص JSON نفس التوجيه حتى تتمكن خطوط CI و
    SDKs من عرضه. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
-   كـ `<ih58>@<domain>`.
+   كـ `<i105>@<domain>`.
 2. يمكن لـ SDKs عرض نفس التحذير/الملخص عبر مساعد JavaScript:
 
    ```js
@@ -181,12 +181,12 @@ payload bit: │version  │ class  │  norm  │ext │
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  يحافظ المساعد على بادئة IH58 المكتشفة من literal ما لم تقدم `networkPrefix`
+  يحافظ المساعد على بادئة I105 المكتشفة من literal ما لم تقدم `networkPrefix`
   صراحة، لذا لا تعاد صياغة الملخصات للشبكات غير الافتراضية بصمت مع بادئة افتراضية.
 
-3. حول الحمولة القانونية عبر اعادة استخدام حقول `ih58.value` او `compressed`
+3. حول الحمولة القانونية عبر اعادة استخدام حقول `i105.value` او `i105_default`
    من الملخص (او اطلب ترميزا اخر عبر `--format`). هذه السلاسل امنة بالفعل
    للمشاركة خارجيا.
 4. حدث manifests والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ
@@ -195,14 +195,14 @@ payload bit: │version  │ class  │  norm  │ext │
    `iroha tools address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
    literals مفصولة باسطر جديدة (التعليقات التي تبدا بـ `#` يتم تجاهلها، و
    `--input -` او عدم وجود علم يستخدم STDIN)، ويصدر تقرير JSON بملخصات
-   قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
+   قانونية/I105/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
    الاتمتة عبر `strict CI post-check` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
 6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
   لملفات الجداول الخاصة بمعالجة محددات Local، استخدم
   لتصدير CSV `input,status,format,...` يبرز الترميزات القانونية والتحذيرات
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
-  ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON)، ويحافظ على
+  ويحول كل ادخال متبق الى الترميز المطلوب (I105/مضغوط/hex/JSON)، ويحافظ على
   النطاق الاصلي عندما يتم تعيين `legacy  suffix`. اقرنه مع `--allow-errors`
   لمواصلة الفحص حتى عند وجود literals تالفة.
 7. يمكن لاتمتة CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
@@ -244,6 +244,6 @@ Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة د
 
 > **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
-> من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
+> من تحويل محددات Local القديمة الى صيغ I105/مضغوطة قانونية قبل حظر Local-8/Local-12
 > على mainnet. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية
 > بحزمة دليل الاصدار.

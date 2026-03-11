@@ -85,7 +85,7 @@ translator: machine-google-reviewed
 
 - **风险摄入** – `POST /v1/fraud/query` 接受 `RiskQuery` 架构：
   - `query_id`（`[u8; 32]`，十六进制编码）
-  - `subject`（`AccountId`，规范 IH58 文字；可选 `@<domain>` 提示或别名）
+  - `subject`（`AccountId`，规范 I105 文字；可选 `@<domain>` 提示或别名）
   - `operation`（标记枚举匹配 `RiskOperation`；JSON `type`
     鉴别器镜像枚举变体）
   - `related_asset`（`AssetId`，可选）

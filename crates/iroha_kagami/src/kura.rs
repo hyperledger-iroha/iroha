@@ -321,9 +321,7 @@ mod tests {
 
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let authority_domain: DomainId = "genesis".parse().unwrap();
-        let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
-        );
+        let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         // A simple instruction is enough; validity is not exercised here.
         let tx = iroha_data_model::transaction::TransactionBuilder::new(chain_id, authority)
             .with_instructions([Log::new(Level::INFO, "test".to_owned())])

@@ -14,9 +14,9 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 ## סיור בספר החשבונות
 
-- ממן את סמכות החוזה (למשל `ih58...`) בנכס שהיא תעביר והעניקו לסמכות את תפקיד `CanTransfer` או הרשאה שקולה.
-- קראו לנקודת הכניסה `call_transfer_asset` כדי להעביר 5 יחידות מחשבון החוזה אל `ih58...`, באופן שמשקף כיצד אוטומציה על השרשרת יכולה לעטוף קריאות מארח.
-- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli ledger assets list --account ih58...` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
+- ממן את סמכות החוזה (למשל `i105...`) בנכס שהיא תעביר והעניקו לסמכות את תפקיד `CanTransfer` או הרשאה שקולה.
+- קראו לנקודת הכניסה `call_transfer_asset` כדי להעביר 5 יחידות מחשבון החוזה אל `i105...`, באופן שמשקף כיצד אוטומציה על השרשרת יכולה לעטוף קריאות מארח.
+- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli ledger assets list --account i105...` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
 
 ## מדריכי SDK קשורים
 
@@ -31,8 +31,8 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

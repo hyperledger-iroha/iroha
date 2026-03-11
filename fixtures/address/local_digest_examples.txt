@@ -4,5 +4,5 @@
 # Local-domain selector (treasury digest example from docs/account_structure.md §2.2)
 0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c
 
-# Canonical IH58 reference (non-Local) to show mixed inputs are accepted.
+# Canonical I105 reference (non-Local) to show mixed inputs are accepted.
 ih1qzg6w6qfqeel6gmyaeel2fvf9ut3khkmragesw0n4jzkf9qt2u85xrdcy3vpsl337y0

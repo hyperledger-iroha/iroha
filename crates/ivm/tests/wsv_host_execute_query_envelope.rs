@@ -85,9 +85,8 @@ fn query_get_balance_returns_json_tlv() {
     );
     let caller_value = norito::json::to_value(&caller).expect("serialize caller");
     let caller_literal = caller_value.as_str().expect("caller id string");
-    let alice = ScopedAccountId::parse_encoded(caller_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("canonical account id must parse");
+    let alice =
+        ScopedAccountId::parse_encoded(caller_literal).expect("canonical account id must parse");
     let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), rose.clone()),

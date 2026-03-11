@@ -970,7 +970,7 @@ pub mod genesis_instructions_json {
     }
 
     fn account_literal(account: &AccountId) -> Option<String> {
-        account.canonical_ih58().ok()
+        account.canonical_i105().ok()
     }
 
     fn asset_literal(asset: &AssetId) -> String {
@@ -4587,7 +4587,6 @@ mod tests {
         let (tmp_dir, builder) = test_builder();
         let (public_key, _) = KeyPair::random().into_parts();
         let domain_name: Name = "wonderland".parse()?;
-        let domain_id = DomainId::new(domain_name.clone());
         let account_id = AccountId::new(public_key.clone());
 
         let genesis = builder
@@ -4599,7 +4598,7 @@ mod tests {
         let json = norito::json::to_json_pretty(&genesis)?;
         assert!(
             json.contains(&account_id.to_string()),
-            "expected IH58 account id in genesis JSON"
+            "expected I105 account id in genesis JSON"
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;

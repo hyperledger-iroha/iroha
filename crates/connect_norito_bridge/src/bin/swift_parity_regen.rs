@@ -396,8 +396,6 @@ fn run() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::domain::DomainId;
-
     use super::*;
 
     fn account_literal(account: &AccountId) -> String {
@@ -407,7 +405,6 @@ mod tests {
     #[test]
     fn instruction_builder_rejects_legacy_asset_literal_argument() {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
         let authority = AccountId::new(keypair.public_key().clone());
         let destination = AccountId::new(keypair.public_key().clone());
 
@@ -433,7 +430,6 @@ mod tests {
     #[test]
     fn payload_builder_sets_nonce_and_ttl() {
         let keypair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
         let authority = AccountId::new(keypair.public_key().clone());
         let destination = AccountId::new(keypair.public_key().clone());
         let mut args = BTreeMap::new();

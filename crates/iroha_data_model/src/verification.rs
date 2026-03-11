@@ -430,7 +430,7 @@ mod tests {
             owned_by: missing_owner.clone(),
         };
 
-        let foreign_domain: DomainId = "elsewhere".parse().expect("valid domain id");
+        let _foreign_domain: DomainId = "elsewhere".parse().expect("valid domain id");
         let account_key = KeyPair::random();
         let account_id = AccountId::new(account_key.public_key().clone());
         let account = Account {

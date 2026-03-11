@@ -346,7 +346,6 @@ try {
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(25L)
-    .addressFormat("canonical")
     .build();
 
 OfflineWallet wallet =
@@ -364,7 +363,7 @@ byte[] auditJson = wallet.exportAuditJson();
 
 ```java
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"ih58...\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"i105...\"]}")
     .setLimit(25L)
     .build();
 
@@ -432,8 +431,8 @@ top-level `transfer` object or alongside the receipt that generated the token:
 {
   "transfer": {
     "bundle_id": "3b6a27bccebfb63b9a...",
-    "receiver": "ih58...",
-    "deposit_account": "ih58...",
+    "receiver": "i105...",
+    "deposit_account": "i105...",
     "receipts": [ /* ... */ ],
     "balance_proof": { /* ... */ },
     "platform_snapshot": {
@@ -498,8 +497,8 @@ value:
     "receipts": [
       {
         "tx_id": "00ff...",
-        "from": "ih58...",
-        "to": "ih58...",
+        "from": "i105...",
+        "to": "i105...",
         "issued_at_ms": 1730314876000,
         "platform_proof": { "...": "..." },
         "platform_snapshot": {

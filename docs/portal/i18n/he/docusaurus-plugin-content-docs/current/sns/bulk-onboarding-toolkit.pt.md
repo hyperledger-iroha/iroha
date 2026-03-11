@@ -36,7 +36,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|--------|
 | `label` | סים | תווית solicitada (מקרה מעורב aceita; a ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | סים | מזהה מספרי סופיקסו (עשרוני או `0x` hex). |
-| `owner` | סים | מחרוזת AccountId (IH58 מילולית; רמז @domain אופציונלי) האם הבעלים מבצע רישום. |
+| `owner` | סים | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | סים | Inteiro `1..=255`. |
 | `payment_asset_id` | סים | Ativo de settlement (por exemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | סים | אינטירוס סם מייצג את הדמויות היחידות. |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ unica execucao de CSV.
   רפרנסים א arquivos sao resolvidas relativo a localizacao do CSV. מטא נתונים
   nao objeto produz um erro de validacao.
 - **בקרים:** celulas em branco respeitam `--default-controllers`. פורנקה
-  רשימה מפורשת (לדוגמה `ih58...;ih58...`) ao delegar para atores nao הבעלים.
+  רשימה מפורשת (לדוגמה `i105...;i105...`) ao delegar para atores nao הבעלים.
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

@@ -413,7 +413,7 @@ fn base_koto_specs() -> Vec<NoteSpec> {
                 .unwrap_or_default()
                 .mul_add(1.0, start_beats)
                 .max(0.0);
-            let duration = (sustain - voice_offsets[voice_idx] * 0.6).max(0.95);
+            let duration = voice_offsets[voice_idx].mul_add(-0.6, sustain).max(0.95);
             let velocity = 78u8.saturating_sub((voice_idx as u8) * 8);
             specs.push(NoteSpec {
                 start_beats: voice_start,

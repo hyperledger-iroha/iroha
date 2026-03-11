@@ -32,21 +32,21 @@ translation_last_reviewed: 2026-02-07
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "ih58...?",
+      "authority": "i105...?",
       "private_key": "...?"
     }
   - תגובה (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - אימות: ноды канонизируют `abi_hash` ל-заданного `abi_version` ו- отвергают несовпадения. Для `abi_version = "v1"` ожидаемое значение - `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.Contracts API (פריסה)
 - POST `/v1/contracts/deploy`
-  - בקשה: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - בקשה: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - התנהגות: вычисляет `code_hash` по телу IVM программы ו `abi_hash` по заголовку Sumeragi по заголовку Sumeragi `RegisterSmartContractCode` (מניפסט) ו-`RegisterSmartContractBytes` (פולני `.to` байты) от имени `authority`.
   - תגובה: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - קשור:
     - קבל `/v1/contracts/code/{code_hash}` -> מניפסט возвращает сохраненный
     - קבל `/v1/contracts/code-bytes/{code_hash}` -> возвращает `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - בקשה: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - בקשה: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - התנהגות: деплоит предоставленный bytecode и сразу активирует маппинг `(namespace, contract_id)` через `ActivateContractInstance`.
   - תגובה: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
@@ -59,11 +59,11 @@ translation_last_reviewed: 2026-02-07
   - שגיאות: HTTP `400` при некорректном hex вводе. Torii возвращает Norito מעטפת `ValidationFail::QueryFailed::Conversion` с сообщением декодера.
 - POST `/v1/aliases/resolve`
   - בקשה: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
+  - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - הערות: צור זמן ריצה של גשר ISO (`[iso_bridge.account_aliases]` в `iroha_config`). Torii כינוי נורמאלי, удаляя пробелы и приводя к верхнему регистру. Возвращает 404 при отсутствии alias и 503, когда ISO bridge runtime отключен.
 - POST `/v1/aliases/resolve_index`
   - בקשה: { "אינדקס": 0 }
-  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
+  - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - הערות: индексы כינוי назначаются детерминированно по порядку конфигурации (מבוסס 0). Клиенты могут кэшировать ответы לא מקוון для построения מסלול ביקורת по событиям аттестации כינוי.
 
 כובע גודל קוד
@@ -71,7 +71,7 @@ translation_last_reviewed: 2026-02-07
   - Управляет максимальным допустимым размером (в байтах) хранения кода контрактов בשרשרת.
   - ברירת מחדל: 16 MiB. Ноды отклоняют `RegisterSmartContractBytes`, когда размер `.to` изображения превышает лимит, с ошибкой inviolant.
   - Операторы могут изменять через `SetParameter(Custom)` с `id = "max_contract_code_bytes"` и числовым מטען.- POST `/v1/gov/ballots/zk`
-  - בקשה: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
+  - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות:
     - Когда публичные входы схемы включают `owner`, `amount` ו-`duration_blocks`, и proof верисфиц מנעול ממשל ל-`election_id` בשיטת `owner`. Направление скрыто (`unknown`); обновляются только סכום/תפוגה. Повторные голоса монотонны: סכום и expiry только увеличиваются (нода применяет max(amount, prev.amount) и max(expiry, prev.expiry)).
@@ -79,12 +79,12 @@ translation_last_reviewed: 2026-02-07
     - Исполнение контракта должно вызвать `ZK_VOTE_VERIFY_BALLOT` до постановки `SubmitBallot`; хосты לאכוף בריח одноразовый.
 
 - POST `/v1/gov/ballots/plain`
-  - בקשה: { "authority": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
+  - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות: הצבעות חוזרות только на расширение - новый הקלפי не может уменьшить סכום или expiry существующего נעילת. `owner` должен совпадать с Authority транзакции. Минимальная длительность - `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58...?", "private_key": "...?" }
+  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - אפקט על השרשרת (פיגום נוכחי): חקיקת הצעה לפרוס утвержденного вставляет минимальный `ContractManifest`, привязанный к `code_hash`, с оNIж10м с оNIж10X, с оNIж10X и помечает ההצעה как נחקק. Если manifest уже существует для `code_hash` с другим `abi_hash`, enactment отклоняется.
   - הערות:
@@ -93,7 +93,7 @@ translation_last_reviewed: 2026-02-07
     - שיעור ההצבעה Проверки используют только approve+reject; נמנע не учитывается בשיעור ההצבעה.
 
 - POST `/v1/gov/enact`
-  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "...?" }
+  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - הערות: Torii отправляет подписанную транзакцию при наличии `authority`/`private_key`; иначе возвращает שלד для подписи и отправки клиентом. Preimage опционален и сейчас носит информационный характер.- קבל את `/v1/gov/proposals/{id}`
   - נתיב `{id}`: hex זיהוי הצעה (64 תווים)
@@ -191,15 +191,15 @@ RBAC
     - הצעת ממשל חוקקה על ידי Существует ל-`(namespace, contract_id, code_hash, abi_hash)`, деривированный тем же offer-id hashing, что использует нода.
   - Выводит JSON отчет с `results[]` по каждому контракту (בעיות, מניפסט/קוד/סיכומי הצעה) ותקציר אופנתי, еслианло по100X (100X).
   - ניתן להשתמש במרחבי שמות מוגנים או להגדיר זרימות עבודה מבוקרות של ממשל.
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
   - צור מטא-נתונים של JSON שלד ל-деплоя в מרחבי שמות מוגנים, включая опциональные `gov_manifest_approvers` ל- соблюдения quorum правил манифест.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` - רמזים לנעילה обязательны при `min_bond_amount > 0`, и любой набор hints должен включать `results[]`, I010000190X, I010000190X, I010000190X, I010000190X, I010000190X, `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` - רמזים לנעילה обязательны при `min_bond_amount > 0`, и любой набор hints должен включать `results[]`, I010000190X, I010000190X, I010000190X, I010000190X, I010000190X, `duration_blocks`.
   - מאמת מזהי חשבונות קנוניים, מבצע קנוניזציה של רמזים לביטול של 32 בתים וממזג את הרמזים לתוך `public_inputs_json` (עם `--public <path>` לעקיפות נוספות).
   - המבטל נגזר מהתחייבות ההוכחה (קלט ציבורי) בתוספת `domain_tag`, `chain_id` ו-`election_id`; `--nullifier` מאומת כנגד ההוכחה כאשר היא מסופקת.
   - תקציר אופטימלי теперь содержит детерминированный `fingerprint=<hex>` из кодированного `CastZkBallot` вместаннированный с дированный (`owner`, `amount`, `duration_blocks`, `direction` לבנים).
   - CLI ответы аннотируют `tx_instructions[]` полем `payload_fingerprint_hex` и декодированными полями, чтобы downstream tooling моглиб приовно реализации Norito פענוח.
   - רמזים למנעול Предоставление позволяет ноде эмитить `LockCreated`/`LockExtended` לקלפי ZK, когда схемаетрывя раски.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Алиасы `--lock-amount`/`--lock-duration-blocks` отражают имена ZK флагов для parity в скриптах.
   - סיכום вывод отражает `vote --mode zk`, включая טביעת אצבע закодированной инструкции и читаемые קלפי поля (Prometheus,Prometheus, `duration_blocks`, `direction`), давая быстрое подтверждение перед подписью שלד.
 
@@ -218,14 +218,14 @@ RBAC
 - POST `/v1/gov/ballots/zk-v1`
   - בקשה (DTO בסגנון v1):
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "ih58...?",
+      "owner": "i105...?",
       "nullifier": "blake2b32:...64hex?"
     }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
@@ -234,7 +234,7 @@ RBAC
   - פרינט `BallotProof` JSON שלד ושלד `CastZkBallot`.
   - בקשה:
     {
-      "authority": "ih58...",
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "...?",
       "election_id": "ref-1",

@@ -2,12 +2,12 @@
 seiyaku NftFlow {
   #[access(read="*", write="*")]
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi");
-    let nft = nft_id!("n0$default");
+    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let recipient = account!("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb");
-    nft_transfer_asset(owner, nft, recipient);
+    let to = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);
   }

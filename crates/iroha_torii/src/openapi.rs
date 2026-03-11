@@ -1223,7 +1223,6 @@ fn offline_bundle_proof_status_operation() -> Map {
         param.insert("schema".into(), Value::Object(schema));
         param
     }));
-    params.push(address_format_query_param());
     operation.insert("parameters".into(), Value::Array(params));
     operation.insert(
         "responses".into(),
@@ -1292,13 +1291,10 @@ fn offline_transfer_detail_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            path_param(
-                "bundle_id_hex",
-                "Deterministic bundle identifier rendered as hex.",
-            ),
-            address_format_query_param(),
-        ]),
+        Value::Array(vec![path_param(
+            "bundle_id_hex",
+            "Deterministic bundle identifier rendered as hex.",
+        )]),
     );
     operation.insert(
         "responses".into(),
@@ -1524,11 +1520,6 @@ fn list_filter_query_parameters() -> Vec<Value> {
         "sort",
         "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
     ));
-    params.push(string_query_param(
-        "address_format",
-        "Optional rendering for account ids (`ih58` or `compressed`).",
-    ));
-
     params
 }
 
@@ -1551,7 +1542,6 @@ fn explorer_pagination_query_parameters() -> Vec<Value> {
             "Optional items per page (default 10).",
             Some("uint64"),
         ),
-        address_format_query_param(),
     ]
 }
 
@@ -1559,7 +1549,7 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts canonical IH58 account literals).",
+        "Filter assets by account owner (accepts canonical I105 account literals).",
     ));
     params.push(string_query_param(
         "definition",
@@ -1576,7 +1566,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts canonical IH58 account literals).",
+        "Filter transactions by authority account (accepts canonical I105 account literals).",
     ));
     params.push(integer_query_param(
         "block",
@@ -1598,11 +1588,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts canonical IH58 account literals).",
+        "Filter instructions by authority account (accepts canonical I105 account literals).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter transfer instructions by participant account (source or destination; accepts canonical IH58 account literals).",
+        "Filter transfer instructions by participant account (source or destination; accepts canonical I105 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -1639,7 +1629,6 @@ fn account_assets_list_query_parameters() -> Vec<Value> {
 
 fn account_transactions_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
-    params.push(address_format_query_param());
     params.push(string_query_param(
         "asset_id",
         "Filter transactions by asset identifier.",
@@ -1649,7 +1638,6 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
 
 fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
-    params.push(address_format_query_param());
     params.push(string_query_param(
         "asset_id",
         "Filter holders by asset identifier.",
@@ -1661,7 +1649,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts canonical IH58 account literals).",
+            "Filter allowances by controller account (accepts canonical I105 account literals).",
         ),
         string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
@@ -1721,15 +1709,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts canonical IH58 account literals).",
+            "Filter bundles by originating controller account (accepts canonical I105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts canonical IH58 account literals).",
+            "Filter bundles by receiver account (accepts canonical I105 account literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts canonical IH58 account literals).",
+            "Filter bundles by deposit account (accepts canonical I105 account literals).",
         ),
         string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
@@ -1793,11 +1781,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts canonical IH58 account literals).",
+            "Filter receipts by sender/controller account (accepts canonical I105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts canonical IH58 account literals).",
+            "Filter receipts by receiver account (accepts canonical I105 account literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -1855,28 +1843,6 @@ fn bool_query_param(name: &str, description: &str) -> Value {
     param.insert("description".into(), Value::String(description.to_owned()));
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("boolean".to_owned()));
-    param.insert("schema".into(), Value::Object(schema));
-    Value::Object(param)
-}
-
-fn address_format_query_param() -> Value {
-    let mut param = Map::new();
-    param.insert("name".into(), Value::String("address_format".to_owned()));
-    param.insert("in".into(), Value::String("query".to_owned()));
-    param.insert("required".into(), Value::Bool(false));
-    param.insert(
-        "description".into(),
-        Value::String("Preferred address format (`ih58` or `compressed`).".to_owned()),
-    );
-    let mut schema = Map::new();
-    schema.insert("type".into(), Value::String("string".to_owned()));
-    schema.insert(
-        "enum".into(),
-        Value::Array(vec![
-            Value::String("ih58".to_owned()),
-            Value::String("compressed".to_owned()),
-        ]),
-    );
     param.insert("schema".into(), Value::Object(schema));
     Value::Object(param)
 }
@@ -3645,7 +3611,7 @@ fn account_paths() -> Map {
             json_get_operation(
                 "Accounts",
                 "List account transactions.",
-                "List transactions authored by an account (supports pagination, address_format, and optional asset_id filtering).",
+                "List transactions authored by an account (supports pagination and optional asset_id filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3731,7 +3697,7 @@ fn asset_paths() -> Map {
             json_get_operation(
                 "Assets",
                 "List asset holders.",
-                "List holders for an asset definition (supports pagination, address_format, and optional asset_id filtering).",
+                "List holders for an asset definition (supports pagination and optional asset_id filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -5780,7 +5746,7 @@ fn repo_agreements_get_operation() -> Map {
     );
     operation.insert(
         "description".into(),
-        Value::String("Returns the active repo agreements recorded on-chain with optional pagination, filtering, and account address formatting.".to_owned()),
+        Value::String("Returns the active repo agreements recorded on-chain with optional pagination and filtering.".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -5789,7 +5755,6 @@ fn repo_agreements_get_operation() -> Map {
             query_param("offset", "integer", "Zero-based pagination offset (default 0)."),
             query_param("sort", "string", "Optional comma-separated sort expression (e.g., `id:asc,maturity_timestamp_ms:desc`)."),
             query_param("filter", "string", "JSON-encoded FilterExpr limiting results (fields: id, initiator, counterparty, custodian)."),
-            query_param("address_format", "string", "Preferred address format (`ih58` or `compressed`)."),
         ]),
     );
     operation.insert(
@@ -5815,7 +5780,7 @@ fn repo_agreements_query_operation() -> Map {
     );
     operation.insert(
         "description".into(),
-        Value::String("Structured query endpoint accepting a JSON envelope with pagination, sort, filter, and address_format fields.".to_owned()),
+        Value::String("Structured query endpoint accepting a JSON envelope with pagination, sort, and filter fields.".to_owned()),
     );
     operation.insert(
         "requestBody".into(),
@@ -6110,8 +6075,7 @@ fn nexus_public_lane_validators_operation() -> Map {
         Value::String(
             "Returns validators servicing the requested public lane with lifecycle status \
              (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, \
-             and `release_at_ms` when an exit timer is running. Account literals honour the optional \
-             `address_format` hint (`ih58` or `compressed`)."
+             and `release_at_ms` when an exit timer is running."
                 .to_owned(),
         ),
     );
@@ -6121,10 +6085,7 @@ fn nexus_public_lane_validators_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            Value::Object(lane_id_parameter()),
-            address_format_query_param(),
-        ]),
+        Value::Array(vec![Value::Object(lane_id_parameter())]),
     );
     operation.insert(
         "responses".into(),
@@ -6165,8 +6126,7 @@ fn nexus_public_lane_stake_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns bonded stake per validator/staker pair for the requested public lane, \
-             including pending unbond timers. Supports an optional validator filter and renders \
-             account literals according to the `address_format` hint (`ih58` or `compressed`)."
+             including pending unbond timers. Supports an optional validator filter."
                 .to_owned(),
         ),
     );
@@ -6178,10 +6138,9 @@ fn nexus_public_lane_stake_operation() -> Map {
         "parameters".into(),
         Value::Array(vec![
             Value::Object(lane_id_parameter()),
-            address_format_query_param(),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (canonical IH58 only).",
+                "Optional validator account literal to filter stake entries (canonical I105 only).",
             ),
         ]),
     );
@@ -6227,7 +6186,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (canonical IH58) and \
+             given public lane. Requires an `account` query parameter (canonical I105) and \
              accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
@@ -6252,10 +6211,9 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "parameters".into(),
         Value::Array(vec![
             Value::Object(lane_id_parameter()),
-            address_format_query_param(),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (canonical IH58 only).",
+                "Account literal to evaluate pending rewards for (canonical I105 only).",
             ),
             string_query_param("asset_id", "Filter pending rewards by asset identifier."),
             Value::Object(upto_epoch_param),
@@ -6302,7 +6260,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied canonical IH58 account literal \
+            "Resolves the supplied canonical I105 account literal \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -6314,13 +6272,10 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            string_path_param(
-                "literal",
-                "Account literal to resolve (canonical IH58 only).",
-            ),
-            address_format_query_param(),
-        ]),
+        Value::Array(vec![string_path_param(
+            "literal",
+            "Account literal to resolve (canonical I105 only).",
+        )]),
     );
     operation.insert(
         "responses".into(),
@@ -6391,7 +6346,7 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as a canonical IH58 account literal.".to_owned(),
+            "Relay account identifier encoded as a canonical I105 account literal.".to_owned(),
         ),
     );
     let mut schema = Map::new();
@@ -7771,7 +7726,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered according to the address_format hint."
+                    "description": "Controller rendered as canonical I105."
                 },
                 "asset_id": {
                     "type": "string",
@@ -8399,7 +8354,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered according to the address_format hint."
+                    "description": "Controller rendered as canonical I105."
                 },
                 "summary_hash_hex": {
                     "type": "string",
@@ -8789,10 +8744,6 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Optional batch fetch size hint."
-                },
-                "address_format": {
-                    "type": "string",
-                    "description": "Optional rendering preference for account ids (`ih58` or `compressed`)."
                 }
             }
         }),
@@ -9293,7 +9244,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier (IH58 or `sora...` compressed literal)."
+                    "description": "Relay account identifier rendered as canonical I105 literal."
                 },
                 "domain": {
                     "type": "string",
@@ -9645,10 +9596,6 @@ fn openapi_schemas() -> Map {
                 "fetch_size": {
                     "type": "integer",
                     "format": "uint64"
-                },
-                "address_format": {
-                    "type": "string",
-                    "enum": ["ih58", "compressed"]
                 }
             }
         }),
@@ -9704,7 +9651,7 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered per address_format."
+                    "description": "Validator account literal rendered as canonical I105."
                 },
                 "stake_account": {
                     "type": "string",
@@ -9808,11 +9755,11 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered per address_format."
+                    "description": "Validator account literal rendered as canonical I105."
                 },
                 "staker": {
                     "type": "string",
-                    "description": "Staker account literal rendered per address_format."
+                    "description": "Staker account literal rendered as canonical I105."
                 },
                 "bonded": {
                     "type": "string",
@@ -10396,13 +10343,11 @@ mod tests {
         let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
         assert!(account_transactions.contains(&"limit".to_owned()));
         assert!(account_transactions.contains(&"offset".to_owned()));
-        assert!(account_transactions.contains(&"address_format".to_owned()));
         assert!(account_transactions.contains(&"asset_id".to_owned()));
 
         let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
         assert!(asset_holders.contains(&"limit".to_owned()));
         assert!(asset_holders.contains(&"offset".to_owned()));
-        assert!(asset_holders.contains(&"address_format".to_owned()));
         assert!(asset_holders.contains(&"asset_id".to_owned()));
     }
 

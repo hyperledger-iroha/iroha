@@ -41,6 +41,7 @@ O portal do desenvolvedor inclui um proxy Try It para que revisores possam repro
 
 1. [Inicie o proxy](./try-it.md#start-the-proxy-locally) e defina `TRYIT_PROXY_PUBLIC_URL` para que os widgets saibam para onde enviar o trafego.
 2. Abra o card **Try it** nesta pagina ou o painel `/reference/torii-swagger` e selecione um endpoint como `POST /v1/pipeline/submit`.
+   For MCP/agent flows, use `/reference/torii-mcp`.
 3. Mude o **Content-Type** para `application/x-norito`, escolha o editor **Binary** e envie `fixtures/norito_rpc/transfer_asset.norito` (ou qualquer payload listado em `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Forneca um bearer token via o widget OAuth device-code ou o campo manual (o proxy aceita overrides `X-TryIt-Auth` quando configurado com `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Envie a requisicao e verifique se o Torii ecoa o `schema_hash` listado em `fixtures/norito_rpc/schema_hashes.json`. Hashes iguais confirmam que o cabecalho Norito sobreviveu ao salto navegador/proxy.

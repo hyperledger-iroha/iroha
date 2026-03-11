@@ -270,8 +270,11 @@ fn npos_multilane_genesis_post_topology_transactions(
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain)).into(),
-        Register::account(Account::new(gas_account_id)).into(),
+        Register::domain(Domain::new(ivm_domain.clone())).into(),
+        Register::account(Account::new(
+            gas_account_id.to_account_id(ivm_domain.clone()),
+        ))
+        .into(),
         Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
     ];
 
@@ -282,7 +285,12 @@ fn npos_multilane_genesis_post_topology_transactions(
 
     for peer in topology {
         let validator_id = AccountId::new(peer.public_key().clone());
-        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
+        bootstrap_tx.push(
+            Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            ))
+            .into(),
+        );
         bootstrap_tx.push(
             Mint::asset_numeric(
                 mint_amount,
@@ -401,7 +409,7 @@ async fn wait_for_active_lane_validators(
 
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let snapshot = client
-            .get_public_lane_validators(lane_id, None)
+            .get_public_lane_validators(lane_id)
             .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
         last_total = total;

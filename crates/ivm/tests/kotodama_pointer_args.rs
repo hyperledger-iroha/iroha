@@ -5,14 +5,14 @@ use iroha_data_model::prelude::*;
 use ivm::{
     IVM, PointerType,
     kotodama::compiler::Compiler,
-    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{MockWorldStateView, WsvHost},
     validate_tlv_bytes,
 };
 
 fn parse_account_literal(literal: &str) -> AccountId {
     AccountId::parse_encoded(literal)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical IH58")
+        .expect("account literal must be canonical I105")
 }
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
@@ -52,12 +52,8 @@ fn pointer_map_default_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytecode).expect("load program");
     let wsv = MockWorldStateView::new();
-    let authority: ScopedAccountId = parse_account_literal(ACCOUNT_A);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&authority),
-        HashMap::new(),
-    );
+    let authority = parse_account_literal(ACCOUNT_A);
+    let host = WsvHost::new_with_subject(wsv, authority, HashMap::new());
     vm.set_host(host);
     vm.run().expect("execute hajimari");
 

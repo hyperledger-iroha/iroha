@@ -36,7 +36,7 @@ Norito کے لئے تیار کردہ ڈھانچے کی تیاری کے لئے ڈ
 | ----------- | ------------- | ----------- |
 | `label` | ہاں | لیبل کی درخواست کی گئی (مخلوط کیس قبول ہو گیا tool ٹول نورم V1 اور UTS-46 کے مطابق معمول بناتا ہے)۔ |
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
-| `owner` | ہاں | ریکارڈ مالک کے اسٹرنگ اکاؤنٹڈ (لفظی IH58 ؛ اختیاری @ڈومین اشارہ)۔ |
+| `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
 | `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `xor#sora`)۔ |
 | `payment_gross` / `payment_net` | ہاں | اثاثہ کے مقامی اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "ih58...",
+      "owner": "i105...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"ih58...",
+        "payer":"i105...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ CSV کی سنگل پھانسی۔
   فائل کے حوالہ جات CSV مقام کے مطابق حل کیے جاتے ہیں۔ میٹا ڈیٹا
   کوئی شے توثیق کی غلطی پیدا نہیں کرتا ہے۔
 - ** کنٹرولرز: ** خالی خلیات `--default-controllers` کا احترام کرتے ہیں۔ فراہمی
-  غیر مالک اداکاروں کو تفویض کرتے وقت واضح فہرستیں (جیسے `ih58...;ih58...`)۔
+  غیر مالک اداکاروں کو تفویض کرتے وقت واضح فہرستیں (جیسے `i105...;i105...`)۔
 
 کریشوں کو سیاق و سباق کے نمبروں کے ساتھ بتایا جاتا ہے (جیسے۔
 `error: row 12 term_years must be between 1 and 255`)۔ اسکرپٹ کوڈ کے ساتھ سامنے آتا ہے

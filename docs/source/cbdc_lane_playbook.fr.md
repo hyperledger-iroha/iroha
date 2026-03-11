@@ -106,10 +106,10 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "ih58...",
-    "ih58...",
-    "ih58...",
-    "ih58..."
+    "i105...",
+    "i105...",
+    "i105...",
+    "i105..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -145,7 +145,7 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 
 Key requirements:
 
-- Validators **must** be canonical IH58 account IDs (no `@domain`; append `@domain` only as an explicit routing hint) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
+- Validators **must** be canonical I105 account IDs (no `@domain` suffix; keep domain routing in dedicated fields) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
 - Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
 - `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
 - After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.
@@ -252,7 +252,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -268,7 +268,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "ih58...",
+            "authority": "i105...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

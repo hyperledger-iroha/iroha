@@ -15,9 +15,7 @@ use iroha_core::iso_bridge::reference_data::{
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     ValidationFail,
-    account::address::{
-        AccountAddress, AccountAddressError, AccountAddressFormat, AddressDomainKind,
-    },
+    account::address::{AccountAddress, AccountAddressError, AddressDomainKind},
     alias::AliasIndex,
     prelude::{
         AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, InstructionBox, Metadata, Name,
@@ -110,16 +108,14 @@ impl IsoMessageContext {
 #[derive(Clone, Debug, Default)]
 pub struct AddressParseObservation {
     literal: Option<String>,
-    format: Option<AccountAddressFormat>,
     domain_kind: Option<AddressDomainKind>,
     error_code: Option<&'static str>,
 }
 
 impl AddressParseObservation {
-    fn from_success(literal: &str, format: AccountAddressFormat, address: &AccountAddress) -> Self {
+    fn from_success(literal: &str, address: &AccountAddress) -> Self {
         Self {
             literal: Some(literal.to_owned()),
-            format: Some(format),
             domain_kind: Some(address.domain_kind()),
             error_code: None,
         }
@@ -128,7 +124,6 @@ impl AddressParseObservation {
     fn from_error(literal: &str, code: &'static str) -> Self {
         Self {
             literal: Some(literal.to_owned()),
-            format: None,
             domain_kind: None,
             error_code: Some(code),
         }
@@ -152,12 +147,11 @@ fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseOb
         return (None, AddressParseObservation::default());
     }
     match AccountAddress::parse_encoded(input, None) {
-        Ok((address, format @ AccountAddressFormat::IH58 { .. }))
-        | Ok((address, format @ AccountAddressFormat::Compressed)) => {
+        Ok(address) => {
             let canonical = address.canonical_hex().unwrap_or_else(|_| input.to_owned());
             (
                 Some(canonical),
-                AddressParseObservation::from_success(input, format, &address),
+                AddressParseObservation::from_success(input, &address),
             )
         }
         Err(err) => {
@@ -1360,8 +1354,8 @@ mod tests {
             iroha_crypto::KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
-        let ih58 = address.to_ih58(42).expect("ih58 encoding");
-        let (value, observation) = super::parse_account_address_literal(&ih58);
+        let i105 = address.to_i105_for_discriminant(42).expect("i105 encoding");
+        let (value, observation) = super::parse_account_address_literal(&i105);
         assert!(value.is_some());
         assert_eq!(observation.error_code(), None);
         assert_eq!(observation.domain_label(), Some("default"));

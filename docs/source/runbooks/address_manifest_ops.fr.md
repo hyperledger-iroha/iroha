@@ -99,7 +99,7 @@ Champs d'en‑tête de `manifest.json` :
    - Les entrées `local_alias` DOIVENT embarquer le digest de 12 octets produit par
      Norm v1 (utilisez `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      pour confirmer ; le résumé JSON reflète le domaine fourni via `input_domain` et
-     `legacy  suffix` rejoue l'encodage converti sous la forme `<ih58>@<domain>` pour les manifestes).
+     `legacy  suffix` rejoue l'encodage converti sous la forme `<i105>@<domain>` pour les manifestes).
    - Les entrées `tombstone` DOIVENT référencer exactement le sélecteur retiré,
      inclure `reason_code`, `ticket`, et `replaces_sequence`.
 
@@ -135,7 +135,7 @@ Champs d'en‑tête de `manifest.json` :
 
    ```bash
    iroha tools address convert sora... --expect-prefix 753 --format json > /tmp/alias.json
-   jq '.canonical_hex, .ih58' /tmp/alias.json
+   jq '.canonical_hex, .i105' /tmp/alias.json
    ```
 
 3. **Rédiger l'entrée de manifeste.** Ajoutez un enregistrement JSON comme :
@@ -186,7 +186,7 @@ Champs d'en‑tête de `manifest.json` :
     `scripts/address_local_toolkit.sh` pour confirmer le mapping de digest et
     coordonnez avec la gouvernance Nexus avant de réémettre l'entrée de registre
     affectée.
-  - `AddressInvalidRatioSlo` — avertit lorsque les soumissions IH58/compressées
+  - `AddressInvalidRatioSlo` — avertit lorsque les soumissions I105/compressées
     invalides (hors rejets Local‑8/strict‑mode) dépassent le SLO global de 0,1 %
     pendant dix minutes. Analysez `torii_address_invalid_total` par
     contexte/raison et coordonnez avec l'équipe SDK propriétaire avant de

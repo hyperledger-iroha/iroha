@@ -18,7 +18,7 @@ Yo'l xaritasi ma'lumotnomasi: ADDR-2 - Ikki formatli muvofiqlik to'plami
 
 ### 1. Umumiy ko'rinish
 
-- Armatura: `fixtures/account/address_vectors.json` (IH58 (afzal) + siqilgan (`sora`, ikkinchi eng yaxshi) + multisig ijobiy/salbiy holatlar).
+- Armatura: `fixtures/account/address_vectors.json` (I105 (afzal) + siqilgan (`sora`, ikkinchi eng yaxshi) + multisig ijobiy/salbiy holatlar).
 - Qo'llanish doirasi: noaniq-standart, Local-12, Global registr va to'liq xato taksonomiyasiga ega multisig kontrollerlarini qamrab oluvchi deterministik V1 foydali yuklari.
 - Tarqatish: Rust ma'lumotlar modeli, Torii, JS/TS, Swift va Android SDK'lar bo'ylab taqsimlanadi; Har qanday iste'molchi chetga chiqsa, CI muvaffaqiyatsiz tugadi.
 - Haqiqat manbai: generator `crates/iroha_data_model/src/account/address/compliance_vectors.rs` da yashaydi va `cargo xtask address-vectors` orqali ochiladi.
@@ -42,10 +42,10 @@ Bayroqlar:
 
 | Yuzaki | Amalga oshirish | Eslatmalar |
 |---------|-------------|-------|
-| Rust ma'lumotlar modeli | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSONni tahlil qiladi, kanonik foydali yuklarni qayta tiklaydi va IH58 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi)/kanonik konversiyalarni + tuzilgan xatolarni tekshiradi. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Server tomoni kodeklarini tasdiqlaydi, shuning uchun Torii noto'g'ri tuzilgan IH58 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi) foydali yuklarni aniq rad etadi. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 armatura (IH58 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/to'liq kenglik) va har bir salbiy holat uchun Norito uslubidagi xato kodlarini tasdiqlaydi. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple platformalarida IH58 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi) dekodlash, multisig foydali yuklari va xatolarni aniqlash mashqlari. |
+| Rust ma'lumotlar modeli | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSONni tahlil qiladi, kanonik foydali yuklarni qayta tiklaydi va I105 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi)/kanonik konversiyalarni + tuzilgan xatolarni tekshiradi. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Server tomoni kodeklarini tasdiqlaydi, shuning uchun Torii noto'g'ri tuzilgan I105 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi) foydali yuklarni aniq rad etadi. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 armatura (I105 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/to'liq kenglik) va har bir salbiy holat uchun Norito uslubidagi xato kodlarini tasdiqlaydi. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Apple platformalarida I105 (afzal)/siqilgan (`sora`, ikkinchi eng yaxshi) dekodlash, multisig foydali yuklari va xatolarni aniqlash mashqlari. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Kotlin/Java ulanishlarining kanonik moslamaga mos kelishini ta'minlaydi. |
 
 ### 4. Monitoring va ajoyib ish- Holat hisoboti: ushbu hujjat `status.md` va yo'l xaritasi bilan bog'langan, shuning uchun haftalik tekshiruvlar armatura sog'lig'ini tekshirishi mumkin.

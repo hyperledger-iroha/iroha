@@ -2036,7 +2036,7 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Produce a TLV with a fixed ScopedAccountId and return its INPUT pointer in x10.
-                // Parsing expects canonical IH58 controller format.
+                // Parsing expects canonical I105 controller format.
                 const ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
                 let account =
                     ScopedAccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;

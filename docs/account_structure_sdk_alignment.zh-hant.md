@@ -10,11 +10,11 @@ translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
 ---
 
-# 針對 SDK 和編解碼器所有者的 IH58 推出說明
+# 針對 SDK 和編解碼器所有者的 I105 推出說明
 
 團隊：Rust SDK、TypeScript/JavaScript SDK、Python SDK、Kotlin SDK、編解碼器工具
 
-上下文：`docs/account_structure.md` 現在反映運輸 IH58 帳戶 ID
+上下文：`docs/account_structure.md` 現在反映運輸 I105 帳戶 ID
 實施。請將 SDK 行為和測試與規範規範保持一致。
 
 主要參考資料：
@@ -24,11 +24,11 @@ translator: machine-google-reviewed
 - 夾具向量 — `fixtures/account/address_vectors.json`
 
 行動項目：
-1. **規範輸出：** `AccountId::to_string()`/顯示器必須僅發出 IH58
+1. **規範輸出：** `AccountId::to_string()`/顯示器必須僅發出 I105
    （無 `@domain` 後綴）。規範十六進制用於調試 (`0x...`)。
-2. **Accepted inputs:** parsers MUST accept only canonical IH58 account literals. Reject compressed `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **IH58校驗和：**使用Blake2b-512 over `IH58PRE || prefix || payload`，取
+4. **I105校驗和：**使用Blake2b-512 over `I105PRE || prefix || payload`，取
    前 2 個字節。壓縮字母基數為 **105**。
 5. **曲線選通：** SDK 默認僅適用於 Ed25519。提供明確的選擇加入
    ML‑DSA/GOST/SM（Swift 構建標誌；JS/Android `configureCurveSupport`）。做

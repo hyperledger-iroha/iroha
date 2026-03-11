@@ -698,7 +698,6 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
 ///    /       /  \     / | \
 ///   0       1    2   3  4  5 <--- personal signatories
 /// ```
-#[expect(clippy::similar_names, clippy::too_many_lines)]
 fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()> {
     let _ = suite;
 

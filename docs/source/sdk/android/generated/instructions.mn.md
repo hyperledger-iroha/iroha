@@ -911,7 +911,7 @@ Declarative read/write key hints stored inside smart-contract manifests.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `read_keys` | `Vec<String>` | Canonical keys (e.g., `account:ih58...`) the contract expects to read. |
+| `read_keys` | `Vec<String>` | Canonical keys (e.g., `account:i105...`) the contract expects to read. |
 | `write_keys` | `Vec<String>` | Keys that the contract expects to write during execution. |
 
 #### EntrypointDescriptor fields

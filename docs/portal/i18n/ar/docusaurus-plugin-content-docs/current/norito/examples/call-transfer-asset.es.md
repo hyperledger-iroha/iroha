@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Recorrido del libro mayor
 
-- قم بإنشاء ترخيص العقد (على سبيل المثال `ih58...`) مع النشاط الذي ينقل ويحرر الدور `CanTransfer` أو تصريح مكافئ.
-- اتصل بنقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، مما يعكس الطريقة التي يمكن أن تشمل بها الأتمتة على السلسلة مكالمات المضيف.
-- التحقق من الأرصدة بين `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وفحص الأحداث للتأكد من أن حماية البيانات تسجل سياق النقل.
+- قم بإنشاء ترخيص العقد (على سبيل المثال `i105...`) مع النشاط الذي ينقل ويحرر الدور `CanTransfer` أو تصريح مكافئ.
+- اتصل بنقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `i105...`، مما يعكس الطريقة التي يمكن أن تشمل بها الأتمتة على السلسلة مكالمات المضيف.
+- التحقق من الأرصدة بين `FindAccountAssets` أو `iroha_cli ledger assets list --account i105...` وفحص الأحداث للتأكد من أن حماية البيانات تسجل سياق النقل.
 
 ## أدلة SDK ذات الصلة
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("i105..."),
+      account!("i105..."),
       asset_definition!("rose#wonderland"),
       10
     );

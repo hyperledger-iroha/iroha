@@ -293,7 +293,7 @@ fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
     if truncated {
         return Err(PeerNotice::warning(
             NoticeKind::StatusPayloadTooLarge,
-            format!("GET {url} body exceeds {} bytes", STATUS_BODY_LIMIT),
+            format!("GET {url} body exceeds {STATUS_BODY_LIMIT} bytes"),
         ));
     }
     if body.is_empty() {
@@ -342,7 +342,7 @@ fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> 
     if truncated {
         return Err(PeerNotice::warning(
             NoticeKind::MetricsPayloadTooLarge,
-            format!("GET {url} body exceeds {} bytes", METRICS_BODY_LIMIT),
+            format!("GET {url} body exceeds {METRICS_BODY_LIMIT} bytes"),
         ));
     }
     let text = String::from_utf8_lossy(&body);

@@ -22,8 +22,8 @@ Bu sənəddə həyata keçirilən göndərmə hesabı ünvanlama yığını təs
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) və
 yoldaş alətlər. O, təmin edir:
 
-- İstehsal edilmiş yoxlama cəmi, insana baxan **Iroha Base58 ünvanı (IH58)**
-  Zəncir diskriminantını hesaba bağlayan `AccountAddress::to_ih58`
+- İstehsal edilmiş yoxlama cəmi, insana baxan **Iroha Base58 ünvanı (I105)**
+  Zəncir diskriminantını hesaba bağlayan `AccountAddress::to_i105`
   nəzarətçi və deterministik qarşılıqlı əlaqəyə uyğun mətn formaları təklif edir.
 - Gizli defolt domenlər və yerli həzmlər üçün domen seçiciləri, a ilə
   gələcək Nexus tərəfindən dəstəklənən marşrutlaşdırma üçün qorunan qlobal reyestr seçici etiketi (
@@ -48,7 +48,7 @@ və domen adından nüfuzlu zəncirə qədər deterministik xəritəçəkmə.
 
 ## Məqsədlər
 
-- Məlumat modelində tətbiq olunan IH58 Base58 zərfini və
+- Məlumat modelində tətbiq olunan I105 Base58 zərfini və
   `AccountId` və `AccountAddress`-in əməl etdiyi kanonik təhlil/ləqəb qaydaları.
 - Konfiqurasiya edilmiş zəncir diskriminantını birbaşa hər bir ünvana kodlayın və
   onun idarə edilməsi/reyestr prosesini müəyyən edir.
@@ -72,9 +72,9 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical IH58 literal (no `@domain` suffix)
+Display: canonical I105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: IH58 (preferred) and `sora` compressed.
+- Encoded account identifiers only: I105.
 - Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
@@ -132,29 +132,29 @@ pub struct Common {
 ### 2. Kanonik ünvan kodekləri
 
 Rust data modeli tək kanonik faydalı yük təqdimatını nümayiş etdirir
-(`AccountAddress`) bir neçə insana baxan format kimi yayıla bilər. IH58
+(`AccountAddress`) bir neçə insana baxan format kimi yayıla bilər. I105
 paylaşma və kanonik çıxış üçün üstünlük verilən hesab formatı; sıxılmış
 `sora` forması kana əlifbasının olduğu UX üçün ikinci ən yaxşı, yalnız Sora variantıdır.
 dəyər əlavə edir. Canonical hex sazlama yardımı olaraq qalır.
 
-- **IH58 (Iroha Base58)** – zənciri daxil edən Base58 zərfi
+- **I105 (Iroha Base58)** – zənciri daxil edən Base58 zərfi
   diskriminant. Dekoderlər faydalı yükü təşviq etməzdən əvvəl prefiksi təsdiqləyirlər
   kanonik forma.
 - **Sora ilə sıxılmış görünüş** – **105 simvoldan** ibarət yalnız Sora əlifbası
   yarım enli イロハ şeirinin (ヰ və ヱ daxil olmaqla) 58 simvola əlavə edilməsi
-  IH58 dəsti. Simlər gözətçi `sora` ilə başlayır, Bech32m-dən əldə ediləni daxil edir
+  I105 dəsti. Simlər gözətçi `sora` ilə başlayır, Bech32m-dən əldə ediləni daxil edir
   checksum və şəbəkə prefiksini buraxın (Sora Nexus gözətçi tərəfindən nəzərdə tutulur).
 
   ```
-  IH58  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
   Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
   ```
 - **Canonical hex** – kanonik baytın sazlama üçün əlverişli `0x…` kodlaması
   zərf.
 
-`AccountAddress::parse_encoded` IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
+`AccountAddress::parse_encoded` I105 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex-i avtomatik aşkarlayır
 (yalnız `0x...`; çılpaq hex rədd edilir) həm deşifrə edilmiş faydalı yükü, həm də aşkarlanmış yükü daxil edir və qaytarır
-`AccountAddressFormat`. Torii indi ISO 20022 əlavəsi üçün `parse_encoded` çağırır
+`AccountAddress`. Torii indi ISO 20022 əlavəsi üçün `parse_encoded` çağırır
 kanonik hex formasını ünvanlayır və saxlayır ki, metadata deterministik olaraq qalır
 orijinal təmsilindən asılı olmayaraq.
 
@@ -299,15 +299,15 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - İkili nəzarətçinin faydalı yükü (`ControllerPayload::Multisig`) kodlayır
   `version:u8`, `threshold:u16`, `member_count:u8`, sonra hər bir üzvün
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. Bu məhz budur
-  `AccountAddress::canonical_bytes()` IH58 (üstünlük verilir)/sora (ikinci ən yaxşı) faydalı yüklərə yazır.
+  `AccountAddress::canonical_bytes()` I105 (üstünlük verilir)/sora (ikinci ən yaxşı) faydalı yüklərə yazır.
 - Hashing (`MultisigPolicy::digest_blake2b256()`) Blake2b-256 ilə birlikdə
   `iroha-ms-policy` fərdiləşdirmə sətri beləliklə idarəetmə manifestləri
-  IH58-ə daxil edilmiş nəzarətçi baytlarına uyğun gələn deterministik siyasət ID-si.
+  I105-ə daxil edilmiş nəzarətçi baytlarına uyğun gələn deterministik siyasət ID-si.
 - Armatur əhatə dairəsi `fixtures/account/address_vectors.json`-də yaşayır (hallar
-  `addr-multisig-*`). Pul kisələri və SDK-lar kanonik IH58 sətirlərini təsdiq etməlidir
+  `addr-multisig-*`). Pul kisələri və SDK-lar kanonik I105 sətirlərini təsdiq etməlidir
   onların kodlayıcılarının Rust tətbiqinə uyğun olduğunu təsdiqləmək üçün aşağıda.
 
-| Case ID | Eşik / üzvlər | IH58 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi | Qeydlər |
+| Case ID | Eşik / üzvlər | I105 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi | Qeydlər |
 |---------|--------------------|--------------------------------|-------------------------|-------|
 | `addr-multisig-council-threshold3` | `≥3` çəki, üzvlər `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Şura-domen idarəetmə kvorumu. |
 | `addr-multisig-wonderland-threshold2` | `≥2`, üzvlər `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | İki imzalı möcüzələr ölkəsi nümunəsi (çəki 1 + 2). |
@@ -320,10 +320,10 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - Naməlum seçici/nəzarətçi teqləri `UnknownDomainTag` və ya `UnknownControllerTag` artırır.
 - Böyük ölçülü və ya qüsurlu əsas material `KeyPayloadTooLong` və ya `InvalidPublicKey`-i qaldırır.
 - 255 üzvdən çox olan Multisig nəzarətçiləri `MultisigMemberOverflow`-i qaldırır.
-- IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və IH58 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
-- Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi IH58 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
+- IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və I105 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
+- Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi I105 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
 - `ERR_LOCAL8_DEPRECATED` səthi 12 baytdan qısa olan yerli selektorun faydalı yükləri köhnə Local‑8 həzmlərindən sərt kəsimi qoruyur.
-- Domainless canonical IH58 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Normativ ikili vektorlar
 
@@ -332,7 +332,7 @@ SDK-lar və operator iş axınları arasında ardıcıl.
   Parçalanma: `0x02` başlığı, `0x00` selektoru (örtülü defolt), `0x00` nəzarətçi teqi, `0x01` əyri identifikatoru (Ed25519), I18NI0000027X açarı yükləmək, 3-byte açarı yükləmək.
 - **Yerli domen həzmi (`treasury`, toxum baytı `0x01`)**  
   Kanonik hex: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_encoded_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_encoded` vasitəsilə təsdiqləyir və alətlərin hex, IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
+  Parçalanma: `0x02` başlığı, selektor teqi `0x01` üstəgəl həzm `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, ardınca tək düyməli faydalı yük (`0x00` teqi, `0x01` əyri id, uzunluğu 002, I18 byte) Ed25519 açarı).Vahid testləri (`account::address::tests::parse_encoded_accepts_all_formats`) aşağıdakı V1 vektorlarını `AccountAddress::parse_encoded` vasitəsilə təsdiqləyir və alətlərin hex, I105 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) formalar üzrə kanonik faydalı yükə etibar edə biləcəyinə zəmanət verir. Genişləndirilmiş armatur dəstini `cargo run -p iroha_data_model --example address_vectors` ilə bərpa edin.
 
 | Domain | Toxum baytı | kanonik hex | Sıxılmış (`sora`) |
 |-------------|-----------|-----------------------------------------------------------------------------------------|------------|
@@ -355,19 +355,19 @@ Nəzərdən keçirən: Data Model WG, Cryptography WG — əhatə dairəsi ADDR-
 
 Sora Nexus şəbəkələri standart olaraq `chain_discriminant = 0x02F1`-dir
 (`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
-`AccountAddress::to_ih58` və `to_compressed_sora` köməkçiləri buna görə də yayırlar
+`AccountAddress::to_i105` və `to_i105` köməkçiləri buna görə də yayırlar
 hər kanonik yük üçün ardıcıl mətn formaları. Seçilmiş qurğular
 `fixtures/account/address_vectors.json` (vasitəsilə yaradılıb
 `cargo xtask address-vectors`) tez istinad üçün aşağıda göstərilmişdir:
 
-| Hesab / seçici | IH58 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi |
+| Hesab / seçici | I105 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi |
 |--------------------------------|--------------------------------|-------------------------|
 | `default` domeni (örtülü seçici, toxum `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (açıq marşrut göstərişləri təmin edərkən isteğe bağlı `@default` şəkilçisi) |
 | `treasury` (yerli həzm seçicisi, toxum `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Qlobal reyestr göstəricisi (`registry_id = 0x0000_002A`, `treasury` ekvivalenti) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Bu sətirlər CLI (`iroha tools address convert`), Torii tərəfindən buraxılanlara uyğundur
-cavablar (`address_format=ih58|compressed`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
+cavablar (`canonical I105 literal rendering`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
 axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` (rejected legacy form) əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
 
 #### 2.6 Qarşılıqlı fəaliyyət üçün mətn ləqəbləri (planlaşdırılmış)
@@ -375,57 +375,57 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
 - ** Zəncir ləqəbi üslubu:** loglar və insan üçün `ih:<chain-alias>:<alias@domain>`
   giriş. Pulqabılar prefiksi təhlil etməli, daxil edilmiş zənciri doğrulamalı və bloklamalıdır
   uyğunsuzluqlar.
-- **CAIP-10 forması:** Zəncirsiz aqnostik üçün `iroha:<caip-2-id>:<ih58-addr>`
+- **CAIP-10 forması:** Zəncirsiz aqnostik üçün `iroha:<caip-2-id>:<i105-addr>`
   inteqrasiyalar. Bu xəritələşdirmə göndəriləndə **hələ həyata keçirilməyib**
   alət zəncirləri.
 - **Maşın köməkçiləri:** Rust, TypeScript/JavaScript, Python, üçün kodekləri dərc edin,
-  və IH58 və sıxılmış formatları əhatə edən Kotlin (`AccountAddress::to_ih58`,
+  və I105 və sıxılmış formatları əhatə edən Kotlin (`AccountAddress::to_i105`,
   `AccountAddress::parse_encoded` və onların SDK ekvivalentləri). CAIP-10 köməkçiləridir
   gələcək iş.
 
-#### 2.7 Deterministik IH58 ləqəbi
+#### 2.7 Deterministik I105 ləqəbi
 
-- **Prefiksin xəritəsi:** `chain_discriminant`-i IH58 şəbəkə prefiksi kimi yenidən istifadə edin.
-  `encode_ih58_prefix()` (bax: `crates/iroha_data_model/src/account/address.rs`)
+- **Prefiksin xəritəsi:** `chain_discriminant`-i I105 şəbəkə prefiksi kimi yenidən istifadə edin.
+  `encode_i105_prefix()` (bax: `crates/iroha_data_model/src/account/address.rs`)
   `<64` dəyərləri üçün 6-bit prefiks (tək bayt) və 14-bit, iki bayt yayır
   daha böyük şəbəkələr üçün forma. Səlahiyyətli tapşırıqlar yaşayır
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
   SDK-lar toqquşmaların qarşısını almaq üçün uyğun JSON reyestrini sinxron şəkildə saxlamalıdırlar.
-- **Hesab materialı:** IH58 tərəfindən qurulmuş kanonik faydalı yükü kodlaşdırır
+- **Hesab materialı:** I105 tərəfindən qurulmuş kanonik faydalı yükü kodlaşdırır
   `AccountAddress::canonical_bytes()`—başlıq baytı, domen seçicisi və
-  nəzarətçi yükü. Əlavə hashing addımı yoxdur; IH58 yerləşdirir
+  nəzarətçi yükü. Əlavə hashing addımı yoxdur; I105 yerləşdirir
   Rust tərəfindən istehsal edilən ikili nəzarətçi yükü (tək açar və ya multisig).
   kodlayıcı, multisig siyasət həzmləri üçün istifadə edilən CTAP2 xəritəsi deyil.
-- **Kodlaşdırma:** `encode_ih58()` prefiks baytlarını kanonik baytlarla birləşdirir
+- **Kodlaşdırma:** `encode_i105()` prefiks baytlarını kanonik baytlarla birləşdirir
   faydalı yüklənir və Blake2b-512-dən əldə edilmiş 16 bitlik yoxlama məbləğini sabitlə əlavə edir.
-  prefiks `IH58PRE` (`b"IH58PRE" || prefix || payload`). Nəticə `bs58` vasitəsilə Base58 ilə kodlanmışdır.
+  prefiks `I105PRE` (`b"I105PRE" || prefix || payload`). Nəticə `bs58` vasitəsilə Base58 ilə kodlanmışdır.
   CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_encoded`
-  onu `decode_ih58` vasitəsilə geri qaytarır.
+  onu `decode_i105` vasitəsilə geri qaytarır.
 
 #### 2.8 Normativ mətn test vektorları
 
-`fixtures/account/address_vectors.json` tam IH58 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) ehtiva edir
+`fixtures/account/address_vectors.json` tam I105 (üstünlük verilir) və sıxılmış (`sora`, ikinci ən yaxşı) ehtiva edir
 hər kanonik faydalı yük üçün hərflər. Əsas məqamlar:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefiks `0x02F1`).**  
-  IH58 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, sıxılmış (`sora`)
+  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, sıxılmış (`sora`)
   `sora2QG…U4N5E5`. Torii bu dəqiq sətirləri `AccountId`-dən yayır
-  `Display` tətbiqi (kanonik IH58) və `AccountAddress::to_compressed_sora`.
+  `Display` tətbiqi (kanonik I105) və `AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (reyestr seçicisi → xəzinə).**  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, sıxılmış (`sora`)
+  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, sıxılmış (`sora`)
   `sorakX…CM6AEP`. Qeyd dəftəri seçicilərinin hələ də deşifrə etdiyini nümayiş etdirir
   müvafiq yerli həzm kimi eyni kanonik faydalı yük.
-- **Uğursuzluq halı (`ih58-prefix-mismatch`).**  
-  Bir qovşaqda `NETWORK_PREFIX + 1` prefiksi ilə kodlanmış IH58 literalının təhlili
+- **Uğursuzluq halı (`i105-prefix-mismatch`).**  
+  Bir qovşaqda `NETWORK_PREFIX + 1` prefiksi ilə kodlanmış I105 literalının təhlili
   standart prefiksin məhsuldarlığını gözləyir
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  domen yönləndirmə cəhdindən əvvəl. `ih58-checksum-mismatch` qurğusu
+  domen yönləndirmə cəhdindən əvvəl. `i105-checksum-mismatch` qurğusu
   Blake2b yoxlama məbləği üzərində saxtakarlığın aşkar edilməsini həyata keçirir.
 
 #### 2.9 Uyğunluq qurğuları
 
 ADDR‑2 müsbət və mənfi cəhətləri əhatə edən təkrar oxuna bilən qurğu paketini göndərir
-kanonik hex üzrə ssenarilər, IH58 (üstünlük verilir), sıxılmış (`sora`, yarım/tam genişlik), gizli
+kanonik hex üzrə ssenarilər, I105 (üstünlük verilir), sıxılmış (`sora`, yarım/tam genişlik), gizli
 defolt seçicilər, qlobal reyestr ləqəbləri və çox imza nəzarətçiləri. The
 kanonik JSON `fixtures/account/address_vectors.json`-də yaşayır və ola bilər
 ilə bərpa olunur:
@@ -562,12 +562,12 @@ HTTP son nöqtələri beləliklə, auditorlar yoxlama addımlarını sözbəsöz
 
 | Növ | Məqsəd | Tələb olunan sahələr |
 |------|---------|-----------------|
-| `global_domain` | Bir domenin qlobal miqyasda qeydiyyatdan keçdiyini və zəncir diskriminantına və IH58 prefiksinə uyğunlaşmalı olduğunu bildirir. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
+| `global_domain` | Bir domenin qlobal miqyasda qeydiyyatdan keçdiyini və zəncir diskriminantına və I105 prefiksinə uyğunlaşmalı olduğunu bildirir. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
 | `tombstone` | Ləqəb/selektoru həmişəlik tərk edir. Local‑8 həzmləri və ya domeni silərkən tələb olunur. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 `global_domain` qeydlərinə isteğe bağlı olaraq `manifest_url` və ya `sorafs_cid` daxil ola bilər
 pul kisələrini imzalanmış zəncir metadatasına yönəltmək, lakin kanonik dəst qalır
-`{domain, chain, discriminant/ih58_prefix}`. `tombstone` qeydləri **istinad edilməlidir**
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` qeydləri **istinad edilməlidir**
 təqaüdə çıxan seçici və icazə verən bilet/idarəetmə artefaktı
 audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
 
@@ -591,14 +591,14 @@ audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
    `iroha tools address convert <address> --format json --expect-prefix 753`
    (və ya vasitəsilə `fixtures/account/address_vectors.json` istehlak edin
    `scripts/account_fixture_helper.py`) dəqiq `digest_hex` tutmaq üçün.
-   CLI IH58, `sora…` və kanonik `0x…` literallarını qəbul edir; əlavə edin
+   CLI I105, `i105` və kanonik `0x…` literallarını qəbul edir; əlavə edin
    `@<domain>` yalnız manifestlər üçün etiket saxlamaq lazım olduqda.
    JSON xülasəsi həmin domeni `input_domain` sahəsi vasitəsilə göstərir və
    `legacy  suffix` çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır.
    manifest fərqləri (bu şəkilçi kanonik hesab identifikatoru deyil, metadatadır).
    Yeni sətir yönümlü ixrac üçün istifadə edin
    Kütləvi çevirmək üçün `iroha tools address normalize --input <file> legacy-selector input mode` Yerli
-   seçiciləri atlayarkən kanonik IH58 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı), hex və ya JSON formalarına
+   seçiciləri atlayarkən kanonik I105 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı), hex və ya JSON formalarına
    yerli olmayan sıralar. Auditorların elektron cədvələ uyğun sübuta ehtiyacı olduqda, qaçın
    CSV xülasəsi yaymaq üçün `iroha tools address audit --input <file> --format csv`
    Yerli seçiciləri vurğulayan (`input,status,format,domain_kind,…`),
@@ -608,7 +608,7 @@ audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
    imza tələb etməzdən əvvəl `cargo xtask address-vectors` ilə manifest.
 4. **Doğrulayın və dərc edin.** Runbook yoxlama siyahısına əməl edin (heşlər, Sigstore,
    ardıcıllığın monotonluğu) paketi SoraFS-ə əks etdirməzdən əvvəl. Torii indi
-   Paketdən dərhal sonra IH58 (üstünlük verilir)/sora (ikinci ən yaxşı) literalları kanonikləşdirir.
+   Paketdən dərhal sonra I105 (üstünlük verilir)/sora (ikinci ən yaxşı) literalları kanonikləşdirir.
 5. **Monitor və geri qaytarın.** Local‑8 və Local‑12 toqquşma panellərini aşağıda saxlayın
    30 gün ərzində sıfır; reqressiyalar görünsə, əvvəlki manifesti yenidən dərc edin
    telemetriya sabitləşənə qədər yalnız təsirə məruz qalmış qeyri-istehsal mühitində.
@@ -620,80 +620,79 @@ onların dəyişmə biletləri.
 
 ### 5. Pul kisəsi və API erqonomikası
 
-- **Defolt ekran parametrləri:** Pul kisələri IH58 ünvanını göstərir (qısa, yoxlama cəmi)
+- **Defolt ekran parametrləri:** Pul kisələri I105 ünvanını göstərir (qısa, yoxlama cəmi)
   üstəgəl həll edilmiş domen reyestrdən alınan etiket kimi. Domenlərdir
-  aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, IH58 isə
+  aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, I105 isə
   sabit ünvan.
-- **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar IH58 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
+- **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar I105 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
   ünvanlar üstəgəl `alias@domain` (rejected legacy form), `uaid:…` və
-  `opaque:…` formalaşdırır, sonra çıxış üçün IH58-ə kanonikləşir. yoxdur
+  `opaque:…` formalaşdırır, sonra çıxış üçün I105-ə kanonikləşir. yoxdur
   ciddi rejimdə keçid; xam telefon/e-poçt identifikatorları kitabdan kənar saxlanılmalıdır
   UAID/şəffaf xəritələr vasitəsilə.
-- **Xətanın qarşısının alınması:** Pul kisələri IH58 prefikslərini təhlil edir və zəncirvari diskriminant tətbiq edir
+- **Xətanın qarşısının alınması:** Pul kisələri I105 prefikslərini təhlil edir və zəncirvari diskriminant tətbiq edir
   gözləntilər. Zəncirvari uyğunsuzluqlar təsirli diaqnostika ilə çətin uğursuzluqlara səbəb olur.
 - **Codec kitabxanaları:** Rəsmi Rust, TypeScript/JavaScript, Python və Kotlin
-  kitabxanalar IH58 kodlaşdırma/şifrləmə və sıxılmış (`sora`) dəstəyi təmin edir.
+  kitabxanalar I105 kodlaşdırma/şifrləmə və sıxılmış (`sora`) dəstəyi təmin edir.
   parçalanmış tətbiqlərdən çəkinin. CAIP-10 dönüşümləri hələ göndərilməyib.
 
 #### Əlçatanlıq və Təhlükəsiz Paylaşım Rəhbərliyi- Məhsul səthləri üçün icra təlimatı canlı olaraq izlənilir
   `docs/portal/docs/reference/address-safety.md`; zaman həmin yoxlama siyahısına istinad edin
   bu tələbləri cüzdan və ya explorer UX-ə uyğunlaşdırmaq.
-- **Təhlükəsiz paylaşma axınları:** Ünvanları defolt olaraq IH58 formasına köçürən və ya göstərən səthlər və istifadəçilərin yoxlama məbləğini vizual və ya skan etməklə yoxlaya bilməsi üçün həm tam sətri, həm də eyni faydalı yükdən əldə edilən QR kodunu təqdim edən bitişik “paylaşma” əməliyyatını ifşa edən səthlər. Kəsilmə qaçınılmaz olduqda (məsələn, kiçik ekranlar), sətirin başlanğıcını və sonunu saxlayın, aydın ellipslər əlavə edin və təsadüfən kəsilmənin qarşısını almaq üçün tam ünvanı buferə köçürmə vasitəsilə əlçatan saxlayın.
+- **Təhlükəsiz paylaşma axınları:** Ünvanları defolt olaraq I105 formasına köçürən və ya göstərən səthlər və istifadəçilərin yoxlama məbləğini vizual və ya skan etməklə yoxlaya bilməsi üçün həm tam sətri, həm də eyni faydalı yükdən əldə edilən QR kodunu təqdim edən bitişik “paylaşma” əməliyyatını ifşa edən səthlər. Kəsilmə qaçınılmaz olduqda (məsələn, kiçik ekranlar), sətirin başlanğıcını və sonunu saxlayın, aydın ellipslər əlavə edin və təsadüfən kəsilmənin qarşısını almaq üçün tam ünvanı buferə köçürmə vasitəsilə əlçatan saxlayın.
 - **IME qoruyucuları:** Ünvan girişləri IME/IME tipli klaviaturaların kompozisiya artefaktlarını rədd etməlidir. Yalnız ASCII girişini tətbiq edin, tam enli və ya Kana simvolları aşkar edildikdə daxili xəbərdarlıq təqdim edin və Yapon və Çin istifadəçilərinin tərəqqini itirmədən öz IME-ni söndürə bilməsi üçün doğrulamadan əvvəl işarələri birləşdirən düz mətn yapışdırma zonası təklif edin.
-- **Ekran oxuyucu dəstəyi:** Aparıcı Base58 prefiks rəqəmlərini təsvir edən və IH58 faydalı yükünü 4 və ya 8 simvoldan ibarət qruplara bölən vizual olaraq gizli etiketlər (`aria-label`/`aria-describedby`) təmin edin. Nəzakətli canlı bölgələr vasitəsilə kopyalama/paylaşım uğurunu elan edin və QR önizləmələrinə təsviri alt mətn (“0x02F1 zəncirində <ləqəb> üçün IH58 ünvanı”) daxil olduğundan əmin olun.
-- **Yalnız Sora üçün sıxılmış istifadə:** Həmişə `sora…` sıxılmış görünüşünü "Yalnız Sora" kimi etiketləyin və kopyalamadan əvvəl onu açıq təsdiqin arxasına keçin. Zəncirvari diskriminant Sora Nexus dəyəri olmadıqda SDK və pul kisələri sıxılmış çıxışı göstərməkdən imtina etməli və vəsaitlərin yanlış yönləndirilməsinin qarşısını almaq üçün istifadəçiləri şəbəkələrarası köçürmələr üçün IH58-ə yönləndirməlidir.
+- **Ekran oxuyucu dəstəyi:** Aparıcı Base58 prefiks rəqəmlərini təsvir edən və I105 faydalı yükünü 4 və ya 8 simvoldan ibarət qruplara bölən vizual olaraq gizli etiketlər (`aria-label`/`aria-describedby`) təmin edin. Nəzakətli canlı bölgələr vasitəsilə kopyalama/paylaşım uğurunu elan edin və QR önizləmələrinə təsviri alt mətn (“0x02F1 zəncirində <ləqəb> üçün I105 ünvanı”) daxil olduğundan əmin olun.
+- **Yalnız Sora üçün sıxılmış istifadə:** Həmişə `i105` sıxılmış görünüşünü "Yalnız Sora" kimi etiketləyin və kopyalamadan əvvəl onu açıq təsdiqin arxasına keçin. Zəncirvari diskriminant Sora Nexus dəyəri olmadıqda SDK və pul kisələri sıxılmış çıxışı göstərməkdən imtina etməli və vəsaitlərin yanlış yönləndirilməsinin qarşısını almaq üçün istifadəçiləri şəbəkələrarası köçürmələr üçün I105-ə yönləndirməlidir.
 
 ## İcra Yoxlama Siyahısı
 
-- **IH58 zərfi:** Prefiks kompaktdan istifadə edərək `chain_discriminant`-i kodlayır
-  `encode_ih58_prefix()`-dən 6-/14-bit sxem, gövdə kanonik baytdır
+- **I105 zərfi:** Prefiks kompaktdan istifadə edərək `chain_discriminant`-i kodlayır
+  `encode_i105_prefix()`-dən 6-/14-bit sxem, gövdə kanonik baytdır
   (`AccountAddress::canonical_bytes()`) və yoxlama məbləği ilk iki baytdır
-  Blake2b-512(`b"IH58PRE"` || prefiks || gövdə). Tam faydalı yük Base58-dir
+  Blake2b-512(`b"I105PRE"` || prefiks || gövdə). Tam faydalı yük Base58-dir
   `bs58` vasitəsilə kodlaşdırılmışdır.
 - **Reyestr müqaviləsi:** İmzalanmış JSON (və əlavə Merkle kökü) nəşri
-  24 saat TTL ilə `{discriminant, ih58_prefix, chain_alias, endpoints}` və
+  24 saat TTL ilə `{discriminant, i105_prefix, chain_alias, endpoints}` və
   fırlanma düymələri.
 - **Domen siyasəti:** ASCII `Name` bu gün; i18n-i aktivləşdirirsinizsə, üçün UTS-46 tətbiq edin
   normallaşdırma və qarışıq yoxlamalar üçün UTS-39. Maksimum etiketi tətbiq edin (63) və
   cəmi (255) uzunluq.
-- **Mətn köməkçiləri:** Rust-da IH58 ↔ sıxılmış (`sora…`) kodekləri göndərin,
+- **Mətn köməkçiləri:** Rust-da I105 ↔ sıxılmış (`i105`) kodekləri göndərin,
   Paylaşılan test vektorları ilə TypeScript/JavaScript, Python və Kotlin (CAIP-10
   Xəritəçəkmələr gələcək iş olaraq qalır).
 - **CLI alətləri:** `iroha tools address convert` vasitəsilə deterministik operator iş axını təmin edin
-  (bax `crates/iroha_cli/src/address.rs`), IH58/`sora…`/`0x…` hərfi və
-  isteğe bağlı `<address>@<domain>` (rejected legacy form) etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək IH58 çıxışı,
+  (bax `crates/iroha_cli/src/address.rs`), I105/`0x…` hərfi və
+  isteğe bağlı `<address>@<domain>` (rejected legacy form) etiketləri, defolt olaraq Sora Nexus (`753`) prefiksindən istifadə edərək I105 çıxışı,
   və yalnız operatorlar bunu açıq şəkildə tələb etdikdə yalnız Sora sıxılmış əlifbasını yayır
-  `--format compressed` və ya JSON xülasə rejimi. Komanda prefiks gözləntilərini tətbiq edir
+  `--format i105` və ya JSON xülasə rejimi. Komanda prefiks gözləntilərini tətbiq edir
   təhlil edir, təmin edilmiş domeni (JSON-da `input_domain`) və `legacy  suffix` bayrağını qeyd edir
   çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
 - **Wallet/explorer UX:** [ünvan göstərmə qaydalarına] əməl edin (source/sns/address_display_guidelines.md)
-  ADDR-6 ilə göndərilir - ikili nüsxə düymələri təklif edin, IH58-i QR yükü kimi saxlayın və xəbərdarlıq edin
-  istifadəçilər sıxılmış `sora…` formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
+  ADDR-6 ilə göndərilir - ikili nüsxə düymələri təklif edin, I105-i QR yükü kimi saxlayın və xəbərdarlıq edin
+  istifadəçilər sıxılmış I105 formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
 - **Torii inteqrasiyası:** Keş Nexus TTL-ə uyğun olaraq təzahür edir, yayır
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministik və
-  keep account-literal parsing encoded-only (`IH58` preferred, `sora…`
-  compressed accepted) with canonical IH58 output.
+  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
 
 ### Torii cavab formatları
 
-- `GET /v1/accounts` isteğe bağlı `address_format` sorğu parametrini qəbul edir və
+- `GET /v1/accounts` isteğe bağlı `canonical I105 rendering` sorğu parametrini qəbul edir və
   `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
-  - `ih58` (defolt) — cavablar kanonik IH58 Base58 faydalı yükləri yayır (məsələn,
+  - `i105` (defolt) — cavablar kanonik I105 Base58 faydalı yükləri yayır (məsələn,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `compressed` — cavablar yalnız Sora üçün `sora…` sıxılmış görünüşünü yayır.
+  - `i105_default` — cavablar yalnız Sora üçün `i105` sıxılmış görünüşünü yayır.
     filtrlərin/yol parametrlərinin kanonik saxlanması.
 - Yanlış dəyərlər `400` (`QueryExecutionFail::Conversion`) qaytarır. Bu imkan verir
   cüzdanlar və tədqiqatçılar yalnız Sora-da UX üçün sıxılmış sətirlər tələb etsinlər
-  IH58-i qarşılıqlı işləyə bilən standart olaraq saxlayır.
+  I105-i qarşılıqlı işləyə bilən standart olaraq saxlayır.
 - Aktiv sahibi siyahıları (`GET /v1/assets/{definition_id}/holders`) və onların JSON
-  zərf həmkarı (`POST …/holders/query`) də `address_format`-i şərəfləndirir.
+  zərf həmkarı (`POST …/holders/query`) də `canonical I105 rendering`-i şərəfləndirir.
   `items[*].account_id` sahəsi hər dəfə sıxılmış hərflər buraxır
-  parametr/zərf sahəsi hesabları əks etdirərək `compressed` olaraq təyin edilib
+  parametr/zərf sahəsi hesabları əks etdirərək `i105_default` olaraq təyin edilib
   tədqiqatçıların qovluqlar arasında ardıcıl çıxış təqdim edə bilməsi üçün son nöqtələr.
 - **Sınaq:** Kodlayıcı/dekoderin gediş-gəlişi, səhv zəncir üçün vahid testləri əlavə edin
   uğursuzluqlar və açıq axtarışlar; Torii və SDK-larda inteqrasiya əhatəsini əlavə edin
-  IH58 axınları üçün başdan sona.
+  I105 axınları üçün başdan sona.
 
 ## Xəta Kodu Qeydiyyatı
 
@@ -710,30 +709,30 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 | `ERR_KEY_PAYLOAD_TOO_LONG` | İmzalanan açarın yüklənmə uzunluğu dəstəklənən limiti keçir. | Tək açarlı kontrollerlər `u8` uzunluqları ilə məhdudlaşır; böyük açıq açarlar üçün multisig istifadə edin (məsələn, ML-DSA). |
 | `ERR_INVALID_HEADER_VERSION` | Ünvan başlığı versiyası dəstəklənən diapazondan kənardadır. | V1 ünvanları üçün `0` başlıq versiyasını buraxın; yeni versiyaları qəbul etməzdən əvvəl kodlayıcıları təkmilləşdirin. |
 | `ERR_INVALID_NORM_VERSION` | Normallaşdırma versiyasının bayrağı tanınmır. | `1` normallaşdırma versiyasından istifadə edin və rezerv edilmiş bitləri dəyişdirməyin. |
-| `ERR_INVALID_IH58_PREFIX` | Tələb olunan IH58 şəbəkə prefiksi kodlana bilməz. | Zəncir reyestrində dərc edilmiş inklüziv `0..=16383` diapazonunda prefiks seçin. |
+| `ERR_INVALID_I105_PREFIX` | Tələb olunan I105 şəbəkə prefiksi kodlana bilməz. | Zəncir reyestrində dərc edilmiş inklüziv `0..=16383` diapazonunda prefiks seçin. |
 | `ERR_CANONICAL_HASH_FAILURE` | Canonical faydalı yük hashing uğursuz oldu. | Əməliyyatı yenidən sınayın; xəta davam edərsə, onu hashing yığınında daxili səhv kimi qəbul edin. |
 
 ### Format Deşifrə və Avtomatik Aşkarlama
 
 | Kod | Uğursuzluq | Tövsiyə olunan Təmir |
 |------|---------|-------------------------|
-| `ERR_INVALID_IH58_ENCODING` | IH58 sətirində əlifbadan kənar simvollar var. | Ünvanın dərc edilmiş IH58 əlifbasından istifadə etdiyinə və kopyalama/yapışdırma zamanı kəsilmədiyinə əmin olun. |
+| `ERR_INVALID_I105_ENCODING` | I105 sətirində əlifbadan kənar simvollar var. | Ünvanın dərc edilmiş I105 əlifbasından istifadə etdiyinə və kopyalama/yapışdırma zamanı kəsilmədiyinə əmin olun. |
 | `ERR_INVALID_LENGTH` | Faydalı yükün uzunluğu seçici/nəzarətçi üçün gözlənilən kanonik ölçüyə uyğun gəlmir. | Seçilmiş domen seçicisi və nəzarətçi tərtibatı üçün tam kanonik faydalı yükü təmin edin. |
-| `ERR_CHECKSUM_MISMATCH` | IH58 (üstünlük verilir) və ya sıxılmış (`sora`, ikinci ən yaxşı) yoxlama məbləğinin doğrulanması uğursuz oldu. | Etibarlı mənbədən ünvanı bərpa edin; bu adətən kopyala/yapışdır xətasını göstərir. |
-| `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefiks baytları səhv formalaşdırılıb. | Ünvanı uyğun kodlayıcı ilə yenidən kodlayın; aparıcı Base58 baytını əl ilə dəyişdirməyin. |
+| `ERR_CHECKSUM_MISMATCH` | I105 (üstünlük verilir) və ya sıxılmış (`sora`, ikinci ən yaxşı) yoxlama məbləğinin doğrulanması uğursuz oldu. | Etibarlı mənbədən ünvanı bərpa edin; bu adətən kopyala/yapışdır xətasını göstərir. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefiks baytları səhv formalaşdırılıb. | Ünvanı uyğun kodlayıcı ilə yenidən kodlayın; aparıcı Base58 baytını əl ilə dəyişdirməyin. |
 | `ERR_INVALID_HEX_ADDRESS` | Kanonik onaltılıq formanı deşifrə etmək alınmadı. | Rəsmi kodlayıcı tərəfindən istehsal olunan `0x`-prefiksli, bərabər uzunluqlu hex simli təmin edin. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Sıxılmış forma `sora` ilə başlamır. | Sıxılmış Sora ünvanlarını dekoderlərə verməzdən əvvəl lazımi gözətçi ilə prefiks edin. |
 | `ERR_COMPRESSED_TOO_SHORT` | Sıxılmış sətirdə faydalı yük və yoxlama məbləği üçün kifayət qədər rəqəmlər yoxdur. | Kəsilmiş fraqmentlər əvəzinə kodlayıcı tərəfindən buraxılan tam sıxılmış sətirdən istifadə edin. |
 | `ERR_INVALID_COMPRESSED_CHAR` | Sıxılmış əlifbanın xaricində xarakter qarşılaşdı. | Dərc olunmuş yarım enli/tam enli cədvəllərdən simvolu etibarlı Base‑105 qlifi ilə əvəz edin. |
 | `ERR_INVALID_COMPRESSED_BASE` | Kodlayıcı dəstəklənməyən radiksdən istifadə etməyə cəhd etdi. | Kodlayıcıya qarşı səhv bildirin; sıxılmış əlifba V1-də radix 105-ə sabitlənmişdir. |
 | `ERR_INVALID_COMPRESSED_DIGIT` | Rəqəm dəyəri sıxılmış əlifba ölçüsünü keçir. | Hər bir rəqəmin `0..105)` daxilində olduğundan əmin olun, lazım olduqda ünvanı bərpa edin. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Avtomatik aşkarlama daxiletmə formatını tanıya bilmədi. | Parserləri çağırarkən IH58 (üstünlük verilir), sıxılmış (`sora`) və ya kanonik `0x` hex sətirləri təmin edin. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Avtomatik aşkarlama daxiletmə formatını tanıya bilmədi. | Parserləri çağırarkən I105 (üstünlük verilir), sıxılmış (`sora`) və ya kanonik `0x` hex sətirləri təmin edin. |
 
 ### Domen və Şəbəkə Doğrulaması| Kod | Uğursuzluq | Tövsiyə olunan Təmir |
 |------|---------|-------------------------|
 | `ERR_DOMAIN_MISMATCH` | Domen seçicisi gözlənilən domenlə uyğun gəlmir. | Nəzərdə tutulan domen üçün verilmiş ünvandan istifadə edin və ya gözləntiləri yeniləyin. |
 | `ERR_INVALID_DOMAIN_LABEL` | Domen etiketi normallaşdırma yoxlamaları uğursuz oldu. | Kodlaşdırmadan əvvəl UTS-46 keçidsiz emaldan istifadə edərək domeni kanonikləşdirin. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | Deşifrə edilmiş IH58 şəbəkə prefiksi konfiqurasiya edilmiş dəyərdən fərqlənir. | Hədəf zəncirindən ünvana keçin və ya gözlənilən diskriminant/prefiksi tənzimləyin. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Deşifrə edilmiş I105 şəbəkə prefiksi konfiqurasiya edilmiş dəyərdən fərqlənir. | Hədəf zəncirindən ünvana keçin və ya gözlənilən diskriminant/prefiksi tənzimləyin. |
 | `ERR_UNKNOWN_ADDRESS_CLASS` | Ünvan sinfi bitləri tanınmır. | Dekoderi yeni sinfi anlayan buraxılışa təkmilləşdirin və ya başlıq bitlərinə müdaxilə etməyin. |
 | `ERR_UNKNOWN_DOMAIN_TAG` | Domen seçici teqi məlum deyil. | Yeni seçici növünü dəstəkləyən buraxılışa güncəlləyin və ya V1 qovşaqlarında eksperimental faydalı yüklərdən istifadə etməyin. |
 | `ERR_UNEXPECTED_EXTENSION_FLAG` | Qorunan genişləndirmə biti təyin edildi. | Qorunan bitləri silin; gələcək ABI onları təqdim edənə qədər onlar qapalı qalırlar. |
@@ -752,14 +751,14 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 ## Alternativlər nəzərdən keçirilir
 
 - **Pure Base58Check (Bitcoin-stil).** Daha sadə yoxlama məbləği, lakin daha zəif səhv aşkarlanması
-  Blake2b-dən əldə edilən IH58 yoxlama cəmindən (`encode_ih58` 512 bitlik hashı kəsir)
+  Blake2b-dən əldə edilən I105 yoxlama cəmindən (`encode_i105` 512 bitlik hashı kəsir)
   və 16 bitlik diskriminantlar üçün açıq prefiks semantikası yoxdur.
 - **Domen sətirində zəncir adının daxil edilməsi (məsələn, `finance@chain`).** Fasilələr
 - **Ünvanları dəyişdirmədən yalnız Nexus marşrutlaşdırmasına etibar edin.** İstifadəçilər hələ də
   qeyri-müəyyən sətirləri kopyalayın/yapışdırın; ünvanın özünün kontekst daşımasını istəyirik.
 - **Bech32m zərf.** QR dostudur və insan tərəfindən oxuna bilən prefiks təklif edir, lakin
-  göndərmə IH58 tətbiqindən fərqli olacaq (`AccountAddress::to_ih58`)
-  və bütün qurğuların/SDK-ların yenidən yaradılmasını tələb edir. Mövcud yol xəritəsi IH58 + saxlayır
+  göndərmə I105 tətbiqindən fərqli olacaq (`AccountAddress::to_i105`)
+  və bütün qurğuların/SDK-ların yenidən yaradılmasını tələb edir. Mövcud yol xəritəsi I105 + saxlayır
   gələcəkdə tədqiqatı davam etdirərkən sıxılmış (`sora`) dəstəyi
   Bech32m/QR təbəqələri (CAIP-10 xəritələşdirilməsi təxirə salınıb).
 
@@ -773,15 +772,15 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
   Nexus paylanması üçün nəqliyyat təhlükəsizliyi (HTTPS sancma, IPFS hash formatı).
 - Miqrasiya üçün domen ləqəblərinin/istiqamətləndirilməsinin dəstəkləndiyini və necə dəstəklənəcəyini müəyyənləşdirin
   determinizmi pozmadan onları üzə çıxarmaq.
-- Kotodama/IVM müqavilələrinin IH58 köməkçilərinə necə daxil olduğunu göstərin (`to_address()`,
+- Kotodama/IVM müqavilələrinin I105 köməkçilərinə necə daxil olduğunu göstərin (`to_address()`,
   `parse_address()`) və zəncirli saxlama heç vaxt CAIP-10-u ifşa edib-etməməlidir
-  Xəritəçəkmələr (bu gün IH58 kanonikdir).
-- Xarici registrlərdə Iroha zəncirlərinin qeydiyyatını araşdırın (məsələn, IH58 reyestri,
+  Xəritəçəkmələr (bu gün I105 kanonikdir).
+- Xarici registrlərdə Iroha zəncirlərinin qeydiyyatını araşdırın (məsələn, I105 reyestri,
   CAIP ad məkanı kataloqu) daha geniş ekosistemin uyğunlaşdırılması üçün.
 
 ## Növbəti Addımlar
 
-1. IH58 kodlaşdırması `iroha_data_model` (`AccountAddress::to_ih58`,
+1. I105 kodlaşdırması `iroha_data_model` (`AccountAddress::to_i105`,
    `parse_encoded`); qurğuları/testləri hər SDK-ya daşımağa davam edin və hər hansı birini təmizləyin
    Bech32m yer tutucular.
 2. `chain_discriminant` ilə konfiqurasiya sxemini genişləndirin və həssas əldə edin

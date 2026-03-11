@@ -157,7 +157,7 @@ iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
 For plain (non-ZK) referenda provide the required fields explicitly:
 
 ```bash
-iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-ih58-owner> \
+iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner> \
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
 
@@ -506,7 +506,7 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical IH58 `AccountId` via `--id` and the explicit account scope via `--domain`:
+To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id` and the explicit account scope via `--domain`:
 
 ```bash
 iroha ledger account register \

@@ -39,11 +39,11 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
     }
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload(
-            "\(field) must be an encoded account id (IH58 preferred, compressed accepted)."
+            "\(field) must be an encoded account id (i105)."
         )
     }
-    let (address, _) = try AccountAddress.parseEncoded(trimmed)
-    return try address.toIH58(networkPrefix: 0x02F1)
+    let address = try AccountAddress.parseEncoded(trimmed)
+    return try address.toI105(networkPrefix: 0x02F1)
 }
 
 fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
@@ -208,26 +208,15 @@ public struct ToriiAccountOnboardingResponse: Decodable, Sendable {
 public struct ToriiExplorerAccountQr: Decodable, Sendable {
     public let canonicalId: String
     public let literal: String
-    public let addressFormat: String
     public let networkPrefix: UInt16
     public let errorCorrection: String
     public let modules: UInt32
     public let qrVersion: UInt8
     public let svg: String
 
-    /// Convenience view that maps the metric label into an `AccountAddressFormat`.
-    public var preferredFormat: AccountAddressFormat? {
-        switch addressFormat.lowercased() {
-        case "ih58": return .ih58
-        case "compressed": return .compressed
-        default: return nil
-        }
-    }
-
     private enum CodingKeys: String, CodingKey {
         case canonicalId = "canonical_id"
         case literal
-        case addressFormat = "address_format"
         case networkPrefix = "network_prefix"
         case errorCorrection = "error_correction"
         case modules
@@ -825,7 +814,6 @@ public extension ToriiExplorerInstructionsPage {
 public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public var page: UInt64?
     public var perPage: UInt64?
-    public var addressFormat: AccountAddressFormat?
     /// Filter transfer instructions by participant account (source or destination).
     public var account: String?
     public var authority: String?
@@ -837,7 +825,6 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
-                addressFormat: AccountAddressFormat? = nil,
                 account: String? = nil,
                 authority: String? = nil,
                 transactionHash: String? = nil,
@@ -847,7 +834,6 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
                 assetId: String? = nil) {
         self.page = page
         self.perPage = perPage
-        self.addressFormat = addressFormat
         self.account = account
         self.authority = authority
         self.transactionHash = transactionHash
@@ -870,11 +856,6 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
                 throw ToriiClientError.invalidPayload("perPage must be at least 1.")
             }
             items.append(URLQueryItem(name: "per_page", value: String(perPage)))
-        }
-        if let addressFormat {
-            let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
-                                                                        context: "explorer instructions")
-            items.append(URLQueryItem(name: "address_format", value: value))
         }
         if let account = account?.trimmingCharacters(in: .whitespacesAndNewlines),
            !account.isEmpty {
@@ -917,7 +898,6 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
 public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
     public var page: UInt64?
     public var perPage: UInt64?
-    public var addressFormat: AccountAddressFormat?
     public var authority: String?
     public var block: UInt64?
     public var status: String?
@@ -925,14 +905,12 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
-                addressFormat: AccountAddressFormat? = nil,
                 authority: String? = nil,
                 block: UInt64? = nil,
                 status: String? = nil,
                 assetId: String? = nil) {
         self.page = page
         self.perPage = perPage
-        self.addressFormat = addressFormat
         self.authority = authority
         self.block = block
         self.status = status
@@ -952,11 +930,6 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
                 throw ToriiClientError.invalidPayload("perPage must be at least 1.")
             }
             items.append(URLQueryItem(name: "per_page", value: String(perPage)))
-        }
-        if let addressFormat {
-            let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
-                                                                        context: "explorer transactions")
-            items.append(URLQueryItem(name: "address_format", value: value))
         }
         if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
            !authority.isEmpty {
@@ -1257,7 +1230,6 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
     public var sort: [ToriiQuerySortKey]
     public var pagination: ToriiQueryPagination
     public var fetchSize: UInt64?
-    public var addressFormat: String?
 
     private enum CodingKeys: String, CodingKey {
         case query
@@ -1266,7 +1238,6 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
         case sort
         case pagination
         case fetchSize = "fetch_size"
-        case addressFormat = "address_format"
     }
 
     public init(query: String? = nil,
@@ -1274,15 +1245,13 @@ public struct ToriiQueryEnvelope: Codable, Sendable, Equatable {
                 select: [String]? = nil,
                 sort: [ToriiQuerySortKey] = [],
                 pagination: ToriiQueryPagination = ToriiQueryPagination(),
-                fetchSize: UInt64? = nil,
-                addressFormat: String? = nil) {
+                fetchSize: UInt64? = nil) {
         self.query = query
         self.filter = filter
         self.select = select
         self.sort = sort
         self.pagination = pagination
         self.fetchSize = fetchSize
-        self.addressFormat = addressFormat
     }
 }
 
@@ -4504,7 +4473,6 @@ public struct ToriiOfflineListParams: Sendable, Equatable {
     public var limit: UInt64?
     public var offset: UInt64?
     public var sort: String?
-    public var addressFormat: String?
     public var controllerId: String?
     public var receiverId: String?
     public var depositAccountId: String?
@@ -4527,7 +4495,6 @@ public struct ToriiOfflineListParams: Sendable, Equatable {
                 limit: UInt64? = nil,
                 offset: UInt64? = nil,
                 sort: String? = nil,
-                addressFormat: String? = nil,
                 controllerId: String? = nil,
                 receiverId: String? = nil,
                 depositAccountId: String? = nil,
@@ -4549,7 +4516,6 @@ public struct ToriiOfflineListParams: Sendable, Equatable {
         self.limit = limit
         self.offset = offset
         self.sort = sort
-        self.addressFormat = addressFormat
         self.controllerId = controllerId
         self.receiverId = receiverId
         self.depositAccountId = depositAccountId
@@ -4582,10 +4548,6 @@ public struct ToriiOfflineListParams: Sendable, Equatable {
         }
         if let sort, !sort.isEmpty {
             items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiOfflineListParams.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
         }
         if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !controllerId.isEmpty {
@@ -4663,18 +4625,15 @@ public struct ToriiOfflineRevocationListParams: Sendable, Equatable {
     public var limit: UInt64?
     public var offset: UInt64?
     public var sort: String?
-    public var addressFormat: String?
 
     public init(filter: String? = nil,
                 limit: UInt64? = nil,
                 offset: UInt64? = nil,
-                sort: String? = nil,
-                addressFormat: String? = nil) {
+                sort: String? = nil) {
         self.filter = filter
         self.limit = limit
         self.offset = offset
         self.sort = sort
-        self.addressFormat = addressFormat
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -4691,21 +4650,15 @@ public struct ToriiOfflineRevocationListParams: Sendable, Equatable {
         if let sort, !sort.isEmpty {
             items.append(URLQueryItem(name: "sort", value: sort))
         }
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiOfflineRevocationListParams.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
-        }
         return items.isEmpty ? nil : items
     }
 }
 
 public struct ToriiOfflineBundleProofStatusParams: Sendable, Equatable {
     public var bundleIdHex: String
-    public var addressFormat: String?
 
-    public init(bundleIdHex: String, addressFormat: String? = nil) {
+    public init(bundleIdHex: String) {
         self.bundleIdHex = bundleIdHex
-        self.addressFormat = addressFormat
     }
 
     public func queryItems() throws -> [URLQueryItem] {
@@ -4718,10 +4671,6 @@ public struct ToriiOfflineBundleProofStatusParams: Sendable, Equatable {
             throw ToriiClientError.invalidPayload("bundleIdHex must be a valid hex string")
         }
         items.append(URLQueryItem(name: "bundle_id_hex", value: trimmed.lowercased()))
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiOfflineBundleProofStatusParams.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
-        }
         return items
     }
 }
@@ -4731,7 +4680,6 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
     public var limit: UInt64?
     public var offset: UInt64?
     public var sort: String?
-    public var addressFormat: String?
     public var controllerId: String?
     public var receiverId: String?
     public var bundleIdHex: String?
@@ -4743,7 +4691,6 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
                 limit: UInt64? = nil,
                 offset: UInt64? = nil,
                 sort: String? = nil,
-                addressFormat: String? = nil,
                 controllerId: String? = nil,
                 receiverId: String? = nil,
                 bundleIdHex: String? = nil,
@@ -4754,7 +4701,6 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
         self.limit = limit
         self.offset = offset
         self.sort = sort
-        self.addressFormat = addressFormat
         self.controllerId = controllerId
         self.receiverId = receiverId
         self.bundleIdHex = bundleIdHex
@@ -4776,10 +4722,6 @@ public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
         }
         if let sort, !sort.isEmpty {
             items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiOfflineReceiptListParams.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
         }
         if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !controllerId.isEmpty {
@@ -4948,19 +4890,10 @@ public struct ToriiUaidBindingsResponse: Decodable, Sendable {
 }
 
 public struct ToriiUaidBindingsQuery: Sendable, Equatable {
-    public var addressFormat: String?
-
-    public init(addressFormat: String? = nil) {
-        self.addressFormat = addressFormat
-    }
+    public init() {}
 
     public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiUaidBindingsQuery.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
-        }
-        return items.isEmpty ? nil : items
+        nil
     }
 }
 
@@ -5067,18 +5000,15 @@ public struct ToriiUaidManifestQuery: Sendable, Equatable {
     public var status: ToriiSpaceDirectoryManifestStatusFilter?
     public var limit: UInt64?
     public var offset: UInt64?
-    public var addressFormat: String?
 
     public init(dataspaceId: UInt64? = nil,
                 status: ToriiSpaceDirectoryManifestStatusFilter? = nil,
                 limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                addressFormat: String? = nil) {
+                offset: UInt64? = nil) {
         self.dataspaceId = dataspaceId
         self.status = status
         self.limit = limit
         self.offset = offset
-        self.addressFormat = addressFormat
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -5094,10 +5024,6 @@ public struct ToriiUaidManifestQuery: Sendable, Equatable {
         }
         if let offset {
             items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let normalized = try ToriiClient.normalizeAddressFormatQueryValue(addressFormat,
-                                                                             context: "ToriiUaidManifestQuery.addressFormat") {
-            items.append(URLQueryItem(name: "address_format", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -7224,20 +7150,17 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    let (address, format): (AccountAddress, AccountAddressFormat)
+    let address: AccountAddress
     do {
-        (address, format) = try AccountAddress.parseEncoded(
+        address = try AccountAddress.parseEncoded(
             trimmed,
             expectedPrefix: 0x02F1
         )
     } catch {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
     }
-    guard format == .ih58 else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
-    }
-    let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-    return ih58
+    let i105 = try address.toI105(networkPrefix: 0x02F1)
+    return i105
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
@@ -8318,10 +8241,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getExplorerAccountQr(accountId: String,
-                                     addressFormat: AccountAddressFormat? = nil,
                                      completion: @escaping (Result<ToriiExplorerAccountQr, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getExplorerAccountQr(accountId: accountId, addressFormat: addressFormat)
+            try await self.getExplorerAccountQr(accountId: accountId)
         }
     }
 
@@ -8342,10 +8264,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getExplorerTransactionDetail(hashHex: String,
-                                              addressFormat: AccountAddressFormat? = nil,
                                               completion: @escaping (Result<ToriiExplorerTransactionDetail, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getExplorerTransactionDetail(hashHex: hashHex, addressFormat: addressFormat)
+            try await self.getExplorerTransactionDetail(hashHex: hashHex)
         }
     }
 
@@ -8353,12 +8274,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @discardableResult
     public func getExplorerInstructionDetail(hashHex: String,
                                               index: UInt64,
-                                              addressFormat: AccountAddressFormat? = nil,
                                               completion: @escaping (Result<ToriiExplorerInstructionItem, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerInstructionDetail(hashHex: hashHex,
-                                                        index: index,
-                                                        addressFormat: addressFormat)
+                                                        index: index)
         }
     }
 
@@ -8397,7 +8316,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getExplorerTransactionTransfers(hashHex: String,
-                                                addressFormat: AccountAddressFormat? = nil,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
                                                 assetId: String? = nil,
@@ -8405,7 +8323,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                 completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransactionTransfers(hashHex: hashHex,
-                                                           addressFormat: addressFormat,
                                                            matchingAccount: accountId,
                                                            assetDefinitionId: assetDefinitionId,
                                                            assetId: assetId,
@@ -8416,7 +8333,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getExplorerTransactionTransferSummaries(hashHex: String,
-                                                        addressFormat: AccountAddressFormat? = nil,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
                                                         assetId: String? = nil,
@@ -8425,7 +8341,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                         completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransactionTransferSummaries(hashHex: hashHex,
-                                                                   addressFormat: addressFormat,
                                                                    matchingAccount: accountId,
                                                                    assetDefinitionId: assetDefinitionId,
                                                                    assetId: assetId,
@@ -8439,7 +8354,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getAccountTransferHistory(accountId: String,
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
-                                          addressFormat: AccountAddressFormat? = nil,
                                           assetDefinitionId: String? = nil,
                                           assetId: String? = nil,
                                           completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -8447,7 +8361,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             try await self.getAccountTransferHistory(accountId: accountId,
                                                      page: page,
                                                      perPage: perPage,
-                                                     addressFormat: addressFormat,
                                                      assetDefinitionId: assetDefinitionId,
                                                      assetId: assetId)
         }
@@ -8459,7 +8372,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTransactionHistory(accountId: String,
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
-                                      addressFormat: AccountAddressFormat? = nil,
                                       assetDefinitionId: String? = nil,
                                       assetId: String? = nil,
                                       completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -8467,7 +8379,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             try await self.getTransactionHistory(accountId: accountId,
                                                  page: page,
                                                  perPage: perPage,
-                                                 addressFormat: addressFormat,
                                                  assetDefinitionId: assetDefinitionId,
                                                  assetId: assetId)
         }
@@ -8477,7 +8388,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func iterateAccountTransferHistory(accountId: String,
                                               page: UInt64? = nil,
                                               perPage: UInt64? = nil,
-                                              addressFormat: AccountAddressFormat? = nil,
                                               assetDefinitionId: String? = nil,
                                               assetId: String? = nil,
                                               maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
@@ -8493,7 +8403,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                         try Task.checkCancellation()
                         let params = ToriiExplorerInstructionsParams(page: currentPage,
                                                                      perPage: currentPerPage,
-                                                                     addressFormat: addressFormat,
                                                                      kind: "Transfer",
                                                                      assetId: assetId)
                         let response = try await getExplorerInstructions(params: params)
@@ -9283,16 +9192,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeTransactionEnvelope(from: data)
     }
 
-    public func getExplorerAccountQr(accountId: String,
-                                     addressFormat: AccountAddressFormat? = nil) async throws -> ToriiExplorerAccountQr {
+    public func getExplorerAccountQr(accountId: String) async throws -> ToriiExplorerAccountQr {
         let encodedAccountId = try encodeAccountIdPath(accountId)
-        var queryItems: [URLQueryItem]? = nil
-        if let addressFormat {
-            let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
-                                                                        context: "explorer QR payloads")
-            queryItems = [URLQueryItem(name: "address_format", value: value)]
-        }
-        let request = try makeRequest(path: "/v1/explorer/accounts/\(encodedAccountId)/qr", queryItems: queryItems)
+        let request = try makeRequest(path: "/v1/explorer/accounts/\(encodedAccountId)/qr")
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerAccountQr.self, from: data)
     }
@@ -9311,35 +9213,21 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiExplorerTransactionsPage.self, from: data)
     }
 
-    public func getExplorerTransactionDetail(hashHex: String,
-                                              addressFormat: AccountAddressFormat? = nil) async throws -> ToriiExplorerTransactionDetail {
+    public func getExplorerTransactionDetail(hashHex: String) async throws -> ToriiExplorerTransactionDetail {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
-        var queryItems: [URLQueryItem]? = nil
-        if let addressFormat {
-            let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
-                                                                        context: "explorer transactions")
-            queryItems = [URLQueryItem(name: "address_format", value: value)]
-        }
         let request = try makeRequest(path: "/v1/explorer/transactions/\(encodedHash)",
-                                      queryItems: queryItems)
+                                      queryItems: nil)
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerTransactionDetail.self, from: data)
     }
 
     public func getExplorerInstructionDetail(hashHex: String,
-                                              index: UInt64,
-                                              addressFormat: AccountAddressFormat? = nil) async throws -> ToriiExplorerInstructionItem {
+                                             index: UInt64) async throws -> ToriiExplorerInstructionItem {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
-        var queryItems: [URLQueryItem]? = nil
-        if let addressFormat {
-            let value = try ToriiClient.explorerAddressFormatQueryValue(addressFormat,
-                                                                        context: "explorer instructions")
-            queryItems = [URLQueryItem(name: "address_format", value: value)]
-        }
         let request = try makeRequest(path: "/v1/explorer/instructions/\(encodedHash)/\(index)",
-                                      queryItems: queryItems)
+                                      queryItems: nil)
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerInstructionItem.self, from: data)
     }
@@ -9391,7 +9279,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func getExplorerTransactionTransfers(hashHex: String,
-                                                addressFormat: AccountAddressFormat? = nil,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
                                                 assetId: String? = nil,
@@ -9407,7 +9294,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         while true {
             let params = ToriiExplorerInstructionsParams(page: currentPage,
                                                          perPage: currentPerPage,
-                                                         addressFormat: addressFormat,
                                                          transactionHash: normalizedHash,
                                                          kind: "Transfer",
                                                          assetId: assetId)
@@ -9443,14 +9329,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func getExplorerTransactionTransferSummaries(hashHex: String,
-                                                        addressFormat: AccountAddressFormat? = nil,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
                                                         assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let records = try await getExplorerTransactionTransfers(hashHex: hashHex,
-                                                                addressFormat: addressFormat,
                                                                 matchingAccount: accountId,
                                                                 assetDefinitionId: assetDefinitionId,
                                                                 assetId: assetId,
@@ -9462,7 +9346,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     /// Stream transfer summaries for a specific transaction, emitting history first then live updates.
     @available(iOS 15.0, macOS 12.0, *)
     public func streamTransactionTransferSummaries(hashHex: String,
-                                                   addressFormat: AccountAddressFormat? = nil,
                                                    matchingAccount accountId: String? = nil,
                                                    assetDefinitionId: String? = nil,
                                                    assetId: String? = nil,
@@ -9498,7 +9381,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     }
 
                     let history = try await getExplorerTransactionTransferSummaries(hashHex: normalizedHash,
-                                                                                    addressFormat: addressFormat,
                                                                                     matchingAccount: accountId,
                                                                                     assetDefinitionId: assetDefinitionId,
                                                                                     assetId: assetId,
@@ -9554,13 +9436,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getAccountTransferHistory(accountId: String,
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
-                                          addressFormat: AccountAddressFormat? = nil,
                                           assetDefinitionId: String? = nil,
                                           assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
         let params = ToriiExplorerInstructionsParams(page: page,
                                                      perPage: perPage,
-                                                     addressFormat: addressFormat,
                                                      kind: "Transfer",
                                                      assetId: assetId)
         return try await getExplorerTransferSummaries(params: params,
@@ -9574,13 +9454,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTransactionHistory(accountId: String,
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
-                                      addressFormat: AccountAddressFormat? = nil,
                                       assetDefinitionId: String? = nil,
                                       assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         try await getAccountTransferHistory(accountId: accountId,
                                             page: page,
                                             perPage: perPage,
-                                            addressFormat: addressFormat,
                                             assetDefinitionId: assetDefinitionId,
                                             assetId: assetId)
     }
@@ -11466,7 +11344,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamAccountTransferHistory(accountId: String,
                                              page: UInt64? = nil,
                                              perPage: UInt64? = nil,
-                                             addressFormat: AccountAddressFormat? = nil,
                                              assetDefinitionId: String? = nil,
                                              assetId: String? = nil,
                                              lastEventId: String? = nil,
@@ -11502,7 +11379,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in iterateAccountTransferHistory(accountId: normalizedAccount,
                                                                            page: page,
                                                                            perPage: perPage,
-                                                                           addressFormat: addressFormat,
                                                                            assetDefinitionId: assetDefinitionId,
                                                                            assetId: assetId,
                                                                            maxItems: remaining) {
@@ -12156,20 +12032,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return encodePathComponent(canonical)
     }
 
-    fileprivate static func explorerAddressFormatQueryValue(_ format: AccountAddressFormat,
-                                                            context: String) throws -> String {
-        switch format {
-        case .ih58:
-            return "ih58"
-        case .compressed:
-            return "compressed"
-        case .canonicalHex:
-            throw ToriiClientError.invalidPayload(
-                "addressFormat=canonicalHex is not supported for \(context); use .ih58 or .compressed."
-            )
-        }
-    }
-
     private func canonicalizeUaidLiteral(_ literal: String) throws -> String {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -12195,26 +12057,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             throw ToriiClientError.invalidPayload("uaid must have least significant bit set to 1.")
         }
         return "uaid:\(rawHex.lowercased())"
-    }
-
-    fileprivate static func normalizeAddressFormatQueryValue(_ raw: String?,
-                                                             context: String) throws -> String? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return nil
-        }
-        let lowered = trimmed.lowercased()
-        switch lowered {
-        case "ih58":
-            return "ih58"
-        case "compressed":
-            return "compressed"
-        default:
-            throw ToriiClientError.invalidPayload(
-                "\(context) must be one of ih58 or compressed."
-            )
-        }
     }
 
     private func postGovernanceJSON<Request: Encodable, Response: Decodable>(path: String,

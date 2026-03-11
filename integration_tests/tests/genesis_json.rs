@@ -29,10 +29,8 @@ fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bo
         let GrantBox::Permission(grant) = grant_box else {
             return false;
         };
-        matches!(
-            grant.object().name(),
-            "CanRegisterAccount" | "CanRegisterAssetDefinition"
-        ) && grant.object().payload() == &Json::default()
+        matches!(grant.object().name(), "CanRegisterAccount")
+            && grant.object().payload() == &Json::default()
     })
 }
 

@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 バイトコード Torii CLI を使用します。 `defaults/client.toml` の意味:
 ```
-ih58...
+i105...
 ```
 
 アクセス先 URL アクセス Torii チェーン ID アクセス:
@@ -110,7 +110,7 @@ CLI アカウントの詳細情報:
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id ih58... \
+  --id i105... \
   --key example | jq .
 ```
 

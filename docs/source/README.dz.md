@@ -29,6 +29,7 @@ translator: machine-google-reviewed
 - ZK App API (མཉམ་མཐུན། བདེན་པ། ཚོགས་རྒྱན་བཙུགས་ནི།): `zk_app_api.md`
 - Torii ZK མཉམ་སྦྲགས་/དཔེ་རིས་བང་རྒྱུག་དེབ་: `zk/prover_runbook.md`
 - Torii ZK App API བཀོལ་སྤྱོད་ལམ་སྟོན་ (མཉམ་སྦྲགས་/དཔེ་གཏམ་ ཀེརེ་ཊི་ཌོག): `../../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof ཚེ་སྲོག་འཁོར་རིམ་ (ཐོ་བཀོད་བདེན་དཔང་, བརྡ་ཆད་): `zk/lifecycle.md`
 - Torii བཀོལ་སྤྱོད་རོགས་སྐྱོར་ (མཐོང་གསལ་གྱི་དོན་ལུ་མཇུག་བསྡུ།): `references/operator_aids.md`
 - Nexus སྔོན་སྒྲིག་-ལམ་མགྱོགས་འགོ་བཙུགས་: `quickstart/default_lane.md`

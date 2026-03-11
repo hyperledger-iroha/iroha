@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` CLI 番号 `iroha` 番号:
   - `audit.json` -- テスト `iroha tools address audit --format json`。
-  - `normalized.txt` -- リテラル IH58 (المفضل) / 圧縮 (`sora`) (الخيار الثاني) セレクター ローカル。
+  - `normalized.txt` -- リテラル I105 (المفضل) / 圧縮 (`sora`) (الخيار الثاني) セレクター ローカル。
 - パスワードを取得する (`dashboards/grafana/address_ingest.json`)
   アラート マネージャー (`dashboards/alerts/address_ingest_rules.yml`) によるカットオーバー Local-8 /
   ローカル-12 時間。ローカル 8 とローカル 12 を使用します。
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## ああ
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 意味:
 
-- `--format compressed (`sora`)` は `sora...` の IH58 です。
+- `--format I105` は `sora...` の I105 です。
 - `domainless output (default)` لاصدار リテラル بدون نطاق。
 - `--audit-only` は。
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI)。

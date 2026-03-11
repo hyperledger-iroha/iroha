@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 إصدار العناصر التجريبية :
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 قم بتأكيد القيم في قائمة الحسابات الأولى:

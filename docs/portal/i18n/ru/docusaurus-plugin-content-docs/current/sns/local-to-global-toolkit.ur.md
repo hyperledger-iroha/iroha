@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` Обертка CLI в случае необходимости:
   - `audit.json` -- `iroha tools address audit --format json` для структурированного вывода.
-  - `normalized.txt` -- ہر Селектор локального домена کے لیے IH58 (ترجیحی) / сжатые (`sora`, второй по качеству) литералы.
+  - `normalized.txt` -- ہر Селектор локального домена کے لیے I105 (ترجیحی) / сжатые (`sora`, второй по качеству) литералы.
 - На панели управления приемом адресов (`dashboards/grafana/address_ingest.json`)
   Правила Alertmanager (`dashboards/alerts/address_ingest_rules.yml`)
   Переключение Local-8/Local-12 Local-8 и панели столкновений Local-12
@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-02-07
 ## استعمال
 
 ```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
 ```
 
 Сообщение:
 
-- `--format compressed` IH58 — выход `sora...` — выходной сигнал
+- `--format i105` I105 — выход `sora...` — выходной сигнал
 - `domainless output (default)` تاکہ голые литералы نکلیں۔
 - Шаг преобразования `--audit-only` چھوڑنے کے لیے۔
 - `--allow-errors` — неверные строки при сканировании (поведение CLI)

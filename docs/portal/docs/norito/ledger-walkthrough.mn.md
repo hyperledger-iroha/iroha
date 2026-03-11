@@ -34,8 +34,8 @@ SDK хурдан ажилладаг тул та CLI болон SDK-ийн үйл
 Демо түлхүүрүүдээс гаралтай:
 
 ```sh
-export ADMIN_ACCOUNT="ih58..."
-export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
 ```
 
 Эхний хэдэн дансыг жагсааж утгыг баталгаажуулна уу:
