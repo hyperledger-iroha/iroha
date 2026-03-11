@@ -669,7 +669,7 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
   用戶認為壓縮的 `i105` 形式僅適用於 Sora，並且容易受到 IME 重寫。
 - **Torii 集成：** 緩存 Nexus 體現尊重 TTL，發出
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` 確定性地，並且
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii 響應格式
 

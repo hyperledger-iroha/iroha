@@ -671,7 +671,7 @@ JSON ကိုယ်ထည်နှင့်အတူ။ SoraFS သို့ mir
   ဖိသိပ်ထားသော `i105` ဖောင်သည် Sora သီးသန့်ဖြစ်ပြီး IME ပြန်လည်ရေးသားခြင်းကို ခံရနိုင်သော အသုံးပြုသူများ။
 - **Torii ပေါင်းစည်းခြင်း-** Cache Nexus သည် TTL ကိုလေးစားပြီး ထုတ်လွှတ်သည်
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` တိကျစွာ လည်းကောင်း၊
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii တုံ့ပြန်မှုဖော်မတ်များ
 

@@ -665,7 +665,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   المستخدمين أن النموذج `i105` المضغوط هو Sora فقط وهو عرضة لإعادة كتابة IME.
 - **تكامل Torii:** يظهر Cache Nexus احترام TTL، والإصدار
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` بشكل حتمي، و
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### تنسيقات استجابة توري
 

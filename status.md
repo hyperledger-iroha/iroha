@@ -2,6 +2,55 @@
 
 Last updated: 2026-03-11
 
+## 2026-03-11 I105 Hard-Cut Gap Closure (Repo-wide completion pass)
+- Closed remaining hard-cut cleanup gaps across prover tests, integration tests, docs wording, and lint gates:
+  - `integration_tests/tests/sumeragi_npos_stake_activation.rs` now provisions NPoS stake/bootstrap state through custom genesis (`genesis_factory_with_post_topology`) instead of stale runtime registration paths that repeated domainless `AccountId` registration.
+  - Verified `fastpq_prover` deterministic account helpers are restored to the intended hard-cut-safe structure in:
+    - `crates/fastpq_prover/src/bin/fastpq_row_bench.rs`
+    - `crates/fastpq_prover/tests/{realistic_flows,backend_regression,proof_fixture,perf_production,transcript_replay}.rs`
+  - Fixed stale strict-parser wording in all `docs/account_structure*.md` variants:
+    - replaced incorrect `reject canonical I105 and any @domain suffix` text with `reject compressed and any @domain suffix`.
+  - Fixed `clippy -D warnings` doc lint fallout in:
+    - `crates/iroha_data_model/src/account/address/vectors.rs` (`i105_default` in docs now wrapped in backticks).
+- Search acceptance sweeps (this pass):
+  - `integration_tests/tests`: no stale bare `*_ID.domain()` callsites; `Account::new(...)` callsites are scoped via `to_account_id(...)` (plus existing `ScopedAccountId` callsites).
+  - docs sweeps for stale strict-input phrases (`reject canonical I105`, `optional @domain hint`, `compressed accepted`, `second-best compressed`, strict parser accepting compressed/@domain) returned no active matches in docs surfaces.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p fastpq_prover --bins --tests --message-format short` (pass)
+  - `cargo check -p integration_tests --tests --message-format short` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (pass, 24 passed)
+  - `cargo test -p integration_tests --test multisig -- --nocapture` (pass, 11 passed)
+  - `cargo test -p integration_tests --test domain_links -- --nocapture` (pass, 5 passed)
+  - `cargo test -p integration_tests --test sumeragi_commit_certificates npos_commit_quorum_requires_stake -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_stake_activation -- --nocapture` (pass, 2 passed)
+  - `cargo check -p iroha_torii --tests --message-format short` (pass)
+  - `cargo check -p iroha_cli --tests --message-format short` (pass)
+  - `cargo build --workspace --message-format short` (pass)
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - `cargo test --workspace` (interrupted by execution environment with exit code `-1` before final summary; long-running run passed broad workspace suites up through large `integration_tests/tests/mod.rs` sections without reporting a concrete test failure before interruption).
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Explorer QR single-format API/docs cleanup)
+- Removed the legacy Rust QR options marker from the client surface:
+  - deleted `ExplorerAccountQrOptions` from `crates/iroha/src/client.rs`.
+  - simplified `Client::get_explorer_account_qr` to `(&self, account_id: &str)`.
+  - updated in-crate call sites/tests accordingly and renamed stale test names:
+    - `get_public_lane_validators_omits_query_params`
+    - `get_explorer_account_qr_parses_payload_and_omits_query_params`
+- Removed `ExplorerAccountQrOptions` references from SDK docs and i18n mirrors:
+  - dropped imports/usages in Rust snippets under:
+    - `docs/source/nexus_sdk_quickstarts*.md`
+    - `docs/portal/docs/sdks/rust*.md`
+    - `docs/portal/i18n/*/docusaurus-plugin-content-docs/{current,version-2025-q2}/sdks/rust*.md`
+  - normalized QR helper prose to canonical-I105-only wording (no format knob).
+- Removed stale JS internal naming to match the new single-format surface:
+  - `javascript/iroha_js/{src,dist}/toriiClient.js`:
+    - `normalizeExplorerAccountQrOptions` -> `normalizeExplorerRequestOptions`
+- Verification (this pass):
+  - `cargo test -p iroha --no-run` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js test/toriiIterators.parity.test.js` (fails with 6 existing JS test failures in governance/iterator feature areas; not in Explorer QR option-removal paths)
+  - `rg -n 'ExplorerAccountQrOptions|AccountAddressFormat::I105|ih58|IH58' crates javascript python mochi docs/source docs/portal examples integration_tests` (no matches)
+
 ## 2026-03-11 I105 Hard-Cut Gap Closure (SDK/example legacy option spelling purge)
 - Removed remaining stale option-name usage from active SDK/example surfaces:
   - `examples/android/retail-wallet/.../WalletPreviewViewModel.kt` no longer calls `.addressFormat("canonical")` on `OfflineListParams.Builder`.

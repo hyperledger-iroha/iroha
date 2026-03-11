@@ -671,7 +671,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   ལག་ལེན་པ་ཚུ་གིས་ `i105` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།
 - **I18NT0000049X མཉམ་བསྡོམས་:** འདྲ་མཛོད་ Nexus གིས་ ཊི་ཊི་ཨེལ་ལུ་གུས་ཞབས་འབད་མི་ བཏོན་གཏང་།
   `ForeignDomain`/I18NI0000497X/`RegistryUnavailable` དང་ དེ་ལས་
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii ལན་འདེབས་རྩ་སྒྲིག་ཚུ།
 

@@ -3558,7 +3558,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiExplorerAccountQrSnapshot>}
    */
   async getExplorerAccountQr(accountId, options = {}) {
-    const { signal } = normalizeExplorerAccountQrOptions(options);
+    const { signal } = normalizeExplorerRequestOptions(options);
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
     const response = await this._request(
       "GET",
@@ -12539,7 +12539,7 @@ function normalizeExplorerMetricsResponse(payload) {
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 
-function normalizeExplorerAccountQrOptions(options) {
+function normalizeExplorerRequestOptions(options) {
   if (options === undefined) {
     return { signal: undefined };
   }
