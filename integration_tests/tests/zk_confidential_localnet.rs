@@ -539,12 +539,28 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
 
-    let public_asset_def: AssetDefinitionId = "zkpublichop#wonderland".parse().unwrap();
-    let shielded_asset_def: AssetDefinitionId = "zkshieldhop#wonderland".parse().unwrap();
+    let public_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkpublichop".parse().unwrap(),
+    );
+    let shielded_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkshieldhop".parse().unwrap(),
+    );
 
     let setup_instructions: Vec<InstructionBox> = vec![
-        Register::asset_definition(AssetDefinition::numeric(public_asset_def.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(shielded_asset_def.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = public_asset_def.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = shielded_asset_def.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
         Mint::asset_numeric(
             1_000_u64,
             AssetId::new(public_asset_def.clone(), source.clone()),
@@ -765,14 +781,22 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = "zkpublicdoubleunshield#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkpublicdoubleunshield".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -922,14 +946,22 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
     };
 
     let source = tx_builder_client.account.clone();
-    let shielded_asset_def: AssetDefinitionId = "zkshieldedthreehop#wonderland".parse().unwrap();
+    let shielded_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkshieldedthreehop".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(shielded_asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = shielded_asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(
                 700_u64,
                 AssetId::new(shielded_asset_def.clone(), source.clone()),
@@ -1021,14 +1053,22 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = "zkshieldedunshieldflow#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkshieldedunshieldflow".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(800_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1158,14 +1198,22 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = "zkrestartstress#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkrestartstress".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(1_100_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1333,14 +1381,22 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = "zkfaultpressure#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkfaultpressure".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(900_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1481,14 +1537,22 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zkbadproofbytes#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkbadproofbytes".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1600,14 +1664,22 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zkbadvkbytes#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkbadvkbytes".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1719,14 +1791,22 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zkwrongstatement#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkwrongstatement".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -1836,14 +1916,22 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
     };
 
     let source = tx_builder_client.account.clone();
-    let zknative_asset_def: AssetDefinitionId = "zkzknativethreehop#wonderland".parse().unwrap();
+    let zknative_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkzknativethreehop".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(zknative_asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = zknative_asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 zknative_asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
@@ -1907,14 +1995,22 @@ async fn confidential_zknative_transparent_mint_creates_public_balance_localnet(
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zkzknativemintok#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkzknativemintok".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
@@ -1971,14 +2067,22 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
-    let asset_def: AssetDefinitionId = "zkzknativetransferok#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkzknativetransferok".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
@@ -2092,14 +2196,22 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zkunshielddeny#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkunshielddeny".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -2212,14 +2324,22 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zkshielddeny#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkshielddeny".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -2304,14 +2424,22 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zknotregistered#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zknotregistered".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
         ],
         &mut non_empty_target,
@@ -2392,14 +2520,22 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zkstaleroot#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkstaleroot".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(400_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -2511,14 +2647,22 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zkunshieldnotregistered#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkunshieldnotregistered".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
         ],
         &mut non_empty_target,
@@ -2600,14 +2744,22 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
 
-    let asset_def: AssetDefinitionId = "zkdupnullifier#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zkdupnullifier".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(500_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -2744,14 +2896,22 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zktransparentonly#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zktransparentonly".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),
@@ -2891,14 +3051,22 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
     };
 
     let source = tx_builder_client.account.clone();
-    let asset_def: AssetDefinitionId = "zktransfertransparentonly#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "zktransfertransparentonly".parse().unwrap(),
+    );
 
     submit_and_wait_non_empty_block(
         &network,
         &tx_builder_client,
         &peer_clients,
         vec![
-            Register::asset_definition(AssetDefinition::numeric(asset_def.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = asset_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
             Mint::asset_numeric(300_u64, AssetId::new(asset_def.clone(), source.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def.clone(),

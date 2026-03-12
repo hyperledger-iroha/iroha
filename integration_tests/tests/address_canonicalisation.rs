@@ -1967,8 +1967,10 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
-    let cash_def_id: AssetDefinitionId = "rose#wonderland".parse()?;
-    let collateral_def_id: AssetDefinitionId = "camomile#wonderland".parse()?;
+    let cash_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+    let collateral_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "camomile".parse()?);
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_numeric(
             numeric!(1500),

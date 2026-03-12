@@ -173,7 +173,10 @@ fn unregister_domain_with_only_assets_fails() {
     vm.run().expect("register domain");
 
     // Register asset def under wonder
-    let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let ad = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),

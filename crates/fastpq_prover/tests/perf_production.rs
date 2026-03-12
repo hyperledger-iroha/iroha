@@ -101,7 +101,7 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 }
 
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
-    let asset_definition = AssetDefinitionId::from_str("xor#perf").expect("asset definition");
+    let asset_definition = AssetDefinitionId::new("perf".parse().unwrap(), "xor".parse().unwrap());
     let domain = DomainId::from_str("perf").expect("domain id");
     let from_account = deterministic_account(&format!("sender_{index:04}"), &domain);
     let to_account = deterministic_account(&format!("receiver_{index:04}"), &domain);

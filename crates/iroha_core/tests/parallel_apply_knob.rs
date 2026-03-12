@@ -23,9 +23,14 @@ fn build_world() -> (
     let (alice_id, alice_kp) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let ad: AssetDefinition =
-        AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
-            .build(&alice_id);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&alice_id);
     let acc_a = Account::new(alice_id.clone().to_account_id(domain_id)).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -48,7 +53,13 @@ fn make_block(
     kp: &iroha_crypto::KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
     // Two simple instructions to ensure a non-empty overlay
-    let asset = AssetId::of("coin#wonderland".parse().unwrap(), alice_id.clone());
+    let asset = AssetId::of(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        ),
+        alice_id.clone(),
+    );
     let instrs: Vec<InstructionBox> = vec![
         Mint::asset_numeric(5_u32, asset).into(),
         SetKeyValue::account(

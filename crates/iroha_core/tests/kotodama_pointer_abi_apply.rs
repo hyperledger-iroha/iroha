@@ -75,7 +75,10 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         to.clone(),
         account_domain_id.clone(),
     )));
-    let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
         asset_def.clone(),
     )));

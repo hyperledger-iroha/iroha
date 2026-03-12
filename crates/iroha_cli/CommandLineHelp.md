@@ -530,6 +530,8 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha tools address convert`↴](#iroha-tools-address-convert)
 * [`iroha tools address audit`↴](#iroha-tools-address-audit)
 * [`iroha tools address normalize`↴](#iroha-tools-address-normalize)
+* [`iroha tools encode`↴](#iroha-tools-encode)
+* [`iroha tools encode asset-id`↴](#iroha-tools-encode-asset-id)
 * [`iroha tools crypto`↴](#iroha-tools-crypto)
 * [`iroha tools crypto sm2`↴](#iroha-tools-crypto-sm2)
 * [`iroha tools crypto sm2 keygen`↴](#iroha-tools-crypto-sm2-keygen)
@@ -574,12 +576,12 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
    Example usage:
 
-   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "asset#domain" -t Numeric`
+   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
 * `-o`, `--output` — Outputs instructions to stdout without submitting them.
 
    Example usage:
 
-   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
+   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
 * `--output-format <OUTPUT_FORMAT>` — Output format for command responses
 
   Default value: `json`
@@ -1183,11 +1185,12 @@ Filter by a given predicate
 
 Retrieve details of a specific asset definition
 
-**Usage:** `iroha ledger asset definition get --id <ID>`
+**Usage:** `iroha ledger asset definition get [OPTIONS]`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1195,11 +1198,17 @@ Retrieve details of a specific asset definition
 
 Register an asset definition
 
-**Usage:** `iroha ledger asset definition register [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger asset definition register [OPTIONS] --id <ID> --name <NAME>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--name <NAME>` — Human-readable asset name
+* `--description <DESCRIPTION>` — Optional human-readable description
+* `--alias <ALIAS>` — Optional explicit alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `--alias-domain <ALIAS_DOMAIN>` — Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`
+* `--alias-dataspace <ALIAS_DATASPACE>` — Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`
+* `--logo <LOGO>` — Optional logo URI. Must use `sorafs://...`
 * `-m`, `--mint-once` — Disables minting after the first instance
 * `-s`, `--scale <SCALE>` — Numeric scale of the asset. No value means unconstrained
 * `--confidential-mode <CONFIDENTIAL_MODE>` — Confidential policy mode for this asset definition
@@ -1218,11 +1227,12 @@ Register an asset definition
 
 Unregister an asset definition
 
-**Usage:** `iroha ledger asset definition unregister --id <ID>`
+**Usage:** `iroha ledger asset definition unregister [OPTIONS]`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1230,11 +1240,12 @@ Unregister an asset definition
 
 Transfer ownership of an asset definition
 
-**Usage:** `iroha ledger asset definition transfer --id <ID> --from <FROM> --to <TO>`
+**Usage:** `iroha ledger asset definition transfer [OPTIONS] --from <FROM> --to <TO>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 * `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
@@ -1297,11 +1308,13 @@ Delete an entry from the key-value store
 
 Retrieve details of a specific asset
 
-**Usage:** `iroha ledger asset get --id <ID>`
+**Usage:** `iroha ledger asset get [OPTIONS]`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 
 
 
@@ -1371,11 +1384,13 @@ Filter by a given predicate
 
 Increase the quantity of an asset
 
-**Usage:** `iroha ledger asset mint --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset mint [OPTIONS] --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1384,11 +1399,13 @@ Increase the quantity of an asset
 
 Decrease the quantity of an asset
 
-**Usage:** `iroha ledger asset burn --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset burn [OPTIONS] --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1397,11 +1414,13 @@ Decrease the quantity of an asset
 
 Transfer an asset between accounts
 
-**Usage:** `iroha ledger asset transfer [OPTIONS] --id <ID> --to <TO> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset transfer [OPTIONS] --to <TO> --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Source account identifier (canonical I105), required with `--definition-alias`
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
@@ -4850,7 +4869,7 @@ Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
 ###### **Options:**
 
-* `--asset-id <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset-id <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--max <MAX>` — Maximum number of roots to return (0 = server cap)
 
   Default value: `0`
@@ -5001,7 +5020,7 @@ Register a ZK-capable asset (Hybrid mode) with policy and VK ids
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--allow-shield` — Allow shielding from public to shielded (default: true)
 
   Default value: `true`
@@ -5022,7 +5041,7 @@ Shield public funds into a shielded ledger (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--from <ACCOUNT_ID>` — Account identifier to debit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
@@ -5041,7 +5060,7 @@ Unshield funds from shielded ledger to public (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
@@ -6140,7 +6159,7 @@ Quote rent/incentive breakdown for a blob size/retention combo
 
 Convert a rent quote into deterministic ledger transfer instructions
 
-**Usage:** `iroha app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <AID>`
 
 ###### **Options:**
 
@@ -6151,7 +6170,7 @@ Convert a rent quote into deterministic ledger transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider payout account that receives the base rent remainder
 * `--pdp-bonus-account <ACCOUNT_ID>` — Account earmarked for PDP bonus payouts
 * `--potr-bonus-account <ACCOUNT_ID>` — Account earmarked for `PoTR` bonus payouts
-* `--asset-definition <NAME#DOMAIN>` — Asset definition identifier used for XOR transfers (e.g., `xor#sora`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
 
 
 
@@ -7063,7 +7082,7 @@ Submit an apartment wallet spend request under policy guardrails
 
   Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name issuing the spend request
-* `--asset-definition <ASSET>` — Asset definition identifier (`definition#domain`)
+* `--asset-definition <ASSET>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
 * `--amount-nanos <NANOS>` — Spend amount in nanos
 * `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/spend` instead of local registry simulation
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
@@ -8960,7 +8979,7 @@ Quote reserve requirements and effective rent for a given tier/capacity
 
 Convert a reserve quote into rent/reserve transfer instructions
 
-**Usage:** `iroha app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <AID>`
 
 ###### **Options:**
 
@@ -8968,7 +8987,7 @@ Convert a reserve quote into rent/reserve transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider account paying the rent and reserve top-ups
 * `--treasury-account <ACCOUNT_ID>` — Treasury account receiving the rent payment
 * `--reserve-account <ACCOUNT_ID>` — Reserve escrow account receiving the reserve top-up
-* `--asset-definition <NAME#DOMAIN>` — Asset definition identifier used for XOR transfers (e.g., `xor#sora`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
 
 
 
@@ -9757,6 +9776,7 @@ Developer utilities and diagnostics
 ###### **Subcommands:**
 
 * `address` — Account address helpers (canonical I105 conversions)
+* `encode` — Canonical ID encoders
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -9847,6 +9867,32 @@ Rewrite newline-separated addresses into canonical encodings
   Possible values: `i105`, `canonical-hex`, `json`
 
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
+
+
+
+## `iroha tools encode`
+
+Canonical ID encoders
+
+**Usage:** `iroha tools encode <COMMAND>`
+
+###### **Subcommands:**
+
+* `asset-id` — Encode a canonical asset id (`norito:<hex>`)
+
+
+
+## `iroha tools encode asset-id`
+
+Encode a canonical asset id (`norito:<hex>`)
+
+**Usage:** `iroha tools encode asset-id [OPTIONS] --account <ACCOUNT>`
+
+###### **Options:**
+
+* `--definition <DEFINITION>` — Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `--account <ACCOUNT>` — Canonical I105 account literal receiving the asset bucket
 
 
 

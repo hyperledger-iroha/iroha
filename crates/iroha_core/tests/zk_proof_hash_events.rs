@@ -21,9 +21,14 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     let domain_id: DomainId = "zkd".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
-    let ad: AssetDefinition =
-        AssetDefinition::new("zcoin#zkd".parse().unwrap(), NumericSpec::default())
-            .build(&authority_id);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "zkd".parse().unwrap(),
+            "zcoin".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -44,7 +49,10 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     };
 
     // Prepare ZK ISIs: mint, register policy, transfer, unshield
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let asset = AssetId::of(asset_def_id.clone(), authority_id.clone());
     let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");

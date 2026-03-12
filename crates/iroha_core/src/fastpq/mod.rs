@@ -575,8 +575,10 @@ mod tests {
 
     #[test]
     fn poseidon_digest_matches_known_vector() {
-        let asset =
-            iroha_data_model::asset::AssetDefinitionId::from_str("rose#wonderland").unwrap();
+        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -958,8 +960,10 @@ mod tests {
     }
 
     fn sample_transcript() -> TransferTranscript {
-        let asset =
-            iroha_data_model::asset::AssetDefinitionId::from_str("rose#wonderland").unwrap();
+        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         TransferTranscript {
             batch_hash: Hash::prehashed([0xAA; 32]),
             deltas: vec![TransferDeltaTranscript {

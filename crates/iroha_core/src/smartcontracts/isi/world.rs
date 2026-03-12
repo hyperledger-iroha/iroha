@@ -11892,9 +11892,13 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
             let (asset_id, asset_value) = asset.into_key_value();
@@ -11982,9 +11986,13 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
@@ -12047,9 +12055,13 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register foreign asset definition");
             stx.world
                 .asset_definition_mut(&asset_def_id)
                 .expect("foreign asset definition exists")
@@ -12252,9 +12264,13 @@ pub mod isi {
                 .expect("register foreign counterparty");
 
             let cash_def = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(cash_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = cash_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
 
             let collateral_def =
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
@@ -12318,9 +12334,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let voting_def = AssetDefinitionId::new(domain_id.clone(), "vote".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(voting_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = voting_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.gov.voting_asset_id = voting_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12361,9 +12381,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let reward_def = AssetDefinitionId::new(domain_id.clone(), "viral".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.gov.viral_incentives.reward_asset_definition_id = reward_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12403,9 +12427,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let reward_def = AssetDefinitionId::new(domain_id.clone(), "oracle".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.oracle.economics.reward_asset = reward_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12443,9 +12471,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let fee_def = AssetDefinitionId::new(domain_id.clone(), "nexusfee".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(fee_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = fee_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.nexus.fees.fee_asset_id = fee_def.to_string();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12483,9 +12515,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let stake_def = AssetDefinitionId::new(domain_id.clone(), "stake".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(stake_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = stake_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.nexus.staking.stake_asset_id = stake_def.to_string();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12525,9 +12561,13 @@ pub mod isi {
 
             let collateral_def =
                 AssetDefinitionId::new(domain_id.clone(), "collateral".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(collateral_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = collateral_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.settlement.repo.eligible_collateral = vec![collateral_def.clone()];
 
             let err = Unregister::domain(domain_id.clone())
@@ -12573,12 +12613,20 @@ pub mod isi {
 
             let base_def = AssetDefinitionId::new(foreign_domain, "base".parse().unwrap());
             let substitute_def = AssetDefinitionId::new(domain_id.clone(), "sub".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(base_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign base asset definition");
-            Register::asset_definition(AssetDefinition::numeric(substitute_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup substitute asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = base_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register foreign base asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = substitute_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup substitute asset definition");
             stx.settlement
                 .repo
                 .collateral_substitution_matrix
@@ -12700,18 +12748,34 @@ pub mod isi {
                 AssetDefinitionId::new(external_domain.clone(), "fee".parse().unwrap());
             let offline_def =
                 AssetDefinitionId::new(external_domain.clone(), "coin".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(cash_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external cash definition");
-            Register::asset_definition(AssetDefinition::numeric(collateral_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external collateral definition");
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external reward definition");
-            Register::asset_definition(AssetDefinition::numeric(offline_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external offline definition");
+            Register::asset_definition({
+                let __asset_definition_id = cash_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external cash definition");
+            Register::asset_definition({
+                let __asset_definition_id = collateral_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external collateral definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external reward definition");
+            Register::asset_definition({
+                let __asset_definition_id = offline_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external offline definition");
 
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "repoguard".parse().expect("repo agreement id");

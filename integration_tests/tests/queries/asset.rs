@@ -103,7 +103,11 @@ fn test_total_quantity(
     // Registering new asset definition
     let definition_id: AssetDefinitionId =
         definition.parse().expect("Failed to parse `definition_id`");
-    let asset_definition = AssetDefinition::new(definition_id.clone(), asset_spec);
+    let asset_definition = {
+        let __asset_definition_id = definition_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), asset_spec)
+            .with_name(__asset_definition_id.name().to_string())
+    };
     test_client.submit_blocking(Register::asset_definition(asset_definition))?;
     let account_count = accounts.len();
 

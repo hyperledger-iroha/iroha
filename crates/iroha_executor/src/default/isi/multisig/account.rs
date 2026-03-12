@@ -10,7 +10,7 @@ use iroha_smart_contract::data_model::{
 
 use super::*;
 use crate::data_model::{
-    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata,
+    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata, name::Name,
 };
 
 impl VisitExecute for MultisigRegister {
@@ -48,6 +48,14 @@ impl VisitExecute for MultisigRegister {
             return executor.verdict().clone();
         }
 
+        materialize_missing_signatory_accounts(
+            executor,
+            &domain_owner,
+            &home_domain,
+            &multisig_account_id,
+            &spec,
+        )?;
+
         configure_roles(
             executor,
             &domain_owner,
@@ -67,7 +75,6 @@ fn validate_registration<V: Execute + Visit + ?Sized>(
     executor: &V,
 ) -> Result<DomainId, ValidationFail> {
     ensure_quorum_reachable(spec)?;
-    ensure_signatories_exist(spec, executor)?;
     ensure_multisig_graph_is_acyclic(spec.signatories.keys().cloned(), executor)?;
     Ok(home_domain.clone())
 }
@@ -89,13 +96,62 @@ fn ensure_quorum_reachable(spec: &MultisigSpec) -> Result<(), ValidationFail> {
     Ok(())
 }
 
-fn ensure_signatories_exist<V: Execute + Visit + ?Sized>(
+fn multisig_created_via_key() -> Name {
+    "iroha:created_via"
+        .parse()
+        .expect("multisig created_via metadata key must be valid")
+}
+
+fn signatories_to_materialize(spec: &MultisigSpec, multisig_account: &AccountId) -> Vec<AccountId> {
+    spec.signatories
+        .keys()
+        .filter(|signatory| signatory.subject_id() != multisig_account.subject_id())
+        .cloned()
+        .collect()
+}
+
+fn materialize_missing_signatory_accounts<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    domain_owner: &AccountId,
+    home_domain: &DomainId,
+    multisig_account: &AccountId,
     spec: &MultisigSpec,
-    executor: &V,
 ) -> Result<(), ValidationFail> {
-    for account in spec.signatories.keys() {
-        fetch_account_by_id(account, executor)?;
+    let original_authority = executor.context().authority.clone();
+
+    let result = (|| {
+        executor.context_mut().authority = domain_owner.clone();
+
+        for signatory in signatories_to_materialize(spec, multisig_account) {
+            ensure_signatory_account_exists(executor, &signatory, home_domain)?;
+        }
+
+        Ok(())
+    })();
+
+    executor.context_mut().authority = original_authority;
+    result
+}
+
+fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    signatory: &AccountId,
+    home_domain: &DomainId,
+) -> Result<(), ValidationFail> {
+    if account_exists(signatory, executor)? {
+        return Ok(());
     }
+
+    let mut metadata = Metadata::default();
+    metadata.insert(multisig_created_via_key(), Json::new("multisig"));
+    let register_account = Register::account(
+        Account::new(signatory.to_account_id(home_domain.clone())).with_metadata(metadata),
+    );
+    executor.visit_register_account(&register_account);
+    if executor.verdict().is_err() {
+        return executor.verdict().clone();
+    }
+
     Ok(())
 }
 
@@ -418,5 +474,42 @@ mod tests {
             result,
             Err(ValidationFail::NotPermitted(message)) if message.contains("multisig spec forms a cycle")
         ));
+    }
+
+    #[test]
+    fn signatory_materialization_skips_multisig_subject() {
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let multisig_account = account(0, &domain);
+        let signer_one = account(1, &domain);
+        let signer_two = account(2, &domain);
+        let spec = MultisigSpec::new(
+            BTreeMap::from([
+                (multisig_account.clone(), 1),
+                (signer_one.clone(), 1),
+                (signer_two.clone(), 1),
+            ]),
+            NonZeroU16::new(2).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+        );
+
+        let materialized = signatories_to_materialize(&spec, &multisig_account);
+        assert!(
+            materialized
+                .iter()
+                .all(|account| account.subject_id() != multisig_account.subject_id()),
+            "multisig account should never be auto-materialized as its own signatory"
+        );
+        assert!(
+            materialized
+                .iter()
+                .any(|account| account.subject_id() == signer_one.subject_id()),
+            "first external signatory should be materialized"
+        );
+        assert!(
+            materialized
+                .iter()
+                .any(|account| account.subject_id() == signer_two.subject_id()),
+            "second external signatory should be materialized"
+        );
     }
 }

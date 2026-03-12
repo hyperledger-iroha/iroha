@@ -40,7 +40,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
 
     run_or_skip(stringify!(two_non_intersecting_execution_paths), || async {
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = "rose#wonderland".parse()?;
+        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
         let get_asset_value = |iroha: &client::Client, asset_id: AssetId| -> Numeric {

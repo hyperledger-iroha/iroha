@@ -181,7 +181,10 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::portfolio"));
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("static domain id");
-        let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+        let def_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "cash".parse().expect("static asset name"),
+        );
 
         seed_world(
             &mut state,
@@ -214,7 +217,10 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::split"));
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("static domain id");
-        let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+        let def_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "cash".parse().expect("static asset name"),
+        );
 
         let second_dataspace = DataSpaceId::new(11);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -269,7 +275,9 @@ mod tests {
                     Domain::new(domain_id.clone()).build(&ALICE_ID),
                 );
             }
-            let definition = AssetDefinition::numeric(def_id.clone()).build(&ALICE_ID);
+            let definition = AssetDefinition::numeric(def_id.clone())
+                .with_name(def_id.name().to_string())
+                .build(&ALICE_ID);
             world.asset_definitions.insert(def_id.clone(), definition);
 
             for (account_id, uaid, amount) in accounts {

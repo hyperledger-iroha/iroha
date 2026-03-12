@@ -63,6 +63,33 @@ fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) t
     return "norito:\(payload.lowercased())"
 }
 
+fileprivate func decodeToriiAssetIdFields(_ raw: String) -> (assetDefinitionId: String?, accountId: String?) {
+    let canonical: String
+    if let normalized = try? normalizeToriiAssetIdQueryValue(raw, field: "asset_id") {
+        canonical = normalized
+    } else {
+        canonical = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard !canonical.isEmpty,
+          let payload = NoritoNativeBridge.shared.decodeAssetId(canonical),
+          let json = payload.data(using: .utf8)
+    else {
+        return (nil, nil)
+    }
+
+    struct DecodedAssetId: Decodable {
+        let asset_definition_id: String
+        let account_id: String
+    }
+
+    guard let decoded = try? JSONDecoder().decode(DecodedAssetId.self, from: json) else {
+        return (nil, nil)
+    }
+    let definition = decoded.asset_definition_id.trimmingCharacters(in: .whitespacesAndNewlines)
+    let account = decoded.account_id.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (definition.isEmpty ? nil : definition, account.isEmpty ? nil : account)
+}
+
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset_id: String
     public let asset_definition_id: String?
@@ -70,6 +97,52 @@ public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset_name: String?
     public let asset_alias: String?
     public let quantity: String
+
+    private enum CodingKeys: String, CodingKey {
+        case asset_id
+        case asset_definition_id
+        case account_id
+        case asset_name
+        case asset_alias
+        case quantity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let sourceAssetId = try container.decode(String.self, forKey: .asset_id)
+        self.asset_id = sourceAssetId
+        self.asset_name = try container.decodeIfPresent(String.self, forKey: .asset_name)
+        self.asset_alias = try container.decodeIfPresent(String.self, forKey: .asset_alias)
+        self.quantity = try container.decode(String.self, forKey: .quantity)
+
+        let decoded = decodeToriiAssetIdFields(sourceAssetId)
+        let providedDefinition = try container.decodeIfPresent(String.self, forKey: .asset_definition_id)
+        let providedAccount = try container.decodeIfPresent(String.self, forKey: .account_id)
+        self.asset_definition_id = providedDefinition ?? decoded.assetDefinitionId
+        self.account_id = providedAccount ?? decoded.accountId
+    }
+}
+
+public struct ToriiAssetAliasResolution: Decodable, Sendable {
+    public let alias: String
+    public let assetDefinitionId: String
+    public let assetName: String
+    public let description: String?
+    public let logo: String?
+    public let source: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case alias
+        case assetDefinitionId = "asset_definition_id"
+        case assetName = "asset_name"
+        case description
+        case logo
+        case source
+    }
+}
+
+private struct ToriiAssetAliasResolveRequest: Encodable {
+    let alias: String
 }
 
 public enum PipelineEndpointMode: Sendable, Equatable {
@@ -1070,7 +1143,12 @@ extension ToriiExplorerTransferDetails {
             return (trimmed, nil)
         }
         let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
-        return ("norito:\(hex)", nil)
+        let canonical = "norito:\(hex)"
+        let decoded = decodeToriiAssetIdFields(canonical)
+        if let definition = decoded.assetDefinitionId {
+            return (definition, decoded.accountId)
+        }
+        return (canonical, nil)
     }
 }
 
@@ -8220,6 +8298,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func resolveAssetAlias(_ alias: String,
+                                  completion: @escaping (Result<ToriiAssetAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.resolveAssetAlias(alias) }
+    }
+
+    @discardableResult
     public func getTransactions(accountId: String,
                                 limit: Int = 50,
                                 offset: Int = 0,
@@ -9176,6 +9260,26 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       queryItems: items)
         let data = try await data(for: request)
         return try decodeAssetBalances(from: data)
+    }
+
+    public func resolveAssetAlias(_ alias: String) async throws -> ToriiAssetAliasResolution? {
+        let normalizedAlias = try ToriiRequestValidation.normalizedNonEmpty(alias, field: "alias")
+        let body = try JSONEncoder().encode(ToriiAssetAliasResolveRequest(alias: normalizedAlias))
+        let request = try makeRequest(
+            path: "/v1/assets/aliases/resolve",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiAssetAliasResolution.self, from: data)
     }
 
     /// Returns account transaction metadata from `/v1/accounts/{account_id}/transactions`.

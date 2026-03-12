@@ -4115,9 +4115,22 @@ fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
 }
 
 #[cfg(feature = "app_api")]
-fn parse_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, Error> {
-    raw.parse::<AssetDefinitionId>()
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
+    let trimmed = raw.trim();
+    if trimmed
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("aid:"))
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+    }
+    let alias = AssetDefinitionAlias::from_str(trimmed)
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let world = app.state.world_view();
+    world.asset_definition_id_by_alias(&alias).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -4156,7 +4169,7 @@ async fn handler_explorer_accounts_list(
         None => None,
     };
     let asset_filter = match with_asset {
-        Some(raw) => Some(parse_asset_definition_id(&raw)?),
+        Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
         None => None,
     };
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
@@ -4246,7 +4259,7 @@ async fn handler_explorer_assets_list(
         None => None,
     };
     let definition = match definition {
-        Some(raw) => Some(parse_asset_definition_id(&raw)?),
+        Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
         None => None,
     };
     let asset_id = match asset_id {
@@ -4694,7 +4707,7 @@ async fn handler_explorer_asset_definition_detail(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/asset-definitions/{id}").await?;
     }
-    let definition_id = parse_asset_definition_id(&def_raw)?;
+    let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
     routing::handle_v1_explorer_asset_definition_detail(app.state.clone(), definition_id).await
 }
 
@@ -4715,7 +4728,7 @@ async fn handler_explorer_asset_definition_econometrics(
         )
         .await?;
     }
-    let definition_id = parse_asset_definition_id(&def_raw)?;
+    let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
     routing::handle_v1_explorer_asset_definition_econometrics(app.state.clone(), definition_id)
         .await
 }
@@ -4737,7 +4750,7 @@ async fn handler_explorer_asset_definition_snapshot(
         )
         .await?;
     }
-    let definition_id = parse_asset_definition_id(&def_raw)?;
+    let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
     routing::handle_v1_explorer_asset_definition_snapshot(app.state.clone(), definition_id).await
 }
 
@@ -4891,7 +4904,7 @@ async fn handler_asset_holders(
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_asset_holders(
             app.state.clone(),
-            AxPath(def_id),
+            AxPath(def_id.clone()),
             query.clone(),
             app.telemetry.clone(),
         )
@@ -4928,7 +4941,7 @@ async fn handler_asset_holders_query(
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_asset_holders_query(
             app.state.clone(),
-            AxPath(def_id),
+            AxPath(def_id.clone()),
             payload.clone(),
             app.telemetry.clone(),
         )
@@ -4956,7 +4969,7 @@ async fn handler_confidential_asset_transitions(
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_confidential_asset_transitions(
             app.state.clone(),
-            AxPath(def_id),
+            AxPath(def_id.clone()),
         )
         .await;
     }
@@ -12860,31 +12873,19 @@ async fn handler_asset_alias_resolve(
     })?;
 
     let world = app.state.world_view();
-    let mut matches = world
-        .asset_definitions_iter()
-        .filter(|definition| {
-            definition
-                .alias()
-                .as_ref()
-                .is_some_and(|bound_alias| bound_alias == &alias)
-        });
-
-    let Some(definition) = matches.next() else {
+    let Some(definition_id) = world.asset_definition_id_by_alias(&alias) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-
-    if matches.next().is_some() {
-        return alias_error_response(
-            StatusCode::CONFLICT,
-            "asset alias is ambiguously bound to multiple definitions",
-        );
-    }
-
-    let definition_id = definition.id.to_string();
-    let logo = definition.logo().as_ref().map(|uri| uri.as_ref().to_owned());
+    let Ok(definition) = world.asset_definition(&definition_id) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let logo = definition
+        .logo()
+        .as_ref()
+        .map(|uri| uri.as_ref().to_owned());
     asset_alias_resolve_ok(
         alias.as_ref(),
-        &definition_id,
+        &definition_id.to_string(),
         definition.name(),
         definition.description().clone(),
         logo,
@@ -21552,6 +21553,107 @@ mod tests {
         assert!(dto.asset_definition_id.starts_with("aid:"));
         assert_eq!(dto.asset_name, "usd");
         assert_eq!(dto.source.as_deref(), Some("world_state"));
+    }
+
+    #[tokio::test]
+    async fn asset_alias_resolve_accepts_short_form_alias() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("usd").expect("asset name token"),
+        );
+        let alias: AssetDefinitionAlias = "usd#main".parse().expect("asset alias");
+        let mut definition =
+            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+                .with_name("usd".to_owned())
+                .build(&authority);
+        definition.alias = Some(alias.clone());
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+        let world = World::with([domain], [account], [definition]);
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let response = handler_asset_alias_resolve(
+            State(app),
+            NoritoJson(routing::AssetAliasResolveRequestDto {
+                alias: alias.to_string(),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::AssetAliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, "usd#main");
+        assert!(dto.asset_definition_id.starts_with("aid:"));
+        assert_eq!(dto.asset_name, "usd");
+        assert_eq!(dto.source.as_deref(), Some("world_state"));
+    }
+
+    #[tokio::test]
+    async fn parse_asset_definition_id_accepts_alias_literals_only() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let long_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("pkr").expect("asset name token"),
+        );
+        let short_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("usd").expect("asset name token"),
+        );
+        let mut long_definition =
+            iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
+                .with_name("pkr".to_owned())
+                .build(&authority);
+        long_definition.alias = Some("pkr#ubl@sbp".parse().expect("alias"));
+        let mut short_definition =
+            iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
+                .with_name("usd".to_owned())
+                .build(&authority);
+        short_definition.alias = Some("usd#sbp".parse().expect("alias"));
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+        let world = World::with([domain], [account], [long_definition, short_definition]);
+        let app = mk_app_state_for_tests_with_world(world);
+
+        assert_eq!(
+            parse_asset_definition_id(app.as_ref(), "pkr#ubl@sbp")
+                .expect("long alias should resolve"),
+            long_id
+        );
+        assert_eq!(
+            parse_asset_definition_id(app.as_ref(), "usd#sbp").expect("short alias should resolve"),
+            short_id
+        );
+        let aid_error =
+            parse_asset_definition_id(app.as_ref(), "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+                .expect_err("legacy aid literal must be rejected");
+        assert!(matches!(
+            aid_error,
+            Error::Query(ValidationFail::TooComplex)
+        ));
+
+        let missing_error = parse_asset_definition_id(app.as_ref(), "pkr#missing")
+            .expect_err("unknown alias should be rejected");
+        assert!(
+            matches!(
+                missing_error,
+                Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound
+                ))
+            ),
+            "unexpected error: {missing_error:?}"
+        );
     }
 
     #[tokio::test]

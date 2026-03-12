@@ -20,7 +20,7 @@ use norito::json::{self, Map, Number, Value};
 
 fn main() {
     let chain_id = ChainId::from_str("00000000-0000-0000-0000-000000000000").unwrap();
-    let asset_id = AssetDefinitionId::from_str("rose#wonderland").unwrap();
+    let asset_id = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
     let signing_key: iroha_crypto::PrivateKey =
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()

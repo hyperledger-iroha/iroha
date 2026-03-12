@@ -73,7 +73,7 @@ fn ivm_syscall_data_events_follow_order() {
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
     let asset_def = AssetDefinition::new(
-        AssetDefinitionId::from_str("rose#wonderland").expect("asset def"),
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
         NumericSpec::default(),
     )
     .build(&authority_id);
@@ -118,7 +118,10 @@ fn ivm_syscall_data_events_follow_order() {
     let val2_bytes = norito::to_bytes(&val2).expect("encode json");
     let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2_bytes);
 
-    let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let asset_bytes = norito::to_bytes(&asset_def_id).expect("encode asset definition");
     let ptr_asset_def = store_tlv(
         &mut vm,

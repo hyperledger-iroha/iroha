@@ -50,7 +50,10 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let escrow_acc =
         Account::new(escrow_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
     let receiver_acc = Account::new(receiver_id.clone().to_account_id(domain_id)).build(&alice_id);
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), alice_id.clone()),

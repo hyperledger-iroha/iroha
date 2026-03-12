@@ -317,7 +317,15 @@ pub mod isi {
         #[test]
         fn cannot_forbid_minting_on_asset_mintable_infinitely() -> Result<(), ParseError> {
             let (authority, _authority_keypair) = gen_account_in("wonderland");
-            let mut definition = AssetDefinition::numeric("test#hello".parse()?).build(&authority);
+            let mut definition = {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "hello".parse()?,
+                    "test".parse()?,
+                );
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&authority);
             assert!(super::forbid_minting(&mut definition).is_err());
             Ok(())
         }
@@ -495,10 +503,17 @@ pub mod query {
                 .unwrap();
 
             // Register asset definition and mint zero to acc1, one to acc2
-            let ad: AssetDefinitionId = "test_coin#wonderland".parse().unwrap();
-            Register::asset_definition(AssetDefinition::numeric(ad.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             let a1 = AssetId::new(ad.clone(), acc1.clone());
             let a2 = AssetId::new(ad.clone(), acc2.clone());
             // minting zero yields an asset entry with zero quantity
@@ -592,10 +607,17 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let ad: AssetDefinitionId = "test_coin#wonderland".parse().unwrap();
-            Register::asset_definition(AssetDefinition::numeric(ad.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -702,10 +724,18 @@ pub mod query {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
-            let asset_definition: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-            Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let asset_definition: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "bond".parse().unwrap(),
+                );
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             stx.world
                 .asset_definition_mut(&asset_definition)
                 .unwrap()
@@ -765,10 +795,18 @@ pub mod query {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
-            let asset_definition: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-            Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            let asset_definition: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "bond".parse().unwrap(),
+                );
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             stx.world
                 .asset_definition_mut(&asset_definition)
                 .unwrap()

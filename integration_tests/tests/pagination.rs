@@ -84,7 +84,11 @@ fn register_assets(client: &Client) -> Result<()> {
         .map(|c| c.to_string())
         .map(|name| (name + "#wonderland").parse().expect("Valid"))
         .map(|asset_definition_id| {
-            Register::asset_definition(AssetDefinition::numeric(asset_definition_id))
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition_id;
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
         })
         .collect();
 

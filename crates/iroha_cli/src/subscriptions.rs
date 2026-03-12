@@ -521,8 +521,14 @@ mod tests {
     #[test]
     fn plan_create_args_build_request() {
         let provider = sample_account_id(1);
-        let plan_id: AssetDefinitionId = "plan#commerce".parse().expect("plan id");
-        let asset_definition: AssetDefinitionId = "usd#pay".parse().expect("asset def");
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "plan".parse().unwrap(),
+        );
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let plan = sample_plan(provider.clone(), asset_definition);
         let (private_key, private_key_str) = sample_private_key();
         let args = PlanCreateArgs {
@@ -558,7 +564,10 @@ mod tests {
     #[test]
     fn subscription_create_args_build_request() {
         let subscriber = sample_account_id(2);
-        let plan_id: AssetDefinitionId = "plan#commerce".parse().expect("plan id");
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "plan".parse().unwrap(),
+        );
         let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().expect("billing trigger");
         let usage_trigger_id: TriggerId = "sub-1-usage".parse().expect("usage trigger");
@@ -650,7 +659,10 @@ mod tests {
     #[test]
     fn load_plan_reads_json_file() {
         let provider = sample_account_id(1);
-        let asset_definition: AssetDefinitionId = "usd#pay".parse().expect("asset def");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let plan = sample_plan(provider, asset_definition);
         let payload = norito::json::to_json(&plan).expect("encode plan");
 

@@ -442,8 +442,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
 
@@ -515,8 +523,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
 
@@ -574,8 +590,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
@@ -680,8 +704,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
 
@@ -718,8 +750,16 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(100, 0));
 
@@ -778,8 +818,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
@@ -829,8 +877,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
@@ -872,7 +928,10 @@ mod tests {
     #[test]
     fn implicit_creation_fee_is_enforced_and_charged() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let fee_sink = random_account_id();
         let domain = open_domain(
             domain_id.clone(),
@@ -892,7 +951,12 @@ mod tests {
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let fee_sink_account =
             build_account_in_domain(fee_sink.clone(), domain_id.clone(), &fee_sink);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(20, 0));
 
@@ -943,7 +1007,10 @@ mod tests {
     #[test]
     fn implicit_creation_fee_rejects_when_insufficient_balance() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -960,7 +1027,12 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(3, 0));
 
@@ -1001,7 +1073,10 @@ mod tests {
     #[test]
     fn min_initial_amount_is_enforced() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let mut min_initial_amounts = BTreeMap::new();
         min_initial_amounts.insert(asset_def_id.clone(), Numeric::new(10, 0));
         let domain = open_domain(
@@ -1016,7 +1091,12 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
@@ -1067,8 +1147,16 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let mut world = World::with([domain], [alice_account], [asset_def]);
         let role = iroha_data_model::role::Role {

@@ -121,7 +121,10 @@ fn seed_slash_snapshot(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn double_vote_slashes_plain_lock() {
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset def id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
     let mut state = governance_state_with_accounts(def_id.clone(), &escrow_id, &slash_id);
@@ -234,7 +237,10 @@ fn double_vote_slashes_plain_lock() {
 
 #[test]
 fn restitution_restores_slashed_balance() {
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset def id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let (escrow_id, _) = gen_account_in("wonderland");
     let (slash_id, _) = gen_account_in("wonderland");
     let mut state = governance_state_with_accounts(def_id.clone(), &escrow_id, &slash_id);

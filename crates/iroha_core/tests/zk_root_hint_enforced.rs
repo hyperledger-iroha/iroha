@@ -109,7 +109,10 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     let mut stx = block.transaction();
 
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let alice = AccountId::new(KeyPair::random().public_key().clone());
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)

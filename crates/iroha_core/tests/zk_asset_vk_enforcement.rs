@@ -60,7 +60,10 @@ fn prepare_state() -> (
 
     let (vk_transfer_id, vk_unshield_id, vk_other_id, asset_def_id, owner) = {
         let domain_id: DomainId = "zkd".parse().unwrap();
-        let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "zkd".parse().unwrap(),
+            "zcoin".parse().unwrap(),
+        );
         let owner_keypair = KeyPair::random();
         let owner: AccountId = AccountId::of(owner_keypair.public_key().clone());
 

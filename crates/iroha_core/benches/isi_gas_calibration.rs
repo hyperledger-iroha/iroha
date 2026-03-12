@@ -131,13 +131,19 @@ fn setup_role_assigned(state: &mut BenchState) {
 }
 
 fn setup_asset_definition(state: &mut BenchState) {
-    let ad: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     state.apply_instrs([Register::asset_definition(AssetDefinition::numeric(ad)).into()]);
 }
 
 fn setup_asset_and_balance(state: &mut BenchState) {
     setup_asset_definition(state);
-    let ad: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
     state.apply_instrs([
         iroha_data_model::isi::Mint::asset_numeric(Numeric::new(10, 0), asset_id).into(),
@@ -208,7 +214,10 @@ fn run_benchmarks(c: &mut Criterion) {
         .into()
     });
     bench_isi(c, "RegisterAssetDef", setup_none, |_ctx| {
-        let ad: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         Register::asset_definition(AssetDefinition::numeric(ad)).into()
     });
     bench_isi(c, "SetAccountKV_small", setup_none, |ctx| {
@@ -237,12 +246,18 @@ fn run_benchmarks(c: &mut Criterion) {
         },
     );
     bench_isi(c, "MintAsset", setup_asset_definition, |ctx| {
-        let ad: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let id = AssetId::of(ad, ctx.authority.clone());
         iroha_data_model::isi::Mint::asset_numeric(Numeric::new(1, 0), id).into()
     });
     bench_isi(c, "TransferAsset", setup_asset_and_balance, |ctx| {
-        let ad: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let id = AssetId::of(ad, ctx.authority.clone());
         iroha_data_model::isi::Transfer::asset_numeric(
             id,

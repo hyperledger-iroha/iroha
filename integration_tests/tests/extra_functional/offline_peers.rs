@@ -17,7 +17,7 @@ use tokio::{task::spawn_blocking, time::sleep};
 async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
     // Given
     let alice_id = ALICE_ID.clone();
-    let roses = "rose#wonderland".parse()?;
+    let roses = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
     let alice_has_roses = numeric!(13);
 
     // When

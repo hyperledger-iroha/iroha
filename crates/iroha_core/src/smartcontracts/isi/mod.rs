@@ -117,6 +117,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
@@ -405,7 +406,8 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id = "rose#wonderland".parse()?;
+        let asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
@@ -422,8 +424,11 @@ mod tests {
         .into();
         Grant::account_permission(trigger_perm, ALICE_ID.clone())
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit().unwrap();
         Ok(state)
@@ -816,7 +821,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
+        let definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::asset_definition(
@@ -848,7 +853,7 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
+        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;

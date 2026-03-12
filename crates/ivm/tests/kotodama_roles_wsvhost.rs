@@ -74,7 +74,10 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         let host = host_any
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
-        let asset: AssetDefinitionId = "rose#wonder".parse().unwrap();
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonder".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let tok = PermissionToken::MintAsset(asset);
         assert!(
             host.wsv.has_permission(&alice, &tok),
@@ -99,7 +102,10 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         let host = host_any
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
-        let asset: AssetDefinitionId = "rose#wonder".parse().unwrap();
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonder".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let tok = PermissionToken::MintAsset(asset);
         assert!(
             !host.wsv.has_permission(&alice, &tok),

@@ -60090,9 +60090,8 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let _guard = crate::sumeragi::witness::exec_witness_guard();
 
     crate::sumeragi::witness::start_block();
-    let asset_def: AssetDefinitionId = "rose#wonderland"
-        .parse()
-        .expect("asset definition id parses");
+    let asset_def: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
     let asset_id = AssetId::new(asset_def, (*ALICE_ID).clone());
     let pre = iroha_primitives::numeric::Numeric::from(1u32);
     let post = iroha_primitives::numeric::Numeric::from(2u32);

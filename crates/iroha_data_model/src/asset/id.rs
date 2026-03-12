@@ -11,6 +11,7 @@ use getset::Getters;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
+    NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
     to_bytes,
 };
@@ -26,16 +27,16 @@ mod model {
     ///
     /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
     /// satisfy UUIDv4 version/variant constraints.
-    #[derive(Debug, Clone, Getters, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, Getters, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
         /// Canonical UUIDv4 bytes (no textual separators).
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
-        /// Transitional legacy domain component retained for compatibility.
+        /// Deterministic domain component derived from canonical bytes.
         pub domain: DomainId,
-        /// Transitional legacy name component retained for compatibility.
+        /// Deterministic name component derived from canonical bytes.
         pub name: Name,
     }
 
@@ -110,6 +111,35 @@ impl Ord for AssetDefinitionId {
 impl Hash for AssetDefinitionId {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.aid_bytes.hash(state);
+    }
+}
+
+impl NoritoSerialize for AssetDefinitionId {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        <[u8; 16] as NoritoSerialize>::encoded_len_hint(&self.aid_bytes)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        <[u8; 16] as NoritoSerialize>::encoded_len_exact(&self.aid_bytes)
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        Self::from_uuid_bytes_unchecked(aid_bytes)
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        Self::from_uuid_bytes(aid_bytes)
+            .map_err(|err| norito::core::Error::Message(err.to_string().into()))
     }
 }
 
@@ -223,7 +253,7 @@ impl AssetDefinitionId {
                 "Asset Definition ID must encode UUIDv4 bytes",
             ));
         }
-        let (domain, name) = synthetic_legacy_components(aid_bytes);
+        let (domain, name) = synthetic_components(aid_bytes);
         Ok(Self {
             aid_bytes,
             domain,
@@ -234,7 +264,7 @@ impl AssetDefinitionId {
     /// Construct from UUID bytes without validation.
     #[must_use]
     pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
-        let (domain, name) = synthetic_legacy_components(aid_bytes);
+        let (domain, name) = synthetic_components(aid_bytes);
         Self {
             aid_bytes,
             domain,
@@ -242,14 +272,11 @@ impl AssetDefinitionId {
         }
     }
 
-    /// Transitional helper: deterministically derive `aid` from legacy components.
-    ///
-    /// `aid`-only semantics are canonical; this helper keeps internal call sites
-    /// compiling while textual parsing is migrated.
+    /// Deterministically derive canonical `aid` bytes from component labels.
     #[must_use]
     pub fn new(domain: DomainId, name: Name) -> Self {
-        let legacy = format!("{name}#{domain}");
-        let digest = blake3::hash(legacy.as_bytes());
+        let literal = format!("{name}#{domain}");
+        let digest = blake3::hash(literal.as_bytes());
         let mut aid_bytes = [0u8; 16];
         aid_bytes.copy_from_slice(&digest.as_bytes()[..16]);
         // Force UUIDv4 version and RFC4122 variant bits.
@@ -318,14 +345,14 @@ fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
     (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
 }
 
-fn synthetic_legacy_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
+fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
     let domain: DomainId = "aid"
         .parse()
         .expect("static `aid` domain label must remain valid");
     let name_literal = hex::encode(aid_bytes);
     let name: Name = name_literal
         .parse()
-        .expect("lowercase hex must remain a valid legacy name");
+        .expect("lowercase hex must remain a valid name literal");
     (domain, name)
 }
 

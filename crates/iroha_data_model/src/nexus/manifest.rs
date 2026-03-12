@@ -1083,7 +1083,10 @@ mod tests {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().expect("program id")),
                 method: Some(sample_name("transfer")),
-                asset: Some("CBDC#centralbank".parse().expect("asset definition")),
+                asset: Some(iroha_data_model::asset::AssetDefinitionId::new(
+                    "centralbank".parse().unwrap(),
+                    "CBDC".parse().unwrap(),
+                )),
                 role: Some(AmxRole::Initiator),
             },
             effect: ManifestEffect::Allow(allowance),

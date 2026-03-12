@@ -16594,7 +16594,10 @@ mod offline_cfg_tests {
         let repo = Repo {
             default_haircut_bps: 12_500,
             margin_frequency_secs: 0,
-            eligible_collateral: vec!["bond#wonderland".parse().unwrap()],
+            eligible_collateral: vec![iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            )],
             collateral_substitution_matrix: BTreeMap::new(),
         };
 
@@ -16820,11 +16823,17 @@ mod offline_cfg_tests {
         assert!(parsed.plain_voting_enabled);
         assert_eq!(
             parsed.voting_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("xor#sora").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap()
+            )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("xor#sora").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap()
+            )
         );
         assert_eq!(parsed.citizenship_bond_amount, 99);
         assert_eq!(
@@ -16852,7 +16861,10 @@ mod offline_cfg_tests {
         assert_eq!(parsed.parliament_min_stake, 456);
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("SORA#stake").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "stake".parse().unwrap(),
+                "SORA".parse().unwrap()
+            )
         );
         assert_eq!(parsed.parliament_alternate_size, Some(13));
     }

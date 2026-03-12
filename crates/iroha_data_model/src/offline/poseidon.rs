@@ -570,7 +570,10 @@ mod tests {
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
-        let definition: AssetDefinitionId = "usd#wonderland".parse().expect("definition");
+        let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         AssetId::new(definition, owner.clone())
     }
 

@@ -2,6 +2,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class TransactionInputValidatorTests: XCTestCase {
+    private let sampleAid = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+
     private func i105(seed: UInt8 = 1,
                       domain: String = AccountAddress.defaultDomainName) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
@@ -14,7 +16,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "   ",
                                                    authorityId: authority,
-                                                   assetDefinitionId: "rose#wonderland")
+                                                   assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError, .emptyChainId)
         }
@@ -24,7 +26,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: "alice",
-                                                   assetDefinitionId: "rose#wonderland")
+                                                   assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAccountId(field: "authority", value: "alice"))
@@ -35,7 +37,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: "alice#bad@wonderland",
-                                                   assetDefinitionId: "rose#wonderland")
+                                                   assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAccountId(field: "authority", value: "alice#bad@wonderland"))
@@ -72,12 +74,12 @@ final class TransactionInputValidatorTests: XCTestCase {
         let ids = try TransactionInputValidator.validate(
             chainId: " 0000 ",
             authorityId: " \(authority) ",
-            assetDefinitionId: " rose#wonderland ",
+            assetDefinitionId: " \(sampleAid) ",
             accountIds: [.init(field: "destination", value: " \(destination) ")]
         )
         XCTAssertEqual(ids.chainId, "0000")
         XCTAssertEqual(ids.authorityId, authority)
-        XCTAssertEqual(ids.assetDefinitionId, "rose#wonderland")
+        XCTAssertEqual(ids.assetDefinitionId, sampleAid)
         XCTAssertEqual(ids.accountIds["destination"], destination)
     }
 

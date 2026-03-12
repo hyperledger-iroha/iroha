@@ -73,7 +73,7 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct RootsArgs {
-    /// `AssetDefinitionId` like `rose#wonderland`
+    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
     #[arg(long, value_name = "ASSET_ID")]
     asset_id: String,
     /// Maximum number of roots to return (0 = server cap)
@@ -1422,7 +1422,7 @@ mod attachments_cleanup_tests {
 
 #[derive(clap::Args, Debug)]
 pub struct ShieldArgs {
-    /// `AssetDefinitionId` like `rose#wonderland`
+    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Account identifier to debit (canonical I105 account literal)
@@ -1610,7 +1610,7 @@ impl Run for EnvelopeArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct UnshieldArgs {
-    /// `AssetDefinitionId` like `rose#wonderland`
+    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Recipient account identifier to credit (canonical I105 account literal)
@@ -1816,7 +1816,7 @@ impl Run for UnshieldArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ZkRegisterAssetArgs {
-    /// `AssetDefinitionId` like `rose#wonderland`
+    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Allow shielding from public to shielded (default: true)

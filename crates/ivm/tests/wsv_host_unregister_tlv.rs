@@ -56,7 +56,10 @@ fn unregister_flow_with_dependencies() {
             .unwrap();
     let alice = test_account(alice_domain, alice_pk);
     let bob = test_account(bob_domain, bob_pk);
-    let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());

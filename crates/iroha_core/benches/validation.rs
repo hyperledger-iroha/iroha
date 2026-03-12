@@ -41,7 +41,10 @@ fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
             .0
             .to_account_id(domain_id.clone()),
     ));
-    let asset_definition_id = "xor#domain".parse().unwrap();
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let create_asset = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
 
     TransactionBuilder::new(chain_id, STARTER_ID.clone()).with_instructions::<InstructionBox>([

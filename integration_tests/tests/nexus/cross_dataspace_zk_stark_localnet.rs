@@ -275,7 +275,12 @@ fn npos_multilane_genesis_post_topology_transactions(
             gas_account_id.to_account_id(ivm_domain.clone()),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = stake_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
     ];
 
     let mut validator_tx = Vec::new();

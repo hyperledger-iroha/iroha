@@ -41,7 +41,7 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 ///             .parse()
 ///             .unwrap(),
 ///     );
-///     let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+///     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
 ///     CanDoSomethingWithAsset {
 ///        some_data: "some data".to_owned(),
 ///        asset: AssetId::new(asset_def, owner),

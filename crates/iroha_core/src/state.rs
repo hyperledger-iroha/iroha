@@ -31,7 +31,10 @@ use iroha_data_model::{
         ScopedAccountId,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
-    asset::{Asset, AssetBalancePolicy, AssetBalanceScope, AssetEntry, AssetValue, Mintable},
+    asset::{
+        Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetEntry, AssetValue,
+        Mintable,
+    },
     block::{
         BlockHeader, SignedBlock,
         consensus::EvidenceRecord,
@@ -339,6 +342,8 @@ macro_rules! build_world_block {
             opaque_uaids: $state.opaque_uaids.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
             asset_definitions: $state.asset_definitions.$method(),
+            asset_definition_aliases: $state.asset_definition_aliases.$method(),
+            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
@@ -462,6 +467,8 @@ macro_rules! build_world_transaction {
             opaque_uaids: $state.opaque_uaids.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
             asset_definitions: $state.asset_definitions.transaction(),
+            asset_definition_aliases: $state.asset_definition_aliases.transaction(),
+            asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
@@ -1229,6 +1236,13 @@ pub struct World {
     pub(crate) account_rekey_records: Storage<AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
+    /// Index mapping asset alias literals to canonical asset definition ids.
+    #[norito(skip)]
+    pub(crate) asset_definition_aliases: Storage<AssetDefinitionAlias, AssetDefinitionId>,
+    /// Alias lease metadata keyed by canonical asset definition id.
+    #[norito(skip)]
+    pub(crate) asset_definition_alias_bindings:
+        Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Registered assets.
     pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1542,6 +1556,12 @@ pub struct WorldBlock<'world> {
     pub(crate) account_rekey_records: StorageBlock<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
+    /// Index mapping asset alias literals to canonical asset definition ids.
+    pub(crate) asset_definition_aliases:
+        StorageBlock<'world, AssetDefinitionAlias, AssetDefinitionId>,
+    /// Alias lease metadata keyed by canonical asset definition id.
+    pub(crate) asset_definition_alias_bindings:
+        StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Registered assets.
     pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1970,6 +1990,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
+    /// Index mapping asset alias literals to canonical asset definition ids.
+    pub(crate) asset_definition_aliases:
+        StorageTransaction<'block, 'world, AssetDefinitionAlias, AssetDefinitionId>,
+    /// Alias lease metadata keyed by canonical asset definition id.
+    pub(crate) asset_definition_alias_bindings:
+        StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Registered assets.
     pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2289,6 +2315,90 @@ impl WorldTransaction<'_, '_> {
         self.decrease_asset_total_amount(asset_id.definition(), &amount)?;
         Ok(self.remove_asset_and_metadata(asset_id))
     }
+
+    /// Bind or update an asset definition alias record and keep both alias indexes consistent.
+    ///
+    /// # Errors
+    /// Returns an error when the requested alias is already bound to a different asset definition.
+    pub fn bind_asset_definition_alias(
+        &mut self,
+        definition_id: &AssetDefinitionId,
+        alias: AssetDefinitionAlias,
+        lease_expiry_ms: Option<u64>,
+        grace_until_ms: Option<u64>,
+        bound_at_ms: u64,
+    ) -> Result<(), Error> {
+        if let Some(existing_definition) = self.asset_definition_aliases.get(&alias).cloned()
+            && existing_definition != *definition_id
+        {
+            return Err(Error::InvariantViolation(
+                format!("asset definition alias `{alias}` is already bound").into(),
+            ));
+        }
+
+        if let Some(existing_binding) = self
+            .asset_definition_alias_bindings
+            .get(definition_id)
+            .cloned()
+            && existing_binding.alias != alias
+        {
+            self.asset_definition_aliases
+                .remove(existing_binding.alias.clone());
+        }
+
+        self.asset_definition_aliases
+            .insert(alias.clone(), definition_id.clone());
+        self.asset_definition_alias_bindings.insert(
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: alias.clone(),
+                lease_expiry_ms,
+                grace_until_ms,
+                bound_at_ms,
+            },
+        );
+        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
+            definition.alias = Some(alias);
+        }
+        Ok(())
+    }
+
+    /// Remove the alias binding for an asset definition and keep indexes consistent.
+    pub fn clear_asset_definition_alias(&mut self, definition_id: &AssetDefinitionId) {
+        if let Some(existing) = self
+            .asset_definition_alias_bindings
+            .remove(definition_id.clone())
+        {
+            self.asset_definition_aliases.remove(existing.alias);
+        }
+        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
+            definition.alias = None;
+        }
+    }
+
+    /// Remove aliases whose grace window has elapsed.
+    ///
+    /// Returns canonical asset definition ids that were unbound.
+    pub fn sweep_expired_asset_definition_aliases(
+        &mut self,
+        now_ms: u64,
+    ) -> Vec<AssetDefinitionId> {
+        let expired: Vec<AssetDefinitionId> = self
+            .asset_definition_alias_bindings
+            .iter()
+            .filter_map(|(definition_id, binding)| {
+                binding
+                    .is_grace_expired_at(now_ms)
+                    .then_some(definition_id.clone())
+            })
+            .collect();
+
+        for definition_id in &expired {
+            self.clear_asset_definition_alias(definition_id);
+        }
+
+        expired
+    }
 }
 
 /// Consistent point in time view of the [`World`]
@@ -2317,6 +2427,12 @@ pub struct WorldView<'world> {
     pub(crate) account_rekey_records: StorageView<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
+    /// Index mapping asset alias literals to canonical asset definition ids.
+    pub(crate) asset_definition_aliases:
+        StorageView<'world, AssetDefinitionAlias, AssetDefinitionId>,
+    /// Alias lease metadata keyed by canonical asset definition id.
+    pub(crate) asset_definition_alias_bindings:
+        StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Registered assets.
     pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -4058,6 +4174,36 @@ pub struct GovernanceLocksForReferendum {
     #[norito(with = "governance_locks_map_json")]
     pub locks:
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
+}
+
+/// On-chain alias lease metadata for an asset definition.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct AssetDefinitionAliasBindingRecord {
+    /// Bound alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+    pub alias: AssetDefinitionAlias,
+    /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub lease_expiry_ms: Option<u64>,
+    /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub grace_until_ms: Option<u64>,
+    /// Timestamp when the binding was recorded.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub bound_at_ms: u64,
+}
+
+impl AssetDefinitionAliasBindingRecord {
+    /// Return `true` when the alias should be unbound at `now_ms`.
+    #[must_use]
+    pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
+        self.grace_until_ms
+            .is_some_and(|grace_until| now_ms > grace_until)
+    }
 }
 
 /// Citizenship registry entry (bonded amount held in escrow).
@@ -9127,6 +9273,8 @@ impl World {
             uaid_accounts: Storage::default(),
             account_rekey_records,
             asset_definitions,
+            asset_definition_aliases: Storage::default(),
+            asset_definition_alias_bindings: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
@@ -9171,6 +9319,9 @@ impl World {
         world
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("duplicate asset definition alias in world constructor");
         world
             .rebuild_opaque_uaid_index()
             .expect("duplicate opaque id in world constructor");
@@ -9309,6 +9460,38 @@ impl World {
         Ok(())
     }
 
+    fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
+        let mut by_alias = BTreeMap::new();
+        let mut by_definition = BTreeMap::new();
+        let view = self.asset_definitions.view();
+        for (definition_id, definition) in view.iter() {
+            let Some(alias) = definition.alias().as_ref().cloned() else {
+                continue;
+            };
+            if let Some(existing) = by_alias.get(&alias) {
+                if existing != definition_id {
+                    return Err(format!(
+                        "Asset alias `{alias}` already bound to asset definition {existing}"
+                    ));
+                }
+                continue;
+            }
+            by_alias.insert(alias.clone(), definition_id.clone());
+            by_definition.insert(
+                definition_id.clone(),
+                AssetDefinitionAliasBindingRecord {
+                    alias,
+                    lease_expiry_ms: None,
+                    grace_until_ms: None,
+                    bound_at_ms: 0,
+                },
+            );
+        }
+        self.asset_definition_aliases = by_alias.into_iter().collect();
+        self.asset_definition_alias_bindings = by_definition.into_iter().collect();
+        Ok(())
+    }
+
     fn rebuild_opaque_uaid_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
         let view = self.accounts.view();
@@ -9437,6 +9620,8 @@ impl World {
             opaque_uaids: self.opaque_uaids.view(),
             account_rekey_records: self.account_rekey_records.view(),
             asset_definitions: self.asset_definitions.view(),
+            asset_definition_aliases: self.asset_definition_aliases.view(),
+            asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
@@ -9583,6 +9768,15 @@ pub trait WorldReadOnly {
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
     /// Asset definition storage (read-only).
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
+    /// Alias index mapping `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` to canonical
+    /// aid.
+    fn asset_definition_aliases(
+        &self,
+    ) -> &impl StorageReadOnly<AssetDefinitionAlias, AssetDefinitionId>;
+    /// Alias lease metadata keyed by canonical aid.
+    fn asset_definition_alias_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
     /// Asset storage (read-only).
     fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
     /// Asset metadata storage (read-only).
@@ -9977,6 +10171,15 @@ pub trait WorldReadOnly {
         self.asset_definitions().iter().map(|(_, ad)| ad)
     }
 
+    /// Resolve an asset alias to canonical aid using the world-state alias index.
+    #[inline]
+    fn asset_definition_id_by_alias(
+        &self,
+        alias: &AssetDefinitionAlias,
+    ) -> Option<AssetDefinitionId> {
+        self.asset_definition_aliases().get(alias).cloned()
+    }
+
     /// Iterate assets in account
     #[allow(clippy::type_complexity)]
     fn assets_in_account_iter(&self, id: &AccountId) -> impl Iterator<Item = AssetEntry<'_>> {
@@ -10252,6 +10455,16 @@ macro_rules! impl_world_ro {
             }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
                 &self.asset_definitions
+            }
+            fn asset_definition_aliases(
+                &self,
+            ) -> &impl StorageReadOnly<AssetDefinitionAlias, AssetDefinitionId> {
+                &self.asset_definition_aliases
+            }
+            fn asset_definition_alias_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
+                &self.asset_definition_alias_bindings
             }
             fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
@@ -10776,6 +10989,8 @@ impl<'world> WorldBlock<'world> {
             opaque_uaids,
             account_rekey_records,
             asset_definitions,
+            asset_definition_aliases,
+            asset_definition_alias_bindings,
             assets,
             asset_metadata,
             nfts,
@@ -10980,6 +11195,8 @@ impl<'world> WorldBlock<'world> {
         assets.commit();
         account_rekey_records.commit();
         asset_metadata.commit();
+        asset_definition_alias_bindings.commit();
+        asset_definition_aliases.commit();
         asset_definitions.commit();
         accounts.commit();
         account_subject_domains.commit();
@@ -11750,6 +11967,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             opaque_uaids,
             account_rekey_records,
             asset_definitions,
+            asset_definition_aliases,
+            asset_definition_alias_bindings,
             assets,
             asset_metadata,
             nfts,
@@ -11930,6 +12149,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_rekey_records.apply();
         asset_metadata.apply();
         assets.apply();
+        asset_definition_alias_bindings.apply();
+        asset_definition_aliases.apply();
         asset_definitions.apply();
         accounts.apply();
         account_subject_domains.apply();
@@ -19081,6 +19302,23 @@ impl<'state> StateBlock<'state> {
             .external_event_buf
             .mutate_vec(|events| events.push(time_event.into()));
 
+        // Time-trigger phase maintenance: unbind asset aliases whose grace window elapsed.
+        {
+            let mut maintenance_tx = self.transaction();
+            let now_ms = maintenance_tx.block_unix_timestamp_ms();
+            let removed = maintenance_tx
+                .world
+                .sweep_expired_asset_definition_aliases(now_ms);
+            if !removed.is_empty() {
+                iroha_logger::info!(
+                    removed = removed.len(),
+                    now_ms,
+                    "expired asset aliases were unbound during time-trigger maintenance"
+                );
+                maintenance_tx.apply();
+            }
+        }
+
         let current_block_height = self._curr_block.height().get();
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
@@ -19589,7 +19827,10 @@ mod transfer_transcript_tests {
         let call_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
         tx.tx_call_hash = Some(call_hash);
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            "rose#wonderland".parse().expect("valid asset id");
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -19627,7 +19868,10 @@ mod transfer_transcript_tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            "rose#wonderland".parse().expect("valid asset id");
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -19673,7 +19917,10 @@ mod transfer_transcript_tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            "rose#wonderland".parse().expect("valid asset id");
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
         let delta_a = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -19806,7 +20053,10 @@ mod fastpq_tx_set_hash_tests {
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
-            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
             amount: Numeric::from(10u32),
             from_balance_before: Numeric::from(100u32),
             from_balance_after: Numeric::from(90u32),
@@ -19849,7 +20099,10 @@ mod fastpq_tx_set_hash_tests {
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
-            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
             amount: Numeric::from(10u32),
             from_balance_before: Numeric::from(100u32),
             from_balance_after: Numeric::from(90u32),
@@ -19912,7 +20165,10 @@ mod fastpq_tx_set_hash_tests {
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
-            asset_definition: "rose#wonderland".parse().expect("valid asset id"),
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
             amount: Numeric::from(10u32),
             from_balance_before: Numeric::from(100u32),
             from_balance_after: Numeric::from(90u32),
@@ -23794,6 +24050,8 @@ pub(crate) mod deserialize {
             opaque_uaids: Storage::default(),
             account_rekey_records,
             asset_definitions,
+            asset_definition_aliases: Storage::default(),
+            asset_definition_alias_bindings: Storage::default(),
             assets,
             asset_metadata,
             nfts,
@@ -23914,6 +24172,12 @@ pub(crate) mod deserialize {
             .rebuild_account_alias_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .map_err(|message| json::Error::InvalidField {
+                field: "asset_definition_aliases".into(),
                 message,
             })?;
         world
@@ -33095,7 +33359,10 @@ mod tests {
         use iroha_data_model::asset::AssetDefinitionId;
 
         let mut delta = DetachedStateTransactionDelta::default();
-        let def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset id");
+        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         delta.record_mint_consumption(def_id.clone(), 1);
         delta.record_mint_consumption(def_id.clone(), 2);
         assert_eq!(delta.flip_mintable_to_not.get(&def_id).copied(), Some(3));
@@ -33293,7 +33560,12 @@ mod tests {
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let asset_definition_id =
             AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+        let asset_definition = {
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&user1);
 
         let world = World::with(
             [alice_domain, users_domain, definition_domain],
@@ -33328,7 +33600,12 @@ mod tests {
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
         let asset_definition_id =
             AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+        let asset_definition = {
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&user1);
 
         let world = World::with(
             [
@@ -33671,10 +33948,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset id");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register asset definition");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
         stx.world
             .asset_definition_mut(&asset_def_id)
             .expect("definition exists")
@@ -33719,10 +34003,17 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
 
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register asset definition");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         Mint::asset_numeric(5_u32, asset_id.clone())
@@ -33770,10 +34061,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register asset definition");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         stx.world.asset_metadata.insert(
@@ -33807,10 +34105,16 @@ mod tests {
             let domain_id: DomainId = "wonderland".parse().expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-            let asset_def_id: AssetDefinitionId =
-                "rose#wonderland".parse().expect("asset definition id");
-            let asset_def =
-                AssetDefinition::new(asset_def_id.clone(), NumericSpec::default()).build(&ALICE_ID);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
             let asset = Asset::new(asset_id.clone(), Numeric::new(0, 0));
 
@@ -33987,7 +34291,7 @@ mod tests {
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
         let asset_def_id =
-            AssetDefinitionId::from_str("rose#wonderland").expect("asset definition id");
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
@@ -34035,13 +34339,21 @@ mod tests {
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse()?))
-                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::asset_definition({
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse()?,
+                    "rose".parse()?,
+                );
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             stx.apply();
         }
 
         let trigger_id: TriggerId = "failing_time_trigger".parse()?;
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse()?;
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
             Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
@@ -34369,10 +34681,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         stx.apply();
         state_block.commit().unwrap();
@@ -34410,9 +34729,12 @@ mod tests {
                 Register::trigger(Trigger::new(trigger_id.clone(), trigger_action))
                     .execute(&ALICE_ID, &mut stx)
                     .unwrap();
-                let duplicate =
-                    Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                        .execute(&ALICE_ID, &mut stx);
+                let duplicate = Register::asset_definition({
+                    let __asset_definition_id = asset_def_id.clone();
+                    AssetDefinition::numeric(__asset_definition_id.clone())
+                        .with_name(__asset_definition_id.name().to_string())
+                })
+                .execute(&ALICE_ID, &mut stx);
                 assert!(
                     duplicate.is_err(),
                     "expected duplicate asset definition to fail"
@@ -34448,7 +34770,11 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
 
         let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
-        let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         // Commit initial domain, account, and the by-call trigger.
         let block = new_dummy_block_with_payload(|header| {
@@ -34464,8 +34790,11 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let create_asset =
-                Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+            let create_asset = Register::asset_definition({
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            });
             let fail_isi = Unregister::domain("dummy".parse().unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
@@ -34527,7 +34856,11 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
 
         let trigger_id: TriggerId = "rollback_trigger_detached".parse().unwrap();
-        let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         // Commit initial domain, account, and the by-call trigger.
         let block = new_dummy_block_with_payload(|header| {
@@ -34543,8 +34876,11 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
-            let create_asset =
-                Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+            let create_asset = Register::asset_definition({
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            });
             let fail_isi = Unregister::domain("dummy".parse().unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
@@ -34794,11 +35130,18 @@ mod tests {
         state.chain_id = ChainId::from("chain");
 
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
-        let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         // Tx 1: register the by-call trigger that will fail when executed.
-        let create_asset =
-            Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+        let create_asset = Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        });
         let fail_isi = Unregister::domain("dummy".parse().unwrap());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let register_trigger = Register::trigger(Trigger::new(
@@ -35824,10 +36167,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         // Data trigger: whenever ALICE's rose asset changes, set account metadata flag=ok (runs once)
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -37035,10 +37385,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         // Data trigger: whenever ALICE's rose asset changes, set account metadata flag=ok (runs once)
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -37162,10 +37519,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
 
         // By-call trigger: mint once, then deplete.
@@ -37588,10 +37952,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -37639,10 +38010,17 @@ mod tests {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -37689,11 +38067,19 @@ mod tests {
     #[test]
     fn detached_merge_removes_asset_metadata_on_zero_balance() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let asset_def = AssetDefinition::numeric(asset_def_id).build(&ALICE_ID);
+        let asset_def = {
+            let __asset_definition_id = asset_def_id;
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);

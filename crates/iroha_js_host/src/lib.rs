@@ -7622,9 +7622,8 @@ mod tests {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let asset_definition: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
@@ -7663,9 +7662,8 @@ mod tests {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let asset_definition: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
@@ -8441,9 +8439,8 @@ mod tests {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let asset_definition: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
         let transfer_box: TransferBox = Transfer::asset_numeric(
@@ -9508,9 +9505,8 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let asset_definition: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
         let instruction_box: InstructionBox = Mint::asset_numeric(

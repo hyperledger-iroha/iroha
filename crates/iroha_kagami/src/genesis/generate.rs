@@ -1350,13 +1350,16 @@ fn generate_synthetic(
         let domain_id: DomainId = format!("domain_{domain}").parse()?;
         builder = builder.append_instruction(Register::domain(Domain::new(domain_id.clone())));
 
+        let mut synthetic_asset_definitions = Vec::new();
         for asset_definition in 0..asset_definitions_per_domain {
-            let asset_definition_id: AssetDefinitionId =
-                format!("asset_{asset_definition}#{domain_id}").parse()?;
-            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
-                asset_definition_id,
-                NumericSpec::default(),
-            )));
+            let asset_name_literal = format!("asset_{asset_definition}");
+            let asset_name: Name = asset_name_literal.parse()?;
+            let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+            synthetic_asset_definitions.push(asset_definition_id.clone());
+            builder = builder.append_instruction(Register::asset_definition(
+                AssetDefinition::new(asset_definition_id, NumericSpec::default())
+                    .with_name(asset_name_literal),
+            ));
         }
 
         for _ in 0..accounts_per_domain {
@@ -1365,13 +1368,10 @@ fn generate_synthetic(
                 account_id.to_account_id(domain_id.clone()),
             )));
 
-            for asset_definition in 0..asset_definitions_per_domain {
+            for asset_definition_id in &synthetic_asset_definitions {
                 let mint = Mint::asset_numeric(
                     13u32,
-                    AssetId::new(
-                        format!("asset_{asset_definition}#domain_{domain}").parse()?,
-                        account_id.clone(),
-                    ),
+                    AssetId::new(asset_definition_id.clone(), account_id.clone()),
                 );
                 builder = builder.append_instruction(mint);
             }

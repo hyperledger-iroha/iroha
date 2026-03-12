@@ -39,6 +39,7 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
 };
+use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
@@ -467,6 +468,22 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         }
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
+    }
+}
+
+fn allows_unregistered_authority(executable: &Executable) -> bool {
+    match executable {
+        Executable::Instructions(instructions) => {
+            !instructions.is_empty()
+                && instructions.iter().all(|instruction| {
+                    matches!(
+                        MultisigInstructionBox::try_from(instruction),
+                        Ok(MultisigInstructionBox::Propose(_))
+                            | Ok(MultisigInstructionBox::Approve(_))
+                    )
+                })
+        }
+        Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
 }
 
@@ -1532,10 +1549,16 @@ impl StateBlock<'_> {
     ) -> TransactionResultInner {
         let authority = tx.as_ref().authority().clone();
         let is_heartbeat = is_heartbeat_transaction(tx.as_ref());
+        let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
+        let allow_unregistered_authority = !is_heartbeat
+            && !authority_exists
+            && allows_unregistered_authority(tx.as_ref().instructions());
 
-        // Heartbeat transactions may be signed by ephemeral identities; other transactions
-        // must originate from an existing account.
-        if state_transaction.world.accounts.get(&authority).is_none() && !is_heartbeat {
+        // Heartbeat transactions may be signed by ephemeral identities.
+        // Multisig propose/approve envelopes are also allowed from unregistered authorities,
+        // because authorization is derived from multisig membership rather than account storage.
+        // All other transactions must originate from an existing account.
+        if !authority_exists && !is_heartbeat && !allow_unregistered_authority {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
                 FindError::Account(authority.clone()),
             ));
@@ -1725,10 +1748,18 @@ impl StateBlock<'_> {
                 state_transaction,
                 ivm_cache,
             )?;
-            debug!("Transaction validated successfully; processing data triggers");
-            let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
-            debug!("Data triggers executed successfully");
-            trigger_sequence
+            if allow_unregistered_authority {
+                debug!(
+                    authority = %authority,
+                    "transaction authority is not materialized; skipping data trigger dispatch"
+                );
+                DataTriggerSequence::default()
+            } else {
+                debug!("Transaction validated successfully; processing data triggers");
+                let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
+                debug!("Data triggers executed successfully");
+                trigger_sequence
+            }
         };
 
         if let Some(seq) = sequence_to_commit {
@@ -3662,7 +3693,9 @@ pub mod tests {
             signed::{MultisigSignature, MultisigSignatures},
         },
     };
-    use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
+    use iroha_executor_data_model::isi::multisig::{
+        DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigSpec,
+    };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
     use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
@@ -4171,6 +4204,76 @@ pub mod tests {
     }
 
     #[test]
+    fn missing_authority_rejected_for_non_multisig_transaction() {
+        let chain: ChainId = "missing-authority-regular".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "regular".into())])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        match result {
+            Err(TransactionRejectionReason::AccountDoesNotExist(FindError::Account(id))) => {
+                assert_eq!(id, authority, "unexpected missing-account id");
+            }
+            other => panic!("expected AccountDoesNotExist rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_authority_multisig_approve_reaches_instruction_validation() {
+        let chain: ChainId = "missing-authority-multisig-approve".parse().unwrap();
+        let (missing_authority, keypair) = gen_account_in("wonderland");
+        let multisig_account = AccountId::new(KeyPair::random().public_key().clone());
+        let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), missing_authority.clone())
+            .with_instructions([MultisigApprove::new(
+                multisig_account.clone(),
+                instructions_hash,
+            )])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::Find(FindError::Account(
+                    _,
+                )),
+            ))) => {}
+            other => panic!("expected instruction-level account lookup failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
         let chain: ChainId = "multisig-disallowed".parse().unwrap();
         let member = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
@@ -4414,11 +4517,17 @@ pub mod tests {
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().expect("asset id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
-            "bond#wonderland".parse().expect("asset id"),
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
             1u32.into(),
         );
         let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
@@ -4487,13 +4596,19 @@ pub mod tests {
         let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                "bond#wonderland".parse().expect("asset id"),
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "bond".parse().unwrap(),
+                ),
                 1u32.into(),
                 counterparty.clone(),
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                "usd#wonderland".parse().expect("asset id"),
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "usd".parse().unwrap(),
+                ),
                 1u32.into(),
                 authority.clone(),
                 counterparty.clone(),
@@ -4506,13 +4621,19 @@ pub mod tests {
         let pvp = iroha_data_model::isi::settlement::PvpIsi::new(
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                "eur#wonderland".parse().expect("asset id"),
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "eur".parse().unwrap(),
+                ),
                 1u32.into(),
                 counterparty.clone(),
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                "usd#wonderland".parse().expect("asset id"),
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "usd".parse().unwrap(),
+                ),
                 1u32.into(),
                 authority.clone(),
                 counterparty.clone(),
@@ -7208,8 +7329,12 @@ pub mod tests {
     /// Pre-parsed domain identifier for the sandbox domain.
     pub static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
-    pub static ASSET: LazyLock<AssetDefinitionId> =
-        LazyLock::new(|| format!("{ASSET_STR}#{DOMAIN_STR}").parse().unwrap());
+    pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
+        AssetDefinitionId::new(
+            DOMAIN.clone(),
+            ASSET_STR.parse().expect("sandbox asset name is valid"),
+        )
+    });
     static FIFO_SCHEDULER_LOCK: LazyLock<std::sync::Mutex<()>> =
         LazyLock::new(|| std::sync::Mutex::new(()));
     const SANDBOX_ACCOUNT_KEYS: [(&str, &str, &str); 5] = [
@@ -7571,8 +7696,12 @@ pub mod tests {
         fn default() -> Self {
             let world = {
                 let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
-                let asset_def = AssetDefinition::new(ASSET.clone(), NumericSpec::default())
-                    .build(&GENESIS_ACCOUNT.id);
+                let asset_def = {
+                    let __asset_definition_id = ASSET.clone();
+                    AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                        .with_name(__asset_definition_id.name().to_string())
+                }
+                .build(&GENESIS_ACCOUNT.id);
                 let accounts = ACCOUNT
                     .clone()
                     .into_iter()

@@ -49,9 +49,13 @@ async fn multiple_blocks_created() -> Result<()> {
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.to_account_id(domain_id)));
-    let asset_definition_id: AssetDefinitionId = "xor#domain".parse()?;
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
+    let create_asset = Register::asset_definition({
+        let __asset_definition_id = asset_definition_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    });
 
     {
         let client = submit_client.clone();

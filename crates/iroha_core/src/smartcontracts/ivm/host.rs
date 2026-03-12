@@ -4665,7 +4665,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let ptr = vm.register(10);
                 let id: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
-                let isi = Register::asset_definition(AssetDefinition::numeric(id));
+                let isi = Register::asset_definition({
+                    let __asset_definition_id = id;
+                    AssetDefinition::numeric(__asset_definition_id.clone())
+                        .with_name(__asset_definition_id.name().to_string())
+                });
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -7419,7 +7423,10 @@ mod pointer_abi_tests {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let ptr = store_tlv(
             &mut vm,
             PointerType::AssetDefinitionId,
@@ -7428,9 +7435,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
-        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-            asset_def,
-        )));
+        let expected = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+        ));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -7442,7 +7449,10 @@ mod pointer_abi_tests {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let ptr = store_tlv(
             &mut vm,
             PointerType::AssetDefinitionId,
@@ -7936,7 +7946,10 @@ mod pointer_abi_tests {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount = Numeric::from(5u64);
@@ -7980,7 +7993,10 @@ mod pointer_abi_tests {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
@@ -8020,7 +8036,10 @@ mod pointer_abi_tests {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
@@ -8313,7 +8332,10 @@ mod tests {
         let authority: AccountId = fixture_account("alice");
         let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
@@ -8585,8 +8607,14 @@ mod tests {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "fixed_plan".parse().unwrap(),
+        );
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill".parse().unwrap();
@@ -8807,8 +8835,14 @@ mod tests {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = "usage_plan#commerce".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "usage_plan".parse().unwrap(),
+        );
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let trigger_id: TriggerId = "sub-usage".parse().unwrap();
 
@@ -8922,8 +8956,14 @@ mod tests {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "fixed_plan".parse().unwrap(),
+        );
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
@@ -9097,8 +9137,14 @@ mod tests {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "fixed_plan".parse().unwrap(),
+        );
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
@@ -9283,7 +9329,10 @@ mod tests {
 
         let from = authority.clone();
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let amount = 7_u64;
 
         let from_payload = norito::to_bytes(&from).expect("encode from account");
@@ -9329,7 +9378,10 @@ mod tests {
 
         let from = authority;
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let entries = vec![
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 1_u64),
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 2_u64),
@@ -9795,7 +9847,10 @@ mod tests {
         crate::test_alias::ensure();
         let mut world = World::new();
 
-        let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "zkd".parse().unwrap(),
+            "zcoin".parse().unwrap(),
+        );
         let mut zk_state = ZkAssetState::default();
         zk_state.root_history = vec![[1u8; 32], [2u8; 32]];
         world.zk_assets.insert(asset_def_id.clone(), zk_state);
@@ -10437,7 +10492,10 @@ mod tests {
         // Prepare Norito-encoded inputs in INPUT region
         let from: AccountId = fixture_account("alice");
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonder".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let amount = Numeric::from(1234_u64);
         let from_bytes = norito_blob(&from);
         let to_bytes = norito_blob(&to);

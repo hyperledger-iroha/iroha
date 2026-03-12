@@ -169,7 +169,7 @@ mod model {
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub description: Option<String>,
-        /// Optional alias literal (`<name>#<domain>@<dataspace>`).
+        /// Optional alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub alias: Option<AssetDefinitionAlias>,
@@ -461,20 +461,23 @@ mod model {
 
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
+    ///
+    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
+    /// before registration.
     #[must_use]
     #[inline]
     pub fn new(id: AssetDefinitionId, spec: NumericSpec) -> <Self as Registered>::With {
-        // TODO: remove this fallback once all callers pass explicit human-readable names.
-        let fallback_name = id.to_string();
-        <Self as Registered>::With::new(id, spec).with_name(fallback_name)
+        <Self as Registered>::With::new(id, spec)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
+    ///
+    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
+    /// before registration.
     #[must_use]
     #[inline]
     pub fn numeric(id: AssetDefinitionId) -> <Self as Registered>::With {
-        let fallback_name = id.to_string();
-        <Self as Registered>::With::new(id, NumericSpec::default()).with_name(fallback_name)
+        <Self as Registered>::With::new(id, NumericSpec::default())
     }
 
     /// Mutable access to asset definition metadata for in-place updates.
@@ -868,6 +871,25 @@ impl HasMetadata for NewAssetDefinition {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+
+    #[test]
+    fn constructors_leave_name_empty_without_explicit_with_name() {
+        let id: AssetDefinitionId = "aid:550e8400e29b41d4a716446655440000"
+            .parse()
+            .expect("asset definition id");
+
+        let numeric = AssetDefinition::numeric(id.clone());
+        assert!(
+            numeric.name.is_empty(),
+            "numeric constructor must not auto-fill name"
+        );
+
+        let custom = AssetDefinition::new(id, NumericSpec::fractional(2));
+        assert!(
+            custom.name.is_empty(),
+            "new constructor must not auto-fill name"
+        );
+    }
 
     #[test]
     fn asset_name_validation_rejects_blank_and_alias_separators() {

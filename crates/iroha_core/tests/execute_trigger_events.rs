@@ -18,7 +18,10 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
     let asset_definition = AssetDefinition::new(
-        "rose#wonderland".parse().expect("asset definition id"),
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ),
         NumericSpec::default(),
     )
     .build(&ALICE_ID);
@@ -46,7 +49,10 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
 
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(
-        "rose#wonderland".parse().expect("asset id"),
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ),
         ALICE_ID.clone(),
     );
 

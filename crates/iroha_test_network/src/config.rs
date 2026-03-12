@@ -382,12 +382,18 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let garden_domain: DomainId = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain id");
-    let rose_definition_id: AssetDefinitionId = "rose#wonderland".parse().expect("rose def");
-    let camomile_definition_id: AssetDefinitionId =
-        "camomile#wonderland".parse().expect("camomile def");
-    let cabbage_definition_id: AssetDefinitionId = "cabbage#garden_of_live_flowers"
-        .parse()
-        .expect("cabbage def");
+    let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
+    let camomile_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "camomile".parse().unwrap(),
+    );
+    let cabbage_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "garden_of_live_flowers".parse().unwrap(),
+        "cabbage".parse().unwrap(),
+    );
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
     let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
@@ -403,8 +409,14 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     let test_domain_id: DomainId = "domain".parse().expect("domain id");
     let and_domain_id: DomainId = "and".parse().expect("and domain id");
-    let xor_asset_def: AssetDefinitionId = "xor#domain".parse().expect("xor asset def");
-    let may_and_def: AssetDefinitionId = "MAY#and".parse().expect("MAY asset def");
+    let xor_asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let may_and_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "and".parse().unwrap(),
+        "MAY".parse().unwrap(),
+    );
 
     let grant_instructions = [
         InstructionBox::from(Grant::account_permission(
@@ -1032,11 +1044,12 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
 
-        let asset_definition_id: AssetDefinitionId = "genesis_extra#wonderland"
-            .parse()
-            .expect("asset definition id");
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "genesis_extra".parse().unwrap(),
+        );
         let instructions = vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id),
+            AssetDefinition::numeric(asset_definition_id).with_name("Genesis Extra".to_owned()),
         ))];
 
         let block = genesis(vec![instructions], topology, vec![entry]);
@@ -1397,6 +1410,7 @@ mod tests {
         }
         let mut asset_definition =
             AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))
+                .with_name("Offline Allowance Asset".to_owned())
                 .build(&genesis_account);
         asset_definition.metadata_mut().insert(
             OFFLINE_ASSET_ENABLED_METADATA_KEY

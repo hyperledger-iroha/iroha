@@ -951,7 +951,10 @@ impl UnstableNetwork {
         }
 
         let account_id = ALICE_ID.clone();
-        let asset_definition_id: AssetDefinitionId = "unstable#wonderland".parse().expect("Valid");
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            "unstable".parse().expect("Valid"),
+        );
 
         let Some((network, mut relay)) =
             run_or_skip_on_sandbox_panic("unstable_network::run", || {
@@ -1139,7 +1142,11 @@ impl UnstableNetwork {
                 client.transaction_ttl = Some(min_ttl);
             }
         }
-        let isi = Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+        let isi = Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        });
         spawn_blocking(move || client.submit_blocking(isi)).await??;
         Ok(())
     }

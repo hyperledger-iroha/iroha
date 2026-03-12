@@ -1477,10 +1477,18 @@ mod tests {
 
     #[test]
     fn asset_definition_dto_contains_metadata() {
-        let def_id: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
-        let mut definition =
-            iroha_data_model::asset::definition::AssetDefinition::numeric(def_id.clone())
-                .build(&ALICE_ID);
+        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let mut definition = {
+            let __asset_definition_id = def_id.clone();
+            iroha_data_model::asset::definition::AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+            )
+            .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
         definition.set_mintable(Mintable::Once);
         definition.total_quantity = Numeric::from(100u32);
         definition.metadata_mut().insert(
@@ -1500,7 +1508,10 @@ mod tests {
 
     #[test]
     fn asset_dto_formats_value() {
-        let def_id: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
         let value = Owned::new(Numeric::from(42u32));
         let entry = Ref::new(&asset_id, &value);
@@ -1695,7 +1706,10 @@ mod tests {
 
     #[test]
     fn accounts_page_filters_by_domain_and_definition() {
-        let def_id: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let mut aggregates = ExplorerAggregates::default();
         aggregates.account_counters.insert(
             ALICE_ID.clone(),
@@ -1760,8 +1774,14 @@ mod tests {
 
     #[test]
     fn assets_page_filters_by_owner_and_definition() {
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
-        let lily_def: AssetDefinitionId = "lily#wonderland".parse().expect("definition id");
+        let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let lily_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "lily".parse().unwrap(),
+        );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
         let bob_asset_id = AssetId::new(lily_def.clone(), BOB_ID.clone());
         let alice_value = Owned::new(Numeric::from(10u32));
@@ -1798,7 +1818,10 @@ mod tests {
 
     #[test]
     fn assets_page_filters_by_asset_id() {
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
         let bob_asset_id = AssetId::new(rose_def, BOB_ID.clone());
         let alice_value = Owned::new(Numeric::from(10u32));
@@ -1876,7 +1899,10 @@ mod tests {
             ExplorerInstructionKind::Register
         );
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let transfer = Transfer::asset_numeric(asset_id, 1u32, BOB_ID.clone());
         let transfer_box: InstructionBox = transfer.into();

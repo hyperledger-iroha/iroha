@@ -1207,8 +1207,8 @@ pub struct ReserveLedgerArgs {
     /// Reserve escrow account receiving the reserve top-up.
     #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
     pub reserve_account: String,
-    /// Asset definition identifier used for XOR transfers (e.g., `xor#sora`).
-    #[arg(long = "asset-definition", value_name = "NAME#DOMAIN")]
+    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
 
@@ -12674,7 +12674,7 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("asset id")
+        AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
     }
 
     fn sample_budget_id_hex() -> String {

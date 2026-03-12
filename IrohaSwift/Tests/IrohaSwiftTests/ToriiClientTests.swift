@@ -579,6 +579,32 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsAsyncDerivesReadableFieldsFromEncodedAssetId() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(balances.count, 1)
+        guard let item = balances.first else {
+            XCTFail("missing asset balance")
+            return
+        }
+        if NoritoNativeBridge.shared.isAvailable {
+            XCTAssertEqual(item.asset_definition_id?.starts(with: "aid:"), true)
+            XCTAssertFalse((item.account_id ?? "").isEmpty)
+        } else {
+            XCTAssertNil(item.asset_definition_id)
+            XCTAssertNil(item.account_id)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsyncDecodesReadableAssetFields() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
@@ -619,6 +645,55 @@ final class ToriiClientTests: XCTestCase {
 
         let balances = try await client.getAssets(accountId: "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et")
         XCTAssertEqual(balances.count, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAssetAliasAsync() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/assets/aliases/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["alias"] as? String, "usd#issuer@main")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "alias":"usd#issuer@main",
+              "asset_definition_id":"aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+              "asset_name":"USD",
+              "description":"United States Dollar",
+              "logo":"sorafs://logos/usd.png",
+              "source":"world_state"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let resolved = try await makeClient().resolveAssetAlias("usd#issuer@main")
+        XCTAssertEqual(resolved?.alias, "usd#issuer@main")
+        XCTAssertEqual(resolved?.assetDefinitionId, "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+        XCTAssertEqual(resolved?.assetName, "USD")
+        XCTAssertEqual(resolved?.description, "United States Dollar")
+        XCTAssertEqual(resolved?.logo, "sorafs://logos/usd.png")
+        XCTAssertEqual(resolved?.source, "world_state")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAssetAliasReturnsNilOnNotFound() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/assets/aliases/resolve")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = Data()
+            return (response, body)
+        }
+
+        let resolved = try await makeClient().resolveAssetAlias("missing#issuer@main")
+        XCTAssertNil(resolved)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

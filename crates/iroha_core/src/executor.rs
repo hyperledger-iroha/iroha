@@ -2819,17 +2819,27 @@ fn dispatch_instruction_with_ivm(
     }
 
     match report.verdict {
-        Ok(()) => instruction
-            .execute(authority, state_transaction)
-            .map_err(|err| {
-                iroha_logger::debug!(
-                    ?err,
-                    %instruction_id,
-                    authority = %authority,
-                    "state application of executor-approved instruction failed"
-                );
-                ValidationFail::from(err)
-            }),
+        Ok(()) => {
+            if execute_multisig_custom_instruction_if_present(
+                state_transaction,
+                authority,
+                &instruction,
+            )? {
+                return Ok(());
+            }
+
+            instruction
+                .execute(authority, state_transaction)
+                .map_err(|err| {
+                    iroha_logger::debug!(
+                        ?err,
+                        %instruction_id,
+                        authority = %authority,
+                        "state application of executor-approved instruction failed"
+                    );
+                    ValidationFail::from(err)
+                })
+        }
         Err(e) => {
             iroha_logger::debug!(
                 ?e,
@@ -2840,6 +2850,32 @@ fn dispatch_instruction_with_ivm(
             Err(e)
         }
     }
+}
+
+fn execute_multisig_custom_instruction_if_present(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> Result<bool, ValidationFail> {
+    if instruction
+        .as_any()
+        .downcast_ref::<CustomInstruction>()
+        .is_none()
+    {
+        return Ok(false);
+    }
+
+    let Ok(multisig) = MultisigInstructionBox::try_from(instruction) else {
+        return Ok(false);
+    };
+
+    crate::smartcontracts::isi::multisig::execute_multisig_instruction(
+        state_transaction,
+        authority,
+        multisig,
+    )?;
+
+    Ok(true)
 }
 
 #[derive(Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
@@ -2867,6 +2903,10 @@ fn dispatch_instruction_with_fixture(
 
     if matches!(kind, FixtureExecutorKind::WithCustomParameter) {
         enforce_fixture_domain_limits(state_transaction, &instruction)?;
+    }
+
+    if execute_multisig_custom_instruction_if_present(state_transaction, authority, &instruction)? {
+        return Ok(());
     }
 
     if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
@@ -3879,7 +3919,10 @@ mod tests {
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
         transaction::executable::IvmBytecode,
     };
-    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
+    use iroha_executor_data_model::{
+        isi::multisig::{MultisigRegister, MultisigSpec},
+        permission::nexus::CanUseFeeSponsor,
+    };
     use iroha_primitives::json::Json;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
@@ -3957,9 +4000,16 @@ mod tests {
             Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.to_account_id(domain_id.clone())).build(&BOB_ID);
         let asset_definition_id: AssetDefinitionId =
-            "rose#wonderland".parse().expect("asset definition id");
-        let asset_definition =
-            AssetDefinition::numeric(asset_definition_id.clone()).build(&ALICE_ID);
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
+        let asset_definition = {
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let world = World::with_assets(
             [domain],
@@ -4010,6 +4060,56 @@ mod tests {
 
         assert_eq!(alice_value, Numeric::from(1_u32));
         assert_eq!(bob_value, Numeric::from(1_u32));
+    }
+
+    #[test]
+    fn fixture_executor_executes_multisig_register_custom_instruction() {
+        let bytecode = generate_fixture_placeholder_program(1);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice_account =
+            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let (existing_signer, _existing_signer_keypair) = gen_account_in("wonderland");
+        let existing_account =
+            Account::new(existing_signer.to_account_id(domain_id.clone())).build(&existing_signer);
+        let world = World::with([domain], [alice_account, existing_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let missing_signer = AccountId::new(KeyPair::random().public_key().clone());
+        let spec = MultisigSpec::new(
+            BTreeMap::from([(existing_signer.clone(), 1), (missing_signer.clone(), 1)]),
+            std::num::NonZeroU16::new(2).expect("quorum"),
+            std::num::NonZeroU64::MAX,
+        );
+        let seed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let instruction: InstructionBox =
+            MultisigRegister::with_account(seed_account, domain_id, spec).into();
+
+        executor
+            .execute_instruction(&mut stx, &ALICE_ID, instruction)
+            .expect("fixture user-provided executor should execute multisig register");
+
+        let created_via_key: Name = "iroha:created_via".parse().expect("metadata key");
+        let created = stx
+            .world
+            .accounts
+            .get(&missing_signer)
+            .expect("missing signatory should be materialized")
+            .clone()
+            .into_inner();
+        assert_eq!(
+            created.metadata().get(&created_via_key),
+            Some(&Json::new("multisig"))
+        );
     }
 
     #[test]
@@ -4189,10 +4289,15 @@ mod tests {
 
         let executor = super::Executor::Initial;
         let asset_definition_id: AssetDefinitionId =
-            "invalid#wonderland".parse().expect("asset id");
-        let instruction = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id),
-        ));
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "invalid".parse().unwrap(),
+            );
+        let instruction = InstructionBox::from(Register::asset_definition({
+            let __asset_definition_id = asset_definition_id;
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }));
 
         let mut stx = block.transaction();
         let res = executor.execute_instruction(&mut stx, &genesis_id, instruction);
@@ -4308,7 +4413,10 @@ mod tests {
         let mut block = state.block(header);
 
         let transfer_asset_id = AssetId::new(
-            "coin#users".parse().expect("asset definition id"),
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "users".parse().unwrap(),
+                "coin".parse().unwrap(),
+            ),
             user1.clone(),
         );
         let instruction = InstructionBox::from(Transfer::asset_numeric(
@@ -4361,7 +4469,10 @@ mod tests {
 
         let executor = super::Executor::Initial;
         let transfer_asset_id = AssetId::new(
-            "coin#users".parse().expect("asset definition id"),
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "users".parse().unwrap(),
+                "coin".parse().unwrap(),
+            ),
             user1.clone(),
         );
         let instruction = InstructionBox::from(Transfer::asset_numeric(
@@ -4414,10 +4525,13 @@ mod tests {
         let user2_account =
             Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
-        let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
-            .parse()
-            .expect("asset definition");
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            defs_domain_id.clone(),
+            "bond".parse().expect("asset definition name"),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("bond".to_owned())
+            .build(&user1);
 
         let world = World::with(
             [alice_domain, users_domain, defs_domain],
@@ -4482,10 +4596,13 @@ mod tests {
         let user2_account =
             Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
 
-        let asset_definition_id: AssetDefinitionId = format!("bond#{}", defs_domain_id)
-            .parse()
-            .expect("asset definition");
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&user1);
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            defs_domain_id.clone(),
+            "bond".parse().expect("asset definition name"),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("bond".to_owned())
+            .build(&user1);
 
         let world = World::with(
             [alice_domain, users_domain, defs_domain],
@@ -4821,9 +4938,16 @@ mod tests {
         let sponsor_account =
             Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
         let sink_account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
-        let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
-        let ad: AssetDefinition =
-            AssetDefinition::numeric(asset_def_id.clone()).build(&authority_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
             Numeric::new(10_000, 0),
@@ -4930,8 +5054,16 @@ mod tests {
         let alice: Account =
             Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
         let sink: Account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
-        let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
-        let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
         let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
@@ -4994,8 +5126,16 @@ mod tests {
         let payer: Account =
             Account::new(payer_id.to_account_id(domain_id.clone())).build(&payer_id);
         let tech: Account = Account::new(tech_id.to_account_id(domain_id.clone())).build(&tech_id);
-        let asset_def_id: AssetDefinitionId = "gas#wonderland".parse().unwrap();
-        let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&payer_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "gas".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
         let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
         let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);

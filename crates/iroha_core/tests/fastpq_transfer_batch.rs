@@ -25,7 +25,10 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
         Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
     let carol_account = Account::new(carol_id.clone().to_account_id(domain_id)).build(&ALICE_ID);
 
-    let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),

@@ -179,6 +179,7 @@ fn append_npos_bootstrap(
     }
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_name("NPOS Stake".to_owned())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());

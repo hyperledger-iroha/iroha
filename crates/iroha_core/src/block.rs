@@ -972,9 +972,13 @@ mod prefetch_tests {
         let mut lane = LaneConfig::default();
         lane.metadata
             .insert("settlement.buffer_account".to_owned(), alice.to_string());
+        let expected_asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("asset name"),
+        );
         lane.metadata.insert(
             "settlement.buffer_asset".to_owned(),
-            "xor#wonderland".to_owned(),
+            expected_asset_definition_id.to_string(),
         );
         lane.metadata.insert(
             "settlement.buffer_capacity_micro".to_owned(),
@@ -986,12 +990,7 @@ mod prefetch_tests {
         let expected = alice.clone();
         assert_eq!(parsed.account_id, expected);
         assert_eq!(parsed.account_id.subject_id(), alice.subject_id());
-        assert_eq!(
-            parsed.asset_definition_id,
-            "xor#wonderland"
-                .parse::<AssetDefinitionId>()
-                .expect("asset definition id")
-        );
+        assert_eq!(parsed.asset_definition_id, expected_asset_definition_id);
         assert_eq!(
             parsed.capacity,
             MicroXor::from(Decimal::from_str("1000").expect("decimal parse"))
@@ -11392,14 +11391,16 @@ pub(crate) mod valid {
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let asset_definition_id = "xor#genesis"
-                .parse::<AssetDefinitionId>()
-                .expect("valid asset definition id");
+            let asset_definition_id = AssetDefinitionId::new(
+                "genesis".parse().expect("valid domain id"),
+                "xor".parse().expect("valid asset name"),
+            );
+            let asset_name = asset_definition_id.name().to_string();
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account.clone())
-                .with_instructions([Register::asset_definition(AssetDefinition::numeric(
-                    asset_definition_id,
-                ))])
+                .with_instructions([Register::asset_definition(
+                    AssetDefinition::numeric(asset_definition_id).with_name(asset_name),
+                )])
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
 
             let block = SignedBlock::genesis(
@@ -14242,9 +14243,15 @@ mod tests {
         let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("wonderland domain");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let ad: AssetDefinition =
-            AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
-                .build(&alice_id);
+        let ad: AssetDefinition = {
+            let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "coin".parse().unwrap(),
+            );
+            AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&alice_id);
         let acc_a =
             Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
         let acc_b = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
@@ -14253,7 +14260,10 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let rose: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+        let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let a_coin = AssetId::of(rose.clone(), alice_id.clone());
         let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions([Mint::asset_numeric(5_u32, a_coin.clone())])
@@ -14312,11 +14322,13 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         // Creating an instruction
-        let asset_definition_id = "xor#wonderland"
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
-        let create_asset_definition =
-            Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let create_asset_definition = Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id).with_name("xor".to_owned()),
+        );
 
         // Making two transactions that have the same instruction
         let tx = TransactionBuilder::new(chain_id.clone(), alice_id)
@@ -14472,9 +14484,13 @@ mod tests {
         };
         let domain_id = "domain".parse().expect("Valid");
         let create_domain = Register::domain(Domain::new(domain_id));
-        let asset_definition_id = "coin#domain".parse().expect("Valid");
-        let create_asset =
-            Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            "domain".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
+        let create_asset = Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id).with_name("coin".to_owned()),
+        );
         let fail_isi = Unregister::domain("dummy".parse().unwrap());
         let tx_fail = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
@@ -14646,10 +14662,13 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
 
-        let asset_definition_id = "xor#wonderland"
-            .parse::<AssetDefinitionId>()
-            .expect("Valid asset definition id");
-        let instruction = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("valid domain id"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let instruction = Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id).with_name("xor".to_owned()),
+        );
 
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
             .with_instructions([instruction])

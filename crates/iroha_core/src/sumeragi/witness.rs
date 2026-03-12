@@ -525,7 +525,10 @@ mod tests {
         // First run
         start_block();
         // Simulate asset balance read+write
-        let ad = iroha_data_model::asset::AssetDefinitionId::from_str("rose#wonderland").unwrap();
+        let ad = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let aid = iroha_data_model::asset::AssetId::new(ad.clone(), (*ALICE_ID).clone());
         let pre = iroha_primitives::numeric::Numeric::from(10u32);
         let post = iroha_primitives::numeric::Numeric::from(15u32);
@@ -581,8 +584,7 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset =
-            AssetDefinitionId::from_str("rose#wonderland").expect("valid asset definition id");
+        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
