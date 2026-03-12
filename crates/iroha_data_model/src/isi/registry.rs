@@ -2,9 +2,9 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, bridge, consensus_keys, domain_link, endorsement,
-        kaigi, nexus, offline, oracle, repo, runtime_upgrade, settlement, smart_contract_code,
-        social, sorafs, space_directory,
+        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
+        endorsement, kaigi, nexus, offline, oracle, repo, runtime_upgrade, settlement,
+        smart_contract_code, social, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -116,6 +116,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
     InstructionRegistry::register::<domain_link::LinkAccountDomain>,
     InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
+    InstructionRegistry::register::<asset_alias::SetAssetDefinitionAlias>,
     InstructionRegistry::register::<sorafs::RegisterPinManifest>,
     InstructionRegistry::register::<sorafs::ApprovePinManifest>,
     InstructionRegistry::register::<sorafs::RetirePinManifest>,
@@ -256,6 +257,9 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
         registry.register_with_id::<domain_link::LinkAccountDomain>("identity::LinkAccountDomain");
     registry = registry
         .register_with_id::<domain_link::UnlinkAccountDomain>("identity::UnlinkAccountDomain");
+    registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
+        asset_alias::SetAssetDefinitionAlias::WIRE_ID,
+    );
     registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
         "nexus::SetLaneRelayEmergencyValidators",
     );

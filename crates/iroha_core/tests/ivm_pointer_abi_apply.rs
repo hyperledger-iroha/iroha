@@ -37,7 +37,10 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     let to =
         fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
-    let asset_def: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);

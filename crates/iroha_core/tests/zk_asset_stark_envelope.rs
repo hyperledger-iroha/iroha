@@ -78,7 +78,10 @@ fn prepare_state() -> (State, AccountId, AssetDefinitionId) {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let (owner, _owner_key) = gen_account_in("zkd");
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
 
     for instr in [
         Register::domain(Domain::new(domain_id)).into(),
@@ -130,7 +133,10 @@ fn prepare_state_with_bound_stark_vk(
 
     let domain_id: DomainId = "zkd".parse().expect("domain id");
     let (owner, _owner_key) = gen_account_in("zkd");
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().expect("asset definition id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let vk_id = VerifyingKeyId::new(BACKEND, "vk_transfer");
 
     for instr in [

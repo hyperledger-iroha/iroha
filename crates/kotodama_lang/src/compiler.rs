@@ -1019,7 +1019,10 @@ seiyaku Test {
                 .expect("public key"),
         );
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
@@ -1066,7 +1069,10 @@ seiyaku Test {
         use iroha_primitives::json::Json;
 
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
         let trigger_id: TriggerId = "wake".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
@@ -1155,7 +1161,10 @@ seiyaku Test {
                 .expect("public key"),
         );
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
             asset_id.clone(),

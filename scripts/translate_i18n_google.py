@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Bulk-translate source-identical i18n files using the no-key Google endpoint.
+Bulk-translate i18n files using the no-key Google endpoint.
 
 Targets Markdown/MDX/Org docs that:
 1) carry i18n metadata (`lang`, `source` / `#+SOURCE`), and
-2) still mirror the English source body verbatim.
+2) match the selected refresh mode (`source-identical`, `stale`, or `all`).
 
 The script preserves metadata, masks non-prose regions (code, URLs, directives),
 applies translation in chunks, performs structural QA checks, and caches
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as futures
+import fnmatch
 import hashlib
 import html
 import json
@@ -27,7 +28,7 @@ import urllib.parse
 import urllib.request
 from urllib.error import HTTPError
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -91,7 +92,9 @@ class Candidate:
     lang: str
     source_lang: str
     source: Path
+    source_last_modified: str
     source_body: str
+    preamble: str
     frontmatter: str
     source_hash: str
     kind: str  # "md" | "org"
@@ -106,13 +109,36 @@ class TranslationTask:
     target_lang: str
 
 
-def split_frontmatter(text: str) -> tuple[str | None, str]:
-    if not text.startswith("---\n"):
-        return None, text
-    end = text.find("\n---\n", 4)
+def split_frontmatter(text: str) -> tuple[str, str | None, str]:
+    """
+    Split optional markdown frontmatter while preserving any preamble comments.
+
+    Returns `(preamble, frontmatter_or_none, body)`.
+    """
+    i = 0
+    n = len(text)
+
+    while i < n:
+        if text.startswith("<!--", i):
+            end = text.find("-->", i + 4)
+            if end == -1:
+                return "", None, text
+            i = end + 3
+            while i < n and text[i] in "\r\n":
+                i += 1
+            continue
+        if text.startswith("\n", i) or text.startswith("\r\n", i):
+            i += 1
+            continue
+        break
+
+    if not text.startswith("---\n", i):
+        return "", None, text
+    end = text.find("\n---\n", i + 4)
     if end == -1:
-        return None, text
-    return text[4:end], text[end + 5 :]
+        return "", None, text
+    preamble = text[:i]
+    return preamble, text[i + 4 : end], text[end + 5 :]
 
 
 def parse_frontmatter_map(frontmatter: str) -> dict[str, str]:
@@ -123,6 +149,27 @@ def parse_frontmatter_map(frontmatter: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         out[key.strip()] = value.strip()
     return out
+
+
+def normalize_frontmatter_value(value: str) -> str:
+    trimmed = value.strip()
+    if (
+        len(trimmed) >= 2
+        and ((trimmed[0] == '"' and trimmed[-1] == '"') or (trimmed[0] == "'" and trimmed[-1] == "'"))
+    ):
+        return trimmed[1:-1]
+    return trimmed
+
+
+def source_last_modified_iso(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+
+
+def matches_path_filters(path: Path, path_globs: list[str] | None) -> bool:
+    if not path_globs:
+        return True
+    rel = path.relative_to(ROOT).as_posix()
+    return any(fnmatch.fnmatch(rel, pattern) for pattern in path_globs)
 
 
 def update_frontmatter(frontmatter: str, updates: dict[str, str]) -> str:
@@ -628,7 +675,9 @@ def translate_task(task: TranslationTask, max_chars: int) -> tuple[str, str | No
         return task.key, None, f"translation error: {exc}"
 
 
-def discover_candidates(only_changed: bool) -> list[Candidate]:
+def discover_candidates(
+    only_changed: bool, refresh_mode: str, path_globs: list[str] | None
+) -> list[Candidate]:
     candidates: list[Candidate] = []
     all_paths: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(ROOT, topdown=True):
@@ -660,18 +709,23 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
         resolved = path.resolve()
         if only_changed and resolved not in changed_paths:
             continue
+        if not matches_path_filters(resolved, path_globs):
+            continue
 
         text = path.read_text(encoding="utf-8", errors="ignore")
         lang: str | None = None
         source_lang: str = "en"
         source_rel: str | None = None
         source_body: str | None = None
+        source_last_modified: str = ""
+        preamble = ""
         frontmatter = ""
         kind = "md"
+        source: Path
 
         if path.suffix in {".md", ".mdx"}:
             kind = "md"
-            fm, body = split_frontmatter(text)
+            preamble, fm, body = split_frontmatter(text)
             if fm is None:
                 continue
             frontmatter = fm
@@ -684,11 +738,22 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
             if not source.exists():
                 continue
             source_text = source.read_text(encoding="utf-8", errors="ignore")
-            source_fm, source_body = split_frontmatter(source_text)
+            _, source_fm, source_body = split_frontmatter(source_text)
             if source_fm is not None:
                 source_meta = parse_frontmatter_map(source_fm)
                 source_lang = source_meta.get("lang", "en")
-            if body.lstrip("\n") != source_body.lstrip("\n"):
+            source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            source_last_modified = source_last_modified_iso(source)
+            source_identical = body.lstrip("\n") == source_body.lstrip("\n")
+            stale = (
+                normalize_frontmatter_value(meta.get("source_hash", "")) != source_hash
+                or normalize_frontmatter_value(meta.get("source_last_modified", ""))
+                != source_last_modified
+            )
+
+            if refresh_mode == "source-identical" and not source_identical:
+                continue
+            if refresh_mode == "stale" and not stale:
                 continue
         else:
             kind = "org"
@@ -704,11 +769,29 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
                 continue
             source_text = source.read_text(encoding="utf-8", errors="ignore")
             source_body = source_text
+            source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            source_last_modified = source_last_modified_iso(source)
             m_source_lang = re.search(r"^#\+LANGUAGE:\s*(.*)$", source_text, flags=re.MULTILINE)
             if m_source_lang:
                 source_lang = m_source_lang.group(1).strip()
-            # Stubs converted earlier are "<meta block>\\n\\n<source text>".
-            if not text.endswith(source_text):
+            source_identical = text.endswith(source_text)
+            m_source_hash = re.search(r"^#\+SOURCE_HASH:\s*(.*)$", text, flags=re.MULTILINE)
+            m_source_mtime = re.search(
+                r"^#\+SOURCE_LAST_MODIFIED:\s*(.*)$", text, flags=re.MULTILINE
+            )
+            stale = (
+                normalize_frontmatter_value(m_source_hash.group(1))
+                if m_source_hash
+                else ""
+            ) != source_hash or (
+                normalize_frontmatter_value(m_source_mtime.group(1))
+                if m_source_mtime
+                else ""
+            ) != source_last_modified
+
+            if refresh_mode == "source-identical" and not source_identical:
+                continue
+            if refresh_mode == "stale" and not stale:
                 continue
             # frontmatter equivalent = initial metadata block up to first non #+ line.
             lines = text.splitlines()
@@ -719,6 +802,9 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
                 i += 1
             frontmatter = "\n".join(meta_lines).rstrip("\n")
 
+        assert source_body is not None
+        if not source_last_modified:
+            source_last_modified = source_last_modified_iso(source)
         source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
         candidates.append(
             Candidate(
@@ -726,7 +812,9 @@ def discover_candidates(only_changed: bool) -> list[Candidate]:
                 lang=lang,
                 source_lang=source_lang,
                 source=source,
+                source_last_modified=source_last_modified,
                 source_body=source_body,
+                preamble=preamble,
                 frontmatter=frontmatter,
                 source_hash=source_hash,
                 kind=kind,
@@ -796,11 +884,33 @@ def main() -> int:
         action="store_true",
         help="Print every file path during apply phase.",
     )
+    parser.add_argument(
+        "--refresh-mode",
+        choices=("source-identical", "stale", "all"),
+        default="source-identical",
+        help=(
+            "Candidate selection mode: source-identical (default), "
+            "stale metadata refresh, or all translations."
+        ),
+    )
+    parser.add_argument(
+        "--path-glob",
+        action="append",
+        default=[],
+        help=(
+            "Restrict candidate files by repo-relative glob (repeatable), e.g. "
+            "'docs/source/data_model.*.md'."
+        ),
+    )
     args = parser.parse_args()
 
     cache_path = Path(args.cache).resolve()
     cache = load_cache(cache_path)
-    candidates = discover_candidates(only_changed=args.only_changed)
+    candidates = discover_candidates(
+        only_changed=args.only_changed,
+        refresh_mode=args.refresh_mode,
+        path_globs=args.path_glob or None,
+    )
     if args.from_index > 0:
         candidates = candidates[args.from_index :]
     if args.limit > 0:
@@ -905,26 +1015,51 @@ def main() -> int:
                 {
                     "status": "complete",
                     "translator": "machine-google-reviewed",
+                    "source_hash": candidate.source_hash,
+                    "source_last_modified": f"\"{candidate.source_last_modified}\"",
                     "translation_last_reviewed": str(date.today()),
                 },
             )
-            new_text = f"---\n{new_frontmatter}\n---\n\n{translated_body.lstrip(chr(10))}"
+            new_text = (
+                f"{candidate.preamble}---\n{new_frontmatter}\n---\n\n"
+                f"{translated_body.lstrip(chr(10))}"
+            )
         else:
             lines = candidate.frontmatter.splitlines()
             out_lines: list[str] = []
             seen_translator = False
+            seen_source_hash = False
+            seen_source_last_modified = False
+            seen_translation_last_reviewed = False
             for line in lines:
                 if line.startswith("#+STATUS:"):
                     out_lines.append("#+STATUS: complete")
                 elif line.startswith("#+TRANSLATION_LAST_REVIEWED:"):
                     out_lines.append(f"#+TRANSLATION_LAST_REVIEWED: {date.today()}")
+                    seen_translation_last_reviewed = True
                 elif line.startswith("#+TRANSLATOR:"):
                     out_lines.append("#+TRANSLATOR: machine-google-reviewed")
                     seen_translator = True
+                elif line.startswith("#+SOURCE_HASH:"):
+                    out_lines.append(f"#+SOURCE_HASH: {candidate.source_hash}")
+                    seen_source_hash = True
+                elif line.startswith("#+SOURCE_LAST_MODIFIED:"):
+                    out_lines.append(
+                        f"#+SOURCE_LAST_MODIFIED: {candidate.source_last_modified}"
+                    )
+                    seen_source_last_modified = True
                 else:
                     out_lines.append(line)
             if not seen_translator:
                 out_lines.append("#+TRANSLATOR: machine-google-reviewed")
+            if not seen_source_hash:
+                out_lines.append(f"#+SOURCE_HASH: {candidate.source_hash}")
+            if not seen_source_last_modified:
+                out_lines.append(
+                    f"#+SOURCE_LAST_MODIFIED: {candidate.source_last_modified}"
+                )
+            if not seen_translation_last_reviewed:
+                out_lines.append(f"#+TRANSLATION_LAST_REVIEWED: {date.today()}")
             new_text = "\n".join(out_lines).rstrip("\n") + "\n\n" + translated_body.lstrip("\n")
 
         candidate.path.write_text(new_text, encoding="utf-8")

@@ -96,10 +96,12 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     let destination_asset = gen_account_in(&domain).0;
     let destination_nft = gen_account_in(&domain).0;
 
-    let asset_definition_id: AssetDefinitionId = format!("coin#{domain}").parse()?;
-    bob_client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-        asset_definition_id.clone(),
-    )))?;
+    let asset_definition_id =
+        iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "coin".parse()?);
+    bob_client.submit_blocking(Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    ))?;
     let source_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     bob_client.submit_blocking(Mint::asset_numeric(10u32, source_asset_id.clone()))?;
     bob_client.submit_blocking(Transfer::asset_numeric(
@@ -256,10 +258,11 @@ fn unlink_domain_link_preserves_materialized_asset_ownership() -> Result<()> {
     client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
 
     let destination = gen_account_in(&domain).0;
-    let definition_id: AssetDefinitionId = format!("coin#{domain}").parse()?;
-    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-        definition_id.clone(),
-    )))?;
+    let definition_id =
+        iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "coin".parse()?);
+    client.submit_blocking(Register::asset_definition(
+        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
+    ))?;
 
     let source_asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
     client.submit_blocking(Mint::asset_numeric(11u32, source_asset_id.clone()))?;

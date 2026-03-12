@@ -59,7 +59,10 @@ fn grant_revoke_permission_with_tlv() {
         "wonderland",
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
-    let asset: AssetDefinitionId = "asset#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),

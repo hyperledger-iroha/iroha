@@ -45,7 +45,10 @@ fn test_balance_syscall_permission() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
@@ -106,7 +109,10 @@ fn test_transfer_syscall_permission() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), Numeric::from(50_u64)),
@@ -159,7 +165,10 @@ fn test_mint_syscall_permission() {
         .unwrap();
     let _alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let wsv =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);

@@ -58,7 +58,7 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
 fn xor_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::from_str("xor#sora").expect("asset id")
+    AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
 }
 
 fn micro_xor_from_value(value: &Value) -> u64 {

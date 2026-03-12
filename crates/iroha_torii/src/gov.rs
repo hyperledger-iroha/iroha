@@ -2887,7 +2887,12 @@ mod tests {
             domain_id.clone(),
             Name::from_str("vote").expect("asset definition name"),
         );
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority);
         let asset = Asset::new(
             AssetId::new(asset_def_id.clone(), authority.clone()),
             Numeric::from(1_000u32),

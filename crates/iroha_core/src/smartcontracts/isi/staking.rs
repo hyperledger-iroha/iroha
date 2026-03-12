@@ -1811,11 +1811,17 @@ mod tests {
         .execute(&ALICE_ID, stx)
         .unwrap();
 
-        let asset_def_id: AssetDefinitionId =
-            "xor#wonderland".parse().expect("asset definition id");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         let reward_asset = AssetId::new(asset_def_id.clone(), sink.clone());
         let initial_stake = Numeric::new(u64::from(mint_amount.max(1)), 0);
         Mint::asset_numeric(mint_amount, reward_asset.clone())
@@ -1902,10 +1908,17 @@ mod tests {
         register_peer_for_account(stx, &delegator);
         register_peer_for_account(stx, &escrow);
 
-        let asset_def_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition id");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "nexus".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
         Mint::asset_numeric(10_000u32, validator_asset)

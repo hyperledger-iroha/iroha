@@ -108,7 +108,10 @@ fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<Stri
 #[test]
 fn ivm_host_shadow_execute_matches_native_execute() {
     let authority = ALICE_ID.clone();
-    let asset_def: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let key: Name = "parity_key".parse().unwrap();
     let value = iroha_primitives::json::Json::new("shadow");
     let amount = Numeric::from(100_u64);

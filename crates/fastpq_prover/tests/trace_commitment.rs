@@ -17,8 +17,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
-use std::str::FromStr;
-
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -107,7 +105,10 @@ fn sample_transfer_transcript() -> TransferTranscript {
     let delta = TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
-        asset_definition: AssetDefinitionId::from_str("xor#fixture").expect("asset definition"),
+        asset_definition: AssetDefinitionId::new(
+            "fixture".parse().unwrap(),
+            "xor".parse().unwrap(),
+        ),
         amount: Numeric::from(75u32),
         from_balance_before: Numeric::from(1_000u32),
         from_balance_after: Numeric::from(925u32),

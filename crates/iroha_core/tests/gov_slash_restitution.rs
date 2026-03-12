@@ -156,7 +156,10 @@ fn lock_slash_restitute(
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let (receiver_id, _) = gen_account_in("wonderland");
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset def id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let state = setup_state(&def_id, &receiver_id);
     let alice_id = ALICE_ID.clone();
     let referendum_id = "rid-slash";

@@ -30,7 +30,7 @@ pub mod isi {
         asset::definition::{
             validate_asset_alias, validate_asset_description, validate_asset_name,
         },
-        isi::error::{InstructionExecutionError, RepetitionError},
+        isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
@@ -42,6 +42,12 @@ pub mod isi {
 
     /// Domain-separation tag for deterministic offline escrow derivation.
     const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
+    /// Alias grace window after lease expiry (369 hours).
+    const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
+
+    fn alias_grace_until_ms(lease_expiry_ms: Option<u64>) -> Option<u64> {
+        lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
+    }
 
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
@@ -1678,11 +1684,12 @@ pub mod isi {
                 .into());
             }
             if let Some(alias) = asset_definition.alias()
-                && state_transaction
+                && let Some(existing) = state_transaction
                     .world
-                    .asset_definitions
-                    .iter()
-                    .any(|(_, existing)| existing.alias().as_ref().is_some_and(|a| a == alias))
+                    .asset_definition_aliases
+                    .get(alias)
+                    .cloned()
+                && existing != asset_definition_id
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("asset definition alias `{alias}` is already bound").into(),
@@ -1693,6 +1700,16 @@ pub mod isi {
                 .world
                 .asset_definitions
                 .insert(asset_definition_id.clone(), asset_definition.clone());
+            if let Some(alias) = asset_definition.alias().as_ref().cloned() {
+                let bound_at_ms = state_transaction.block_unix_timestamp_ms();
+                state_transaction.world.bind_asset_definition_alias(
+                    &asset_definition_id,
+                    alias,
+                    None,
+                    None,
+                    bound_at_ms,
+                )?;
+            }
 
             ensure_offline_escrow_account(&asset_definition, authority, state_transaction)?;
 
@@ -1982,6 +1999,9 @@ pub mod isi {
             }
             state_transaction
                 .world
+                .clear_asset_definition_alias(&asset_definition_id);
+            state_transaction
+                .world
                 .zk_assets
                 .remove(asset_definition_id.clone());
             state_transaction
@@ -1995,6 +2015,60 @@ pub mod isi {
             )));
 
             state_transaction.world.emit_events(events);
+
+            Ok(())
+        }
+    }
+
+    impl Execute for SetAssetDefinitionAlias {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let SetAssetDefinitionAlias {
+                asset_definition_id,
+                alias,
+                lease_expiry_ms,
+            } = self;
+
+            if alias.is_none() && lease_expiry_ms.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lease_expiry_ms requires alias binding".into(),
+                    ),
+                )
+                .into());
+            }
+
+            // Ensure definition exists and validate alias semantics against the required human name.
+            let definition = state_transaction
+                .world
+                .asset_definition(&asset_definition_id)
+                .map_err(Error::from)?;
+            if let Some(alias) = alias.as_ref() {
+                validate_asset_alias(Some(alias), definition.name()).map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid asset definition alias: {err}").into(),
+                    )
+                })?;
+            }
+
+            if let Some(alias) = alias {
+                let bound_at_ms = state_transaction.block_unix_timestamp_ms();
+                let grace_until_ms = alias_grace_until_ms(lease_expiry_ms);
+                state_transaction.world.bind_asset_definition_alias(
+                    &asset_definition_id,
+                    alias,
+                    lease_expiry_ms,
+                    grace_until_ms,
+                    bound_at_ms,
+                )?;
+            } else {
+                state_transaction
+                    .world
+                    .clear_asset_definition_alias(&asset_definition_id);
+            }
 
             Ok(())
         }
@@ -3182,9 +3256,13 @@ mod tests {
 
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
         let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
         let (asset_id, asset_value) = asset.into_key_value();
@@ -3624,9 +3702,13 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register account");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.world
             .asset_definition_mut(&asset_def_id)
             .expect("definition exists")
@@ -4023,9 +4105,13 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register account");
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.settlement
             .offline
             .escrow_accounts
@@ -5351,6 +5437,28 @@ mod tests {
     }
 
     #[test]
+    fn register_asset_definition_rejects_missing_explicit_name() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "missing-name".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id =
+            AssetDefinitionId::new(domain_id, "usd".parse().expect("asset definition name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = Register::asset_definition(AssetDefinition::numeric(definition_id))
+            .execute(&authority, &mut tx)
+            .expect_err("registration without explicit name must fail");
+        assert!(
+            err.to_string().contains("invalid asset definition name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn register_asset_definition_rejects_duplicate_alias() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -5400,6 +5508,186 @@ mod tests {
         assert!(
             err.to_string().contains("already bound"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_alias_updates_world_indexes() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "alias-update".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "USD".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        let alias: AssetDefinitionAlias = "USD#issuer@main".parse().expect("alias");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), Some(11_000))
+            .execute(&authority, &mut tx)
+            .expect("bind alias");
+
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id),
+            "alias index must resolve to definition id"
+        );
+        let binding = tx
+            .world
+            .asset_definition_alias_bindings
+            .get(&definition_id)
+            .expect("binding should be present");
+        assert_eq!(binding.alias, alias);
+        assert_eq!(binding.lease_expiry_ms, Some(11_000));
+        assert_eq!(
+            binding.grace_until_ms,
+            Some(11_000 + 369u64 * 60 * 60 * 1_000)
+        );
+        let updated = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition should exist");
+        assert_eq!(updated.alias().as_ref(), Some(&binding.alias));
+    }
+
+    #[test]
+    fn set_asset_definition_alias_clear_removes_indexes() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "alias-clear".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "USD".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        let alias: AssetDefinitionAlias = "USD#issuer@main".parse().expect("alias");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind alias");
+        SetAssetDefinitionAlias::clear(definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear alias");
+
+        assert!(
+            tx.world.asset_definition_aliases.get(&alias).is_none(),
+            "alias index should be removed"
+        );
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none(),
+            "binding index should be removed"
+        );
+        let updated = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition should exist");
+        assert!(
+            updated.alias().is_none(),
+            "definition alias should be cleared"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_alias_grace_window_sweeps_after_expiry() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "alias-grace".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "USD".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register asset definition");
+
+        let alias: AssetDefinitionAlias = "USD#issuer@main".parse().expect("alias");
+        let lease_expiry = 11_000_u64;
+        let grace_until = lease_expiry + 369u64 * 60 * 60 * 1_000;
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), Some(lease_expiry))
+            .execute(&authority, &mut tx)
+            .expect("bind alias");
+
+        let swept_at_grace = tx.world.sweep_expired_asset_definition_aliases(grace_until);
+        assert!(
+            swept_at_grace.is_empty(),
+            "alias must remain bound while still inside grace window"
+        );
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id),
+            "alias should still resolve during grace window"
+        );
+
+        let swept_after_grace = tx
+            .world
+            .sweep_expired_asset_definition_aliases(grace_until + 1);
+        assert_eq!(
+            swept_after_grace,
+            vec![definition_id.clone()],
+            "sweep should unbind alias after grace window"
+        );
+        assert!(
+            tx.world.asset_definition_aliases.get(&alias).is_none(),
+            "alias index should be removed after grace expiry"
+        );
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none(),
+            "binding record should be removed after grace expiry"
         );
     }
 
@@ -5484,9 +5772,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
 
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repo_asset_guard".parse().expect("repo agreement id");
@@ -5542,9 +5834,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.gov.voting_asset_id = asset_definition_id.clone();
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5577,9 +5873,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.gov.viral_incentives.reward_asset_definition_id = asset_definition_id.clone();
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5612,9 +5912,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.oracle.economics.reward_asset = asset_definition_id.clone();
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5647,9 +5951,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.nexus.fees.fee_asset_id = asset_definition_id.to_string();
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5682,9 +5990,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.nexus.staking.stake_asset_id = asset_definition_id.to_string();
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5718,9 +6030,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.settlement.repo.eligible_collateral = vec![asset_definition_id.clone()];
 
         let err = Unregister::asset_definition(asset_definition_id.clone())
@@ -5755,12 +6071,20 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(base_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register base asset definition");
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register substitute asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = base_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register base asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register substitute asset definition");
         tx.settlement
             .repo
             .collateral_substitution_matrix
@@ -5814,9 +6138,13 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register holder account");
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
 
         let permission_with_definition: Permission = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
             asset_definition: asset_definition_id.clone(),
@@ -5921,9 +6249,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.settlement
             .offline
             .escrow_accounts
@@ -5968,9 +6300,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
 
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settle_asset_guard".parse().expect("settlement id");
@@ -6038,9 +6374,13 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register asset definition");
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
         tx.world.zk_assets.insert(
             asset_definition_id.clone(),
             crate::state::ZkAssetState::default(),

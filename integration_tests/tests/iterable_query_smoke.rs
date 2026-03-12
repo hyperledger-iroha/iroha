@@ -30,7 +30,10 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     );
 
     // Verify the well-known genesis asset exists with expected quantity.
-    let asset_id = AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone());
+    let asset_id = AssetId::new(
+        AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?),
+        ALICE_ID.clone(),
+    );
     let rose = assets
         .into_iter()
         .find(|a| a.id() == &asset_id)

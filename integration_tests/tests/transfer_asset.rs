@@ -26,7 +26,10 @@ fn simulate_transfer_numeric() {
         "simulate_transfer_numeric",
         numeric!(200),
         &numeric!(20),
-        AssetDefinition::numeric,
+        |id| {
+            let name = id.name().to_string();
+            AssetDefinition::numeric(id).with_name(name)
+        },
         Mint::asset_numeric,
         Transfer::asset_numeric,
     )
@@ -105,9 +108,11 @@ fn create_mouse(mouse_id: AccountId) -> Register<Account> {
 }
 
 fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
-    format!("camomile_{context}#wonderland")
-        .parse()
-        .expect("asset definition id should be valid")
+    let name = format!("camomile_{context}");
+    AssetDefinitionId::new(
+        "wonderland".parse().expect("domain id should be valid"),
+        name.parse().expect("asset name should be valid"),
+    )
 }
 
 #[test]
@@ -120,8 +125,10 @@ fn should_fail_if_asset_not_found() {
 
     let (alice_id, mouse_id) = generate_two_ids();
     let asset_definition_id = asset_definition_id_for(context);
-    let create_asset_definition =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let create_asset_definition = Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    );
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
     let transfer_asset = Transfer::asset_numeric(asset_id.clone(), numeric!(20), mouse_id.clone());
 

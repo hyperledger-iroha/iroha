@@ -83,7 +83,10 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .collect();
 
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
-    let asset_def_id: AssetDefinitionId = "xor#sora".parse().expect("asset definition");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "sora".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);
 
     let proposer_asset = Asset::new(

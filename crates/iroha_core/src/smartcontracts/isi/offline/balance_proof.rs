@@ -555,7 +555,10 @@ mod tests {
     }
 
     fn sample_asset() -> AssetId {
-        let definition: AssetDefinitionId = "usd#wonderland".parse().unwrap();
+        let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let owner = sample_account();
         AssetId::new(definition, owner)
     }

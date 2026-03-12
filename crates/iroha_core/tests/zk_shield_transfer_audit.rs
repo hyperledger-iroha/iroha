@@ -34,7 +34,10 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let owner = AccountId::new(KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),

@@ -103,15 +103,17 @@ fn signed_certificate_for(
 async fn register_offline_allowance_rejects_non_controller_authority() -> Result<()> {
     init_instruction_registry();
     let now_ms = now_millis();
-    let definition_id: AssetDefinitionId = "offsecunauth#wonderland".parse()?;
+    let definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "offsecunauth".parse()?);
     let certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_genesis_instruction(Register::asset_definition(AssetDefinition::new(
-            definition_id,
-            NumericSpec::integer(),
-        )));
+        .with_genesis_instruction(Register::asset_definition({
+            let __asset_definition_id = definition_id;
+            AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                .with_name(__asset_definition_id.name().to_string())
+        }));
     let Some(network) = start_network_async_or_skip(
         builder,
         stringify!(register_offline_allowance_rejects_non_controller_authority),
@@ -141,15 +143,17 @@ async fn register_offline_allowance_rejects_non_controller_authority() -> Result
 async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<()> {
     init_instruction_registry();
     let now_ms = now_millis();
-    let definition_id: AssetDefinitionId = "offsecescrow#wonderland".parse()?;
+    let definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "offsecescrow".parse()?);
     let certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_genesis_instruction(Register::asset_definition(AssetDefinition::new(
-            definition_id,
-            NumericSpec::integer(),
-        )));
+        .with_genesis_instruction(Register::asset_definition({
+            let __asset_definition_id = definition_id;
+            AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                .with_name(__asset_definition_id.name().to_string())
+        }));
     let Some(network) = start_network_async_or_skip(
         builder,
         stringify!(register_offline_allowance_rejects_missing_escrow_binding),
@@ -176,17 +180,19 @@ async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<(
 #[tokio::test]
 async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Result<()> {
     init_instruction_registry();
-    let definition_id: AssetDefinitionId = "offsecreclaime2e#wonderland".parse()?;
+    let definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "offsecreclaime2e".parse()?);
     let initial_balance = Numeric::new(100, 0);
     let allowance_amount = Numeric::new(50, 0);
     let controller_asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_genesis_instruction(Register::asset_definition(AssetDefinition::new(
-            definition_id.clone(),
-            NumericSpec::integer(),
-        )))
+        .with_genesis_instruction(Register::asset_definition({
+            let __asset_definition_id = definition_id.clone();
+            AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                .with_name(__asset_definition_id.name().to_string())
+        }))
         .with_genesis_instruction(SetKeyValue::asset_definition(
             definition_id.clone(),
             OFFLINE_ASSET_ENABLED_METADATA_KEY

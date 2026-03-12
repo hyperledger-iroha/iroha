@@ -1727,7 +1727,10 @@ mod tests {
 
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
         let potr_bonus = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().expect("xor asset");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
 
         let accounts = DaRentLedgerAccounts {
             payer: &payer,

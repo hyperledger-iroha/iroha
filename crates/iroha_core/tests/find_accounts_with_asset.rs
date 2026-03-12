@@ -59,7 +59,10 @@ fn multi_account_mint_returns_only_positive_holders() {
         .expect("register account");
     }
 
-    let definition_id: AssetDefinitionId = "multi_coin#wonderland".parse().expect("asset def");
+    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "multi_coin".parse().unwrap(),
+    );
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");

@@ -3183,7 +3183,10 @@ mod tests {
                 .to_account_id("wonderland".parse().unwrap()),
         )
         .build(&ALICE_ID);
-        let asset_definition_id = "rose#wonderland".parse().expect("Valid");
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_definition = AssetDefinition::numeric(asset_definition_id).build(&ALICE_ID);
         World::with([domain], [account], [asset_definition])
     }
@@ -3503,7 +3506,10 @@ mod tests {
                 ALICE_ID.clone().to_account_id("w".parse().unwrap()),
             )
             .build(&ALICE_ID);
-            let ad_id: AssetDefinitionId = "rose#w".parse().unwrap();
+            let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "w".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
             let ad = iroha_data_model::asset::definition::AssetDefinition::numeric(ad_id.clone())
                 .build(&ALICE_ID);
             let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
@@ -4307,10 +4313,22 @@ mod tests {
             Account::new(acc1_id.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
         let acc2 =
             Account::new(acc2_id.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let ad1 = AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default())
-            .build(&ALICE_ID);
-        let ad2 = AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
-            .build(&ALICE_ID);
+        let ad1 = AssetDefinition::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "w".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            NumericSpec::default(),
+        )
+        .build(&ALICE_ID);
+        let ad2 = AssetDefinition::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "w".parse().unwrap(),
+                "tulip".parse().unwrap(),
+            ),
+            NumericSpec::default(),
+        )
+        .build(&ALICE_ID);
         let world = World::with(
             [domain],
             [acc1.clone(), acc2.clone()],
@@ -4550,9 +4568,21 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric("rose#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric("tulip#w".parse().unwrap()).build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric("peony#w".parse().unwrap()).build(&ALICE_ID); // no rank
+        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap(),
+        ))
+        .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         ad2.metadata_mut()
@@ -4897,7 +4927,10 @@ mod tests {
 
         // World with a domain, ALICE account, one asset definition, and a minted asset
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let ad_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(ad_id.clone(), ALICE_ID.clone());
 
         let world = World::default();
@@ -4922,9 +4955,11 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register account");
-        Register::asset_definition(AssetDefinition::numeric(ad_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register asset definition");
+        Register::asset_definition(
+            AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
         Mint::asset_numeric(13_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
@@ -4992,7 +5027,10 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let (acc1_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let (acc2_id, _) = iroha_test_samples::gen_account_in("wonderland");
-        let ad_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(ad_id.clone(), acc1_id.clone());
 
         let kura = Kura::blank_kura_for_testing();
@@ -5020,9 +5058,11 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect("register account2");
-        Register::asset_definition(AssetDefinition::numeric(ad_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register asset definition");
+        Register::asset_definition(
+            AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
         Mint::asset_numeric(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
@@ -5092,7 +5132,10 @@ mod tests {
             AssetDefinitionId,
         ) {
             let domain_id: DomainId = "wonderland".parse().unwrap();
-            let ad_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+            let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
 
             let kura = Kura::blank_kura_for_testing();
             let store = std::sync::Arc::new(LiveQueryStore::from_config(
@@ -5121,9 +5164,11 @@ mod tests {
             ))
             .execute(&ALICE_ID, &mut stx)
             .expect("register BOB");
-            Register::asset_definition(AssetDefinition::numeric(ad_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register asset definition");
+            Register::asset_definition(
+                AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
             Mint::asset_numeric(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for ALICE");
@@ -5363,8 +5408,16 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let ad1 = AssetDefinition::numeric("rose#w".parse().unwrap()).build(&ALICE_ID);
-        let ad2 = AssetDefinition::numeric("tulip#w".parse().unwrap()).build(&ALICE_ID);
+        let ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
         let world = World::with([domain], [account], [ad1.clone(), ad2.clone()]);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5626,9 +5679,21 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric("rose#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric("tulip#w".parse().unwrap()).build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric("peony#w".parse().unwrap()).build(&ALICE_ID); // no rank
+        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap(),
+        ))
+        .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         ad2.metadata_mut()
@@ -5880,9 +5945,21 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric("rose#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric("tulip#w".parse().unwrap()).build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric("peony#w".parse().unwrap()).build(&ALICE_ID); // no rank
+        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad3 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap(),
+        ))
+        .build(&ALICE_ID); // no rank
         ad1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         ad2.metadata_mut()
@@ -5969,9 +6046,21 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric("a0#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric("a1#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric("a2#w".parse().unwrap()).build(&ALICE_ID);
+        let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a0".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a1".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a2".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
         ad0.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
         ad1.metadata_mut()
@@ -6060,9 +6149,21 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
             Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric("a0#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric("a1#w".parse().unwrap()).build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric("a2#w".parse().unwrap()).build(&ALICE_ID);
+        let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a0".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a1".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "a2".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
         ad0.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
         ad1.metadata_mut()

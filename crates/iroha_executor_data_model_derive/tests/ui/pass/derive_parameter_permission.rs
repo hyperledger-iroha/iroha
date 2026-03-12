@@ -37,7 +37,7 @@ fn main() {
         value: "demo".to_owned(),
     };
     let perm = CustomPermission {
-        asset: "xor#wonderland".parse().unwrap(),
+        asset: iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap()),
     };
     conversions(param, perm);
 }

@@ -336,7 +336,12 @@ fn npos_multilane_genesis_post_topology_transactions(
             gas_account_id.to_account_id(ivm_domain.clone()),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(stake_asset_id.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = stake_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
     ];
 
     let mut validator_tx = Vec::with_capacity(TOTAL_PEERS * 2);
@@ -1330,8 +1335,14 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             );
         }
     }
-    let ds1_asset_def: AssetDefinitionId = "ds1coin#wonderland".parse().expect("asset definition");
-    let ds2_asset_def: AssetDefinitionId = "ds2coin#wonderland".parse().expect("asset definition");
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("asset definition"),
+        "ds1coin".parse().expect("asset definition"),
+    );
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("asset definition"),
+        "ds2coin".parse().expect("asset definition"),
+    );
     let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
         asset_definition: ds1_asset_def.clone(),
     }
@@ -1421,18 +1432,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 );
             let setup_alice_tx = setup_alice_submitter.build_transaction(
                 vec![
-                    InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-                        ds1_asset_def.clone(),
-                    ))),
+                    InstructionBox::from(Register::asset_definition({
+                        let __asset_definition_id = ds1_asset_def.clone();
+                        AssetDefinition::numeric(__asset_definition_id.clone())
+                            .with_name(__asset_definition_id.name().to_string())
+                    })),
                     InstructionBox::from(Mint::asset_numeric(100_u32, alice_ds1_asset.clone())),
                 ],
                 Metadata::default(),
             );
             let setup_bob_tx = setup_bob_submitter.build_transaction(
                 vec![
-                    InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-                        ds2_asset_def.clone(),
-                    ))),
+                    InstructionBox::from(Register::asset_definition({
+                        let __asset_definition_id = ds2_asset_def.clone();
+                        AssetDefinition::numeric(__asset_definition_id.clone())
+                            .with_name(__asset_definition_id.name().to_string())
+                    })),
                     InstructionBox::from(Mint::asset_numeric(200_u32, bob_ds2_asset.clone())),
                 ],
                 Metadata::default(),

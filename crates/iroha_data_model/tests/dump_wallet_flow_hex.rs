@@ -25,7 +25,10 @@ fn make_proof(bytes: Vec<u8>, vk_name: &str) -> ProofAttachment {
 
 #[test]
 fn dump_wallet_flow_hex() {
-    let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let alice = AccountId::new(KeyPair::random().public_key().clone());
     let bob = AccountId::new(KeyPair::random().public_key().clone());
 

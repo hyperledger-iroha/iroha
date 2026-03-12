@@ -49,7 +49,10 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     vm.load_program(&metadata.encode()).expect("load metadata");
 
     // Build an Unshield instruction and pass via the vendor bridge
-    let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),

@@ -294,7 +294,10 @@ mod tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
-            "rose#wonderland".parse().expect("valid asset definition");
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
         let domain_id: crate::domain::DomainId = "wonderland".parse().expect("valid domain");
 

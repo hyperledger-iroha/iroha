@@ -9895,10 +9895,16 @@ mod subscription_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (provider, provider_key) = gen_account_in("commerce");
         let (subscriber, subscriber_key) = gen_account_in("users");
-        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "fixed_plan".parse().unwrap(),
+        );
         let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let provider_private = provider_key.private_key().clone();
         let subscriber_private = subscriber_key.private_key().clone();
@@ -16335,7 +16341,10 @@ mod tests {
             transaction::error::TransactionRejectionReason,
         };
 
-        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             crate::data_model::isi::error::InstructionExecutionError::Query(
                 QueryExecutionFail::Find(FindError::AssetDefinition(asset_def)),

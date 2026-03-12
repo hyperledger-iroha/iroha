@@ -187,7 +187,10 @@ mod tests {
     fn risk_query_encodes() {
         let _domain: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def, account_id.clone());
 
         let query = RiskQuery {
@@ -249,7 +252,10 @@ mod tests {
     fn governance_export_encodes() {
         let _domain: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let voting_asset = AssetId::of(asset_def, account_id);
 
         let params = GovernanceParameters {

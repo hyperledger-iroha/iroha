@@ -230,9 +230,14 @@ fn permissions_disallow_asset_transfer() {
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    );
     let mouse_keypair = KeyPair::random();
 
     let alice_start_assets = get_assets(&iroha, &alice_id);
@@ -367,11 +372,14 @@ fn permissions_disallow_asset_burn() {
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let asset_definition_id = "xor#wonderland"
-        .parse::<AssetDefinitionId>()
-        .expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    );
     let mouse_keypair = KeyPair::random();
 
     let alice_start_assets = get_assets(&iroha, &alice_id);
@@ -568,9 +576,15 @@ fn stored_vs_granted_permission_payload() {
     let alice_id = ALICE_ID.clone();
 
     // Registering mouse and asset definition
-    let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition({
+        let __asset_definition_id = asset_definition_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    });
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
     let register_mouse_account = Register::account(Account::new(
@@ -617,9 +631,10 @@ fn permissions_are_unified() {
     // Given
     let alice_id = ALICE_ID.clone();
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
-    let rose_definition: AssetDefinitionId = format!("rose#{wonderland_domain}")
-        .parse()
-        .expect("valid rose definition");
+    let rose_definition = AssetDefinitionId::new(
+        wonderland_domain.clone(),
+        "rose".parse().expect("valid rose name"),
+    );
     let rose_asset = AssetId::new(rose_definition, alice_id.clone());
     let permission1 = CanTransferAsset {
         asset: rose_asset.clone(),

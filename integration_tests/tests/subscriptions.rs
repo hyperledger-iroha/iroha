@@ -179,8 +179,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
-            let plan_id: AssetDefinitionId = "usage_plan#wonderland".parse()?;
+            let charge_def_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);
+            let plan_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "usage_plan".parse()?);
             let billing_trigger_id: TriggerId = "usage_billing".parse()?;
             let usage_trigger_id: TriggerId = "usage_record".parse()?;
             let nft_id: NftId = "subscription_usage$wonderland".parse()?;
@@ -198,9 +200,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        charge_def_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(charge_def_id.clone())
+                            .with_name(charge_def_id.name().to_string()),
+                    ))
                 }
             })
             .await??;
@@ -208,9 +211,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        plan_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(plan_id.clone())
+                            .with_name(plan_id.name().to_string()),
+                    ))
                 }
             })
             .await??;
@@ -448,8 +452,10 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = "usd_fixed#wonderland".parse()?;
-            let plan_id: AssetDefinitionId = "fixed_plan#wonderland".parse()?;
+            let charge_def_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "usd_fixed".parse()?);
+            let plan_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "fixed_plan".parse()?);
             let billing_trigger_id: TriggerId = "fixed_billing".parse()?;
             let nft_id: NftId = "subscription_fixed$wonderland".parse()?;
             let period_ms = 3_000_u64;
@@ -462,9 +468,10 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        charge_def_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(charge_def_id.clone())
+                            .with_name(charge_def_id.name().to_string()),
+                    ))
                 }
             })
             .await??;
@@ -472,9 +479,10 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        plan_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(plan_id.clone())
+                            .with_name(plan_id.name().to_string()),
+                    ))
                 }
             })
             .await??;
@@ -659,8 +667,10 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId = "usd_retry#wonderland".parse()?;
-            let plan_id: AssetDefinitionId = "retry_plan#wonderland".parse()?;
+            let charge_def_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "usd_retry".parse()?);
+            let plan_id: AssetDefinitionId =
+                AssetDefinitionId::new("wonderland".parse()?, "retry_plan".parse()?);
             let billing_trigger_id: TriggerId = "retry_billing".parse()?;
             let nft_id: NftId = "subscription_retry$wonderland".parse()?;
             let period_ms = 1_500_u64;
@@ -674,9 +684,10 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        charge_def_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(charge_def_id.clone())
+                            .with_name(charge_def_id.name().to_string()),
+                    ))
                 }
             })
             .await??;
@@ -684,9 +695,10 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
-                    client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                        plan_id,
-                    )))
+                    client.submit_blocking(Register::asset_definition(
+                        AssetDefinition::numeric(plan_id.clone())
+                            .with_name(plan_id.name().to_string()),
+                    ))
                 }
             })
             .await??;

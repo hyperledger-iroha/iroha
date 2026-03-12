@@ -514,8 +514,12 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
     let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
     let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
-    let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-        .with_metadata(Metadata::default());
+    let definition = {
+        let __asset_definition_id = stake_asset_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+            .with_name(__asset_definition_id.name().to_string())
+    }
+    .with_metadata(Metadata::default());
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),

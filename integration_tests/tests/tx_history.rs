@@ -23,9 +23,12 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
 
     // Given
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
+    let create_asset = Register::asset_definition({
+        let __asset_definition_id = asset_definition_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    });
     client.submit_blocking(create_asset)?;
 
     //When
@@ -34,7 +37,10 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
     let mint_existed_asset = Mint::asset_numeric(quantity.clone(), asset_id);
     let mint_not_existed_asset = Mint::asset_numeric(
         quantity,
-        AssetId::new("foo#wonderland".parse()?, account_id.clone()),
+        AssetId::new(
+            AssetDefinitionId::new("wonderland".parse()?, "foo".parse()?),
+            account_id.clone(),
+        ),
     );
 
     let transactions_count = 10;

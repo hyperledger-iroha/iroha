@@ -2022,7 +2022,10 @@ mod tests {
         let domain: DomainId = "test".parse().expect("domain id");
         let from = fixture_account(&domain);
         let to = fixture_account(&domain);
-        let asset: AssetDefinitionId = "xor#test".parse().expect("asset id");
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "test".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
 
         let delta = TransferDeltaTranscript {
             from_account: from,
@@ -2090,7 +2093,10 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
-        let asset: AssetDefinitionId = "xor#chain".parse().expect("asset id");
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "chain".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: authority.clone(),
             to_account: authority,

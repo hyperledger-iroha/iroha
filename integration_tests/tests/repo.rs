@@ -115,13 +115,25 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     let client = network.client();
 
     let metadata = Metadata::default();
-    let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
-    let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
+    let cash_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);
+    let collateral_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "bond".parse()?);
 
     // Prepare cash/collateral assets and balances.
     let setup_instructions: Vec<InstructionBox> = vec![
-        Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
         Mint::asset_numeric(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
@@ -422,8 +434,10 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     let client = network.client();
 
     let metadata = Metadata::default();
-    let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
-    let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
+    let cash_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);
+    let collateral_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "bond".parse()?);
 
     let outsider_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
     let outsider_domain: DomainId = "wonderland".parse()?;
@@ -434,8 +448,18 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
             outsider_id.to_account_id(outsider_domain.clone()),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
         Mint::asset_numeric(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
@@ -547,16 +571,28 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let custodian_keypair = KeyPair::random();
     let custodian_domain: DomainId = "wonderland".parse()?;
     let custodian_id = AccountId::new(custodian_keypair.public_key().clone());
-    let cash_def_id: AssetDefinitionId = "usd#wonderland".parse()?;
-    let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse()?;
+    let cash_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);
+    let collateral_def_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse()?, "bond".parse()?);
 
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::account(Account::new(
             custodian_id.to_account_id(custodian_domain.clone()),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone())).into(),
+        Register::asset_definition({
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
         Mint::asset_numeric(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),

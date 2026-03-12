@@ -1345,7 +1345,7 @@ pub mod isi {
         fn sample_certificate() -> OfflineWalletCertificate {
             let controller = sample_account(0x01);
             let definition =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let asset = AssetId::new(definition, controller.clone());
             let spend_pair = iroha_crypto::KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
             let mut certificate = OfflineWalletCertificate {
@@ -1847,7 +1847,7 @@ pub mod isi {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
             let definition_id =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account =
@@ -1909,7 +1909,7 @@ pub mod isi {
         fn credit_deposit_account_rejects_missing_escrow_when_not_required() {
             let deposit = sample_account(0x03);
             let definition_id =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let deposit_account =
@@ -1952,7 +1952,7 @@ pub mod isi {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
             let definition_id =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account =
@@ -2012,7 +2012,7 @@ pub mod isi {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
             let definition_id =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&escrow);
             let escrow_account =
@@ -2653,9 +2653,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let controller_asset_entry = Asset::new(
                 AssetId::new(definition_id.clone(), controller.clone()),
                 Numeric::new(50, 0),
@@ -2726,9 +2729,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let world = World::with(
                 [domain],
                 [controller_account, escrow_account],
@@ -2940,8 +2946,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3003,8 +3013,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             world
                 .offline_allowances
@@ -3053,8 +3067,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3129,9 +3147,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3195,8 +3216,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3263,8 +3288,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3303,7 +3332,7 @@ pub mod isi {
             let deposit_account = sample_account(0x03);
             let escrow_account = sample_account(0x04);
             let definition_id =
-                AssetDefinitionId::from_str("xor#offline").expect("asset definition id");
+                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let asset = AssetId::new(definition_id.clone(), controller.clone());
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
             let spend_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
@@ -3424,9 +3453,12 @@ pub mod isi {
                 .build(&controller);
             let escrow =
                 Account::new(escrow_account.clone().to_account_id(domain_id)).build(&controller);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with(
                 [domain],
                 [controller_account, receiver_account, deposit, escrow],
@@ -3511,8 +3543,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id;
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3580,9 +3616,12 @@ pub mod isi {
             let account =
                 Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let mut world = World::with([domain], [account], [asset_definition]);
             let certificate_id = record.certificate.certificate_id();
             world.offline_allowances.insert(certificate_id, record);
@@ -3684,9 +3723,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let controller_asset_entry = Asset::new(
                 AssetId::new(definition_id.clone(), controller.clone()),
                 Numeric::new(50, 0),
@@ -3811,9 +3853,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let escrow_asset = Asset::new(
                 AssetId::new(definition_id.clone(), escrow.clone()),
                 Numeric::new(50, 0),
@@ -3902,9 +3947,12 @@ pub mod isi {
                     .build(&unauthorized);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let escrow_asset = Asset::new(
                 AssetId::new(definition_id.clone(), escrow.clone()),
                 Numeric::new(50, 0),
@@ -4011,9 +4059,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let escrow_asset = Asset::new(
                 AssetId::new(definition_id.clone(), escrow.clone()),
                 Numeric::new(50, 0),
@@ -4153,9 +4204,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let controller_asset = Asset::new(
                 AssetId::new(definition_id.clone(), controller.clone()),
                 Numeric::new(20, 0),
@@ -4321,9 +4375,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let escrow_asset = Asset::new(
                 AssetId::new(definition_id.clone(), escrow.clone()),
                 Numeric::new(80, 0),
@@ -4465,9 +4522,12 @@ pub mod isi {
                     .build(&controller);
             let escrow_account =
                 Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
-            let asset_definition =
-                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
-                    .build(&controller);
+            let asset_definition = {
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&controller);
             let controller_asset = Asset::new(
                 AssetId::new(definition_id.clone(), controller.clone()),
                 Numeric::new(50, 0),
@@ -10795,7 +10855,7 @@ mod attestation {
                 let controller = test_account_id(0xA1);
                 let operator = AccountId::new(operator_pair.public_key().clone());
                 let definition =
-                    AssetDefinitionId::from_str("usd#acme").expect("asset definition id");
+                    AssetDefinitionId::new("acme".parse().unwrap(), "usd".parse().unwrap());
                 let asset = AssetId::new(definition, controller.clone());
                 let mut certificate = OfflineWalletCertificate {
                     controller: controller.clone(),
@@ -11206,7 +11266,8 @@ mod attestation {
         ) -> OfflineWalletCertificate {
             let controller = test_account_id(0xC3);
             let operator = AccountId::new(operator_pair.public_key().clone());
-            let definition = AssetDefinitionId::from_str("usd#acme").expect("asset definition id");
+            let definition =
+                AssetDefinitionId::new("acme".parse().unwrap(), "usd".parse().unwrap());
             let asset = AssetId::new(definition, controller.clone());
             let mut certificate = OfflineWalletCertificate {
                 controller,
@@ -11558,7 +11619,8 @@ mod attestation {
         fn sample_receipt(counter: u64, key_id: &str) -> OfflineSpendReceipt {
             let controller: AccountId = test_account_id(1);
             let receiver: AccountId = test_account_id(2);
-            let definition = AssetDefinitionId::from_str("xor#counter").expect("asset definition");
+            let definition =
+                AssetDefinitionId::new("counter".parse().unwrap(), "xor".parse().unwrap());
             let asset = AssetId::new(definition, controller.clone());
             let counter_byte = u8::try_from(counter).expect("counter fits u8");
             let certificate = OfflineWalletCertificate {
@@ -11899,7 +11961,7 @@ mod aggregate_proof_tests {
         let controller: AccountId = test_account_id(1);
         let receiver: AccountId = test_account_id(2);
         let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::from_str("xor#agg").expect("asset definition");
+            AssetDefinitionId::new("agg".parse().unwrap(), "xor".parse().unwrap());
         let asset = AssetId::new(asset_definition, controller.clone());
         let spend_public_key = controller.signatory().clone();
         let c_init = RistrettoPoint::hash_from_bytes::<Sha512>(b"agg-commitment");

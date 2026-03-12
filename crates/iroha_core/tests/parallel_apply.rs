@@ -39,9 +39,14 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let build_world = || {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let ad: AssetDefinition =
-            AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
-                .build(&alice_id);
+        let ad: AssetDefinition = AssetDefinition::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "coin".parse().unwrap(),
+            ),
+            NumericSpec::default(),
+        )
+        .build(&alice_id);
         let acc_a =
             Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
         let acc_b = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
@@ -60,7 +65,13 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let tx1 = tx_builder(&chain_id, &alice_id)
         .with_instructions([Mint::asset_numeric(
             10_u32,
-            AssetId::of("coin#wonderland".parse().unwrap(), alice_id.clone()),
+            AssetId::of(
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "coin".parse().unwrap(),
+                ),
+                alice_id.clone(),
+            ),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = tx_builder(&chain_id, &bob_id)
@@ -268,7 +279,13 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     assert_eq!(root_seq, root_par, "merkle roots must match");
 
     // Compare resulting asset balances (Alice's coin should be 10 in both states)
-    let a_coin: AssetId = AssetId::of("coin#wonderland".parse().unwrap(), alice_id.clone());
+    let a_coin: AssetId = AssetId::of(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        ),
+        alice_id.clone(),
+    );
     let view_seq = state_seq.view();
     let view_par = state_par.view();
     let bal_seq = view_seq
@@ -308,9 +325,10 @@ fn run_block_and_events(
         .expect("non-empty account set");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&first_auth);
-    let ad_id: AssetDefinitionId = format!("rose#{domain_id}").parse().unwrap();
-    let ad: AssetDefinition =
-        AssetDefinition::new(ad_id.clone(), NumericSpec::default()).build(&first_auth);
+    let ad_id = AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+    let ad: AssetDefinition = AssetDefinition::new(ad_id.clone(), NumericSpec::default())
+        .with_name("rose".to_owned())
+        .build(&first_auth);
     let mut world_accounts: Vec<Account> = Vec::new();
     let mut assets: Vec<Asset> = Vec::new();
     for acc_id in &accounts {
@@ -366,7 +384,10 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
-    let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
 
@@ -502,7 +523,10 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
 fn events_snapshot_asset_definition_kv_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
-    let ad: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let tx_set = tx_builder(&chain_id, &alice_id)
         .with_instructions([SetKeyValue::asset_definition(
@@ -534,7 +558,10 @@ fn owner_transfer_domain_and_asset_def_parity() {
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = "wonderland".parse().unwrap();
-    let ad: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let tx_dom_xfer = tx_builder(&chain_id, &alice_id)
         .with_instructions([Transfer::domain(

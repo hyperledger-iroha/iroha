@@ -2,20 +2,289 @@
 
 Last updated: 2026-03-12
 
+## 2026-03-12 aid/name/alias gap closure (constructor hard-cut + targeted docs refresh)
+- Completed the asset-definition constructor hard-cut in `crates/iroha_data_model/src/asset/definition.rs`:
+  - `AssetDefinition::new(id, spec)` and `AssetDefinition::numeric(id)` no longer auto-derive `name` from `id`.
+  - constructor docs now state explicit `.with_name(...)` is required before registration.
+- Migrated remaining `crates/*/src` and `integration_tests/tests` registration/build paths to explicit naming:
+  - applied explicit `.with_name(...)` across remaining `AssetDefinition::new/numeric` call sites used for registration/build.
+  - left one intentional negative test path without `.with_name(...)` to assert rejection.
+- Added/updated hard-cut tests:
+  - `asset::definition::validation_tests::constructors_leave_name_empty_without_explicit_with_name`
+  - `smartcontracts::isi::domain::tests::register_asset_definition_rejects_missing_explicit_name`
+- Extended `scripts/translate_i18n_google.py`:
+  - added `--refresh-mode` (`source-identical`/`stale`/`all`) including stale-translation refresh support.
+  - added repeatable `--path-glob` filtering to constrain regeneration scope.
+  - improved markdown frontmatter parsing to preserve leading HTML comment preambles.
+  - apply phase now refreshes `source_hash`, `source_last_modified`, and `translation_last_reviewed`.
+- Regenerated only the targeted data-model docs family (40 localized files):
+  - `docs/source/data_model.*.md`
+  - `docs/source/data_model_and_isi_spec.*.md`
+  - enforced canonical wording checks (`aid:<32-lower-hex-no-dash>`, both alias forms, no `asset#domain`/`IpfsPath`/`ipfs://` guidance).
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model constructors_leave_name_empty_without_explicit_with_name --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core register_asset_definition_rejects_missing_explicit_name --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii parse_asset_definition_id_accepts_alias_literals_only --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii resolve_asset_definition_selector_rejects_legacy_aid_literal --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli -p integration_tests` (pass)
+
+## 2026-03-12 Default-executor multisig register signatory materialization parity
+- Removed default-executor `MultisigRegister` validation dependency on preexisting signatory accounts in:
+  - `crates/iroha_executor/src/default/isi/multisig/account.rs`
+  - dropped `ensure_signatories_exist(...)` from registration validation.
+- Added execution-time auto-materialization of missing signatory accounts for `MultisigRegister`:
+  - runs under home-domain owner authority before role wiring.
+  - tags auto-created accounts with `iroha:created_via = "multisig"`.
+  - skips self-subject entries for the multisig account being registered.
+- Added executor unit coverage:
+  - `signatory_materialization_skips_multisig_subject`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_executor --lib signatory_materialization_skips_multisig_subject -- --nocapture` (pass)
+  - `cargo test -p iroha_executor --lib signatories_from_multiple_domains_are_allowed -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib register_materializes_missing_signatory_accounts -- --nocapture` (pass; warnings only)
+
+## 2026-03-12 aid/alias hard-cut continuation (remaining runtime `name#domain` constructor migration)
+- Removed remaining runtime/test helper construction that still derived `AssetDefinitionId` via legacy `format!("name#domain").parse()` patterns:
+  - `crates/iroha_genesis/src/lib.rs`
+  - `crates/iroha_core/src/executor.rs`
+  - `crates/izanami/src/instructions.rs`
+  - `crates/izanami/src/faults.rs`
+- Replaced all of the above with canonical constructor form:
+  - `AssetDefinitionId::new(domain_id, name.parse()?)`
+- Ensured updated executor fixtures set explicit asset display names when registering migrated definitions.
+- Re-verified alias-only Torii selector behavior and CLI legacy-literal rejection in targeted tests.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib resolve_asset_definition_selector_rejects_legacy_aid_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib initial_executor_denies_transfer_asset_definition -- --nocapture` (pass)
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/testResolveAssetAliasAsync|ToriiClientTests/testResolveAssetAliasReturnsNilOnNotFound|TransactionInputValidatorTests'` (selected tests pass; runner exits with environment signal code 5 after execution)
+  - `cargo check -p iroha_genesis -p izanami -p iroha_core --tests` (pass; warnings only)
+  - `cargo check -p iroha_data_model -p iroha_core -p integration_tests -p iroha_genesis -p izanami --tests` (pass; warnings only)
+
+## 2026-03-12 Explorer instruction account-filter: custom multisig parity fix
+- Closed a remaining `/v1/explorer/instructions?account=...` gap for `Custom` envelopes carrying multisig instructions.
+- Updated `crates/iroha_torii/src/routing.rs`:
+  - `instruction_matches_account_id(...)` now decodes multisig `CustomInstruction` payloads and matches:
+    - `MultisigRegister.account`
+    - `MultisigApprove.account`
+    - `MultisigPropose.account`
+    - nested `MultisigPropose.instructions` recursively (so embedded Mint/Burn account targets are matched).
+  - `instruction_matches_asset_id(...)` now recursively checks nested `MultisigPropose.instructions`.
+  - `append_asset_ids_from_instruction(...)` now extracts asset ids recursively from nested `MultisigPropose.instructions`.
+- Added targeted tests:
+  - `instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset`
+  - `instruction_matches_account_id_matches_multisig_custom_propose_account`
+  - `instruction_matches_account_id_matches_multisig_custom_propose_nested_accounts`
+  - `explorer_instructions_endpoint_account_filter_includes_multisig_custom_propose`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_account_id_matches_multisig_custom_propose -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_multisig_custom_propose -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_mint_and_burn -- --nocapture` (pass)
+
+## 2026-03-12 Explorer instruction account-filter follow-up: public-lane rewards + OpenAPI parity
+- Closed another `/v1/explorer/instructions?account=...` matcher gap in `crates/iroha_torii/src/routing.rs`:
+  - `instruction_matches_account_id(...)` now matches `staking::RecordPublicLaneRewards` via `reward_asset().account()`.
+- Added unit coverage:
+  - `instruction_matches_account_id_matches_public_lane_rewards_asset_account`
+- Updated OpenAPI text for explorer instruction `account` query parameter to match actual behavior beyond transfer-only filtering.
+- Added OpenAPI regression coverage:
+  - `explorer_instructions_account_param_description_mentions_non_transfer_matches`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_account_id_matches_public_lane_rewards_asset_account -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_account_param_description_mentions_non_transfer_matches -- --nocapture` (pass)
+
+## 2026-03-12 aid/alias completion pass (Torii selector parity + CLI help sync + fixture sweep)
+- Restored Torii app-API selector parity in `crates/iroha_torii/src/lib.rs`:
+  - `parse_asset_definition_id(...)` now accepts canonical `aid:<32-lower-hex-no-dash>` and strict alias literals (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+  - Added/updated test coverage with `parse_asset_definition_id_accepts_aid_or_alias_literals`.
+- Regenerated static CLI help from live clap configuration:
+  - `crates/iroha_cli/CommandLineHelp.md` now reflects aid/alias surfaces for asset-definition and asset commands, including `iroha tools encode asset-id`.
+  - Updated regeneration command in `crates/iroha_cli/README.md` to `cargo run -p iroha_cli --bin iroha -- tools markdown-help`.
+- Completed remaining legacy fixture migration in integration/Torii/bench harnesses:
+  - Replaced legacy asset-definition textual parses (`\"name#domain\".parse()`) with explicit `AssetDefinitionId::new(domain, name)` construction across migrated test files.
+  - Removed remaining dynamic `format!(\"name#{domain}\").parse()` asset-definition construction from:
+    - `integration_tests/tests/domain_links.rs`
+    - `integration_tests/tests/extra_functional/seven_peer_consistency.rs`
+    - `integration_tests/tests/scheduler_teu.rs`
+    - `crates/iroha_torii/tests/accounts_portfolio.rs`
+    - `crates/iroha_core/benches/queries.rs`
+- Validation (this pass):
+  - `CARGO_TARGET_DIR=target_tmp_aid_alias cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_aid_or_alias_literals -- --nocapture` (pass)
+  - `cargo check -p integration_tests --tests` (pass)
+  - `cargo check -p iroha_torii --tests` (pass)
+  - `cargo check -p iroha_core --benches` (pass; warnings only)
+
+## 2026-03-12 Torii alias-only ingress gap closure (`name#issuer@dataspace` / `name#dataspace` only)
+- Closed remaining legacy `aid:` acceptance paths for public asset-definition selectors:
+  - `crates/iroha_torii/src/lib.rs::parse_asset_definition_id(...)` now rejects all `aid:` literals and resolves aliases only.
+  - `crates/iroha_torii/src/routing.rs` handlers now resolve `{definition_id}` via alias selector helper (holders GET/query + confidential transitions), matching `/v1/zk/roots` behavior.
+- Updated wrapper flow in `crates/iroha_torii/src/lib.rs` so holders/confidential routes forward alias literals to routing handlers instead of rewriting to canonical `aid:...`.
+- Updated Torii tests to assert alias-only path usage (`rose%23sbp`) and seeded fixture aliases where required.
+- Updated ZK selector docs/tests to remove canonical-`aid` acceptance language and keep only:
+  - `<name>#<domain>@<dataspace>`
+  - `<name>#<dataspace>`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib resolve_asset_definition_selector_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_holders_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib confidential_asset_transitions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration zk_roots_endpoint_returns_bounded_recent_roots -- --nocapture` (pass)
+
+## 2026-03-12 Multisig unregistered-signatory admission fix
+- Confirmed explorer rejection root cause for tx `ef3eb7fb6bdd4a852c838bb0dcb349ad75fa18e7ecd05e9d7b5408304c1a1537`: `Account does not exist` was raised at transaction validation before multisig authorization paths.
+- Updated `crates/iroha_core/src/tx.rs`:
+  - Added `allows_unregistered_authority(...)` to permit missing-authority admission only for `MultisigPropose` / `MultisigApprove` custom envelopes.
+  - Kept existing account-existence rejection unchanged for all other transaction kinds.
+  - Skips data-trigger DFS dispatch for this unregistered multisig-only path to avoid authority-account lookup failures after instruction execution.
+- Added regression tests in `tx::tests`:
+  - `missing_authority_rejected_for_non_multisig_transaction`
+  - `missing_authority_multisig_approve_reaches_instruction_validation`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib missing_authority_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib multisig_account_direct_signing_rejected_in_validation -- --nocapture` (pass)
+
+## 2026-03-12 Torii asset selector completion (aid + strict alias forms) + cleanup
+- Completed Torii API selector behavior to match the v1 break plan:
+  - `crates/iroha_torii/src/lib.rs::parse_asset_definition_id(...)` now accepts canonical `aid:<32-lower-hex-no-dash>` and strict aliases:
+    - `<name>#<domain>@<dataspace>`
+    - `<name>#<dataspace>`
+  - invalid `aid:` literals and malformed aliases are rejected.
+- Added/updated Torii coverage:
+  - `tests::parse_asset_definition_id_accepts_aid_or_alias_literals` now validates:
+    - long/short alias acceptance
+    - canonical `aid` acceptance
+    - invalid `aid` rejection
+    - unknown alias => `NotFound`
+- Extended ZK roots convenience API selector semantics in `crates/iroha_torii/src/routing.rs`:
+  - `ZkRootsGetRequestDto.asset_id` now accepts canonical `aid` or strict alias forms.
+  - Added helper `resolve_asset_definition_selector(...)` with focused unit tests for canonical aid, alias resolve, invalid aid rejection, and unknown alias handling.
+- Removed post-migration warning-only residue in `fastpq_prover`:
+  - dropped unused `std::str::FromStr` test imports in:
+    - `crates/fastpq_prover/src/digest.rs`
+    - `crates/fastpq_prover/src/gadgets/transfer.rs`
+    - `crates/fastpq_prover/src/trace.rs`
+- Continued CLI test migration away from legacy `name#domain` parsing in `crates/iroha_cli/src/main_shared.rs` by replacing `format!(\"ad{i}#land\").parse()` with explicit `AssetDefinitionId::new(domain, name)` construction in paginated asset-definition query harnesses.
+
+## 2026-03-12 Torii asset-definition literal hard cut: alias-only API ingress
+- Enforced alias-only parsing for public Torii asset-definition inputs at API ingress (`crates/iroha_torii/src/lib.rs`):
+  - `parse_asset_definition_id(...)` now accepts only `AssetDefinitionAlias` literals:
+    - `<name>#<domain>@<dataspace>`
+    - `<name>#<dataspace>`
+  - canonical `aid:...` literals are rejected on these external paths.
+- All affected handlers now resolve alias literals through world-state alias index (`asset_definition_id_by_alias`) before dispatch:
+  - explorer account/asset filters and explorer asset-definition detail/snapshot/econometrics routes
+  - asset holders (`GET` and `POST query`) routes
+  - confidential asset transitions route
+  - `/v1/zk/roots` request parsing now accepts alias literals only and resolves through alias index
+- Kept auth/rate-limit ordering intact for holders/confidential handlers: access checks still run before alias resolution in gated branches.
+- Added targeted coverage:
+  - `tests::parse_asset_definition_id_accepts_alias_literals_only` verifies:
+    - long + short alias acceptance
+    - `aid:...` rejection
+    - unknown alias => `NotFound`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_holders_get_pagination_preserves_total -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration zk_roots_endpoint_returns_bounded_recent_roots -- --nocapture` (pass)
+
+## 2026-03-12 aid/name hard-cut continuation (static `name#domain` migration + explicit-name runtime paths + docs)
+- Removed implicit constructor fallback naming in `AssetDefinition::new` / `AssetDefinition::numeric` (no auto-`id.to_string()` anymore).
+- Migrated static Rust literals from legacy `\"name#domain\".parse()` to canonical constructor form:
+  - `iroha_data_model::asset::AssetDefinitionId::new(<domain>, <name>)`
+  - applied across data-model/core/cli/torii/ivm/SDK-adjacent Rust sources and tests.
+- Patched runtime genesis/localnet builders to set explicit asset names when registering definitions:
+  - `iroha_kagami` genesis/localnet bootstrap assets.
+  - `iroha_test_network` bootstrap/genesis fixture definitions.
+  - `iroha_genesis` domain builder now sets definition name from provided asset name.
+  - `izanami` genesis scenario definitions now set explicit names.
+- Updated docs with explicit aid/alias UX:
+  - `docs/source/data_model.md`
+  - `docs/source/data_model_and_isi_spec.md`
+  - added both alias forms (`<name>#<domain>@<dataspace>`, `<name>#<dataspace>`) and a CLI/Torii migration note.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_cli -p iroha_torii -p iroha_kagami -p iroha_test_network -p iroha_genesis -p izanami -p ivm -p iroha` (pass)
+  - `cargo test -p iroha_core --lib set_asset_definition_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass; 3 targeted tests, remaining bins filtered/no-op)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_parses_valid_short_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals -- --nocapture` (pass)
+
+## 2026-03-12 aid/Alias hard-cut follow-up (CLI alias resolve strict path + constructor test alignment)
+- Removed the CLI compatibility fallback in `resolve_asset_definition_id_by_alias`:
+  - `iroha_cli` now resolves aliases only through `POST /v1/assets/aliases/resolve`.
+  - no client-side fallback scan over `FindAssetsDefinitions` remains.
+  - HTTP `404` now maps directly to “alias not bound” in CLI UX.
+- Updated `crates/iroha_data_model/tests/id_of_constructors.rs` to stop parsing legacy `name#domain` literals for `AssetDefinitionId`; parity test now round-trips canonical `aid:...` text.
+- Removed remaining internal “legacy name” wording from synthetic aid-component helper text in `crates/iroha_data_model/src/asset/id.rs`.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_cli -p iroha_torii` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testResolveAssetAliasAsync --filter ToriiClientTests/testResolveAssetAliasReturnsNilOnNotFound --filter TransactionInputValidatorTests` (selected tests pass; process exits with environment signal code 5 after execution)
+
+## 2026-03-12 Torii explorer account instruction filter: account-bearing instruction parity fix
+- Expanded `instruction_matches_account_id()` in `crates/iroha_torii/src/routing.rs` to account-match all relevant asset-account instructions in this path:
+  - `MintBox::Asset` / `BurnBox::Asset` by `destination().account()`
+  - `SetAssetKeyValue` / `RemoveAssetKeyValue` by `asset().account()`
+- Added endpoint-level coverage for `GET /v1/explorer/instructions?account=...`:
+  - `explorer_instructions_endpoint_account_filter_includes_mint_and_burn`
+  - verifies account filtering returns only the expected Mint/Burn instructions for that account.
+- Removed legacy `name#domain` asset-definition literals from `crates/iroha_torii/src/routing.rs` test surfaces and replaced them with canonical `aid:...` IDs.
+- Added unit coverage in `tx_query_filter_tests`:
+  - `instruction_matches_account_id_matches_mint_asset_destination_account`
+  - `instruction_matches_account_id_matches_burn_asset_destination_account`
+  - `instruction_matches_account_id_matches_set_asset_key_value_asset_account`
+  - `instruction_matches_account_id_matches_remove_asset_key_value_asset_account`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii instruction_matches_account_id_matches_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii explorer_instructions_endpoint_account_filter_includes_mint_and_burn -- --nocapture` (pass)
+  - `cargo test -p iroha_torii explorer_transaction_filters_match_asset_id -- --nocapture` (pass)
+  - `cargo test -p iroha_torii instruction_matches_asset_id_handles_mint_assets -- --nocapture` (pass)
+  - `rg -n '#wonderland|%23wonderland' crates/iroha_torii/src/routing.rs` (no matches)
+
 ## 2026-03-12 aid-only Assets + required name + alias literal rollout (v1 break plan implementation slice)
 - Implemented canonical `aid`-first asset identity and removed legacy `name#domain` textual parsing from `AssetDefinitionId::from_str`.
 - Added first-class asset alias literal model (`<name>#<domain>@<dataspace>`) in `iroha_data_model`:
   - new `AssetDefinitionAlias` type + parsing/validation/tests.
   - `AssetDefinition` / `NewAssetDefinition` now include optional `alias`.
   - validation enforces alias left segment must match the required human asset name exactly.
+- Extended asset alias literal support to allow exactly two on-chain forms:
+  - `<name>#<domain>@<dataspace>`
+  - `<name>#<dataspace>`
+  - and reject malformed multi-separator variants.
+- Updated CLI alias UX for asset-definition registration:
+  - `--alias-dataspace` alone now derives short-form alias `<name>#<dataspace>`.
+  - `--alias-domain` + `--alias-dataspace` derives long form `<name>#<domain>@<dataspace>`.
+- Removed component-derived legacy asset-id construction paths from CLI runtime flows:
+  - `iroha tools encode asset-id` now accepts only canonical `--definition aid:...` or `--alias ...`.
+  - `iroha ledger asset {id,mint,burn,transfer}` resolution no longer accepts `--asset/--domain` fallback paths.
 - Enforced required human-readable asset name path in registration flow and tests; added duplicate-alias rejection in core registration logic.
 - Updated config defaults and consumers to stop using legacy `name#domain` constants:
   - governance/oracle/nexus defaults now emit canonical IDs via helper functions.
   - replaced removed string constants with default functions in config/core/torii tests.
 - Expanded CLI UX to make manual asset workflows usable without hand-crafted Rust:
-  - `ledger asset` operations now accept canonical ID, alias+account, or component forms.
-  - `tools encode asset-id` supports canonical definition IDs, alias literals, and component construction.
-  - asset-definition commands now accept alias-based input; register can derive alias from `name + alias-domain + alias-dataspace`.
+  - `ledger asset` operations now accept canonical ID or alias+account (no component construction fallback).
+  - `tools encode asset-id` supports canonical definition IDs and alias literals.
+  - asset-definition commands accept alias-based input; register can derive alias from `name + alias-dataspace` or `name + alias-domain + alias-dataspace`.
 - Added cross-feature test compatibility helpers in core state:
   - `State::new_with_chain_for_testing(...)`
   - `WorldBlock::transaction_without_telemetry(...)`
@@ -32,6 +301,10 @@ Last updated: 2026-03-12
   - `cargo test -p iroha_cli register_alias_derives_from_name_domain_and_dataspace -- --nocapture` (pass)
   - `cargo test -p iroha_torii offline_bundle_proof_status_reports_match -- --nocapture` (pass)
   - `cargo test -p iroha_torii vk_list_filters_by_backend_and_status -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo check -p iroha_data_model -p iroha_cli -p iroha_torii` (pass)
 
 ## 2026-03-11 I105 Hard-Cut Gap Closure (Repo-wide completion pass)
 - Closed remaining hard-cut cleanup gaps across prover tests, integration tests, docs wording, and lint gates:
@@ -2441,3 +2714,23 @@ Last updated: 2026-03-12
   - `CARGO_TARGET_DIR=/tmp/iroha-check cargo check -p iroha_torii --features app_api,telemetry` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-check cargo test -p iroha_torii --features app_api,telemetry explorer_detail_lookup_returns_transaction_and_instruction -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-check cargo test -p iroha_torii --features app_api,telemetry tx_projection_display_tests -- --nocapture` (pass)
+
+## 2026-03-12 Multisig Register Upgraded-Executor Coverage
+- Closed multisig register parity gaps between initial and upgraded executor paths:
+  - Added `execute_multisig_custom_instruction_if_present(...)` in `crates/iroha_core/src/executor.rs`.
+  - Wired it into both `dispatch_instruction_with_ivm(...)` and `dispatch_instruction_with_fixture(...)` so user-provided executors execute multisig custom envelopes through `execute_multisig_instruction(...)` before generic `InstructionBox::execute`.
+- Added missing host-side test coverage:
+  - `crates/iroha_core/src/executor.rs`:
+    - `fixture_executor_executes_multisig_register_custom_instruction`
+      verifies user-provided executor flow materializes missing signatory accounts and sets `iroha:created_via="multisig"`.
+- Added upgraded-executor integration coverage:
+  - `integration_tests/tests/multisig.rs`:
+    - `multisig_register_materializes_missing_signatory_account_after_executor_upgrade`
+    - `multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade`
+  - Both tests explicitly upgrade to `executor_with_admin` and assert success/rejection materialization behavior.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib fixture_executor_executes_multisig_register_custom_instruction -- --nocapture` (pass)
+  - `cargo build -p irohad` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_materializes_missing_signatory_account_after_executor_upgrade -- --nocapture` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade -- --nocapture` (pass)

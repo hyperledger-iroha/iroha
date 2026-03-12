@@ -5696,7 +5696,10 @@ mod tests_permission_json {
 
     #[test]
     fn parse_register_zk_asset_ok() {
-        let ad: AssetDefinitionId = "gold#land".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "land".parse().unwrap(),
+            "gold".parse().unwrap(),
+        );
         let s = format!("{{\"type\":\"register_zk_asset\",\"target\":\"{ad}\"}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::RegisterZkAsset(id) if id == ad));
@@ -5704,7 +5707,10 @@ mod tests_permission_json {
 
     #[test]
     fn parse_shield_ok() {
-        let ad: AssetDefinitionId = "silver#land".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "land".parse().unwrap(),
+            "silver".parse().unwrap(),
+        );
         let s = format!("{{\"type\":\"shield\",\"target\":\"{ad}\"}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::Shield(id) if id == ad));
@@ -5712,7 +5718,10 @@ mod tests_permission_json {
 
     #[test]
     fn parse_unshield_ok() {
-        let ad: AssetDefinitionId = "bronze#land".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "land".parse().unwrap(),
+            "bronze".parse().unwrap(),
+        );
         let s = format!("{{\"type\":\"unshield\",\"target\":\"{ad}\"}}");
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(tok, PermissionToken::Unshield(id) if id == ad));
@@ -6384,7 +6393,10 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let domain: DomainId = "domain".parse().unwrap();
-        let asset: AssetDefinitionId = "rose#domain".parse().unwrap();
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "domain".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let mut wsv = MockWorldStateView::new();
         wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
         assert!(wsv.register_domain(&caller, domain.clone()));

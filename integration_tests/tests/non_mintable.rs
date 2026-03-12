@@ -21,11 +21,17 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
     // Case 1: mintable once can be minted once, but not twice.
     {
-        let asset_definition_id = "xor_once#wonderland"
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            "xor_once".parse().expect("Valid"),
+        );
         let create_asset = Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).mintable_once(),
+            {
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .mintable_once(),
         );
 
         let metadata = Metadata::default();
@@ -54,11 +60,17 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
     // Case 2: if registered with non-zero value, it cannot be minted again.
     {
-        let asset_definition_id = "xor_seeded#wonderland"
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            "xor_seeded".parse().expect("Valid"),
+        );
         let create_asset = Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).mintable_once(),
+            {
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .mintable_once(),
         );
 
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());

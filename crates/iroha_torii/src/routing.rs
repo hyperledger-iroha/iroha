@@ -1873,13 +1873,8 @@ pub async fn handle_v1_confidential_asset_transitions(
     state: Arc<CoreState>,
     axum::extract::Path(definition_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::asset::id::AssetDefinitionId;
-
-    let def_id: AssetDefinitionId = definition_id
-        .parse()
-        .map_err(|_| conversion_error("invalid asset definition id".to_owned()))?;
-
     let world = state.world_view();
+    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
     let block_height = state.committed_height() as u64;
     let definition = world
         .asset_definition(&def_id)
@@ -2997,7 +2992,8 @@ mod connect_session_tests {
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
 pub struct ZkRootsGetRequestDto {
-    /// Asset identifier (e.g., `xor#wonderland`) whose shielded pool roots to fetch.
+    /// Asset selector (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+    /// whose shielded pool roots to fetch.
     pub asset_id: String,
     /// Maximum number of recent roots to return.
     pub max: u32,
@@ -4038,24 +4034,39 @@ pub async fn handle_v1_zk_verify_batch(
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
 /// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
+#[cfg(feature = "app_api")]
+fn resolve_asset_definition_selector(
+    world: &impl WorldReadOnly,
+    asset_literal: &str,
+) -> Result<iroha_data_model::asset::id::AssetDefinitionId, Error> {
+    const INVALID_SELECTOR_MSG: &str =
+        "invalid asset selector; expected `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`";
+
+    let selector = asset_literal.trim();
+    let alias: iroha_data_model::asset::AssetDefinitionAlias = selector.parse().map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            INVALID_SELECTOR_MSG.to_owned(),
+        ))
+    })?;
+    world.asset_definition_id_by_alias(&alias).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })
+}
+
+/// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
+///
+/// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
+/// Returns recent shielded roots for the requested asset, bounded by the configured
+/// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
 pub async fn handle_v1_zk_roots(
     state: Arc<CoreState>,
     accept: Option<axum::http::HeaderValue>,
     NoritoJson(req): NoritoJson<ZkRootsGetRequestDto>,
 ) -> Result<Response> {
-    use iroha_data_model::prelude::AssetDefinitionId;
-    // Parse and validate asset id
-    let ad: AssetDefinitionId = match req.asset_id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted(
-                    "invalid asset_id; expected `name#domain`".to_owned(),
-                ),
-            ));
-        }
-    };
     let world = state.world_view();
+    let ad = resolve_asset_definition_selector(&world, &req.asset_id)?;
     let zk = state.zk_snapshot();
     // Bound the requested window by config cap (0 -> cap)
     let cap = zk.root_history_cap;
@@ -4212,6 +4223,67 @@ pub async fn handle_v1_sumeragi_evidence_list(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod zk_roots_selector_tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn selector_world() -> (iroha_core::state::World, AssetDefinitionId) {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("usd").expect("asset name"),
+        );
+        let mut definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
+        definition.alias = Some("usd#main".parse().expect("alias"));
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+        let world = iroha_core::state::World::with([domain], [account], [definition]);
+        (world, definition_id)
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_accepts_alias_literal() {
+        let (world, definition_id) = selector_world();
+        let view = world.view();
+        let resolved =
+            resolve_asset_definition_selector(&view, "usd#main").expect("alias should resolve");
+        assert_eq!(resolved, definition_id);
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_rejects_legacy_aid_literal() {
+        let (world, _) = selector_world();
+        let view = world.view();
+        let err = resolve_asset_definition_selector(&view, "aid:550e8400e29b11d4a7164466554400dd")
+            .expect_err("legacy aid should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_rejects_unknown_alias() {
+        let (world, _) = selector_world();
+        let view = world.view();
+        let err = resolve_asset_definition_selector(&view, "usd#missing")
+            .expect_err("unknown alias should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
 }
 
 fn hash_to_hex<H>(hash: H) -> String
@@ -12993,10 +13065,11 @@ fn append_asset_ids_from_instruction(
     use iroha_data_model::{
         asset::AssetId,
         isi::{
-            BurnBox, MintBox, RemoveAssetKeyValue, SetAssetKeyValue, TransferAssetBatch,
-            TransferBox, staking::RecordPublicLaneRewards,
+            BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+            TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
         },
     };
+    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
     fn push_asset(out: &mut Vec<AssetId>, asset: &AssetId) {
         out.push(asset.clone());
@@ -13040,6 +13113,16 @@ fn append_asset_ids_from_instruction(
     }
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         push_asset(out, rewards.reward_asset());
+        return;
+    }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
+        if let Ok(MultisigInstructionBox::Propose(propose)) =
+            MultisigInstructionBox::try_from(custom.payload())
+        {
+            for nested in &propose.instructions {
+                append_asset_ids_from_instruction(out, nested);
+            }
+        }
     }
 }
 
@@ -13051,10 +13134,11 @@ fn instruction_matches_asset_id(
     use iroha_data_model::{
         asset::AssetId,
         isi::{
-            BurnBox, MintBox, RemoveAssetKeyValue, SetAssetKeyValue, TransferAssetBatch,
-            TransferBox, staking::RecordPublicLaneRewards,
+            BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+            TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
         },
     };
+    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
     let any = instr.as_any();
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
@@ -13089,6 +13173,17 @@ fn instruction_matches_asset_id(
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         return rewards.reward_asset() == expected;
     }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
+        if let Ok(MultisigInstructionBox::Propose(propose)) =
+            MultisigInstructionBox::try_from(custom.payload())
+        {
+            return propose
+                .instructions
+                .iter()
+                .any(|nested| instruction_matches_asset_id(nested, expected));
+        }
+        return false;
+    }
     false
 }
 
@@ -13097,7 +13192,11 @@ fn instruction_matches_account_id(
     instr: &iroha_data_model::isi::InstructionBox,
     expected: &AccountId,
 ) -> bool {
-    use iroha_data_model::isi::{TransferAssetBatch, TransferBox};
+    use iroha_data_model::isi::{
+        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
+    };
+    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
     let any = instr.as_any();
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
@@ -13121,6 +13220,43 @@ fn instruction_matches_account_id(
             .entries()
             .iter()
             .any(|entry| entry.from() == expected || entry.to() == expected);
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(asset_mint) = mint {
+            return asset_mint.destination().account() == expected;
+        }
+        return false;
+    }
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(asset_burn) = burn {
+            return asset_burn.destination().account() == expected;
+        }
+        return false;
+    }
+    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
+        return set.asset().account() == expected;
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
+        return remove.asset().account() == expected;
+    }
+    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
+        return rewards.reward_asset().account() == expected;
+    }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
+        if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
+            return match multisig {
+                MultisigInstructionBox::Register(register) => register.account == *expected,
+                MultisigInstructionBox::Approve(approve) => approve.account == *expected,
+                MultisigInstructionBox::Propose(propose) => {
+                    propose.account == *expected
+                        || propose
+                            .instructions
+                            .iter()
+                            .any(|nested| instruction_matches_account_id(nested, expected))
+                }
+            };
+        }
+        return false;
     }
     false
 }
@@ -15946,7 +16082,8 @@ mod sse_filter_tests {
         let controller = ALICE_ID.clone();
         let receiver = BOB_ID.clone();
         let deposit = CARPENTER_ID.clone();
-        let asset_definition: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_definition: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let bundled = OfflineTransferSettled {
             bundle_id: Hash::new(b"bundle"),
             controller,
@@ -15969,7 +16106,11 @@ mod sse_filter_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod tx_query_filter_tests {
     use iroha_crypto::{Hash, HashOf as GenericHashOf, KeyPair};
+    use iroha_data_model::isi::{
+        RemoveAssetKeyValue, SetAssetKeyValue, staking::RecordPublicLaneRewards,
+    };
     use iroha_data_model::prelude as dm;
+    use iroha_executor_data_model::isi::multisig::MultisigPropose;
     use iroha_primitives::{const_vec::ConstVec, json::Json};
     use norito::json;
 
@@ -15983,6 +16124,12 @@ mod tx_query_filter_tests {
         let kp = KeyPair::random();
         let account = dm::AccountId::new(kp.public_key().clone());
         (account, kp)
+    }
+
+    fn test_asset_definition_id() -> dm::AssetDefinitionId {
+        "aid:550e8400e29b41d4a7164466554400aa"
+            .parse()
+            .expect("valid aid asset definition id")
     }
 
     fn dummy_proof<T>() -> iroha_crypto::MerkleProof<T> {
@@ -16101,7 +16248,7 @@ mod tx_query_filter_tests {
     fn explorer_transaction_filters_match_asset_id() {
         let (authority, keypair) = account_with_key();
         let (other_account, _) = account_with_key();
-        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
@@ -16136,7 +16283,7 @@ mod tx_query_filter_tests {
     fn instruction_matches_asset_id_handles_mint_assets() {
         let (authority, _) = account_with_key();
         let (other_account, _) = account_with_key();
-        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
@@ -16147,11 +16294,27 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset() {
+        let (controller, _) = account_with_key();
+        let (holder, _) = account_with_key();
+        let (other_holder, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let asset_id = dm::AssetId::new(def.clone(), holder.clone());
+        let other_asset_id = dm::AssetId::new(def, other_holder);
+        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, asset_id.clone()).into();
+        let propose = MultisigPropose::new(controller, vec![nested], None);
+        let instruction: dm::InstructionBox = propose.into();
+
+        assert!(instruction_matches_asset_id(&instruction, &asset_id));
+        assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
+    }
+
+    #[test]
     fn instruction_matches_account_id_matches_transfer_asset_accounts() {
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let (carol, _) = account_with_key();
-        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
         let transfer = dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone());
         let instruction: dm::InstructionBox = transfer.into();
@@ -16168,7 +16331,7 @@ mod tx_query_filter_tests {
         let (carol, _) = account_with_key();
         let (dave, _) = account_with_key();
         let (eve, _) = account_with_key();
-        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def = test_asset_definition_id();
         let entry_a =
             dm::TransferAssetBatchEntry::new(alice.clone(), bob.clone(), def.clone(), 1_u32);
         let entry_b = dm::TransferAssetBatchEntry::new(carol.clone(), dave.clone(), def, 2_u32);
@@ -16180,6 +16343,104 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &carol));
         assert!(instruction_matches_account_id(&instruction, &dave));
         assert!(!instruction_matches_account_id(&instruction, &eve));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_mint_asset_destination_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let asset_id = dm::AssetId::new(def, alice.clone());
+        let mint = dm::Mint::asset_numeric(1_u32, asset_id);
+        let instruction: dm::InstructionBox = mint.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_burn_asset_destination_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let def = test_asset_definition_id();
+        let asset_id = dm::AssetId::new(def, alice.clone());
+        let burn = dm::Burn::asset_numeric(1_u32, asset_id);
+        let instruction: dm::InstructionBox = burn.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_set_asset_key_value_asset_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let asset_id = dm::AssetId::new(test_asset_definition_id(), alice.clone());
+        let set = SetAssetKeyValue::new(asset_id, "key".parse().unwrap(), Json::new("value"));
+        let instruction: dm::InstructionBox = set.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_remove_asset_key_value_asset_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let asset_id = dm::AssetId::new(test_asset_definition_id(), alice.clone());
+        let remove = RemoveAssetKeyValue::new(asset_id, "key".parse().unwrap());
+        let instruction: dm::InstructionBox = remove.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_public_lane_rewards_asset_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let reward_asset = dm::AssetId::new(test_asset_definition_id(), alice.clone());
+        let rewards = RecordPublicLaneRewards {
+            lane_id: dm::LaneId::SINGLE,
+            epoch: 1,
+            reward_asset,
+            total_reward: 1_u32.into(),
+            shares: Vec::new(),
+            metadata: dm::Metadata::default(),
+        };
+        let instruction: dm::InstructionBox = rewards.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_multisig_custom_propose_account() {
+        let (multisig, _) = account_with_key();
+        let (other, _) = account_with_key();
+        let propose = MultisigPropose::new(multisig.clone(), Vec::new(), None);
+        let instruction: dm::InstructionBox = propose.into();
+
+        assert!(instruction_matches_account_id(&instruction, &multisig));
+        assert!(!instruction_matches_account_id(&instruction, &other));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_multisig_custom_propose_nested_accounts() {
+        let (multisig, _) = account_with_key();
+        let (nested_account, _) = account_with_key();
+        let (other, _) = account_with_key();
+        let nested_asset = dm::AssetId::new(test_asset_definition_id(), nested_account.clone());
+        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, nested_asset).into();
+        let propose = MultisigPropose::new(multisig.clone(), vec![nested], None);
+        let instruction: dm::InstructionBox = propose.into();
+
+        assert!(instruction_matches_account_id(&instruction, &multisig));
+        assert!(instruction_matches_account_id(
+            &instruction,
+            &nested_account
+        ));
+        assert!(!instruction_matches_account_id(&instruction, &other));
     }
 
     #[test]
@@ -16260,7 +16521,8 @@ mod tx_query_filter_tests {
     #[test]
     fn filter_asset_id_eq_matches_instruction_asset() {
         let (account, kp) = account_with_key();
-        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: dm::AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_id = dm::AssetId::new(asset_def.clone(), account.clone());
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
 
@@ -16286,7 +16548,8 @@ mod tx_query_filter_tests {
     fn tx_filter_adapter_accepts_asset_id_eq() {
         let telemetry = MaybeTelemetry::disabled();
         let (account, _kp) = account_with_key();
-        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: dm::AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_id = dm::AssetId::new(asset_def, account);
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
@@ -16415,6 +16678,7 @@ mod tx_query_filter_tests {
 mod explorer_lookup_tests {
     use std::{borrow::Cow, sync::Arc, time::Duration};
 
+    use http_body_util::BodyExt as _;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
@@ -16427,6 +16691,19 @@ mod explorer_lookup_tests {
     use iroha_data_model::{prelude as dm, transaction::signed::TransactionEntrypoint};
 
     use super::*;
+
+    #[derive(
+        crate::json_macros::JsonDeserialize,
+        norito::derive::NoritoDeserialize,
+        Debug,
+        Default,
+        Clone,
+    )]
+    struct ExplorerInstructionsEndpointQuery {
+        account: Option<String>,
+        page: Option<u64>,
+        per_page: Option<u64>,
+    }
 
     fn build_state_with_transactions(
         instruction_batches: Vec<Vec<dm::InstructionBox>>,
@@ -16574,6 +16851,176 @@ mod explorer_lookup_tests {
         assert_eq!(items[1].index, 1);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
         assert_eq!(items[1].transaction_hash, target_hash.to_string());
+    }
+
+    #[tokio::test]
+    async fn explorer_instructions_endpoint_account_filter_includes_mint_and_burn() {
+        use axum::{Router, routing::get};
+        use tower::ServiceExt;
+
+        let (alice, _) = {
+            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            (dm::AccountId::new(kp.public_key().clone()), kp)
+        };
+        let (bob, _) = {
+            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            (dm::AccountId::new(kp.public_key().clone()), kp)
+        };
+        let def: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400bb".parse().unwrap();
+        let alice_asset = dm::AssetId::new(def.clone(), alice.clone());
+        let bob_asset = dm::AssetId::new(def, bob.clone());
+        let instructions = vec![
+            dm::Mint::asset_numeric(10_u32, alice_asset.clone()).into(),
+            dm::Burn::asset_numeric(1_u32, alice_asset).into(),
+            dm::Mint::asset_numeric(10_u32, bob_asset.clone()).into(),
+            dm::Burn::asset_numeric(1_u32, bob_asset).into(),
+        ];
+        let (state, tx_hash) = build_state_with_single_transaction(instructions);
+
+        let app = Router::new().route(
+            ENDPOINT_EXPLORER_INSTRUCTIONS,
+            get({
+                let state = state.clone();
+                move |crate::NoritoQuery(query): crate::NoritoQuery<
+                    ExplorerInstructionsEndpointQuery,
+                >| {
+                    let state = state.clone();
+                    async move {
+                        let account = query.account.map(|raw| {
+                            dm::AccountId::parse_encoded(&raw)
+                                .expect("test query account should parse")
+                                .into_account_id()
+                        });
+                        let pagination = crate::explorer::ExplorerPaginationQuery {
+                            page: query.page.unwrap_or(0),
+                            per_page: query.per_page.unwrap_or(20),
+                        };
+                        handle_v1_explorer_instructions(
+                            state,
+                            MaybeTelemetry::disabled(),
+                            pagination,
+                            ExplorerInstructionQuery {
+                                account,
+                                authority: None,
+                                transaction_hash: None,
+                                status: None,
+                                block: None,
+                                kind: None,
+                                asset_id: None,
+                            },
+                        )
+                        .await
+                    }
+                }
+            }),
+        );
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(format!(
+                "{ENDPOINT_EXPLORER_INSTRUCTIONS}?account={}&page=0&per_page=10",
+                urlencoding::encode(&alice.to_string())
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let payload: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = payload["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 2);
+        let expected_hash = tx_hash.to_string();
+        for item in items {
+            assert_eq!(
+                item["transaction_hash"].as_str(),
+                Some(expected_hash.as_str())
+            );
+        }
+        let mut indexes: Vec<u64> = items
+            .iter()
+            .filter_map(|item| item["index"].as_u64())
+            .collect();
+        indexes.sort_unstable();
+        assert_eq!(indexes, vec![0, 1]);
+        let mut kinds: Vec<String> = items
+            .iter()
+            .filter_map(|item| item["kind"].as_str().map(ToOwned::to_owned))
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["Burn".to_owned(), "Mint".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn explorer_instructions_endpoint_account_filter_includes_multisig_custom_propose() {
+        use axum::{Router, routing::get};
+        use iroha_executor_data_model::isi::multisig::MultisigPropose;
+        use tower::ServiceExt;
+
+        let (multisig, _) = {
+            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            (dm::AccountId::new(kp.public_key().clone()), kp)
+        };
+        let custom: dm::InstructionBox =
+            MultisigPropose::new(multisig.clone(), Vec::new(), None).into();
+        let (state, tx_hash) = build_state_with_single_transaction(vec![custom]);
+
+        let app = Router::new().route(
+            ENDPOINT_EXPLORER_INSTRUCTIONS,
+            get({
+                let state = state.clone();
+                move |crate::NoritoQuery(query): crate::NoritoQuery<
+                    ExplorerInstructionsEndpointQuery,
+                >| {
+                    let state = state.clone();
+                    async move {
+                        let account = query.account.map(|raw| {
+                            dm::AccountId::parse_encoded(&raw)
+                                .expect("test query account should parse")
+                                .into_account_id()
+                        });
+                        let pagination = crate::explorer::ExplorerPaginationQuery {
+                            page: query.page.unwrap_or(0),
+                            per_page: query.per_page.unwrap_or(20),
+                        };
+                        handle_v1_explorer_instructions(
+                            state,
+                            MaybeTelemetry::disabled(),
+                            pagination,
+                            ExplorerInstructionQuery {
+                                account,
+                                authority: None,
+                                transaction_hash: None,
+                                status: None,
+                                block: None,
+                                kind: None,
+                                asset_id: None,
+                            },
+                        )
+                        .await
+                    }
+                }
+            }),
+        );
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(format!(
+                "{ENDPOINT_EXPLORER_INSTRUCTIONS}?account={}&page=0&per_page=10",
+                urlencoding::encode(&multisig.to_string())
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let payload: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = payload["items"].as_array().expect("items array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["transaction_hash"].as_str(),
+            Some(tx_hash.to_string().as_str())
+        );
+        assert_eq!(items[0]["kind"].as_str(), Some("Custom"));
     }
 
     #[test]
@@ -16989,7 +17436,8 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
-        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: dm::AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
 
@@ -19451,11 +19899,7 @@ mod app_api_integration_tests {
     #[tokio::test]
     async fn asset_holders_query_rejects_invalid_operator_for_account_id() {
         let _guard = app_query_limits_guard();
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let (state, _, _) = build_asset_holder_fixture_state();
 
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
@@ -19488,7 +19932,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19783,7 +20227,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19835,7 +20279,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19879,8 +20323,10 @@ mod app_api_integration_tests {
             }),
         );
 
-        let def_id = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
-        let asset_id = AssetId::new(def_id, alice_id.clone());
+        let asset_id = AssetId::new(
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap(),
+            alice_id.clone(),
+        );
         let body = json_string(obj(vec![(
             "filter",
             obj(vec![
@@ -19893,7 +20339,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20040,8 +20486,14 @@ mod app_api_integration_tests {
             "asset_definition_id should be canonical aid: {definition_id}"
         );
         let account_literal = alice_id.to_string();
-        assert_eq!(items[0]["account_id"].as_str(), Some(account_literal.as_str()));
-        assert!(!items[0]["asset_name"].is_null(), "asset_name should be populated");
+        assert_eq!(
+            items[0]["account_id"].as_str(),
+            Some(account_literal.as_str())
+        );
+        assert!(
+            !items[0]["asset_name"].is_null(),
+            "asset_name should be populated"
+        );
         assert!(items[0]["asset_alias"].is_null());
     }
 
@@ -20118,7 +20570,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23wonderland/holders?limit=1")
+            .uri("/v1/assets/rose%23sbp/holders?limit=1")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20159,13 +20611,16 @@ mod app_api_integration_tests {
             }),
         );
 
-        let asset_id =
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()).to_string();
+        let asset_id = AssetId::new(
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap(),
+            alice_id.clone(),
+        )
+        .to_string();
         let expected_account = alice_id.to_string();
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/assets/rose%23wonderland/holders?asset_id={}",
+                "/v1/assets/rose%23sbp/holders?asset_id={}",
                 urlencoding::encode(&asset_id)
             ))
             .body(axum::body::Body::empty())
@@ -20202,7 +20657,7 @@ mod app_api_integration_tests {
 
         let err = handle_v1_asset_holders(
             state,
-            axum::extract::Path("rose#wonderland".to_string()),
+            axum::extract::Path("rose#sbp".to_string()),
             crate::NoritoQuery(params),
             MaybeTelemetry::for_tests(),
         )
@@ -20212,6 +20667,31 @@ mod app_api_integration_tests {
             Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected error for limit above cap"),
+        }
+    }
+
+    #[tokio::test]
+    async fn asset_holders_get_rejects_legacy_aid_path_selector() {
+        let _guard = app_query_limits_guard();
+        let (state, _, _) = build_asset_holder_fixture_state();
+        let params = AssetHolderGetParams {
+            limit: Some(10),
+            offset: 0,
+            asset_id: None,
+        };
+
+        let result = handle_v1_asset_holders(
+            state,
+            axum::extract::Path("aid:550e8400e29b41d4a7164466554400dd".to_string()),
+            crate::NoritoQuery(params),
+            MaybeTelemetry::for_tests(),
+        )
+        .await;
+
+        match result {
+            Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("legacy aid selector must be rejected"),
         }
     }
 
@@ -20246,7 +20726,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23wonderland/holders?limit=4")
+            .uri("/v1/assets/rose%23sbp/holders?limit=4")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20306,9 +20786,11 @@ mod app_api_integration_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
-        let asset_def = AssetDefinition::numeric("rose#wonderland".parse().unwrap())
-            .confidential_policy(policy)
-            .build(&alice_id);
+        let mut asset_def =
+            AssetDefinition::numeric("aid:550e8400e29b41d4a7164466554400dd".parse().unwrap())
+                .confidential_policy(policy)
+                .build(&alice_id);
+        asset_def.alias = Some("rose#sbp".parse().expect("asset alias literal"));
         let world = World::with([domain], [account], [asset_def]);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -20329,7 +20811,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/confidential/assets/rose%23wonderland/transitions")
+            .uri("/v1/confidential/assets/rose%23sbp/transitions")
             .body(axum::body::Body::empty())
             .unwrap();
 
@@ -20340,7 +20822,10 @@ mod app_api_integration_tests {
             .unwrap()
             .to_bytes();
         let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(json["asset_id"].as_str(), Some("rose#wonderland"));
+        assert_eq!(
+            json["asset_id"].as_str(),
+            Some("aid:550e8400e29b41d4a7164466554400dd")
+        );
         assert_eq!(json["current_mode"].as_str(), Some("Convertible"));
         assert_eq!(json["effective_mode"].as_str(), Some("Convertible"));
         assert_eq!(json["vk_set_hash"].as_str(), Some(expected_vk_hex.as_str()));
@@ -20363,6 +20848,24 @@ mod app_api_integration_tests {
             Some("ShieldedOnly")
         );
         assert!(json["block_height"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn confidential_asset_transitions_rejects_legacy_aid_path_selector() {
+        let _guard = app_query_limits_guard();
+        let (state, _, _) = build_asset_holder_fixture_state();
+
+        let result = handle_v1_confidential_asset_transitions(
+            state,
+            axum::extract::Path("aid:550e8400e29b41d4a7164466554400dd".to_string()),
+        )
+        .await;
+
+        match result {
+            Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("legacy aid selector must be rejected"),
+        }
     }
 
     #[tokio::test]
@@ -20477,7 +20980,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20514,7 +21017,11 @@ mod app_api_integration_tests {
         let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
 
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let rose_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let mut rose_definition = AssetDefinition::numeric(rose_def.clone())
+            .with_name("rose".to_owned())
+            .build(&alice_id);
+        rose_definition.alias = Some("rose#sbp".parse().expect("asset alias literal"));
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -20525,13 +21032,22 @@ mod app_api_integration_tests {
                 Numeric::from(20_u32),
             ),
         ];
-        let state = state_with_assets(
-            domain_id,
-            alice_id.clone(),
-            vec![alice_id.clone(), bob_id.clone()],
-            vec![rose_def],
+        let domain = Domain::new(domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+        let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
+        let world = World::with_assets(
+            [domain],
+            [alice_account, bob_account],
+            [rose_definition],
             assets,
+            [],
         );
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
 
         (state, alice_id, bob_id)
     }
@@ -20579,7 +21095,8 @@ mod query_endpoint_tests {
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
         let asset = Asset::new(asset_id.clone(), Numeric::from(13_u32));
@@ -29515,8 +30032,9 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let initiator_id: AccountId = AccountId::new(initiator_keys.public_key().clone());
     let counterparty_id: AccountId = AccountId::new(counterparty_keys.public_key().clone());
     let authority_id = initiator_id.clone();
-    let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
-    let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
+    let cash_def_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap();
+    let collateral_def_id: AssetDefinitionId =
+        "aid:550e8400e29b41d4a7164466554400f2".parse().unwrap();
 
     let latest_block = state.view().latest_block();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -29536,12 +30054,20 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Register::asset_definition(AssetDefinition::numeric(cash_def_id.clone()))
-        .execute(&authority_id, &mut stx)
-        .unwrap();
-    Register::asset_definition(AssetDefinition::numeric(collateral_def_id.clone()))
-        .execute(&authority_id, &mut stx)
-        .unwrap();
+    Register::asset_definition({
+        let __asset_definition_id = cash_def_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    })
+    .execute(&authority_id, &mut stx)
+    .unwrap();
+    Register::asset_definition({
+        let __asset_definition_id = collateral_def_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    })
+    .execute(&authority_id, &mut stx)
+    .unwrap();
 
     Mint::asset_numeric(
         numeric!(5000),
@@ -34536,7 +35062,7 @@ mod explorer_asset_definition_econometrics_tests {
         let kp_carol = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let carol_id = dm::ScopedAccountId::new(domain_id.clone(), kp_carol.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -34553,9 +35079,13 @@ mod explorer_asset_definition_econometrics_tests {
         dm::Register::account(dm::Account::new(carol_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::asset_definition({
+            let __asset_definition_id = def_id.clone();
+            dm::AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         // Ensure balances exist so transfers/burn would be valid if executed.
         dm::Mint::asset_numeric(
@@ -34838,7 +35368,7 @@ mod explorer_asset_definition_snapshot_tests {
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -34852,9 +35382,13 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::account(dm::Account::new(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::asset_definition({
+            let __asset_definition_id = def_id.clone();
+            dm::AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         dm::Mint::asset_numeric(
             100_u32,
@@ -35003,7 +35537,7 @@ mod explorer_asset_definition_snapshot_tests {
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -35017,9 +35551,13 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::account(dm::Account::new(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::asset_definition(dm::AssetDefinition::numeric(def_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::asset_definition({
+            let __asset_definition_id = def_id.clone();
+            dm::AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
 
         dm::Mint::asset_numeric(
             1_u32,
@@ -37960,7 +38498,9 @@ mod public_lane_tests {
 
     #[test]
     fn pending_reward_to_json_uses_canonical_i105_literals() {
-        let asset_def: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400cc"
+            .parse()
+            .expect("asset definition id");
         let reward = PublicLanePendingReward {
             lane_id: LaneId::new(5),
             account: ALICE_ID.clone(),
@@ -37985,8 +38525,10 @@ mod public_lane_tests {
     #[test]
     fn pending_rewards_filter_by_asset_id() {
         let lane_id = LaneId::new(1);
-        let asset_def_a: AssetDefinitionId = "xor#wonderland".parse().unwrap();
-        let asset_def_b: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_a: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400cc".parse().unwrap();
+        let asset_def_b: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_a = AssetId::new(asset_def_a, ALICE_ID.clone());
         let asset_b = AssetId::new(asset_def_b, ALICE_ID.clone());
 
@@ -42009,9 +42551,9 @@ pub async fn handle_post_v1_subscription_plan(
 
     let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
     let instructions = vec![
-        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-            plan_id.clone(),
-        ))),
+        InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(plan_id.clone()).with_name(plan_id.name().to_string()),
+        )),
         InstructionBox::from(SetKeyValue::asset_definition(
             plan_id.clone(),
             plan_key,
@@ -43013,7 +43555,7 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "usd#wonderland".parse().unwrap(),
+                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             }),
         };
         let mut metadata = Metadata::default();
@@ -43031,7 +43573,7 @@ mod subscription_api_tests {
     fn subscription_state_and_invoice_from_metadata_roundtrip() {
         let billing_trigger_id: TriggerId = "billing_trigger".parse().unwrap();
         let subscription = SubscriptionState {
-            plan_id: "plan#wonderland".parse().unwrap(),
+            plan_id: "aid:550e8400e29b41d4a7164466554400f3".parse().unwrap(),
             provider: ALICE_ID.clone(),
             subscriber: ALICE_ID.clone(),
             status: SubscriptionStatus::Active,
@@ -43050,7 +43592,7 @@ mod subscription_api_tests {
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
             amount: Numeric::new(5_u32, 0),
-            asset_definition: "usd#wonderland".parse().unwrap(),
+            asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
         };
@@ -43182,7 +43724,7 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "usd#wonderland".parse().unwrap(),
+                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             }),
         }
     }
@@ -43270,8 +43812,10 @@ mod subscription_api_tests {
     async fn handle_v1_subscription_plans_filters_provider() {
         let provider = ALICE_ID.clone();
         let other = BOB_ID.clone();
-        let plan_primary_id: AssetDefinitionId = "plan-a#wonderland".parse().unwrap();
-        let plan_secondary_id: AssetDefinitionId = "plan-b#wonderland".parse().unwrap();
+        let plan_primary_id: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400f4".parse().unwrap();
+        let plan_secondary_id: AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400f5".parse().unwrap();
         let plan_a = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -43285,7 +43829,7 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "usd#wonderland".parse().unwrap(),
+                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             }),
         };
         let plan_b = SubscriptionPlan {
@@ -43323,7 +43867,7 @@ mod subscription_api_tests {
     async fn handle_v1_subscriptions_filters_status() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "plan-sub#wonderland".parse().unwrap();
+        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f6".parse().unwrap();
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -43337,7 +43881,7 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(1_u32, 0),
-                asset_definition: "usd#wonderland".parse().unwrap(),
+                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             }),
         };
         let active_id: NftId = "sub-active$wonderland".parse().unwrap();
@@ -43399,7 +43943,7 @@ mod subscription_api_tests {
     async fn handle_v1_subscription_get_includes_invoice() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "plan-invoice#wonderland".parse().unwrap();
+        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f7".parse().unwrap();
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -43413,7 +43957,7 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(1_u32, 0),
-                asset_definition: "usd#wonderland".parse().unwrap(),
+                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             }),
         };
         let subscription_id: NftId = "sub-invoice$wonderland".parse().unwrap();
@@ -43437,7 +43981,7 @@ mod subscription_api_tests {
             period_end_ms: 1_000,
             attempted_at_ms: 1_000,
             amount: Numeric::new(1_u32, 0),
-            asset_definition: "usd#wonderland".parse().unwrap(),
+            asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
         };
@@ -43475,7 +44019,7 @@ mod subscription_api_tests {
             Vec::new(),
         );
         let (queue, chain_id, telemetry) = test_queue_components();
-        let plan_id: AssetDefinitionId = "plan-new#wonderland".parse().unwrap();
+        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f8".parse().unwrap();
         let plan = sample_plan(provider.clone());
         let req = SubscriptionPlanCreateDto {
             authority: provider,
@@ -43507,7 +44051,7 @@ mod subscription_api_tests {
     async fn handle_post_v1_subscription_create_enqueues_transaction() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "plan-subscribe#wonderland".parse().unwrap();
+        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f9".parse().unwrap();
         let plan = sample_plan(provider.clone());
         let state = state_with_plans_and_subscriptions(
             provider.clone(),
@@ -43552,7 +44096,7 @@ mod subscription_api_tests {
     async fn handle_post_v1_subscription_actions_enqueue_transactions() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "plan-actions#wonderland".parse().unwrap();
+        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400fa".parse().unwrap();
         let plan = sample_plan(provider.clone());
         let active_id: NftId = "sub-active-actions$wonderland".parse().unwrap();
         let paused_id: NftId = "sub-paused-actions$wonderland".parse().unwrap();
@@ -43769,7 +44313,10 @@ mod adapter_filter_tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    arr(vec![val("rose#wonderland"), val("gold#wonderland")]),
+                    arr(vec![
+                        val("aid:550e8400e29b41d4a7164466554400dd"),
+                        val("aid:550e8400e29b41d4a7164466554400ee"),
+                    ]),
                 ]),
             ),
         ]);
@@ -43808,7 +44355,7 @@ mod adapter_filter_tests {
     fn asset_holder_filter_adapter_accepts_asset_id_eq() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let expr = FilterExpr::Eq(
             FieldPath("asset_id".into()),
@@ -43825,7 +44372,7 @@ mod adapter_filter_tests {
     fn asset_holder_filter_matches_asset_id() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let item = AssetHolderListItem {
             account_id: ALICE_ID.clone(),
@@ -43839,7 +44386,7 @@ mod adapter_filter_tests {
         );
         assert!(filter_asset_holder_item(&expr, &item));
 
-        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
         let other_asset_id = AssetId::new(other_def, ALICE_ID.clone());
         let expr2 = FilterExpr::Eq(
             FieldPath("asset_id".into()),
@@ -43878,8 +44425,8 @@ mod adapter_filter_tests {
         use iroha_test_samples::ALICE_ID;
 
         let controller = ALICE_ID.clone();
-        let definition =
-            AssetDefinitionId::from_str("xor#wonderland").expect("asset definition id");
+        let definition = AssetDefinitionId::from_str("aid:550e8400e29b41d4a7164466554400cc")
+            .expect("asset definition id");
         let asset_id = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
@@ -44117,7 +44664,7 @@ mod adapter_filter_tests {
         .expect("filters");
         assert!(filters.matches(&record));
 
-        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
         let other_asset_id = AssetId::new(other_def, record.certificate.controller.clone());
         let params = OfflineAllowanceListParams {
             asset_id: Some(other_asset_id.to_string()),
@@ -44496,7 +45043,7 @@ mod adapter_filter_tests {
         .expect("filters");
         assert!(filters.matches(&record));
 
-        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
         let other_asset = AssetId::new(other_def, record.controller.clone());
         let params = OfflineTransferListParams {
             asset_id: Some(other_asset.to_string()),
@@ -44701,7 +45248,8 @@ fn sample_transfer_record() -> OfflineTransferRecord {
     let controller = ALICE_ID.clone();
     let receiver = BOB_ID.clone();
     let deposit = CARPENTER_ID.clone();
-    let definition = AssetDefinitionId::from_str("xor#wonderland").expect("asset definition id");
+    let definition = AssetDefinitionId::from_str("aid:550e8400e29b41d4a7164466554400cc")
+        .expect("asset definition id");
     let asset_id = AssetId::new(definition, controller.clone());
     let certificate = OfflineWalletCertificate {
         controller: controller.clone(),
@@ -45178,14 +45726,7 @@ pub async fn handle_v1_asset_holders(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::{
-        account::ScopedAccountId,
-        asset::{AssetId, id::AssetDefinitionId},
-    };
-
-    let def_id: AssetDefinitionId = definition_id
-        .parse()
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    use iroha_data_model::{account::ScopedAccountId, asset::AssetId};
     let asset_filter = p
         .asset_id
         .as_deref()
@@ -45199,6 +45740,7 @@ pub async fn handle_v1_asset_holders(
         .transpose()?;
 
     let world = state.world_view();
+    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
     // Aggregate balances per account
@@ -45283,13 +45825,10 @@ pub async fn handle_v1_asset_holders_query(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::asset::{AssetId, id::AssetDefinitionId};
-
-    let def_id: AssetDefinitionId = definition_id
-        .parse()
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    use iroha_data_model::asset::AssetId;
 
     let world = state.world_view();
+    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
     let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();

@@ -61,10 +61,13 @@ fn correct_pagination_assets_after_creating_new_one() {
     let mut missing_register_assets = vec![];
 
     for i in 0..N_ASSETS {
-        let asset_definition_id = format!("xor{i}#wonderland")
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+        let asset_name = format!("xor{i}");
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            asset_name.parse().expect("Valid"),
+        );
+        let asset_definition =
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name(asset_name);
         let asset = Asset::new(AssetId::new(asset_definition_id, account_id.clone()), 1u32);
 
         if missing_indices.contains(&i) {
@@ -154,12 +157,15 @@ fn correct_sorting_of_entities() {
     let mut instructions = vec![];
     let n = 10_u32;
     for i in 0..n {
-        let asset_definition_id = format!("xor_{i}#wonderland")
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
+        let asset_name = format!("xor_{i}");
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            asset_name.parse().expect("Valid"),
+        );
         let mut asset_metadata = Metadata::default();
         asset_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_name)
             .with_metadata(asset_metadata.clone());
 
         metadata_of_assets.push(asset_metadata);
@@ -331,12 +337,15 @@ fn metadata_sorting_descending() {
     let mut instructions = vec![];
     let n = 10_u32;
     for i in 0..n {
-        let asset_definition_id = format!("xor_{i}#wonderland")
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
+        let asset_name = format!("xor_{i}");
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            asset_name.parse().expect("Valid"),
+        );
         let mut asset_metadata = Metadata::default();
         asset_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_name)
             .with_metadata(asset_metadata.clone());
 
         metadata_of_assets.push(asset_metadata);

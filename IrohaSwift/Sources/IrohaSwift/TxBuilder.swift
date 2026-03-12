@@ -3,7 +3,7 @@ import Foundation
 public struct TransferRequest {
     public let chainId: String
     public let authority: String
-    public let assetDefinitionId: String // e.g., "jpy#xst"
+    public let assetDefinitionId: String // e.g., "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
     public let quantity: String         // decimal string
     public let destination: String      // account id
     public let description: String?
@@ -870,17 +870,6 @@ public final class IrohaSDK: @unchecked Sendable {
 
     private func makeCreationTimeMs() -> UInt64 {
         creationTimeProvider()
-    }
-
-    /// Compose Iroha v2 AssetId string from definition and account id.
-    public static func makeAssetId(assetDefinitionId: String, accountId: String) -> String {
-        let parts = assetDefinitionId.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
-        if parts.count == 2 {
-            let defName = String(parts[0])
-            let defDomain = String(parts[1])
-            return "\(defName)#\(defDomain)#\(accountId)"
-        }
-        return "\(assetDefinitionId)#\(accountId)"
     }
 
     /// Build a signed transfer payload using the experimental Swift encoder.

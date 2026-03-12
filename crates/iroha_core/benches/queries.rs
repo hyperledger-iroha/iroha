@@ -252,7 +252,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = "bench".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "coin#bench".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "bench".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let mut accounts = Vec::with_capacity(1_000);
     let mut assets: Vec<iroha_data_model::asset::Asset> = Vec::with_capacity(1_000);
     for i in 0..1_000 {
@@ -361,7 +364,8 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     let domain = Domain::new("bench".parse().unwrap()).build(&auth);
     let mut defs = Vec::with_capacity(10_000);
     for i in 0..10_000 {
-        let id: AssetDefinitionId = format!("ad{}#bench", i).parse().unwrap();
+        let id =
+            AssetDefinitionId::new("bench".parse().unwrap(), format!("ad{i}").parse().unwrap());
         let mut ad = AssetDefinition::numeric(id).build(&auth);
         let _ = ad.metadata_mut().insert(
             "rank".parse().unwrap(),
@@ -457,7 +461,10 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
 
-    let asset_def_id: AssetDefinitionId = "coin#bench".parse().expect("asset def id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "bench".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority_id);
 
     let mut accounts = Vec::with_capacity(n_accounts);
@@ -470,9 +477,10 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
                 asset_def_id.clone()
             } else {
                 // create a handful of distinct definitions to vary lookups
-                format!("coin{}_#bench", j)
-                    .parse()
-                    .unwrap_or_else(|_| asset_def_id.clone())
+                AssetDefinitionId::new(
+                    "bench".parse().unwrap(),
+                    format!("coin{j}").parse().unwrap(),
+                )
             };
             let asset_id = AssetId::new(ad, acc_id.clone());
             let value = Numeric::new(u128::from(j as u64 + 1), 0);
@@ -590,7 +598,10 @@ fn build_state_with_asset_definitions(n: usize) -> State {
 
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
-        let def_id: AssetDefinitionId = format!("coin{}#bench", i).parse().expect("ad id");
+        let def_id = AssetDefinitionId::new(
+            "bench".parse().expect("domain"),
+            format!("coin{i}").parse().expect("ad id"),
+        );
         defs.push(AssetDefinition::numeric(def_id).build(&authority_id));
     }
 

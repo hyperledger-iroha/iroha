@@ -65,7 +65,10 @@ fn asset_totals_track_multi_account_mint_and_burn() {
             .expect("register account");
     }
 
-    let definition_id: AssetDefinitionId = "multi_total#wonderland".parse().expect("asset def");
+    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "multi_total".parse().unwrap(),
+    );
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
@@ -171,7 +174,10 @@ fn asset_totals_drop_when_unregistering_account() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register holder");
 
-    let definition_id: AssetDefinitionId = "account_drop#wonderland".parse().expect("asset def");
+    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "account_drop".parse().unwrap(),
+    );
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register definition");
@@ -265,7 +271,10 @@ fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register foreign holder");
 
-    let definition_id: AssetDefinitionId = "domain_drop#source".parse().expect("asset def");
+    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "source".parse().unwrap(),
+        "domain_drop".parse().unwrap(),
+    );
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register source definition");
@@ -376,7 +385,10 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register foreign holder");
 
-    let definition_id: AssetDefinitionId = "teardown#source".parse().expect("asset def");
+    let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "source".parse().unwrap(),
+        "teardown".parse().unwrap(),
+    );
     Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register source definition");

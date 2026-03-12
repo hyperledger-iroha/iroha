@@ -59,7 +59,10 @@ fn register_account_and_asset_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
 
     // Predeclare asset id to grant mint permission
-    let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
     let host = WsvHost::new_with_subject(
         wsv,

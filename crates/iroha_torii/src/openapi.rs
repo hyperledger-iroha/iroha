@@ -1596,7 +1596,7 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     ));
     params.push(string_query_param(
         "account",
-        "Filter transfer instructions by participant account (source or destination; accepts canonical I105 account literals).",
+        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -6736,7 +6736,7 @@ fn asset_alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` aliases."
+            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` aliases."
                 .to_owned(),
         ),
     );
@@ -7722,7 +7722,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "alias": {
                     "type": "string",
-                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>`) to resolve."
+                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) to resolve."
                 }
             }
         }),
@@ -10660,6 +10660,41 @@ mod tests {
         assert!(explorer_instructions.contains(&"transaction_status".to_owned()));
         assert!(explorer_instructions.contains(&"block".to_owned()));
         assert!(explorer_instructions.contains(&"kind".to_owned()));
+    }
+
+    #[test]
+    fn explorer_instructions_account_param_description_mentions_non_transfer_matches() {
+        fn parameter_description(doc: &Value, path: &str, name: &str) -> String {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find_map(|param| {
+                    let obj = param.as_object()?;
+                    let param_name = obj.get("name")?.as_str()?;
+                    (param_name == name)
+                        .then(|| obj.get("description")?.as_str().map(str::to_owned))
+                        .flatten()
+                })
+                .expect("parameter description")
+        }
+
+        let doc = generate_spec();
+        let description =
+            parameter_description(&doc, "/v1/explorer/instructions", "account").to_lowercase();
+        assert!(description.contains("mint/burn"));
+        assert!(description.contains("multisig"));
+        assert!(description.contains("reward"));
     }
 
     #[test]

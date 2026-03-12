@@ -1449,7 +1449,10 @@ mod bundle_inspect_tests {
         let controller = AccountId::new(controller_key);
         let receiver = AccountId::new(receiver_key);
         let deposit = receiver.clone();
-        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset = AssetId::new(asset_definition, controller.clone());
 
         let allowance_amount = Numeric::from_str("500").unwrap();
@@ -1816,7 +1819,8 @@ mod tests {
 
     fn sample_allowance_record() -> OfflineAllowanceRecord {
         let controller = sample_account(0xA1, "wonderland");
-        let definition = AssetDefinitionId::from_str("xor#wonderland").expect("asset definition");
+        let definition =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
         let asset = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {

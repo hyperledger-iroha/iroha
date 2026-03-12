@@ -21,7 +21,7 @@ use toml::Table;
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_peer_should_restore_its_state() -> Result<()> {
-    let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
+    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
     let quantity = numeric!(200);
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -50,9 +50,11 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
             .submit_all_blocking::<InstructionBox>([
-                Register::asset_definition(AssetDefinition::numeric(
-                    asset_definition_clone.clone(),
-                ))
+                Register::asset_definition({
+                    let __asset_definition_id = asset_definition_clone.clone();
+                    AssetDefinition::numeric(__asset_definition_id.clone())
+                        .with_name(__asset_definition_id.name().to_string())
+                })
                 .into(),
                 Mint::asset_numeric(
                     mint_quantity,

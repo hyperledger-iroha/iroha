@@ -199,11 +199,19 @@ mod tests {
         let initiator = parse_account(INITIATOR);
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().unwrap(),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: 1_000u32.into(),
         };
-        let collateral_leg =
-            RepoCollateralLeg::new("bond#wonderland".parse().unwrap(), 1_100u32.into());
+        let collateral_leg = RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            1_100u32.into(),
+        );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
         let instruction = RepoIsi::new(
@@ -230,11 +238,19 @@ mod tests {
         let initiator = parse_account(INITIATOR);
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().unwrap(),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: 1_000u32.into(),
         };
-        let collateral_leg =
-            RepoCollateralLeg::new("bond#wonderland".parse().unwrap(), 1_100u32.into());
+        let collateral_leg = RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            1_100u32.into(),
+        );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
         let instruction = RepoIsi::new(
@@ -261,11 +277,19 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let custodian = parse_account(CUSTODIAN);
         let cash_leg = RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().unwrap(),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: 1_000u32.into(),
         };
-        let collateral_leg =
-            RepoCollateralLeg::new("bond#wonderland".parse().unwrap(), 1_100u32.into());
+        let collateral_leg = RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            1_100u32.into(),
+        );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
         let instruction = RepoIsi::new(
@@ -301,11 +325,19 @@ mod tests {
         let initiator = parse_account(INITIATOR);
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().unwrap(),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: 1_000u32.into(),
         };
-        let collateral_leg =
-            RepoCollateralLeg::new("bond#wonderland".parse().unwrap(), 1_100u32.into());
+        let collateral_leg = RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            1_100u32.into(),
+        );
 
         let instruction = ReverseRepoIsi::new(
             agreement_id.clone(),

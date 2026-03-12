@@ -716,11 +716,27 @@ mod tests {
         let bob_account =
             Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
-        let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
-        let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
+        let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
+        let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "bond".parse().unwrap(),
+        );
 
-        let cash_def = AssetDefinition::numeric(cash_def_id.clone()).build(&ALICE_ID);
-        let collateral_def = AssetDefinition::numeric(collateral_def_id.clone()).build(&ALICE_ID);
+        let cash_def = {
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
+        let collateral_def = {
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
@@ -762,14 +778,38 @@ mod tests {
         let bob_account =
             Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
-        let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
-        let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-        let alt_collateral_def_id: AssetDefinitionId = "note#wonderland".parse().unwrap();
+        let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
+        let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "bond".parse().unwrap(),
+        );
+        let alt_collateral_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "note".parse().unwrap(),
+            );
 
-        let cash_def = AssetDefinition::numeric(cash_def_id.clone()).build(&ALICE_ID);
-        let collateral_def = AssetDefinition::numeric(collateral_def_id.clone()).build(&ALICE_ID);
-        let alt_collateral_def =
-            AssetDefinition::numeric(alt_collateral_def_id.clone()).build(&ALICE_ID);
+        let cash_def = {
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
+        let collateral_def = {
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
+        let alt_collateral_def = {
+            let __asset_definition_id = alt_collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
@@ -825,11 +865,27 @@ mod tests {
         let custodian_account =
             Account::new(custodian_id.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
-        let cash_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
-        let collateral_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
+        let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
+        let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "bond".parse().unwrap(),
+        );
 
-        let cash_def = AssetDefinition::numeric(cash_def_id.clone()).build(&ALICE_ID);
-        let collateral_def = AssetDefinition::numeric(collateral_def_id.clone()).build(&ALICE_ID);
+        let cash_def = {
+            let __asset_definition_id = cash_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
+        let collateral_def = {
+            let __asset_definition_id = collateral_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&ALICE_ID);
 
         let bob_cash = Asset::new(
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),

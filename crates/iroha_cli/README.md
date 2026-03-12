@@ -316,7 +316,7 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 Shield public funds (append a shielded note commitment):
 
 ```
-iroha app zk shield --asset rose#wonderland --from alice@wonderland \
+iroha app zk shield --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f --from <i105-account-id> \
   --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
@@ -346,13 +346,13 @@ cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
 }
 JSON
 
-iroha app zk unshield --asset rose#wonderland --to alice@wonderland --amount 1000 \
+iroha app zk unshield --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f --to <i105-account-id> --amount 1000 \
   --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
 
 ### Register a ZK-capable asset (Hybrid)
 
 ```
-iroha app zk register-asset --asset rose#wonderland \
+iroha app zk register-asset --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -404,7 +404,7 @@ iroha app zk vk update --json fuzz/attachments/zk/vk_update.json
 5) Bind VKs to an asset policy (Hybrid) using the new helper:
 
 ```
-iroha app zk register-asset --asset rose#wonderland \
+iroha app zk register-asset --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -429,7 +429,7 @@ It runs the following:
 Environment variables you can set before running:
 - `CLI_CONFIG`: path to client config TOML
 - `AUTHORITY`, `PRIVATE_KEY`: used for VK ops
-- `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `rose#wonderland`)
+- `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
 - `FROM`, `TO`, `AMOUNT`, `NOTE_COMMITMENT_HEX`
 - `RUN_UNSHIELD=1`, `PROOF_JSON=/path/to/proof.json` to attempt unshield
 
@@ -611,10 +611,10 @@ Note: This feature is experimental and off by default; enable it for testing and
 
 Ensure the CLI builds, then run:
 
-```
+``` 
 make docs-cli
 # or
-cargo run -p iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
+cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
 ```
 
 This regenerates the full `CommandLineHelp.md` directly from the live CLI, keeping the docs in sync with the actual arguments and subcommands.

@@ -55,7 +55,10 @@ fn create_role_grant_and_revoke_affects_permissions() {
         "wonder",
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
-    let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
@@ -198,7 +201,10 @@ fn create_role_with_permissions_key_then_mint() {
         "wonder",
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
-    let rose: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());

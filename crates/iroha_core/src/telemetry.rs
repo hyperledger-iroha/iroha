@@ -10618,7 +10618,10 @@ mod tests {
     fn confidential_tree_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let asset_id: AssetDefinitionId = "rose#sora".parse().expect("asset id");
+        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "sora".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let label = asset_id.to_string();
 
         let initial = ConfidentialTreeStats {
@@ -10767,7 +10770,10 @@ mod tests {
     fn confidential_tree_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let asset_id: AssetDefinitionId = "rose#sora".parse().expect("asset id");
+        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "sora".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let label = asset_id.to_string();
         let stats = ConfidentialTreeStats {
             commitments: 5,
@@ -12921,7 +12927,10 @@ mod tests {
         let sut = SystemUnderTest::new();
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
-        let missing_def: AssetDefinitionId = "ghost#ghost".parse().expect("asset definition id");
+        let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "ghost".parse().unwrap(),
+            "ghost".parse().unwrap(),
+        );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
             [Transfer::asset_numeric(

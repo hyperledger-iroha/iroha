@@ -983,9 +983,10 @@ async fn setup_hostile_fixture(
         .await
         .wrap_err("wait for governance domain registration in hostile fixture")?;
     alice
-        .submit(Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-        )))
+        .submit(Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        ))
         .wrap_err("register governance asset definition for hostile fixture")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
@@ -1215,9 +1216,10 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .await
         .wrap_err("wait for governance domain registration")?;
     alice
-        .submit(Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-        )))
+        .submit(Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        ))
         .wrap_err("register governance numeric asset definition")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await

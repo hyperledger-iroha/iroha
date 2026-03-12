@@ -251,7 +251,10 @@ mod tests {
     fn key_roundtrip_and_ordering() {
         let domain: DomainId = "wonderland".parse().unwrap();
         let alice = AccountId::new(KeyPair::random().public_key().clone());
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
         let nft_id: NftId = "nft0$wonderland".parse().unwrap();
         let trig_id: TriggerId = "trigger0".parse().unwrap();

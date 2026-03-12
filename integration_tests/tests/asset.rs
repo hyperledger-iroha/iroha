@@ -470,9 +470,9 @@ fn start_test_network_with_builder(
 fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let big_asset_definition_id = "xorbig#wonderland".parse::<AssetDefinitionId>()?;
-    let decimal_definition_id = "xorfrac#wonderland".parse::<AssetDefinitionId>()?;
+    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
+    let big_asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xorbig".parse()?);
+    let decimal_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xorfrac".parse()?);
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
     let big_asset_definition = AssetDefinition::numeric(big_asset_definition_id.clone());
     let decimal_definition =
@@ -686,15 +686,20 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let (buyer_id, buyer_keypair) = gen_account_in("company");
         let exchange_domain: DomainId = "exchange".parse().expect("domain should be valid");
         let company_domain: DomainId = "company".parse().expect("domain should be valid");
-        let rate_def: AssetDefinitionId = "btc/eth#exchange"
-            .parse()
-            .expect("asset definition should be valid");
-        let btc_def: AssetDefinitionId = "btc#crypto"
-            .parse()
-            .expect("asset definition should be valid");
-        let eth_def: AssetDefinitionId = "eth#crypto"
-            .parse()
-            .expect("asset definition should be valid");
+        let rate_def: AssetDefinitionId = AssetDefinitionId::new(
+            "exchange"
+                .parse()
+                .expect("asset definition should be valid"),
+            "btc/eth".parse().expect("asset definition should be valid"),
+        );
+        let btc_def: AssetDefinitionId = AssetDefinitionId::new(
+            "crypto".parse().expect("asset definition should be valid"),
+            "btc".parse().expect("asset definition should be valid"),
+        );
+        let eth_def: AssetDefinitionId = AssetDefinitionId::new(
+            "crypto".parse().expect("asset definition should be valid"),
+            "eth".parse().expect("asset definition should be valid"),
+        );
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
@@ -722,9 +727,18 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let mut last_non_empty_height = status.blocks_non_empty;
 
         let register_instructions: [InstructionBox; 3] = [
-            Register::asset_definition(AssetDefinition::numeric(rate_def.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(btc_def.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(eth_def.clone())).into(),
+            Register::asset_definition(
+                AssetDefinition::numeric(rate_def.clone()).with_name(rate_def.name().to_string()),
+            )
+            .into(),
+            Register::asset_definition(
+                AssetDefinition::numeric(btc_def.clone()).with_name(btc_def.name().to_string()),
+            )
+            .into(),
+            Register::asset_definition(
+                AssetDefinition::numeric(eth_def.clone()).with_name(eth_def.name().to_string()),
+            )
+            .into(),
         ];
         let register_tx = clients
             .current()
@@ -873,7 +887,10 @@ fn transfer_asset_definition() -> Result<()> {
     let alice_id = ALICE_ID.clone();
     // Create a destination account we can register (in a domain Alice can manage)
     let (new_owner_id, _kp) = gen_account_in("domain");
-    let asset_definition_id: AssetDefinitionId = "asset#wonderland".parse().expect("Valid");
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "asset".parse().expect("Valid"),
+    );
 
     let mut builder = quiet_network_builder();
     let domain_id: DomainId = "domain".parse().expect("domain should be valid");
@@ -896,7 +913,10 @@ fn transfer_asset_definition() -> Result<()> {
 
     if submit_or_tolerate_timeout(
         &mut clients,
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone())),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        ),
         "register transferable asset definition",
     )?
     .is_none()
@@ -943,7 +963,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         // Prepare a transferable destination account under a manageable domain
         let (dest_id, _kp) = gen_account_in("domain");
 
-        let asset_definition_id: AssetDefinitionId = "asset#wonderland".parse().expect("Valid");
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            "asset".parse().expect("Valid"),
+        );
         let asset_id: AssetId = AssetId::new(asset_definition_id.clone(), alice_id.clone());
         // Create asset definition which accepts only integers
         let asset_definition =

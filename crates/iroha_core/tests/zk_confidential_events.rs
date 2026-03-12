@@ -52,7 +52,8 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = format!("zcoin#{domain_id}").parse().unwrap();
+    let asset_def_id =
+        AssetDefinitionId::new(domain_id.clone(), "zcoin".parse().expect("asset name"));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -65,7 +66,10 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
             domain_id.clone(),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, asset_id).into(),
         RegisterZkAsset::new(
             asset_def_id.clone(),

@@ -603,11 +603,16 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
         let mint = Mint::asset_numeric(1u32, asset_id);
-        let register =
-            Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()));
+        let register = Register::asset_definition(
+            AssetDefinition::numeric(asset_definition.clone())
+                .with_name(asset_definition.name().to_string()),
+        );
 
         let tx = sample_transaction(
             &alice_id,
@@ -1131,7 +1136,10 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "uae".parse().unwrap(),
+            "aed".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
         let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id);
         let tx = sample_transaction(
@@ -1178,7 +1186,10 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "uae".parse().unwrap(),
+            "aed".parse().unwrap(),
+        );
         let uae_transfer = Transfer::asset_numeric(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,

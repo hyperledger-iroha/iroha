@@ -121,16 +121,20 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         "zkd".parse().expect("domain id"),
         "rose".parse().expect("asset definition name"),
     );
+    let asset_alias = "rose#sbp";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        let mut definition =
+            AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
+        definition.alias = Some(asset_alias.parse().expect("asset alias literal"));
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+            Register::asset_definition(definition).into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),
@@ -191,7 +195,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Query with max=0 (bounded by cap=3)
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
+        iroha_torii::json_entry("asset_id", asset_alias),
         iroha_torii::json_entry("max", 0u64),
     ]))
     .expect("json serialization");
@@ -231,7 +235,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Query with max=2 (bounded by requested)
     let req_second_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
+        iroha_torii::json_entry("asset_id", asset_alias),
         iroha_torii::json_entry("max", 2u64),
     ]))
     .expect("json serialization");
