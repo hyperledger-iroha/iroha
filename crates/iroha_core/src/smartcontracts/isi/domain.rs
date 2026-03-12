@@ -27,6 +27,9 @@ pub mod isi {
             AccountController,
             curve::{CurveId, CurveRegistryError},
         },
+        asset::definition::{
+            validate_asset_alias, validate_asset_description, validate_asset_name,
+        },
         isi::error::{InstructionExecutionError, RepetitionError},
         metadata::Metadata,
         name::Name,
@@ -39,6 +42,29 @@ pub mod isi {
 
     /// Domain-separation tag for deterministic offline escrow derivation.
     const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
+
+    fn ensure_asset_definition_human_fields(
+        asset_definition: &AssetDefinition,
+    ) -> Result<(), InstructionExecutionError> {
+        validate_asset_name(asset_definition.name()).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid asset definition name: {err}").into(),
+            )
+        })?;
+        validate_asset_description(asset_definition.description().as_deref()).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid asset definition description: {err}").into(),
+            )
+        })?;
+        validate_asset_alias(asset_definition.alias().as_ref(), asset_definition.name()).map_err(
+            |err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid asset definition alias: {err}").into(),
+                )
+            },
+        )?;
+        Ok(())
+    }
 
     /// Read the `offline.enabled` metadata flag from an asset definition.
     pub(crate) fn asset_definition_offline_enabled(
@@ -97,6 +123,7 @@ pub mod isi {
 
     pub(crate) fn ensure_offline_escrow_account(
         asset_definition: &AssetDefinition,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         if !asset_definition_offline_enabled(asset_definition.metadata())? {
@@ -147,14 +174,21 @@ pub mod isi {
         state_transaction
             .world
             .insert_account_with_links(account_id.clone(), account_value);
-        state_transaction
+        if let Some(linked_domain) = state_transaction
             .world
-            .link_account_subject_domain(&account_id.to_account_id(definition_id.domain().clone()));
-        state_transaction
-            .world
-            .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                AccountCreated::new(account, definition_id.domain().clone()),
-            ))));
+            .account_subject_domains
+            .get(authority)
+            .and_then(|domains| domains.iter().next().cloned())
+        {
+            state_transaction
+                .world
+                .link_account_subject_domain(&account_id.to_account_id(linked_domain.clone()));
+            state_transaction
+                .world
+                .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                    AccountCreated::new(account, linked_domain),
+                ))));
+        }
 
         Ok(())
     }
@@ -1629,6 +1663,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition = self.object().clone().build(authority);
+            ensure_asset_definition_human_fields(&asset_definition)?;
 
             let asset_definition_id = asset_definition.id().clone();
             if state_transaction
@@ -1642,12 +1677,24 @@ pub mod isi {
                 }
                 .into());
             }
+            if let Some(alias) = asset_definition.alias()
+                && state_transaction
+                    .world
+                    .asset_definitions
+                    .iter()
+                    .any(|(_, existing)| existing.alias().as_ref().is_some_and(|a| a == alias))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("asset definition alias `{alias}` is already bound").into(),
+                )
+                .into());
+            }
             state_transaction
                 .world
                 .asset_definitions
                 .insert(asset_definition_id.clone(), asset_definition.clone());
 
-            ensure_offline_escrow_account(&asset_definition, state_transaction)?;
+            ensure_offline_escrow_account(&asset_definition, authority, state_transaction)?;
 
             state_transaction
                 .world
@@ -1942,9 +1989,6 @@ pub mod isi {
                 .offline
                 .escrow_accounts
                 .remove(&asset_definition_id);
-            let _ = state_transaction
-                .world
-                .domain(asset_definition_id.domain())?;
 
             events.push(DataEvent::from(AssetDefinitionEvent::Deleted(
                 asset_definition_id,
@@ -1960,7 +2004,7 @@ pub mod isi {
         #[metrics(+"set_key_value_asset_definition")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let SetKeyValue {
@@ -1991,7 +2035,7 @@ pub mod isi {
                     .world
                     .asset_definition(&asset_definition_id)
                     .map_err(Error::from)?;
-                ensure_offline_escrow_account(&asset_definition, state_transaction)?;
+                ensure_offline_escrow_account(&asset_definition, authority, state_transaction)?;
             }
 
             state_transaction
@@ -2436,7 +2480,10 @@ mod tests {
         IntoKeyValue,
         account::{NewAccount, OpaqueAccountId, rekey::AccountLabel},
         asset::definition::AssetConfidentialPolicy,
-        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId, Mintable, NewAssetDefinition},
+        asset::{
+            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
+            NewAssetDefinition,
+        },
         block::BlockHeader,
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
@@ -5231,6 +5278,9 @@ mod tests {
 
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
+            name: "USD".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
             logo: None,
@@ -5272,6 +5322,9 @@ mod tests {
         let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
+            name: "EUR".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
             logo: None,
@@ -5298,6 +5351,59 @@ mod tests {
     }
 
     #[test]
+    fn register_asset_definition_rejects_duplicate_alias() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = "alias-test".parse().expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let id1 = AssetDefinitionId::new(domain_id.clone(), "usd1".parse().expect("asset name"));
+        let id2 = AssetDefinitionId::new(domain_id, "usd2".parse().expect("asset name"));
+        let alias: AssetDefinitionAlias = "USD#issuer@main".parse().expect("alias");
+
+        let first = NewAssetDefinition {
+            id: id1,
+            name: "USD".to_owned(),
+            description: None,
+            alias: Some(alias.clone()),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+        let second = NewAssetDefinition {
+            id: id2,
+            name: "USD".to_owned(),
+            description: None,
+            alias: Some(alias),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        Register::asset_definition(first)
+            .execute(&authority, &mut tx)
+            .expect("first registration should succeed");
+
+        let err = Register::asset_definition(second)
+            .execute(&authority, &mut tx)
+            .expect_err("duplicate alias must fail");
+        assert!(
+            err.to_string().contains("already bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn set_asset_definition_offline_enabled_creates_escrow_account() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -5308,6 +5414,9 @@ mod tests {
         let definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
         let new_definition = NewAssetDefinition {
             id: definition_id.clone(),
+            name: "GBP".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
             logo: None,

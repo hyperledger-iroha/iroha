@@ -848,7 +848,7 @@ pub struct AgentWalletSpendArgs {
     /// Apartment name issuing the spend request.
     #[arg(long, value_name = "NAME")]
     apartment_name: String,
-    /// Asset definition identifier (`definition#domain`).
+    /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
     #[arg(long, value_name = "ASSET")]
     asset_definition: String,
     /// Spend amount in nanos.

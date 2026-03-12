@@ -1,6 +1,37 @@
 # Status
 
-Last updated: 2026-03-11
+Last updated: 2026-03-12
+
+## 2026-03-12 aid-only Assets + required name + alias literal rollout (v1 break plan implementation slice)
+- Implemented canonical `aid`-first asset identity and removed legacy `name#domain` textual parsing from `AssetDefinitionId::from_str`.
+- Added first-class asset alias literal model (`<name>#<domain>@<dataspace>`) in `iroha_data_model`:
+  - new `AssetDefinitionAlias` type + parsing/validation/tests.
+  - `AssetDefinition` / `NewAssetDefinition` now include optional `alias`.
+  - validation enforces alias left segment must match the required human asset name exactly.
+- Enforced required human-readable asset name path in registration flow and tests; added duplicate-alias rejection in core registration logic.
+- Updated config defaults and consumers to stop using legacy `name#domain` constants:
+  - governance/oracle/nexus defaults now emit canonical IDs via helper functions.
+  - replaced removed string constants with default functions in config/core/torii tests.
+- Expanded CLI UX to make manual asset workflows usable without hand-crafted Rust:
+  - `ledger asset` operations now accept canonical ID, alias+account, or component forms.
+  - `tools encode asset-id` supports canonical definition IDs, alias literals, and component construction.
+  - asset-definition commands now accept alias-based input; register can derive alias from `name + alias-domain + alias-dataspace`.
+- Added cross-feature test compatibility helpers in core state:
+  - `State::new_with_chain_for_testing(...)`
+  - `WorldBlock::transaction_without_telemetry(...)`
+  - migrated Torii tests to these helpers to avoid feature-gating drift with `iroha_core` telemetry feature.
+- Updated test fixtures and harnesses across `iroha_torii` and integration paths for new required `alias` field and aid-safe asset-id construction.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_config -p iroha_core -p iroha_cli` (pass)
+  - `cargo check --tests -p iroha_kagami -p iroha_torii -p integration_tests` (pass)
+  - `cargo test -p iroha_data_model asset_alias_parses_valid_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_validation_requires_name_segment_match -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_from_str_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_core register_asset_definition_rejects_duplicate_alias -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_from_name_domain_and_dataspace -- --nocapture` (pass)
+  - `cargo test -p iroha_torii offline_bundle_proof_status_reports_match -- --nocapture` (pass)
+  - `cargo test -p iroha_torii vk_list_filters_by_backend_and_status -- --nocapture` (pass)
 
 ## 2026-03-11 I105 Hard-Cut Gap Closure (Repo-wide completion pass)
 - Closed remaining hard-cut cleanup gaps across prover tests, integration tests, docs wording, and lint gates:

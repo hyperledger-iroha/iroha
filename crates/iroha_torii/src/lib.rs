@@ -234,7 +234,7 @@ use iroha_data_model::{
     ChainId,
     account::{AccountAddress, AccountId},
     alias::AliasIndex,
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{BlockHeader, proofs::BlockProofs},
     domain::DomainId,
     events::{
@@ -529,6 +529,25 @@ fn alias_resolve_index_ok(
         index,
         alias: alias.to_owned(),
         account_id: account_id.to_owned(),
+        source: Some(source.to_owned()),
+    };
+    alias_json_response(StatusCode::OK, payload)
+}
+
+fn asset_alias_resolve_ok(
+    alias: &str,
+    asset_definition_id: &str,
+    asset_name: &str,
+    description: Option<String>,
+    logo: Option<String>,
+    source: &'static str,
+) -> Result<AxResponse, Error> {
+    let payload = routing::AssetAliasResolveResponseDto {
+        alias: alias.to_owned(),
+        asset_definition_id: asset_definition_id.to_owned(),
+        asset_name: asset_name.to_owned(),
+        description,
+        logo,
         source: Some(source.to_owned()),
     };
     alias_json_response(StatusCode::OK, payload)
@@ -12821,6 +12840,58 @@ async fn handler_alias_resolve_index(
     }
 }
 
+async fn handler_asset_alias_resolve(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<routing::AssetAliasResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    let alias_literal = request.alias.trim();
+    if alias_literal.is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "asset alias must not be empty".to_string(),
+            ),
+        )));
+    }
+
+    let alias = AssetDefinitionAlias::from_str(alias_literal).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+
+    let world = app.state.world_view();
+    let mut matches = world
+        .asset_definitions_iter()
+        .filter(|definition| {
+            definition
+                .alias()
+                .as_ref()
+                .is_some_and(|bound_alias| bound_alias == &alias)
+        });
+
+    let Some(definition) = matches.next() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    if matches.next().is_some() {
+        return alias_error_response(
+            StatusCode::CONFLICT,
+            "asset alias is ambiguously bound to multiple definitions",
+        );
+    }
+
+    let definition_id = definition.id.to_string();
+    let logo = definition.logo().as_ref().map(|uri| uri.as_ref().to_owned());
+    asset_alias_resolve_ok(
+        alias.as_ref(),
+        &definition_id,
+        definition.name(),
+        definition.description().clone(),
+        logo,
+        "world_state",
+    )
+}
+
 fn normalise_alias(input: &str) -> String {
     input
         .chars()
@@ -13937,6 +14008,10 @@ impl Torii {
                 .route(
                     "/v1/aliases/resolve_index",
                     post(handler_alias_resolve_index),
+                )
+                .route(
+                    "/v1/assets/aliases/resolve",
+                    post(handler_asset_alias_resolve),
                 )
         });
     }
@@ -21434,6 +21509,65 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn asset_alias_resolve_returns_definition_fields() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("usd").expect("asset name token"),
+        );
+        let alias: AssetDefinitionAlias = "usd#issuer@main".parse().expect("asset alias");
+        let mut definition =
+            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+                .with_name("usd".to_owned())
+                .build(&authority);
+        definition.alias = Some(alias.clone());
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+        let world = World::with([domain], [account], [definition]);
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let response = handler_asset_alias_resolve(
+            State(app),
+            NoritoJson(routing::AssetAliasResolveRequestDto {
+                alias: alias.to_string(),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::AssetAliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, "usd#issuer@main");
+        assert!(dto.asset_definition_id.starts_with("aid:"));
+        assert_eq!(dto.asset_name, "usd");
+        assert_eq!(dto.source.as_deref(), Some("world_state"));
+    }
+
+    #[tokio::test]
+    async fn asset_alias_resolve_returns_not_found_for_unknown_alias() {
+        let app = mk_app_state_for_tests();
+        let response = handler_asset_alias_resolve(
+            State(app),
+            NoritoJson(routing::AssetAliasResolveRequestDto {
+                alias: "usd#issuer@main".to_owned(),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

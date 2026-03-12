@@ -1270,6 +1270,11 @@ pub struct AliasResolveRequestDto {
     pub alias: String,
 }
 
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+pub struct AssetAliasResolveRequestDto {
+    pub alias: String,
+}
+
 #[cfg(feature = "app_api")]
 #[derive(
     Clone,
@@ -1645,6 +1650,24 @@ pub struct AliasResolveIndexResponseDto {
     pub index: u64,
     pub alias: String,
     pub account_id: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AssetAliasResolveResponseDto {
+    pub alias: String,
+    pub asset_definition_id: String,
+    pub asset_name: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -19481,8 +19504,8 @@ mod app_api_integration_tests {
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -19547,8 +19570,8 @@ mod app_api_integration_tests {
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -19856,7 +19879,7 @@ mod app_api_integration_tests {
             }),
         );
 
-        let def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let def_id = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let asset_id = AssetId::new(def_id, alice_id.clone());
         let body = json_string(obj(vec![(
             "filter",
@@ -19893,8 +19916,8 @@ mod app_api_integration_tests {
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -19953,8 +19976,8 @@ mod app_api_integration_tests {
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -20009,6 +20032,17 @@ mod app_api_integration_tests {
         let items = json["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["asset_id"].as_str(), Some(asset_id.as_str()));
+        let definition_id = items[0]["asset_definition_id"]
+            .as_str()
+            .expect("asset_definition_id field");
+        assert!(
+            definition_id.starts_with("aid:"),
+            "asset_definition_id should be canonical aid: {definition_id}"
+        );
+        let account_literal = alice_id.to_string();
+        assert_eq!(items[0]["account_id"].as_str(), Some(account_literal.as_str()));
+        assert!(!items[0]["asset_name"].is_null(), "asset_name should be populated");
+        assert!(items[0]["asset_alias"].is_null());
     }
 
     #[tokio::test]
@@ -20018,7 +20052,7 @@ mod app_api_integration_tests {
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let assets = vec![Asset::new(
             AssetId::new(rose_def.clone(), alice_id.clone()),
             Numeric::from(1_u32),
@@ -28928,6 +28962,10 @@ fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
 #[derive(Clone)]
 struct AccountAssetListItem {
     asset_id: String,
+    asset_definition_id: String,
+    account_id: String,
+    asset_name: String,
+    asset_alias: Option<String>,
     quantity: iroha_primitives::numeric::Numeric,
 }
 
@@ -29226,8 +29264,23 @@ pub async fn handle_v1_account_assets_with_policy(
             {
                 continue;
             }
+            let definition_id = asset.id().definition().clone();
+            let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
+                Ok(definition) => (
+                    definition.name().clone(),
+                    definition
+                        .alias()
+                        .as_ref()
+                        .map(|alias| alias.as_ref().to_owned()),
+                ),
+                Err(_) => (definition_id.to_string(), None),
+            };
             projected_assets.push(AccountAssetListItem {
                 asset_id: asset.id().to_string(),
+                asset_definition_id: definition_id.to_string(),
+                account_id: account_id.to_string(),
+                asset_name,
+                asset_alias,
                 quantity: asset.value().clone().into_inner(),
             });
         }
@@ -29248,6 +29301,26 @@ pub async fn handle_v1_account_assets_with_policy(
         m.insert(
             "asset_id".into(),
             norito::json::Value::from(it.asset_id.clone()),
+        );
+        m.insert(
+            "asset_definition_id".into(),
+            norito::json::Value::from(it.asset_definition_id.clone()),
+        );
+        m.insert(
+            "account_id".into(),
+            norito::json::Value::from(it.account_id.clone()),
+        );
+        m.insert(
+            "asset_name".into(),
+            norito::json::Value::from(it.asset_name.clone()),
+        );
+        m.insert(
+            "asset_alias".into(),
+            it.asset_alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
         );
         m.insert(
             "quantity".into(),
@@ -44768,8 +44841,23 @@ pub async fn handle_v1_account_assets_query_with_policy(
     let mut projected_assets = Vec::new();
     for account_id in &scoped_accounts {
         for asset in world.assets_in_account_iter(account_id) {
+            let definition_id = asset.id().definition().clone();
+            let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
+                Ok(definition) => (
+                    definition.name().clone(),
+                    definition
+                        .alias()
+                        .as_ref()
+                        .map(|alias| alias.as_ref().to_owned()),
+                ),
+                Err(_) => (definition_id.to_string(), None),
+            };
             projected_assets.push(AccountAssetListItem {
                 asset_id: asset.id().to_string(),
+                asset_definition_id: definition_id.to_string(),
+                account_id: account_id.to_string(),
+                asset_name,
+                asset_alias,
                 quantity: asset.value().clone().into_inner(),
             });
         }
@@ -44840,6 +44928,26 @@ pub async fn handle_v1_account_assets_query_with_policy(
         m.insert(
             "asset_id".into(),
             norito::json::Value::from(it.asset_id.clone()),
+        );
+        m.insert(
+            "asset_definition_id".into(),
+            norito::json::Value::from(it.asset_definition_id.clone()),
+        );
+        m.insert(
+            "account_id".into(),
+            norito::json::Value::from(it.account_id.clone()),
+        );
+        m.insert(
+            "asset_name".into(),
+            norito::json::Value::from(it.asset_name.clone()),
+        );
+        m.insert(
+            "asset_alias".into(),
+            it.asset_alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
         );
         m.insert(
             "quantity".into(),

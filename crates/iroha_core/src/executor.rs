@@ -639,7 +639,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
 
             let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
                 ValidationFail::NotPermitted(
-                    "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                    "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`".to_owned(),
                 )
             })?;
 
@@ -896,7 +896,8 @@ impl Executor {
             ValidationFail::NotPermitted(reason)
         })?;
         let asset_def: AssetDefinitionId = cfg.fee_asset_id.parse().map_err(|_| {
-            let reason = "invalid nexus fee asset id; expected `name#domain`".to_owned();
+            let reason =
+                "invalid nexus fee asset id; expected `aid:<32-lower-hex-no-dash>`".to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
@@ -1128,7 +1129,7 @@ impl Executor {
                 // Parse gas asset definition id
                 let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
                     ValidationFail::NotPermitted(
-                        "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                        "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`".to_owned(),
                     )
                 })?;
 
@@ -1319,8 +1320,8 @@ impl Executor {
         // Refresh pipeline gas settings from on-chain parameters (genesis/governance updates)
         Self::refresh_gas_from_parameters(state_transaction);
         // Gas asset admission: if an allowlist is configured, require the tx metadata to specify
-        // a `gas_asset_id` present in the allowlist. The value must be a valid AssetDefinitionId
-        // string (e.g., "xor#domain").
+        // a `gas_asset_id` present in the allowlist. The value must be a valid
+        // `aid:<32-lower-hex-no-dash>` AssetDefinitionId string.
         let md = transaction.metadata();
         let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
@@ -1706,7 +1707,8 @@ impl Executor {
                     // Parse gas asset definition id
                     let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
                         ValidationFail::NotPermitted(
-                            "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                            "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`"
+                                .to_owned(),
                         )
                     })?;
                     // Compute fee amount deterministically

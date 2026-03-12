@@ -555,6 +555,9 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
     );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,

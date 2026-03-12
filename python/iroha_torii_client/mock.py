@@ -14,8 +14,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 
-from .client import ToriiClient
-
 __all__ = ["ToriiMockServer", "main"]
 
 
@@ -652,7 +650,7 @@ class _MockState:
                 raise ValueError(
                     "lock hints must include owner, amount, duration_blocks"
                 )
-            ToriiClient._ensure_governance_owner_canonical(
+            _ensure_governance_owner_canonical(
                 public_inputs.get("owner"),
                 context="zk ballot public inputs",
             )
@@ -1219,6 +1217,22 @@ def _parse_int(values: Optional[Iterable[str]]) -> Optional[int]:
 def _json_response(status: int, payload: object) -> _Response:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     return _Response(status, body=body, headers={"Content-Type": "application/json"})
+
+
+def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
+    if owner is None:
+        return
+    if not isinstance(owner, str):
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    trimmed = owner.strip()
+    if not trimmed or trimmed != owner:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    if any(ch.isspace() for ch in trimmed):
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    if "@" in trimmed:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    if trimmed.lower().startswith("0x"):
+        raise ValueError(f"{context}.owner must be a canonical account id")
 
 
 class ToriiMockServer:

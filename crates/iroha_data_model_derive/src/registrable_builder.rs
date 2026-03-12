@@ -250,15 +250,19 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
                 while let Some(key) = visitor.next_key()? {
                     match key {
                         #(
-                            KeyRef::Borrowed(name) if name == stringify!(#builder_fields_idents) => {
+                            KeyRef::Borrowed(field_name)
+                                if field_name == stringify!(#builder_fields_idents) =>
+                            {
                                 if #builder_fields_idents.is_some() {
-                                    return Err(MapVisitor::duplicate_field(name));
+                                    return Err(MapVisitor::duplicate_field(field_name));
                                 }
                                 #builder_fields_idents = Some(visitor.parse_value()?);
                             }
                         )*
-                        KeyRef::Owned(name) => return Err(Error::unknown_field(name)),
-                        KeyRef::Borrowed(name) => return Err(Error::unknown_field(name.to_owned())),
+                        KeyRef::Owned(field_name) => return Err(Error::unknown_field(field_name)),
+                        KeyRef::Borrowed(field_name) => {
+                            return Err(Error::unknown_field(field_name.to_owned()));
+                        }
                     }
                 }
 

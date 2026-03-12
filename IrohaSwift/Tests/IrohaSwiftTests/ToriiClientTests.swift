@@ -579,6 +579,32 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsAsyncDecodesReadableAssetFields() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            [{
+              "asset_id":"norito:4e52543000000001",
+              "asset_definition_id":"aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+              "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "asset_name":"USD",
+              "asset_alias":"usd#issuer@main",
+              "quantity":"10"
+            }]
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(balances.count, 1)
+        XCTAssertEqual(balances.first?.asset_definition_id, "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+        XCTAssertEqual(balances.first?.account_id, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(balances.first?.asset_name, "USD")
+        XCTAssertEqual(balances.first?.asset_alias, "usd#issuer@main")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsPreservesPercentEncodedPathWithBasePath() async throws {
         let baseURL = URL(string: "https://example.test/api")!
         let client = makeClient(baseURL: baseURL)

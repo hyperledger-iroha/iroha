@@ -326,6 +326,9 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
     );
     let asset_definition = AssetDefinition {
         id: first.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
@@ -357,8 +360,10 @@ fn build_revocation_seeds() -> Vec<RevocationSeed> {
             .clone(),
     );
     let spend_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-    let asset_definition =
-        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
+    let asset_definition = AssetDefinitionId::new(
+        "merchants".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
 
     let mut cert_one = OfflineWalletCertificate {
         controller: controller_one.clone(),

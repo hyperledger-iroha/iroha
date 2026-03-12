@@ -1041,10 +1041,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         gov: iroha_config::parameters::actual::Governance {
             vk_ballot: None,
             vk_tally: None,
-            voting_asset_id: iroha_config::parameters::defaults::governance::VOTING_ASSET_ID
+            voting_asset_id: iroha_config::parameters::defaults::governance::voting_asset_id()
                 .parse()
                 .expect("valid default governance asset id"),
-            citizenship_asset_id: iroha_config::parameters::defaults::governance::CITIZENSHIP_ASSET_ID
+            citizenship_asset_id:
+                iroha_config::parameters::defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
@@ -1109,7 +1110,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             parliament_min_stake:
                 iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
             parliament_eligibility_asset_id:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
+                iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),
             parliament_alternate_size:

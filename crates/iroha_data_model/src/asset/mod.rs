@@ -4,12 +4,14 @@ use std::collections::btree_map;
 
 use iroha_primitives::numeric::Numeric;
 
+pub mod alias;
 pub mod definition;
 pub mod id;
 pub mod instructions;
 pub mod policy;
 pub mod value;
 
+pub use alias::AssetDefinitionAlias;
 pub use definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition};
 pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
 pub use policy::{
@@ -24,6 +26,7 @@ pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Numeric>
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
+        alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition},
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         policy::{

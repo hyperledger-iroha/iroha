@@ -611,6 +611,7 @@ fn resolve_offline_escrow_account(
     )? {
         crate::smartcontracts::isi::domain::isi::ensure_offline_escrow_account(
             &asset_definition,
+            asset_definition.owned_by(),
             state_transaction,
         )?;
         let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(

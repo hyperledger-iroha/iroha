@@ -10736,6 +10736,25 @@ impl<'world> WorldBlock<'world> {
         build_world_transaction!(self, telemetry, axt_lane_config, axt_current_slot)
     }
 
+    /// Create struct to apply transaction changes without passing telemetry explicitly.
+    ///
+    /// This helper is intended for cross-crate tests and API scaffolding where the
+    /// `iroha_core` telemetry feature may differ from the caller crate feature set.
+    pub fn transaction_without_telemetry(
+        &mut self,
+        axt_lane_config: LaneConfig,
+        axt_current_slot: u64,
+    ) -> WorldTransaction<'_, 'world> {
+        #[cfg(feature = "telemetry")]
+        {
+            self.trasaction(None, axt_lane_config, axt_current_slot)
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            self.trasaction(axt_lane_config, axt_current_slot)
+        }
+    }
+
     /// Commit block's changes
     #[allow(clippy::too_many_lines)]
     pub fn commit(self) {
@@ -13829,10 +13848,10 @@ impl State {
             gov: iroha_config::parameters::actual::Governance {
                 vk_ballot: None,
                 vk_tally: None,
-                voting_asset_id: iroha_config::parameters::defaults::governance::VOTING_ASSET_ID
+                voting_asset_id: iroha_config::parameters::defaults::governance::voting_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),
-                citizenship_asset_id: iroha_config::parameters::defaults::governance::CITIZENSHIP_ASSET_ID
+                citizenship_asset_id: iroha_config::parameters::defaults::governance::citizenship_asset_id()
                     .parse()
                     .expect("valid default citizenship asset id"),
                 citizenship_bond_amount:
@@ -13887,7 +13906,7 @@ impl State {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
                 parliament_min_stake:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
-                parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
+                parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),
                 parliament_alternate_size:
@@ -14178,6 +14197,26 @@ impl State {
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
     ) -> Self {
+        Self::new_with_chain_for_testing(
+            world,
+            kura,
+            query_handle,
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+        )
+    }
+
+    /// Create a [`State`] suitable for tests in dependent crates with explicit chain id.
+    ///
+    /// This helper selects the correct constructor regardless of whether the
+    /// `telemetry` feature is enabled for `iroha_core`.
+    #[must_use]
+    #[inline]
+    pub fn new_with_chain_for_testing(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+    ) -> Self {
         let mut s = Self::new_inner(
             world,
             kura,
@@ -14185,7 +14224,7 @@ impl State {
             #[cfg(feature = "telemetry")]
             <_>::default(),
         );
-        s.chain_id = (*DEFAULT_TEST_CHAIN_ID).clone();
+        s.chain_id = chain_id;
         // Make pipeline settings conservative and single-threaded for tests to reduce
         // flakiness and avoid scheduler edge cases on highly parallel configs.
         s.pipeline.dynamic_prepass = true;
@@ -24264,7 +24303,7 @@ pub(crate) mod deserialize {
             parliament_min_stake:
                 iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
             parliament_eligibility_asset_id:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
+                iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),
             parliament_alternate_size:

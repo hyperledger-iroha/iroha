@@ -2051,7 +2051,7 @@ pub struct Governance {
     /// Asset definition id that provides voting stake eligibility.
     #[config(
         env = "GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID.to_string()"
+        default = "crate::parameters::defaults::governance::parliament_eligibility_asset_id()"
     )]
     pub parliament_eligibility_asset_id: String,
     /// Number of alternates to draw per term (None = committee size).
@@ -2176,8 +2176,8 @@ impl Default for Governance {
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
             parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
-            parliament_eligibility_asset_id: defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
-                .to_string(),
+            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
+            ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
@@ -11203,7 +11203,7 @@ pub struct NexusFees {
     /// Fee asset definition identifier (string form).
     #[config(
         env = "NEXUS_FEE_ASSET_ID",
-        default = "defaults::nexus::fees::FEE_ASSET_ID.to_string()"
+        default = "defaults::nexus::fees::fee_asset_id()"
     )]
     pub fee_asset_id: String,
     /// Account that receives collected fees.
@@ -11272,7 +11272,7 @@ impl NexusEndorsement {
 impl Default for NexusFees {
     fn default() -> Self {
         Self {
-            fee_asset_id: defaults::nexus::fees::FEE_ASSET_ID.to_string(),
+            fee_asset_id: defaults::nexus::fees::fee_asset_id(),
             fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
             base_fee: defaults::nexus::fees::BASE_FEE,
             per_byte_fee: defaults::nexus::fees::PER_BYTE_FEE,

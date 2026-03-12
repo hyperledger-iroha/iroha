@@ -65,6 +65,10 @@ fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) t
 
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset_id: String
+    public let asset_definition_id: String?
+    public let account_id: String?
+    public let asset_name: String?
+    public let asset_alias: String?
     public let quantity: String
 }
 

@@ -582,24 +582,30 @@ pub fn generate_default(
     let meta = Metadata::default();
     let wonderland_name: Name = "wonderland".parse()?;
     let wonderland_domain = DomainId::new(wonderland_name.clone());
+    let garden_of_live_flowers_name: Name = "garden_of_live_flowers".parse()?;
+    let garden_of_live_flowers_domain = DomainId::new(garden_of_live_flowers_name.clone());
+    let rose_asset_definition_id =
+        AssetDefinitionId::new(wonderland_domain.clone(), "rose".parse()?);
+    let cabbage_asset_definition_id =
+        AssetDefinitionId::new(garden_of_live_flowers_domain.clone(), "cabbage".parse()?);
 
     let mut builder = builder
         .domain_with_metadata(wonderland_name, meta.clone())
         .account_with_metadata(ALICE_ID.signatory().clone(), meta.clone())
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
-        .domain("garden_of_live_flowers".parse()?)
+        .domain(garden_of_live_flowers_name)
         .account(CARPENTER_ID.signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
 
     let mint = Mint::asset_numeric(
         13u32,
-        AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone()),
+        AssetId::new(rose_asset_definition_id.clone(), ALICE_ID.clone()),
     );
     let mint_cabbage = Mint::asset_numeric(
         44u32,
-        AssetId::new("cabbage#garden_of_live_flowers".parse()?, ALICE_ID.clone()),
+        AssetId::new(cabbage_asset_definition_id, ALICE_ID.clone()),
     );
     let register_account_permission = Permission::new(
         <CanRegisterAccount as iroha_executor_data_model::permission::Permission>::name(),
@@ -613,7 +619,7 @@ pub fn generate_default(
         Grant::account_permission(register_account_permission, ALICE_ID.clone());
     let transfer_rose_ownership = Transfer::asset_definition(
         genesis_account_id.clone(),
-        "rose#wonderland".parse()?,
+        rose_asset_definition_id,
         ALICE_ID.clone(),
     );
 

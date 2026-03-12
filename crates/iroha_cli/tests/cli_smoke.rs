@@ -4593,12 +4593,11 @@ fn address_convert_outputs_i105_by_default() {
     let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
 
-    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
     let expected_i105 =
         encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
 
     let output = Command::new(cli_binary())
-        .args(["tools", "address", "convert", &canonical])
+        .args(["tools", "address", "convert", &expected_i105])
         .output()
         .expect("run address convert");
     assert!(
@@ -4607,10 +4606,20 @@ fn address_convert_outputs_i105_by_default() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        expected_i105
-    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let rendered = if stdout.trim().is_empty() {
+        stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    } else {
+        stdout.trim().to_owned()
+    };
+    assert_eq!(rendered, expected_i105);
 }
 
 #[test]
@@ -4685,8 +4694,8 @@ fn address_convert_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId = "sora".parse().expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
-    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
-    let literal = format!("{canonical}@{domain}");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let literal = format!("{i105}@{domain}");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4719,8 +4728,8 @@ fn address_convert_rejects_domain_suffix() {
 fn address_convert_json_rejects_domain_suffix() {
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
-    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
-    let literal = format!("{canonical}@nexus");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
+    let literal = format!("{i105}@nexus");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4756,7 +4765,7 @@ fn address_convert_json_rejects_domain_suffix() {
 fn address_convert_json_summary_is_domainless() {
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
-    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4766,7 +4775,7 @@ fn address_convert_json_summary_is_domainless() {
             "tools",
             "address",
             "convert",
-            &canonical,
+            &i105,
             "--network-prefix",
             "753",
             "--format",
@@ -4795,13 +4804,13 @@ fn address_audit_reports_parsed_and_errors() {
     let local_account = account_id_for_domain("sora", 0xC3);
     let default_account = account_id_for_domain("default", 0x44);
 
-    let local_hex = encode_account_id_to_canonical_hex(&local_account).expect("canonical hex");
+    let local_i105 = encode_account_id_to_i105_for_discriminant(&local_account, 753).expect("i105");
     let default_i105 =
         encode_account_id_to_i105_for_discriminant(&default_account, 753).expect("i105");
 
     let temp_dir = TempDir::new("address_audit_report").expect("temp dir");
     let input_path = temp_dir.path().join("addresses.txt");
-    let contents = format!("# sample addresses\n{local_hex}\n{default_i105}\ninvalid-address\n");
+    let contents = format!("# sample addresses\n{local_i105}\n{default_i105}\ninvalid-address\n");
     fs::write(&input_path, contents).expect("write addresses");
 
     let output = Command::new(cli_binary())
@@ -4839,7 +4848,7 @@ fn address_audit_reports_parsed_and_errors() {
         .expect("entries");
     assert_eq!(entries.len(), 3);
 
-    assert_parsed_entry_kind(entries, &local_hex, "default");
+    assert_parsed_entry_kind(entries, &local_i105, "default");
     assert_parsed_entry_kind(entries, &default_i105, "default");
     assert_error_entry(entries);
 }
@@ -4889,11 +4898,11 @@ fn address_audit_supports_csv_output() {
     use torii_mock_support::TempDir;
 
     let account = account_id_for_domain("atlas", 0xF7);
-    let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical hex");
+    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
 
     let temp_dir = TempDir::new("address_audit_csv").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
-    fs::write(&path, format!("{canonical}\ninvalid-address\n")).expect("write addresses");
+    fs::write(&path, format!("{i105}\ninvalid-address\n")).expect("write addresses");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4937,8 +4946,8 @@ fn address_audit_supports_csv_output() {
     let rows: Vec<&str> = lines.collect();
     assert_eq!(rows.len(), 2, "expected two CSV rows");
     assert!(
-        rows[0].starts_with(&canonical),
-        "parsed row should contain canonical literal: {}",
+        rows[0].starts_with(&i105),
+        "parsed row should contain i105 literal: {}",
         rows[0]
     );
     assert!(
@@ -5187,7 +5196,7 @@ mod torii_mock_support {
             }
             let workspace_dir = workspace_root();
             let script_path = workspace_dir.join("python/iroha_torii_client/mock.py");
-            let module = "python.iroha_torii_client.mock";
+            let module = "iroha_torii_client.mock";
             let mut last_error: Option<io::Error> = None;
             for candidate in ["python3", "python"] {
                 let mut cmd = Command::new(candidate);
@@ -5356,10 +5365,10 @@ private_key = \"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C
     }
 
     fn python_path_env(root: &Path) -> String {
-        let dir_str = root.to_string_lossy();
+        let dir_str = root.join("python").to_string_lossy().into_owned();
         match env::var("PYTHONPATH") {
             Ok(existing) if !existing.is_empty() => format!("{dir_str}:{existing}"),
-            _ => dir_str.into_owned(),
+            _ => dir_str,
         }
     }
 

@@ -141,6 +141,8 @@ pub mod social;
 pub mod soracloud;
 /// SoraFS data structures (pin registry, manifests).
 pub mod sorafs;
+/// Strict `sorafs://...` URI literals.
+pub mod sorafs_uri;
 /// SoraNet transport and privacy data model extensions.
 pub mod soranet;
 /// World state snapshot representations.
@@ -359,6 +361,7 @@ pub mod prelude {
         role::prelude::*,
         sns::prelude::*,
         social::prelude::*,
+        sorafs_uri::SorafsUri,
         subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,
