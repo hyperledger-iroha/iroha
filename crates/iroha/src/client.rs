@@ -6486,6 +6486,20 @@ impl Client {
             .send()
     }
 
+    /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
+    pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: POST `/v1/accounts/resolve` with an account literal.
     ///
     /// # Errors

@@ -854,7 +854,7 @@ impl Execute for ClaimPublicLaneRewards {
             .parse()
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `name#domain`".into(),
+                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
                 )
             })?;
         let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
@@ -1182,7 +1182,7 @@ fn validate_reward_sink(
             .parse()
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `name#domain`".into(),
+                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
                 )
             })?;
     if reward_asset.account() != &sink_account {
@@ -1558,7 +1558,7 @@ fn stake_context(
 ) -> Result<StakeEscrowContext, Error> {
     let asset_definition: AssetDefinitionId = staking_cfg.stake_asset_id.parse().map_err(|_| {
         Error::InvariantViolation(
-            "invalid nexus.staking.stake_asset_id; expected `name#domain`".into(),
+            "invalid nexus.staking.stake_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
         )
     })?;
     let escrow_account = parse_staking_account_literal(

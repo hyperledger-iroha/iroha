@@ -6,7 +6,6 @@ mod offline_balance_proof_utils;
 
 use std::{
     fs,
-    str::FromStr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -123,16 +122,8 @@ fn build_harness() -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -175,16 +166,8 @@ fn build_harness_without_offline_issuer() -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -227,16 +210,8 @@ fn build_harness_without_offline_issuer_skip_build_claim_verification() -> Harne
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -293,16 +268,8 @@ fn build_harness_with_issuer(primary_seed: u8, legacy_seeds: &[u8]) -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -353,16 +320,8 @@ fn build_harness_for_app_attest_fixture(
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let world = world_from_fixtures(&fixtures);
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = false;
     state.settlement.offline.apple_app_attest_strict_signature = strict_signature;
     state.settlement.offline.skip_build_claim_verification = true;
@@ -779,6 +738,9 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
     );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
@@ -805,8 +767,10 @@ fn build_fixtures() -> Fixtures {
     let receiver_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
     let receiver = AccountId::of(receiver_keys.public_key().clone());
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-    let asset_definition =
-        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
+    let asset_definition = AssetDefinitionId::new(
+        "merchants".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let allowance_asset = AssetId::new(asset_definition, controller.clone());
     let lineage_scope = "merchants-main-wallet";
     let ios_bundle_id = "com.example.merchants";

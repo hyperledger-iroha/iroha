@@ -44,15 +44,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
     let live_for_route = live.clone();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        world,
-        kura,
-        live,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura, live);
+    let state = State::new_for_testing(world, kura, live);
     let mut state = state;
 
     // Seed one proof record

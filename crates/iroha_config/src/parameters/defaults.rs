@@ -23,6 +23,16 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 
+fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
+    let domain_id = DomainId::from_str(domain).expect("default asset definition domain");
+    let asset_name = Name::from_str(name).expect("default asset definition name");
+    AssetDefinitionId::new(domain_id, asset_name)
+}
+
+fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
+    canonical_asset_definition_id(domain, name).to_string()
+}
+
 /// Cryptography configuration defaults.
 pub mod crypto {
     use super::*;
@@ -472,7 +482,7 @@ pub mod oracle {
 
     /// Asset credited to providers when observations are accepted.
     pub fn reward_asset() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("default oracle reward asset id")
+        super::canonical_asset_definition_id("sora", "xor")
     }
 
     /// Account debited to fund oracle provider rewards.
@@ -482,7 +492,7 @@ pub mod oracle {
 
     /// Asset debited when slashing oracle providers.
     pub fn slash_asset() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("default oracle slash asset id")
+        super::canonical_asset_definition_id("sora", "xor")
     }
 
     /// Account credited when penalties are collected.
@@ -507,7 +517,7 @@ pub mod oracle {
 
     /// Bond asset required when opening a dispute.
     pub fn dispute_bond_asset() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("default oracle dispute bond asset")
+        super::canonical_asset_definition_id("sora", "xor")
     }
 
     /// Bond amount required to open a dispute.
@@ -1983,8 +1993,6 @@ pub mod nexus {
         pub const MAX_SLASH_BPS: u16 = 10_000;
         /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
         pub const REWARD_DUST_THRESHOLD: u64 = 0;
-        /// Asset definition used for staking bonds (defaults to the Nexus fee asset).
-        pub const STAKE_ASSET_ID: &str = super::fees::FEE_ASSET_ID;
         /// Escrow account that custodies bonded stake.
         pub const STAKE_ESCROW_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
         /// Account that receives slashed stake (treasury/burn sink).
@@ -1992,7 +2000,7 @@ pub mod nexus {
 
         /// Asset definition used for staking bonds (defaults to the Nexus fee asset).
         pub fn stake_asset_id() -> String {
-            STAKE_ASSET_ID.to_string()
+            super::fees::fee_asset_id()
         }
 
         /// Escrow account that custodies bonded stake.
@@ -2008,8 +2016,6 @@ pub mod nexus {
 
     /// Universal fee schedule defaults.
     pub mod fees {
-        /// Fee asset definition identifier (string form).
-        pub const FEE_ASSET_ID: &str = "xor#nexus";
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
         /// Base fee charged per transaction (asset base units).
@@ -2024,6 +2030,11 @@ pub mod nexus {
         pub const SPONSORSHIP_ENABLED: bool = false;
         /// Maximum fee a sponsor can cover (asset base units, 0 = unlimited).
         pub const SPONSOR_MAX_FEE: u64 = 0;
+
+        /// Fee asset definition identifier (string form).
+        pub fn fee_asset_id() -> String {
+            super::super::canonical_asset_definition_literal("nexus", "xor")
+        }
     }
 
     /// Domain endorsement defaults.
@@ -2819,10 +2830,6 @@ pub mod sumeragi {
 pub mod governance {
     use super::*;
 
-    /// Default asset definition used for governance voting and bonds.
-    pub const VOTING_ASSET_ID: &str = "xor#sora";
-    /// Default asset definition used for citizenship bonding (mirrors voting asset).
-    pub const CITIZENSHIP_ASSET_ID: &str = VOTING_ASSET_ID;
     /// Default public key used for governance escrow account derivation.
     pub const BOND_ESCROW_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -2831,7 +2838,7 @@ pub mod governance {
 
     /// Default asset definition used for governance voting and bonds.
     pub fn voting_asset_id() -> String {
-        VOTING_ASSET_ID.to_string()
+        super::canonical_asset_definition_literal("sora", "xor")
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
@@ -2874,7 +2881,7 @@ pub mod governance {
 
     /// Default asset definition used for citizenship bonding.
     pub fn citizenship_asset_id() -> String {
-        CITIZENSHIP_ASSET_ID.to_string()
+        voting_asset_id()
     }
 
     /// Default escrow account that holds citizenship bonds.
@@ -2945,7 +2952,9 @@ pub mod governance {
     /// Minimum stake required to qualify for council selection (smallest units).
     pub const PARLIAMENT_MIN_STAKE: u128 = 1;
     /// Default stake asset definition used for council eligibility.
-    pub const PARLIAMENT_ELIGIBILITY_ASSET_ID: &str = "SORA#stake";
+    pub fn parliament_eligibility_asset_id() -> String {
+        super::canonical_asset_definition_literal("stake", "SORA")
+    }
     /// Default alternates drawn per parliament term (None = committee size).
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
     /// Default council quorum requirement expressed in basis points (ceil-divided).
@@ -2988,8 +2997,6 @@ pub mod governance {
     pub const PIPELINE_RULES_SLA_BLOCKS: u64 = 20;
     /// Default SLA (blocks) for agenda council scheduling.
     pub const PIPELINE_AGENDA_SLA_BLOCKS: u64 = 40;
-    /// Default reward asset definition (mirrors governance voting asset).
-    pub const VIRAL_REWARD_ASSET_ID: &str = VOTING_ASSET_ID;
     /// Default per-binding reward amount ("1" XOR).
     pub const VIRAL_FOLLOW_REWARD_AMOUNT: &str = "1";
     /// Default sender bonus amount ("0.1" XOR).
@@ -3013,7 +3020,7 @@ pub mod governance {
 
     /// Default viral reward asset definition identifier.
     pub fn viral_reward_asset_id() -> String {
-        VIRAL_REWARD_ASSET_ID.to_string()
+        voting_asset_id()
     }
 
     /// Default viral follow reward amount.

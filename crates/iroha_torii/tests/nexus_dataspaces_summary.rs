@@ -123,7 +123,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
 
-    let asset_definition_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition");
+    let asset_definition_id = AssetDefinitionId::new(
+        "nexus".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
 

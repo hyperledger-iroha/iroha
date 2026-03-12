@@ -28,15 +28,7 @@ async fn zk_vk_get_returns_record_with_key() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
 
     // Insert a verifying key record directly into WSV via a block transaction
@@ -140,15 +132,7 @@ async fn zk_vk_get_returns_record_with_key() {
 async fn zk_vk_get_not_found() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let state = Arc::new(state);
     let app = Router::new().route(
         "/v1/zk/vk/{backend}/{name}",

@@ -12628,6 +12628,9 @@ pub mod isi {
             );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
+                name: "offline".to_owned(),
+                description: None,
+                alias: None,
                 spec: NumericSpec::integer(),
                 mintable: Mintable::Infinitely,
                 logo: None,

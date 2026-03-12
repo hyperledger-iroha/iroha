@@ -1,14 +1,12 @@
 //! Asset identifiers.
 
 use std::{
-    cmp::Ordering,
     fmt, format,
     hash::{Hash, Hasher},
     str::FromStr,
     string::String,
 };
 
-use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
@@ -18,46 +16,26 @@ use norito::{
 };
 
 pub use self::model::*;
-use crate::{
-    Name, account::prelude::*, common::split_nonempty, domain::prelude::*, error::ParseError,
-    nexus::DataSpaceId,
-};
+use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 
 #[model]
 mod model {
     use super::*;
 
-    /// Identification of an Asset Definition. Consists of asset name and domain name.
+    /// Canonical asset definition identifier.
     ///
-    /// Asset names are compared case-insensitively (ASCII) for equality, ordering and hashing.
-    /// This ensures asset definition IDs are unique per domain regardless of name casing (e.g.
-    /// `usd#acme` and `USD#acme` refer to the same asset definition).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use iroha_data_model::asset::id::AssetDefinitionId;
-    ///
-    /// let definition_id = "xor#soramitsu".parse::<AssetDefinitionId>().expect("Valid");
-    /// ```
-    #[derive(
-        derive_more::Debug,
-        Clone,
-        derive_more::Display,
-        Constructor,
-        Getters,
-        Decode,
-        Encode,
-        IntoSchema,
-    )]
-    #[display("{name}#{domain}")]
-    #[debug("{name}#{domain}")]
+    /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
+    /// satisfy UUIDv4 version/variant constraints.
+    #[derive(Debug, Clone, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
-        /// Domain id.
+        /// Canonical UUIDv4 bytes (no textual separators).
+        #[getset(get_copy = "pub")]
+        pub aid_bytes: [u8; 16],
+        /// Transitional legacy domain component retained for compatibility.
         pub domain: DomainId,
-        /// Asset name.
+        /// Transitional legacy name component retained for compatibility.
         pub name: Name,
     }
 
@@ -107,53 +85,31 @@ mod model {
 
 string_id!(AssetDefinitionId);
 
-fn cmp_ignore_ascii_case(a: &str, b: &str) -> Ordering {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    let shared = core::cmp::min(a_bytes.len(), b_bytes.len());
-    for i in 0..shared {
-        let a_fold = a_bytes[i].to_ascii_lowercase();
-        let b_fold = b_bytes[i].to_ascii_lowercase();
-        match a_fold.cmp(&b_fold) {
-            Ordering::Equal => {}
-            non_eq => return non_eq,
-        }
-    }
-    a_bytes.len().cmp(&b_bytes.len())
-}
+const AID_PREFIX: &str = "aid:";
 
 impl PartialEq for AssetDefinitionId {
     fn eq(&self, other: &Self) -> bool {
-        self.domain == other.domain && self.name.as_ref().eq_ignore_ascii_case(other.name.as_ref())
+        self.aid_bytes == other.aid_bytes
     }
 }
 
 impl Eq for AssetDefinitionId {}
 
 impl PartialOrd for AssetDefinitionId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for AssetDefinitionId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.domain.cmp(&other.domain) {
-            Ordering::Equal => cmp_ignore_ascii_case(self.name.as_ref(), other.name.as_ref()),
-            non_eq => non_eq,
-        }
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.aid_bytes.cmp(&other.aid_bytes)
     }
 }
 
 impl Hash for AssetDefinitionId {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.domain.hash(state);
-        let name = self.name.as_ref();
-        // Preserve structural hashing (like `str`) without allocating a lowercase String.
-        name.len().hash(state);
-        for byte in name.as_bytes() {
-            state.write_u8(byte.to_ascii_lowercase());
-        }
+        self.aid_bytes.hash(state);
     }
 }
 
@@ -256,31 +212,139 @@ impl AssetId {
 }
 
 impl AssetDefinitionId {
-    /// Convenience alias for [`Self::new`]
+    /// Construct an identifier from canonical UUIDv4 bytes.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when `aid_bytes` do not satisfy UUIDv4
+    /// version/variant constraints.
+    pub fn from_uuid_bytes(aid_bytes: [u8; 16]) -> Result<Self, ParseError> {
+        if !is_uuid_v4_bytes(&aid_bytes) {
+            return Err(ParseError::new(
+                "Asset Definition ID must encode UUIDv4 bytes",
+            ));
+        }
+        let (domain, name) = synthetic_legacy_components(aid_bytes);
+        Ok(Self {
+            aid_bytes,
+            domain,
+            name,
+        })
+    }
+
+    /// Construct from UUID bytes without validation.
+    #[must_use]
+    pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
+        let (domain, name) = synthetic_legacy_components(aid_bytes);
+        Self {
+            aid_bytes,
+            domain,
+            name,
+        }
+    }
+
+    /// Transitional helper: deterministically derive `aid` from legacy components.
+    ///
+    /// `aid`-only semantics are canonical; this helper keeps internal call sites
+    /// compiling while textual parsing is migrated.
+    #[must_use]
+    pub fn new(domain: DomainId, name: Name) -> Self {
+        let legacy = format!("{name}#{domain}");
+        let digest = blake3::hash(legacy.as_bytes());
+        let mut aid_bytes = [0u8; 16];
+        aid_bytes.copy_from_slice(&digest.as_bytes()[..16]);
+        // Force UUIDv4 version and RFC4122 variant bits.
+        aid_bytes[6] = (aid_bytes[6] & 0x0f) | 0x40;
+        aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
+        Self {
+            aid_bytes,
+            domain,
+            name,
+        }
+    }
+
+    /// Canonical textual literal (`aid:<32-lower-hex>`).
+    #[must_use]
+    pub fn canonical_literal(&self) -> String {
+        format!("{AID_PREFIX}{}", hex::encode(self.aid_bytes))
+    }
+
+    /// Parse strictly canonical `aid:<32-lower-hex-no-dash>` literals.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the textual form is not canonical or bytes
+    /// do not satisfy UUIDv4 constraints.
+    pub fn parse_aid_literal(input: &str) -> Result<Self, ParseError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError::new("Asset Definition ID must not be empty"));
+        }
+        let Some(payload) = trimmed.strip_prefix(AID_PREFIX) else {
+            return Err(ParseError::new(
+                "Asset Definition ID must use `aid:<32-lower-hex>` format",
+            ));
+        };
+        if payload.contains('-') {
+            return Err(ParseError::new(
+                "Asset Definition ID must not include dashes",
+            ));
+        }
+        if payload.len() != 32 {
+            return Err(ParseError::new(
+                "Asset Definition ID must contain exactly 32 hex characters",
+            ));
+        }
+        if !payload
+            .as_bytes()
+            .iter()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(ch))
+        {
+            return Err(ParseError::new(
+                "Asset Definition ID must be lowercase hexadecimal",
+            ));
+        }
+        let mut aid_bytes = [0u8; 16];
+        hex::decode_to_slice(payload, &mut aid_bytes)
+            .map_err(|_| ParseError::new("Asset Definition ID payload must be valid hex"))?;
+        Self::from_uuid_bytes(aid_bytes)
+    }
+
+    /// Convenience alias for [`Self::new`].
     pub fn of(domain: DomainId, name: Name) -> Self {
         Self::new(domain, name)
     }
 }
 
-/// Asset Definition Identification is represented by `name#domain_name` string.
+fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
+    (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
+}
+
+fn synthetic_legacy_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
+    let domain: DomainId = "aid"
+        .parse()
+        .expect("static `aid` domain label must remain valid");
+    let name_literal = hex::encode(aid_bytes);
+    let name: Name = name_literal
+        .parse()
+        .expect("lowercase hex must remain a valid legacy name");
+    (domain, name)
+}
+
+impl fmt::Display for AssetDefinitionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.canonical_literal())
+    }
+}
+
+/// Asset definition identifier textual representation.
 impl FromStr for AssetDefinitionId {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (name_candidate, domain_id_candidate) = split_nonempty(
-            s,
-            '#',
-            "Asset Definition ID should have format `name#domain`",
-            "Empty `name` part in `name#domain`",
-            "Empty `domain` part in `name#domain`",
-        )?;
-        let name = name_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `name` part in `name#domain`",
-        })?;
-        let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `domain` part in `name#domain`",
-        })?;
-        Ok(Self::new(domain_id, name))
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError::new("Asset Definition ID must not be empty"));
+        }
+        Self::parse_aid_literal(trimmed)
     }
 }
 
@@ -306,12 +370,6 @@ impl FromStr for AssetId {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cmp::Ordering,
-        collections::BTreeSet,
-        hash::{Hash as _, Hasher as _},
-    };
-
     use iroha_crypto::KeyPair;
 
     use super::*;
@@ -320,9 +378,10 @@ mod tests {
     #[test]
     fn debug_formats_without_recursion() {
         let kp = KeyPair::random();
-        let _domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = "domain".parse().unwrap();
+        let name: Name = "xor".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
-        let def: AssetDefinitionId = "xor#domain".parse().unwrap();
+        let def = AssetDefinitionId::new(domain, name);
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
         // Should be the canonical encoded literal and not recurse.
@@ -330,30 +389,23 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_id_name_is_case_insensitive() {
-        let lower: AssetDefinitionId = "usd#acme".parse().unwrap();
-        let upper: AssetDefinitionId = "USD#acme".parse().unwrap();
-        assert_eq!(lower, upper);
-        assert_eq!(lower.cmp(&upper), Ordering::Equal);
-
-        let mut hasher_lower = std::collections::hash_map::DefaultHasher::new();
-        lower.hash(&mut hasher_lower);
-        let mut hasher_upper = std::collections::hash_map::DefaultHasher::new();
-        upper.hash(&mut hasher_upper);
-        assert_eq!(hasher_lower.finish(), hasher_upper.finish());
-
-        let mut set = BTreeSet::new();
-        set.insert(lower);
-        set.insert(upper);
-        assert_eq!(set.len(), 1);
+    fn asset_definition_id_parses_canonical_aid() {
+        let parsed: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("aid should parse");
+        assert_eq!(
+            parsed.to_string(),
+            "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_string()
+        );
     }
 
     #[test]
     fn asset_id_parse_encoded_roundtrips() {
         let kp = KeyPair::random();
-        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
-        let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let name: Name = "xor".parse().expect("name");
+        let definition = AssetDefinitionId::new(domain, name);
         let id = AssetId::new(definition, account);
 
         let encoded = id.canonical_encoded();
@@ -364,9 +416,10 @@ mod tests {
     #[test]
     fn asset_id_with_explicit_scope_roundtrips() {
         let kp = KeyPair::random();
-        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
-        let definition: AssetDefinitionId = "xor#wonderland".parse().expect("definition");
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let name: Name = "xor".parse().expect("name");
+        let definition = AssetDefinitionId::new(domain, name);
         let id = AssetId::with_scope(
             definition,
             account,
@@ -385,13 +438,32 @@ mod tests {
     #[test]
     fn asset_id_parse_encoded_rejects_textual_literal() {
         let kp = KeyPair::random();
-        let _account_domain: DomainId = "wonderland".parse().expect("domain");
         let account = AccountId::new(kp.public_key().clone());
         let literal = format!("xor#wonderland#{account}");
 
         let err = AssetId::parse_encoded(&literal).expect_err("textual literal must fail");
         assert!(
             err.reason().contains("textual forms are not supported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals() {
+        assert!(AssetDefinitionId::parse_aid_literal("usd#wonderland").is_err());
+        assert!(
+            AssetDefinitionId::parse_aid_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_from_str_rejects_legacy_literal() {
+        let err = "usd#wonderland"
+            .parse::<AssetDefinitionId>()
+            .expect_err("legacy literal must be rejected");
+        assert!(
+            err.to_string().contains("aid:<32-lower-hex>"),
             "unexpected error: {err}"
         );
     }

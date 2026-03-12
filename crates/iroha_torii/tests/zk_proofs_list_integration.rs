@@ -22,21 +22,7 @@ async fn proofs_list_and_count_with_filters() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            State::new(
-                World::new(),
-                kura,
-                query,
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            State::new(World::new(), kura, query)
-        }
-    };
+    let state = State::new_for_testing(World::new(), kura, query);
 
     // Seed two proofs under the same backend; assign tags for one
     let backend = "halo2/ipa";
@@ -267,21 +253,7 @@ async fn proofs_list_and_count_with_filters() {
 async fn proofs_list_rejects_over_limit() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            State::new(
-                World::new(),
-                kura,
-                query,
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            State::new(World::new(), kura, query)
-        }
-    };
+    let state = State::new_for_testing(World::new(), kura, query);
 
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::new(

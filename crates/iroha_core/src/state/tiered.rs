@@ -2509,6 +2509,7 @@ mod measured_bytes_impls {
             KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
             TriggerDescriptor,
         },
+        sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
     };
@@ -2806,6 +2807,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for IpfsPath {
         fn measured_bytes(&self) -> usize {
             size_of::<IpfsPath>().saturating_add(self.as_ref().len())
+        }
+    }
+
+    impl MeasuredBytes for SorafsUri {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SorafsUri>().saturating_add(self.as_ref().len())
         }
     }
 

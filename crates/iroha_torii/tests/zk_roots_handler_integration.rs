@@ -25,15 +25,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     // Build state and cap recent roots to 3
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     state.set_zk(iroha_config::parameters::actual::Zk {
         halo2: iroha_config::parameters::actual::Halo2 {
             enabled: false,
@@ -125,7 +117,10 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Seed shielded roots via ISIs
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
+    let asset_def_id = AssetDefinitionId::new(
+        "zkd".parse().expect("domain id"),
+        "rose".parse().expect("asset definition name"),
+    );
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =

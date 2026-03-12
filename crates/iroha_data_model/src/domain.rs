@@ -9,8 +9,8 @@ use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
 use crate::{
-    HasMetadata, Identifiable, Name, Registered, Registrable, ipfs::IpfsPath, metadata::Metadata,
-    prelude::*,
+    HasMetadata, Identifiable, Name, Registered, Registrable, metadata::Metadata, prelude::*,
+    sorafs_uri::SorafsUri,
 };
 
 #[model]
@@ -62,9 +62,9 @@ mod model {
     pub struct Domain {
         /// Identification of this [`Domain`].
         pub id: DomainId,
-        /// IPFS link to the [`Domain`] logo.
+        /// SoraFS URI to the [`Domain`] logo.
         #[getset(get = "pub")]
-        pub logo: Option<IpfsPath>,
+        pub logo: Option<SorafsUri>,
         /// [`Metadata`] of this `Domain` as a key-value store.
         pub metadata: Metadata,
         /// The account that owns this domain. Usually the [`Account`] that registered it.
@@ -89,8 +89,8 @@ mod model {
     pub struct NewDomain {
         /// The identification associated with the domain builder.
         pub id: DomainId,
-        /// The (IPFS) link to the logo of this domain.
-        pub logo: Option<IpfsPath>,
+        /// The (SoraFS) link to the logo of this domain.
+        pub logo: Option<SorafsUri>,
         /// Metadata associated with the domain builder.
         pub metadata: Metadata,
     }
@@ -116,9 +116,9 @@ impl NewDomain {
         }
     }
 
-    /// Add [`logo`](IpfsPath) to the domain replacing previously defined value
+    /// Add [`logo`](SorafsUri) to the domain replacing previously defined value.
     #[must_use]
-    pub fn with_logo(mut self, logo: IpfsPath) -> Self {
+    pub fn with_logo(mut self, logo: SorafsUri) -> Self {
         self.logo = Some(logo);
         self
     }

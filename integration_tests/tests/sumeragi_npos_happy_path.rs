@@ -26,8 +26,9 @@ const PACEMAKER_EMA_BUDGET_MS: f64 = 5_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const RBC_DELIVER_MIN: f64 = 1.0;
 const RBC_WAIT_BUDGET: Duration = Duration::from_secs(20);
-const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(120);
-const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(120);
+// Full-workspace runs can delay large RBC delivery under network-test permit contention.
+const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
+const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(240);
 const LARGE_PAYLOAD_BYTES: usize = 6 * 1024 * 1024;
 
 #[derive(Clone)]

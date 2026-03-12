@@ -882,7 +882,6 @@ where
                 add_account_rw(&mut set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_domain_r(&mut set, r.object.id().domain());
                 add_asset_def_rw(&mut set, &r.object.id().clone());
             }
             RegisterBox::Nft(r) => add_nft_rw(&mut set, r.object.id()),

@@ -10748,7 +10748,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
@@ -10792,7 +10792,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10828,7 +10828,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            "account_id:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10845,7 +10845,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10882,7 +10882,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10923,7 +10923,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10966,7 +10966,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -12086,7 +12086,9 @@ mod tests {
         let i105 = address
             .to_i105_for_discriminant(address::chain_discriminant())
             .expect("i105 encode");
-        let non_canonical_i105 = address.to_i105().expect("i105 encode");
+        let non_canonical_i105 = address
+            .to_i105_for_discriminant(address::chain_discriminant().wrapping_add(1))
+            .expect("non-canonical i105 encode");
         (canonical, i105, non_canonical_i105)
     }
 

@@ -465,6 +465,10 @@ fn alias_paths() -> Map {
         "/v1/aliases/resolve_index".to_owned(),
         Value::Object(alias_resolve_index_operation()),
     );
+    paths.insert(
+        "/v1/assets/aliases/resolve".to_owned(),
+        Value::Object(asset_alias_resolve_operation()),
+    );
     paths
 }
 
@@ -6719,6 +6723,84 @@ fn alias_resolve_index_operation() -> Map {
     methods
 }
 
+fn asset_alias_resolve_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Resolve an asset alias into canonical asset definition fields.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` aliases."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("assetAliasResolve".to_owned()),
+    );
+    operation.insert("requestBody".into(), asset_alias_resolve_request_body());
+    operation.insert(
+        "responses".into(),
+        Value::Object(asset_alias_resolve_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn asset_alias_resolve_request_body() -> Value {
+    let mut media = Map::new();
+    media.insert(
+        "application/json".into(),
+        Value::Object({
+            let mut schema = Map::new();
+            schema.insert("schema".into(), schema_ref("AssetAliasResolveRequest"));
+            schema
+        }),
+    );
+
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert("content".into(), Value::Object(media));
+    Value::Object(body)
+}
+
+fn asset_alias_resolve_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Asset alias successfully resolved.",
+            schema_ref("AssetAliasResolveResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request (alias missing or invalid).",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response("Asset alias not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Asset alias is ambiguously bound to multiple definitions.",
+            error_schema_reference(),
+        ),
+    );
+    responses
+}
+
 fn alias_resolve_index_request_body() -> Value {
     let mut media = Map::new();
     media.insert(
@@ -7632,6 +7714,20 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AssetAliasResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>`) to resolve."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AliasResolveResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -7654,6 +7750,42 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetAliasResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "asset_definition_id", "asset_name"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "description": "Canonical asset definition id (`aid:<32-lower-hex>`)."
+                },
+                "asset_name": {
+                    "type": "string",
+                    "description": "Human-readable asset name."
+                },
+                "description": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional asset description."
+                },
+                "logo": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional SoraFS logo URI."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolver source."
                 }
             }
         }),
@@ -10260,6 +10392,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
+        assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
         assert!(paths.contains_key("/v1/time/status"));
         assert!(paths.contains_key("/v1/ledger/headers"));

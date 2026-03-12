@@ -236,7 +236,10 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let escrow = Account::new(escrow_id.to_account_id(domain_id.clone())).build(&escrow_id);
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
-    let asset_definition_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition");
+    let asset_definition_id = AssetDefinitionId::new(
+        "nexus".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let asset_definition =
         AssetDefinition::numeric(asset_definition_id.clone()).build(&validator_id);
 

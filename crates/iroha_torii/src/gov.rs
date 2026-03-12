@@ -2762,6 +2762,7 @@ mod tests {
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::{Domain, DomainId},
+        name::Name,
         permission::Permission,
         smart_contract::manifest::ContractManifest,
     };
@@ -2882,8 +2883,10 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let escrow_account =
             Account::new(escrow.clone().to_account_id(domain_id.clone())).build(&escrow);
-        let asset_def_id: AssetDefinitionId =
-            "vote#wonderland".parse().expect("asset definition id");
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("vote").expect("asset definition name"),
+        );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset = Asset::new(
             AssetId::new(asset_def_id.clone(), authority.clone()),
@@ -2911,12 +2914,7 @@ mod tests {
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
             let mut world_block = world.block();
-            let mut world_tx = world_block.trasaction(
-                #[cfg(feature = "telemetry")]
-                None,
-                LaneConfig::default(),
-                0,
-            );
+            let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);

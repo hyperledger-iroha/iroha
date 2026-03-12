@@ -23,15 +23,7 @@ async fn vk_register_update_return_202() {
     // Minimal state and queue
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura.clone(),
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura.clone(), query);
+    let state = State::new_for_testing(World::new(), kura.clone(), query);
     let state = Arc::new(state);
     let chain_id = Arc::new(ChainId::from("test-chain"));
     let queue_cfg = iroha_config::parameters::actual::Queue {

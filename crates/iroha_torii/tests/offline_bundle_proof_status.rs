@@ -176,16 +176,7 @@ fn build_harness(include_proof: bool) -> Harness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = cfg.common.chain.clone();
-    #[cfg(feature = "telemetry")]
-    let state = Arc::new(State::new_with_chain(
-        World::default(),
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    ));
-    #[cfg(not(feature = "telemetry"))]
-    let state = Arc::new(State::new_with_chain(
+    let state = Arc::new(State::new_with_chain_for_testing(
         World::default(),
         Arc::clone(&kura),
         query,
@@ -491,6 +482,9 @@ fn seed_state(state: &Arc<State>, fixtures: &Fixtures) {
         }
         Register::asset_definition(NewAssetDefinition {
             id: asset_definition_id.clone(),
+            name: "OfflineAsset".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::default(),
             mintable: Mintable::Infinitely,
             logo: None,
