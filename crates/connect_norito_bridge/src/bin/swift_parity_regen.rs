@@ -9,6 +9,7 @@ use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
+    domain::DomainId,
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
@@ -80,6 +81,22 @@ impl Drop for ChainDiscriminantReset {
     fn drop(&mut self) {
         address::set_chain_discriminant(self.0);
     }
+}
+
+fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
+    let trimmed = raw.trim();
+    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
+        return Ok(id);
+    }
+
+    let (name, domain) = trimmed
+        .split_once('#')
+        .ok_or_else(|| format!("invalid asset definition '{raw}'"))?;
+    let name = Name::from_str(name)
+        .map_err(|_| format!("invalid asset definition '{raw}': invalid name"))?;
+    let domain = DomainId::from_str(domain)
+        .map_err(|_| format!("invalid asset definition '{raw}': invalid domain"))?;
+    Ok(AssetDefinitionId::new(domain, name))
 }
 
 impl PayloadSpec {
@@ -165,10 +182,7 @@ impl InstructionSpec {
                     .arguments
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
-                let asset_definition: AssetDefinitionId =
-                    asset_definition.parse().map_err(|err| {
-                        format!("invalid asset definition '{asset_definition}': {err}")
-                    })?;
+                let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
@@ -197,10 +211,7 @@ impl InstructionSpec {
                     .arguments
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
-                let asset_definition: AssetDefinitionId =
-                    asset_definition.parse().map_err(|err| {
-                        format!("invalid asset definition '{asset_definition}': {err}")
-                    })?;
+                let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
@@ -229,10 +240,7 @@ impl InstructionSpec {
                     .arguments
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
-                let asset_definition: AssetDefinitionId =
-                    asset_definition.parse().map_err(|err| {
-                        format!("invalid asset definition '{asset_definition}': {err}")
-                    })?;
+                let asset_definition = parse_asset_definition_argument(asset_definition)?;
                 let quantity: Numeric = quantity
                     .parse()
                     .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
@@ -466,5 +474,17 @@ mod tests {
             Executable::Instructions(instructions) => assert_eq!(instructions.len(), 1),
             _ => panic!("expected instruction executable"),
         }
+    }
+
+    #[test]
+    fn parse_asset_definition_argument_accepts_canonical_literal() {
+        let canonical = AssetDefinitionId::new(
+            DomainId::from_str("wonderland").expect("domain"),
+            Name::from_str("rose").expect("name"),
+        )
+        .to_string();
+        let parsed =
+            parse_asset_definition_argument(&canonical).expect("canonical aid should parse");
+        assert_eq!(parsed.to_string(), canonical);
     }
 }

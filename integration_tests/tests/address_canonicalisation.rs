@@ -24,6 +24,7 @@ use iroha::data_model::{
 };
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::account::{AccountDomainSelector, address::AccountAddress};
+use iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias;
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
@@ -569,6 +570,23 @@ fn i105_bob_literal() -> String {
     account_address.to_i105().expect("I105 address encoding")
 }
 
+fn with_rose_wonderland_alias(builder: NetworkBuilder) -> NetworkBuilder {
+    let definition_id = AssetDefinitionId::new(
+        "wonderland"
+            .parse()
+            .expect("wonderland domain should parse"),
+        "rose".parse().expect("rose name should parse"),
+    );
+    let alias = "rose#wonderland"
+        .parse()
+        .expect("rose#wonderland alias should parse");
+    let instruction =
+        <SetAssetDefinitionAlias as iroha_data_model::isi::Instruction>::into_instruction_box(
+            Box::new(SetAssetDefinitionAlias::bind(definition_id, alias, None)),
+        );
+    builder.with_genesis_instruction(instruction)
+}
+
 fn legacy_dotted_i105_literal(i105_literal: &str) -> String {
     let mut chars = i105_literal.chars();
     let sentinel: String = chars.by_ref().take(4).collect();
@@ -1088,7 +1106,7 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
 #[tokio::test]
 async fn asset_holders_get_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
+        with_rose_wonderland_alias(NetworkBuilder::new()),
         stringify!(asset_holders_get_supports_i105_response),
     )
     .await?
@@ -1131,7 +1149,7 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
 #[tokio::test]
 async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new(),
+        with_rose_wonderland_alias(NetworkBuilder::new()),
         stringify!(asset_holders_query_rejects_legacy_dotted_i105_filter_literals),
     )
     .await?
