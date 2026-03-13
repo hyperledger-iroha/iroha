@@ -287,10 +287,11 @@ mod tests {
                     .accounts
                     .insert(account_id.clone(), Owned::new(details));
                 world.uaid_accounts.insert(*uaid, account_id.clone());
-                world.assets.insert(
-                    AssetId::new(def_id.clone(), account_id.clone()),
-                    Owned::new(Numeric::from(*amount)),
-                );
+                let asset_id = AssetId::new(def_id.clone(), account_id.clone());
+                world
+                    .assets
+                    .insert(asset_id.clone(), Owned::new(Numeric::from(*amount)));
+                world.track_asset_holder(&asset_id);
             }
 
             if let Some(entries) = bindings {

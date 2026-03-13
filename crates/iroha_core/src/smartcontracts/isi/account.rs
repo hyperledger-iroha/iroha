@@ -334,22 +334,239 @@ pub mod isi {
 
 /// Implementations for account queries.
 pub mod query {
+    use std::{collections::BTreeSet, sync::Arc};
 
     use eyre::Result;
+    use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::Account,
         permission::Permission,
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
+            json::PredicateJson,
         },
     };
+    use norito::json::Value;
 
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::StateReadOnly,
     };
+
+    fn account_from_entry(account_id: &AccountId, account_value: &AccountValue) -> Account {
+        let details = account_value.as_ref();
+        Account {
+            id: account_id.clone(),
+            metadata: details.metadata.clone(),
+            label: details.label.clone(),
+            uaid: details.uaid,
+            opaque_ids: details.opaque_ids.clone(),
+        }
+    }
+
+    fn account_alias_value(
+        account_id: &AccountId,
+        account_value: &AccountValue,
+        field: &str,
+    ) -> Option<Option<String>> {
+        let details = account_value.as_ref();
+        match field {
+            "id" | "account" | "account_id" => Some(Some(account_id.to_string())),
+            "uaid" | "universal_account_id" => Some(details.uaid().map(ToString::to_string)),
+            _ => None,
+        }
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn account_field_is_id(field: &str) -> bool {
+        matches!(field, "id" | "account" | "account_id")
+    }
+
+    fn parse_account_id_value(value: &Value) -> Option<AccountId> {
+        match value {
+            Value::String(raw) => AccountId::parse_encoded(raw)
+                .ok()
+                .map(|parsed| parsed.into_account_id())
+                .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
+            _ => None,
+        }
+    }
+
+    fn intersect_account_id_candidates(
+        candidates: &mut Option<BTreeSet<AccountId>>,
+        next: BTreeSet<AccountId>,
+    ) {
+        if let Some(existing) = candidates {
+            existing.retain(|candidate| next.contains(candidate));
+            return;
+        }
+        *candidates = Some(next);
+    }
+
+    /// Extract account-id candidates constrained by JSON predicate clauses.
+    ///
+    /// Returns `None` when the predicate does not constrain id/account fields.
+    /// Returns `Some(empty-set)` when id/account constraints are unsatisfiable.
+    fn account_predicate_candidate_ids(
+        predicate: &PredicateJson,
+    ) -> Option<Arc<BTreeSet<AccountId>>> {
+        let mut candidates: Option<BTreeSet<AccountId>> = None;
+
+        for cond in &predicate.equals {
+            if !account_field_is_id(&cond.field) {
+                continue;
+            }
+            let next = parse_account_id_value(&cond.value)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        for cond in &predicate.r#in {
+            if !account_field_is_id(&cond.field) {
+                continue;
+            }
+            let next = cond
+                .values
+                .iter()
+                .filter_map(parse_account_id_value)
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        candidates.map(Arc::new)
+    }
+
+    enum AccountSimpleIdPath {
+        One(AccountId),
+        Set(Arc<BTreeSet<AccountId>>),
+    }
+
+    fn account_predicate_simple_id_path(predicate: &PredicateJson) -> Option<AccountSimpleIdPath> {
+        if !predicate.exists.is_empty() {
+            return None;
+        }
+
+        if predicate.r#in.is_empty() && predicate.equals.len() == 1 {
+            let cond = &predicate.equals[0];
+            if !account_field_is_id(&cond.field) {
+                return None;
+            }
+            return parse_account_id_value(&cond.value).map(AccountSimpleIdPath::One);
+        }
+
+        if predicate.equals.is_empty() && predicate.r#in.len() == 1 {
+            let cond = &predicate.r#in[0];
+            if !account_field_is_id(&cond.field) {
+                return None;
+            }
+            let ids = cond
+                .values
+                .iter()
+                .map(parse_account_id_value)
+                .collect::<Option<BTreeSet<_>>>()?;
+            return Some(AccountSimpleIdPath::Set(Arc::new(ids)));
+        }
+
+        None
+    }
+
+    fn predicate_is_id_only(predicate: &PredicateJson) -> bool {
+        let has_any_clause = !predicate.equals.is_empty()
+            || !predicate.r#in.is_empty()
+            || !predicate.exists.is_empty();
+        has_any_clause
+            && predicate
+                .equals
+                .iter()
+                .all(|cond| account_field_is_id(&cond.field))
+            && predicate
+                .r#in
+                .iter()
+                .all(|cond| account_field_is_id(&cond.field))
+            && predicate
+                .exists
+                .iter()
+                .all(|field| account_field_is_id(field))
+    }
+
+    /// Evaluate JSON predicate fields that can be resolved directly from account id/details
+    /// without building a full `Account` object.
+    ///
+    /// Returns:
+    /// - `Some(true|false)` when all predicate fields were alias-resolved.
+    /// - `None` when at least one field requires full JSON evaluation fallback.
+    fn predicate_matches_account_aliases(
+        predicate: &PredicateJson,
+        account_id: &AccountId,
+        account_value: &AccountValue,
+    ) -> Option<bool> {
+        for cond in &predicate.equals {
+            let Some(alias) = account_alias_value(account_id, account_value, &cond.field) else {
+                return None;
+            };
+            let Some(alias) = alias else {
+                return Some(false);
+            };
+            if !predicate_value_equals_str(&cond.value, &alias) {
+                return Some(false);
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let Some(alias) = account_alias_value(account_id, account_value, &cond.field) else {
+                return None;
+            };
+            let Some(alias) = alias else {
+                return Some(false);
+            };
+            if !predicate_values_contain_str(&cond.values, &alias) {
+                return Some(false);
+            }
+        }
+
+        for field in &predicate.exists {
+            let Some(alias) = account_alias_value(account_id, account_value, field) else {
+                return None;
+            };
+            if alias.is_none() {
+                return Some(false);
+            }
+        }
+
+        Some(true)
+    }
+
+    fn account_matches_filter(
+        filter: &CompoundPredicate<Account>,
+        predicate_json: Option<&PredicateJson>,
+        account_id: &AccountId,
+        account_value: &AccountValue,
+    ) -> Option<Account> {
+        if let Some(predicate) = predicate_json
+            && let Some(matches) =
+                predicate_matches_account_aliases(predicate, account_id, account_value)
+        {
+            if !matches {
+                return None;
+            }
+            return Some(account_from_entry(account_id, account_value));
+        }
+
+        let account = account_from_entry(account_id, account_value);
+        filter.applies(&account).then_some(account)
+    }
 
     impl ValidQuery for FindRolesByAccountId {
         #[metrics(+"find_roles_by_account_id")]
@@ -391,17 +608,67 @@ pub mod query {
             filter: CompoundPredicate<Account>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Account>, Error> {
-            Ok(state_ro.world().accounts_iter().filter_map(move |entry| {
-                let details = entry.value().clone().into_inner();
-                let account = Account {
-                    id: entry.id().clone(),
-                    metadata: details.metadata,
-                    label: details.label,
-                    uaid: details.uaid,
-                    opaque_ids: details.opaque_ids,
+            let world = state_ro.world();
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let simple_id_path = predicate_json
+                .as_ref()
+                .and_then(account_predicate_simple_id_path);
+
+            if let Some(path) = simple_id_path {
+                let iter: Box<dyn Iterator<Item = Account> + '_> = match path {
+                    AccountSimpleIdPath::One(account_id) => {
+                        Box::new(world.accounts().get_key_value(&account_id).into_iter().map(
+                            |(account_id, account_value)| {
+                                account_from_entry(account_id, account_value)
+                            },
+                        ))
+                    }
+                    AccountSimpleIdPath::Set(account_ids) => {
+                        let account_ids = account_ids.iter().cloned().collect::<Vec<_>>();
+                        Box::new(account_ids.into_iter().filter_map(move |account_id| {
+                            world.accounts().get_key_value(&account_id).map(
+                                |(account_id, account_value)| {
+                                    account_from_entry(account_id, account_value)
+                                },
+                            )
+                        }))
+                    }
                 };
-                filter.applies(&account).then_some(account)
-            }))
+                return Ok(iter);
+            }
+
+            let candidate_ids = predicate_json
+                .as_ref()
+                .and_then(account_predicate_candidate_ids);
+            let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
+
+            if let Some(candidates) = candidate_ids {
+                let candidates = candidates.iter().cloned().collect::<Vec<_>>();
+                let iter: Box<dyn Iterator<Item = Account> + '_> =
+                    Box::new(candidates.into_iter().filter_map(move |account_id| {
+                        let Some((account_id, account_value)) =
+                            world.accounts().get_key_value(&account_id)
+                        else {
+                            return None;
+                        };
+                        if id_only_predicate {
+                            return Some(account_from_entry(account_id, account_value));
+                        }
+                        account_matches_filter(
+                            &filter,
+                            predicate_json.as_ref(),
+                            account_id,
+                            account_value,
+                        )
+                    }));
+                return Ok(iter);
+            }
+
+            Ok(Box::new(world.accounts_iter().filter_map(move |entry| {
+                account_matches_filter(&filter, predicate_json.as_ref(), entry.id(), entry.value())
+            })))
         }
     }
 
@@ -413,30 +680,103 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> std::result::Result<impl Iterator<Item = Account>, Error> {
             let asset_definition_id = self.asset_definition_id().clone();
+            let world = state_ro.world();
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let simple_id_path = predicate_json
+                .as_ref()
+                .and_then(account_predicate_simple_id_path);
 
             trace!(%asset_definition_id);
 
-            Ok(state_ro.world().accounts_iter().filter_map(move |entry| {
-                let has_balance = state_ro
-                    .world()
-                    .assets_in_account_iter(entry.id())
-                    .filter(|asset| asset.id().definition() == &asset_definition_id)
-                    // Skip zero-valued placeholders (including genesis seeds).
-                    .any(|asset| !asset.value().is_zero());
-
-                if !has_balance {
-                    return None;
-                }
-                let details = entry.value().clone().into_inner();
-                let account = Account {
-                    id: entry.id().clone(),
-                    metadata: details.metadata,
-                    label: details.label,
-                    uaid: details.uaid,
-                    opaque_ids: details.opaque_ids,
+            if let Some(path) = simple_id_path {
+                let subjects = match (
+                    world.asset_definition_holders().get(&asset_definition_id),
+                    path,
+                ) {
+                    (Some(holders), AccountSimpleIdPath::One(account_id)) => holders
+                        .contains(&account_id)
+                        .then_some(account_id)
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                    (Some(holders), AccountSimpleIdPath::Set(account_ids)) => account_ids
+                        .iter()
+                        .filter(|account_id| holders.contains(*account_id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    (None, _) => Vec::new(),
                 };
-                filter.applies(&account).then_some(account)
-            }))
+
+                let iter: Box<dyn Iterator<Item = Account> + '_> =
+                    Box::new(subjects.into_iter().filter_map(move |subject| {
+                        let Some((account_id, account_value)) =
+                            world.accounts().get_key_value(&subject)
+                        else {
+                            return None;
+                        };
+
+                        let has_balance = world
+                            .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
+                            // Skip zero-valued placeholders (including genesis seeds).
+                            .any(|asset| !asset.value().is_zero());
+
+                        if !has_balance {
+                            return None;
+                        }
+
+                        Some(account_from_entry(account_id, account_value))
+                    }));
+                return Ok(iter);
+            }
+
+            let candidate_ids = predicate_json
+                .as_ref()
+                .and_then(account_predicate_candidate_ids);
+            let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
+
+            let subjects = match (
+                world.asset_definition_holders().get(&asset_definition_id),
+                candidate_ids.as_ref(),
+            ) {
+                (Some(holders), Some(candidates)) => candidates
+                    .iter()
+                    .filter(|account_id| holders.contains(*account_id))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                (Some(holders), None) => holders.iter().cloned().collect::<Vec<_>>(),
+                (None, _) => Vec::new(),
+            };
+
+            let iter: Box<dyn Iterator<Item = Account> + '_> =
+                Box::new(subjects.into_iter().filter_map(move |subject| {
+                    let Some((account_id, account_value)) =
+                        world.accounts().get_key_value(&subject)
+                    else {
+                        return None;
+                    };
+
+                    let has_balance = world
+                        .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
+                        // Skip zero-valued placeholders (including genesis seeds).
+                        .any(|asset| !asset.value().is_zero());
+
+                    if !has_balance {
+                        return None;
+                    }
+
+                    if id_only_predicate {
+                        return Some(account_from_entry(account_id, account_value));
+                    }
+
+                    account_matches_filter(
+                        &filter,
+                        predicate_json.as_ref(),
+                        account_id,
+                        account_value,
+                    )
+                }));
+            Ok(iter)
         }
     }
 
@@ -584,6 +924,138 @@ pub mod query {
         }
 
         #[test]
+        fn find_accounts_applies_id_literal_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate =
+                CompoundPredicate::<Account>::build(|p| p.equals("id", acc2.to_string()));
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn find_accounts_applies_id_in_literal_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            let (acc3, _kp3) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc3.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.in_values("id", [acc2.to_string(), acc3.to_string()])
+            });
+            let mut results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            results.sort();
+            let mut expected = vec![acc2, acc3];
+            expected.sort();
+            assert_eq!(results, expected);
+        }
+
+        #[test]
+        fn find_accounts_applies_mixed_id_and_metadata_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key, Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("id", acc1.to_string())
+                    .equals("metadata.tier", "gold")
+            });
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
         fn find_accounts_with_asset_applies_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -639,6 +1111,189 @@ pub mod query {
             let view = state.view();
             let predicate =
                 CompoundPredicate::<Account>::build(|p| p.equals("metadata.tier", "gold"));
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_applies_id_literal_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate =
+                CompoundPredicate::<Account>::build(|p| p.equals("id", acc2.to_string()));
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_applies_id_in_literal_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            let (acc3, _kp3) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc3.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.in_values("id", [acc2.to_string(), acc3.to_string()])
+            });
+            let results: Vec<_> = FindAccountsWithAsset::new(ad)
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn find_accounts_with_asset_applies_mixed_id_and_metadata_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _kp1) = gen_account_in("wonderland");
+            let (acc2, _kp2) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "test_coin".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = ad.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc1.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Mint::asset_numeric(1u32, AssetId::new(ad.clone(), acc2.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let tier_key: Name = "tier".parse().unwrap();
+            SetKeyValue::account(acc1.clone(), tier_key.clone(), Json::from("gold"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            SetKeyValue::account(acc2.clone(), tier_key, Json::from("silver"))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.equals("id", acc1.to_string())
+                    .equals("metadata.tier", "gold")
+            });
             let results: Vec<_> = FindAccountsWithAsset::new(ad)
                 .execute(predicate, &view)
                 .unwrap()

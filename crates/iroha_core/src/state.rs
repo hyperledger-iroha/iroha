@@ -140,7 +140,10 @@ use norito::{
 };
 use once_cell::sync::OnceCell as SyncOnceCell;
 use range_bounds::*;
-pub use range_bounds::{AsAssetIdAccountCompare, AssetByAccountBounds, RoleIdByAccountBounds};
+pub use range_bounds::{
+    AsAssetIdAccountCompare, AsAssetIdAccountDefinitionCompare, AssetByAccountBounds,
+    AssetByAccountDefinitionBounds, RoleIdByAccountBounds,
+};
 pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 
@@ -344,6 +347,7 @@ macro_rules! build_world_block {
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
+            asset_definition_holders: $state.asset_definition_holders.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
@@ -469,6 +473,7 @@ macro_rules! build_world_transaction {
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
+            asset_definition_holders: $state.asset_definition_holders.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
@@ -1243,6 +1248,9 @@ pub struct World {
     #[norito(skip)]
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Holder index keyed by asset definition id.
+    #[norito(skip)]
+    pub(crate) asset_definition_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1562,6 +1570,9 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Holder index keyed by asset definition id.
+    pub(crate) asset_definition_holders:
+        StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1996,6 +2007,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Holder index keyed by asset definition id.
+    pub(crate) asset_definition_holders:
+        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2292,10 +2306,52 @@ pub struct WorldTransaction<'block, 'world> {
 }
 
 impl WorldTransaction<'_, '_> {
+    /// Record that the given account now holds at least one balance partition of the definition.
+    pub(crate) fn track_asset_holder(&mut self, asset_id: &AssetId) {
+        if let Some(holders) = self.asset_definition_holders.get_mut(asset_id.definition()) {
+            holders.insert(asset_id.account().clone());
+        } else {
+            self.asset_definition_holders.insert(
+                asset_id.definition().clone(),
+                BTreeSet::from([asset_id.account().clone()]),
+            );
+        }
+    }
+
+    /// Drop holder linkage when the account no longer has any balance partition
+    /// for the definition.
+    pub(crate) fn untrack_asset_holder_if_empty(&mut self, asset_id: &AssetId) {
+        let has_remaining_for_definition =
+            self.assets
+                .range::<dyn AsAssetIdAccountDefinitionCompare>(
+                    AssetByAccountDefinitionBounds::new(asset_id.account(), asset_id.definition()),
+                )
+                .next()
+                .is_some();
+        if has_remaining_for_definition {
+            return;
+        }
+
+        let remove_index_entry = self
+            .asset_definition_holders
+            .get_mut(asset_id.definition())
+            .is_some_and(|holders| {
+                holders.remove(asset_id.account());
+                holders.is_empty()
+            });
+        if remove_index_entry {
+            self.asset_definition_holders
+                .remove(asset_id.definition().clone());
+        }
+    }
+
     /// Remove an asset entry and any attached asset metadata.
     pub(crate) fn remove_asset_and_metadata(&mut self, asset_id: &AssetId) -> Option<AssetValue> {
         let removed = self.assets.remove(asset_id.clone());
         self.asset_metadata.remove(asset_id.clone());
+        if removed.is_some() {
+            self.untrack_asset_holder_if_empty(asset_id);
+        }
         removed
     }
 
@@ -2433,6 +2489,9 @@ pub struct WorldView<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Holder index keyed by asset definition id.
+    pub(crate) asset_definition_holders:
+        StorageView<'world, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
     pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -9275,6 +9334,7 @@ impl World {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            asset_definition_holders: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
@@ -9322,6 +9382,7 @@ impl World {
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
+        world.rebuild_asset_definition_holder_index();
         world
             .rebuild_opaque_uaid_index()
             .expect("duplicate opaque id in world constructor");
@@ -9492,6 +9553,17 @@ impl World {
         Ok(())
     }
 
+    fn rebuild_asset_definition_holder_index(&mut self) {
+        let mut holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
+        for (asset_id, _) in self.assets.view().iter() {
+            holders
+                .entry(asset_id.definition().clone())
+                .or_default()
+                .insert(asset_id.account().clone());
+        }
+        self.asset_definition_holders = holders.into_iter().collect();
+    }
+
     fn rebuild_opaque_uaid_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
         let view = self.accounts.view();
@@ -9622,6 +9694,7 @@ impl World {
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
+            asset_definition_holders: self.asset_definition_holders.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
@@ -9777,6 +9850,10 @@ pub trait WorldReadOnly {
     fn asset_definition_alias_bindings(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
+    /// Holder index keyed by asset definition id.
+    fn asset_definition_holders(
+        &self,
+    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>>;
     /// Asset storage (read-only).
     fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
     /// Asset metadata storage (read-only).
@@ -10105,15 +10182,29 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
-    /// Iterate accounts in domain
+    /// Iterate subjects linked to the specified domain.
+    fn account_subjects_in_domain_iter<'a>(
+        &'a self,
+        id: &'a DomainId,
+    ) -> impl Iterator<Item = &'a AccountId> {
+        self.domain_account_subjects()
+            .get(id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+    }
+
+    /// Iterate accounts in domain.
     #[allow(clippy::type_complexity)]
-    fn accounts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AccountEntry<'_>> {
-        let subjects: BTreeSet<AccountId> =
-            self.account_subjects_in_domain(id).into_iter().collect();
-        self.accounts()
-            .iter()
-            .filter(move |(account_id, _)| subjects.contains(*account_id))
-            .map(|(account_id, value)| AccountEntry::new(account_id, value))
+    fn accounts_in_domain_iter<'a>(
+        &'a self,
+        id: &'a DomainId,
+    ) -> impl Iterator<Item = AccountEntry<'a>> {
+        self.account_subjects_in_domain_iter(id)
+            .filter_map(move |subject| {
+                self.accounts()
+                    .get_key_value(subject)
+                    .map(|(account_id, value)| AccountEntry::new(account_id, value))
+            })
     }
 
     /// Returns reference for accounts map
@@ -10145,10 +10236,7 @@ pub trait WorldReadOnly {
 
     /// List account subjects linked to a specific domain.
     fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountId> {
-        self.domain_account_subjects()
-            .get(id)
-            .map(|linked_subjects| linked_subjects.iter().cloned().collect())
-            .unwrap_or_default()
+        self.account_subjects_in_domain_iter(id).cloned().collect()
     }
 
     /// Iterate asset definitions in domain
@@ -10180,6 +10268,17 @@ pub trait WorldReadOnly {
         self.asset_definition_aliases().get(alias).cloned()
     }
 
+    /// Iterate holders tracked for an asset definition.
+    fn asset_definition_holders_iter<'a>(
+        &'a self,
+        definition_id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = &'a AccountId> {
+        self.asset_definition_holders()
+            .get(definition_id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+    }
+
     /// Iterate assets in account
     #[allow(clippy::type_complexity)]
     fn assets_in_account_iter(&self, id: &AccountId) -> impl Iterator<Item = AssetEntry<'_>> {
@@ -10188,27 +10287,46 @@ pub trait WorldReadOnly {
             .map(|(id, value)| AssetEntry::new(id, value))
     }
 
+    /// Iterate assets in account for a specific definition.
+    #[allow(clippy::type_complexity)]
+    fn assets_in_account_by_definition_iter<'a>(
+        &'a self,
+        account_id: &'a AccountId,
+        definition_id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = AssetEntry<'a>> {
+        self.assets()
+            .range::<dyn AsAssetIdAccountDefinitionCompare>(AssetByAccountDefinitionBounds::new(
+                account_id,
+                definition_id,
+            ))
+            .map(|(id, value)| AssetEntry::new(id, value))
+    }
+
     /// Iterate assets held by all accounts within the specified domain.
     #[allow(clippy::type_complexity)]
-    fn assets_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AssetEntry<'_>> {
-        self.accounts_in_domain_iter(id).flat_map(|account| {
-            let account_id = account.id().clone();
-            self.assets_in_account_iter(&account_id)
-                .collect::<Vec<_>>()
-                .into_iter()
-        })
+    fn assets_in_domain_iter<'a>(
+        &'a self,
+        id: &'a DomainId,
+    ) -> impl Iterator<Item = AssetEntry<'a>> {
+        self.account_subjects_in_domain_iter(id)
+            .filter(move |subject| self.accounts().get(*subject).is_some())
+            .flat_map(move |subject| self.assets_in_account_iter(subject))
     }
 
     /// Iterate assets matching a specific definition.
     ///
     /// Asset ownership is keyed by `(owner subject, definition, scope)`, so definition queries
-    /// must walk the asset store directly to preserve all balance partitions.
-    fn assets_by_definition_iter(&self, id: &AssetDefinitionId) -> impl Iterator<Item = Asset> {
-        let definition_id = id.clone();
-        self.assets().iter().filter_map(move |(asset_id, value)| {
-            (asset_id.definition() == &definition_id)
-                .then(|| Asset::new(asset_id.clone(), value.clone().into_inner()))
-        })
+    /// must preserve all balance partitions.
+    fn assets_by_definition_iter<'a>(
+        &'a self,
+        id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = Asset> + 'a {
+        self.asset_definition_holders_iter(id)
+            .flat_map(move |holder| self.assets_in_account_by_definition_iter(holder, id))
+            .map(|entry| Asset {
+                id: entry.id().clone(),
+                value: entry.value().clone().into_inner(),
+            })
     }
 
     /// Returns reference for asset definitions map
@@ -10335,18 +10453,10 @@ pub trait WorldReadOnly {
     /// # Errors
     /// - Asset definition not found
     fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Numeric, FindError> {
-        // Ensure asset definition exists
-        let _ = self.asset_definition(definition_id)?;
-        // Sum all asset values matching this definition
-        let mut total = Numeric::zero();
-        for (asset_id, value) in self.assets().iter() {
-            if asset_id.definition() == definition_id {
-                total = total
-                    .checked_add(value.clone().into_inner())
-                    .expect("INTERNAL BUG: Numeric overflow while summing assets");
-            }
-        }
-        Ok(total)
+        Ok(self
+            .asset_definition(definition_id)?
+            .total_quantity()
+            .clone())
     }
 
     // NFT-related methods
@@ -10465,6 +10575,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
                 &self.asset_definition_alias_bindings
+            }
+            fn asset_definition_holders(
+                &self,
+            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
+                &self.asset_definition_holders
             }
             fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
@@ -10991,6 +11106,7 @@ impl<'world> WorldBlock<'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            asset_definition_holders,
             assets,
             asset_metadata,
             nfts,
@@ -11197,6 +11313,7 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
+        asset_definition_holders.commit();
         asset_definitions.commit();
         accounts.commit();
         account_subject_domains.commit();
@@ -11969,6 +12086,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            asset_definition_holders,
             assets,
             asset_metadata,
             nfts,
@@ -12151,6 +12269,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definition_alias_bindings.apply();
         asset_definition_aliases.apply();
+        asset_definition_holders.apply();
         asset_definitions.apply();
         accounts.apply();
         account_subject_domains.apply();
@@ -12388,6 +12507,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
             self.emit_events(Some(AssetEvent::Created(asset.clone())));
             let (asset_id, asset_value) = asset.into_key_value();
+            self.track_asset_holder(&asset_id);
             self.assets.insert(asset_id, asset_value);
         }
         Ok(self
@@ -23756,6 +23876,50 @@ mod range_bounds {
         }
     }
 
+    /// `AccountId + AssetDefinitionId` wrapper for fetching definition partitions in an account.
+    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
+    pub struct AssetIdAccountDefinitionCompare<'a> {
+        account_id: &'a AccountId,
+        definition: &'a AssetDefinitionId,
+        scope: MinMaxExt<&'a AssetBalanceScope>,
+    }
+
+    /// Bounds for range queries over assets by account and definition.
+    pub struct AssetByAccountDefinitionBounds<'a> {
+        start: AssetIdAccountDefinitionCompare<'a>,
+        end: AssetIdAccountDefinitionCompare<'a>,
+    }
+
+    impl<'a> AssetByAccountDefinitionBounds<'a> {
+        /// Create range bounds for range queries over assets by account and definition.
+        pub fn new(account_id: &'a AccountId, definition: &'a AssetDefinitionId) -> Self {
+            Self {
+                start: AssetIdAccountDefinitionCompare {
+                    account_id,
+                    definition,
+                    scope: MinMaxExt::Min,
+                },
+                end: AssetIdAccountDefinitionCompare {
+                    account_id,
+                    definition,
+                    scope: MinMaxExt::Max,
+                },
+            }
+        }
+    }
+
+    impl<'a> RangeBounds<dyn AsAssetIdAccountDefinitionCompare + 'a>
+        for AssetByAccountDefinitionBounds<'a>
+    {
+        fn start_bound(&self) -> Bound<&(dyn AsAssetIdAccountDefinitionCompare + 'a)> {
+            Bound::Excluded(&self.start)
+        }
+
+        fn end_bound(&self) -> Bound<&(dyn AsAssetIdAccountDefinitionCompare + 'a)> {
+            Bound::Excluded(&self.end)
+        }
+    }
+
     impl AsAssetIdAccountCompare for AssetId {
         fn as_key(&self) -> AssetIdAccountCompare<'_> {
             AssetIdAccountCompare {
@@ -23765,10 +23929,26 @@ mod range_bounds {
         }
     }
 
+    impl AsAssetIdAccountDefinitionCompare for AssetId {
+        fn as_key(&self) -> AssetIdAccountDefinitionCompare<'_> {
+            AssetIdAccountDefinitionCompare {
+                account_id: self.account(),
+                definition: self.definition(),
+                scope: self.scope().into(),
+            }
+        }
+    }
+
     impl_as_dyn_key! {
         target: AssetId,
         key: AssetIdAccountCompare<'_>,
         trait: AsAssetIdAccountCompare
+    }
+
+    impl_as_dyn_key! {
+        target: AssetId,
+        key: AssetIdAccountDefinitionCompare<'_>,
+        trait: AsAssetIdAccountDefinitionCompare
     }
 }
 
@@ -24052,6 +24232,7 @@ pub(crate) mod deserialize {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            asset_definition_holders: Storage::default(),
             assets,
             asset_metadata,
             nfts,
@@ -24180,6 +24361,7 @@ pub(crate) mod deserialize {
                 field: "asset_definition_aliases".into(),
                 message,
             })?;
+        world.rebuild_asset_definition_holder_index();
         world
             .rebuild_opaque_uaid_index()
             .map_err(|message| json::Error::InvalidField {
@@ -34045,6 +34227,133 @@ mod tests {
     }
 
     #[test]
+    fn asset_definition_holder_index_tracks_asset_lifecycle() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
+
+        let alice_id = ALICE_ID.clone();
+        let asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
+        stx.world
+            .asset_or_insert(&asset_id, 1_u32)
+            .expect("insert asset through helper");
+        assert!(
+            stx.world
+                .asset_definition_holders
+                .get(&asset_def_id)
+                .is_some_and(|holders| holders.contains(&alice_id)),
+            "holder index should include account after insert"
+        );
+
+        let removed = stx.world.remove_asset_and_metadata(&asset_id);
+        assert!(removed.is_some(), "asset removed");
+        assert!(
+            stx.world
+                .asset_definition_holders
+                .get(&asset_def_id)
+                .is_none(),
+            "holder index should remove empty holder set"
+        );
+    }
+
+    #[test]
+    fn asset_definition_holder_index_waits_for_last_partition_removal() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
+
+        let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let (_, global_asset_value) =
+            Asset::new(global_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+        stx.world
+            .assets
+            .insert(global_asset_id.clone(), global_asset_value);
+        stx.world.track_asset_holder(&global_asset_id);
+
+        let scoped_asset_id = AssetId::with_scope(
+            asset_def_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_data_model::nexus::DataSpaceId::new(7),
+            ),
+        );
+        let (_, scoped_asset_value) =
+            Asset::new(scoped_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+        stx.world
+            .assets
+            .insert(scoped_asset_id.clone(), scoped_asset_value);
+        stx.world.track_asset_holder(&scoped_asset_id);
+
+        let removed_global = stx.world.remove_asset_and_metadata(&global_asset_id);
+        assert!(removed_global.is_some(), "global partition removed");
+        assert!(
+            stx.world
+                .asset_definition_holders
+                .get(&asset_def_id)
+                .is_some_and(|holders| holders.contains(&ALICE_ID)),
+            "holder should remain while another partition exists"
+        );
+
+        let removed_scoped = stx.world.remove_asset_and_metadata(&scoped_asset_id);
+        assert!(removed_scoped.is_some(), "scoped partition removed");
+        assert!(
+            stx.world
+                .asset_definition_holders
+                .get(&asset_def_id)
+                .is_none(),
+            "holder entry should be removed after last partition disappears"
+        );
+    }
+
+    #[test]
     fn remove_asset_and_metadata_with_total_cleans_orphan_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -34088,6 +34397,51 @@ mod tests {
         assert!(
             stx.world.asset_metadata.get(&asset_id).is_none(),
             "orphan metadata removed"
+        );
+    }
+
+    #[test]
+    fn asset_total_amount_reads_tracked_definition_total() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
+
+        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let (_, asset_value) = Asset::new(asset_id.clone(), Numeric::new(9, 0)).into_key_value();
+        stx.world.assets.insert(asset_id.clone(), asset_value);
+        stx.world.track_asset_holder(&asset_id);
+
+        let tracked_total = stx
+            .world
+            .asset_total_amount(&asset_def_id)
+            .expect("asset total query succeeds");
+        assert_eq!(
+            tracked_total,
+            Numeric::zero(),
+            "query should return tracked definition total quantity"
         );
     }
 
@@ -34277,8 +34631,6 @@ mod tests {
 
     #[test]
     fn capture_exec_witness_stashes_reads_and_writes() {
-        use core::str::FromStr as _;
-
         use iroha_data_model::{asset::AssetDefinitionId, asset::AssetId, block::BlockHeader};
 
         let world = World::default();
@@ -37933,6 +38285,40 @@ mod tests {
         let view = map.view();
         let range = view.range(AssetByAccountBounds::new(&account_id));
         assert_eq!(range.count(), 2);
+    }
+
+    #[test]
+    fn asset_account_definition_range_includes_all_scopes() {
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let account_id = gen_account_in("wonderland").0;
+        let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
+
+        let assets = [
+            AssetId::new(target_definition.clone(), account_id.clone()),
+            AssetId::with_scope(
+                target_definition.clone(),
+                account_id.clone(),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            ),
+            AssetId::new(other_definition, account_id.clone()),
+            AssetId::new(target_definition.clone(), gen_account_in("other").0),
+        ]
+        .map(|asset_id| (asset_id, ()));
+
+        let map: Storage<_, _> = assets.into_iter().collect();
+        let view = map.view();
+        let range =
+            view.range::<dyn AsAssetIdAccountDefinitionCompare>(
+                AssetByAccountDefinitionBounds::new(&account_id, &target_definition),
+            )
+            .collect::<Vec<_>>();
+
+        assert_eq!(range.len(), 2, "global + scoped partitions should match");
+        for (asset_id, ()) in range {
+            assert_eq!(asset_id.account(), &account_id);
+            assert_eq!(asset_id.definition(), &target_definition);
+        }
     }
 
     #[test]

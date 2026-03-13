@@ -428,8 +428,12 @@ fn rekey_account_id(
         if let Some(value) = state_transaction.world.assets.remove(asset_id.clone()) {
             state_transaction
                 .world
+                .untrack_asset_holder_if_empty(&asset_id);
+            state_transaction
+                .world
                 .assets
                 .insert(new_asset_id.clone(), value);
+            state_transaction.world.track_asset_holder(&new_asset_id);
         }
         if let Some(meta) = state_transaction
             .world
@@ -1969,7 +1973,7 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        ChainId,
+        ChainId, IntoKeyValue,
         account::AccountId,
         block::BlockHeader,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
@@ -2882,6 +2886,100 @@ mod tests {
         assert!(
             domain_subjects.contains(&new_subject),
             "domain subject index should contain new subject after rekey"
+        );
+    }
+
+    #[test]
+    fn rekey_account_id_moves_asset_holder_index_to_new_account() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-rekey-asset-holder-index"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+
+        let old_key = KeyPair::random();
+        let old_account = new_account_id(&old_key);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&old_account, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &old_account,
+            &domain_id,
+            &old_account,
+            "register old account",
+        );
+
+        let asset_def_id: iroha_data_model::asset::AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                domain_id.clone(),
+                "rose".parse().unwrap(),
+            );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            iroha_data_model::asset::AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&old_account, &mut state_transaction)
+        .expect("register asset definition");
+
+        let old_asset_id =
+            iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
+        let (_, old_asset_value) = iroha_data_model::asset::Asset::new(
+            old_asset_id.clone(),
+            iroha_primitives::numeric::Numeric::new(5, 0),
+        )
+        .into_key_value();
+        state_transaction
+            .world
+            .assets
+            .insert(old_asset_id.clone(), old_asset_value);
+        state_transaction.world.track_asset_holder(&old_asset_id);
+
+        let new_key = KeyPair::random();
+        let new_account = new_account_id(&new_key);
+
+        rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            &domain_id,
+        )
+        .expect("rekey should succeed");
+
+        let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
+            asset_def_id.clone(),
+            new_account.clone(),
+            *old_asset_id.scope(),
+        );
+        assert!(
+            state_transaction.world.assets.get(&old_asset_id).is_none(),
+            "old account asset row should be removed"
+        );
+        assert!(
+            state_transaction.world.assets.get(&new_asset_id).is_some(),
+            "new account asset row should exist"
+        );
+
+        let holders = state_transaction
+            .world
+            .asset_definition_holders
+            .get(&asset_def_id)
+            .expect("holder index should exist after rekey");
+        assert!(
+            holders.contains(&new_account),
+            "new account should be present in holder index"
+        );
+        assert!(
+            !holders.contains(&old_account),
+            "old account should be removed from holder index"
         );
     }
 

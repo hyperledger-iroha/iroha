@@ -1720,9 +1720,14 @@ mod tests {
                 stake_asset_id.clone(),
                 AssetDefinition::numeric(stake_asset_id.clone()).build(&validator),
             );
-            block.assets.insert(
-                AssetId::new(stake_asset_id.clone(), escrow_account.clone()),
-                Owned::new(slash_amount.clone()),
+            let escrow_stake_asset_id =
+                AssetId::new(stake_asset_id.clone(), escrow_account.clone());
+            block
+                .assets
+                .insert(escrow_stake_asset_id, Owned::new(slash_amount.clone()));
+            block.asset_definition_holders.insert(
+                stake_asset_id.clone(),
+                BTreeSet::from([escrow_account.clone()]),
             );
             block.commit();
         }
