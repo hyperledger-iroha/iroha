@@ -2,11 +2,11 @@
 use core::fmt;
 use std::{collections::BTreeSet, format, io::Write, str::FromStr, string::String, vec::Vec};
 
-use bs58;
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
     DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
 };
+use bs58;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_primitives::json::Json;
@@ -659,7 +659,9 @@ impl AccountId {
                     AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
                     Err(AccountAddressError::ChecksumMismatch)
                 ) {
-                    Err(ParseError::new(AccountAddressErrorCode::ChecksumMismatch.as_str()))
+                    Err(ParseError::new(
+                        AccountAddressErrorCode::ChecksumMismatch.as_str(),
+                    ))
                 } else {
                     Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
                 }

@@ -252,11 +252,14 @@ fn instructions_match(
         return false;
     };
 
-    batch
-        .iter()
-        .any(|instruction| {
-            instruction_matches(matcher_label, destination_domain, &**instruction, state_view)
-        })
+    batch.iter().any(|instruction| {
+        instruction_matches(
+            matcher_label,
+            destination_domain,
+            &**instruction,
+            state_view,
+        )
+    })
 }
 
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
@@ -691,7 +694,9 @@ mod tests {
             domain_owners
                 .entry(domain_id.clone())
                 .or_insert_with(|| account_id.clone());
-            account_models.push(Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id));
+            account_models.push(
+                Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id),
+            );
         }
         let domain_models = domain_owners
             .into_iter()
@@ -1362,7 +1367,10 @@ mod tests {
         let state = state_with_accounts(&[
             (uae_sender_id.clone(), "uae".parse().expect("uae domain")),
             (bank_sender_id.clone(), "hbl".parse().expect("hbl domain")),
-            (acme_receiver_id.clone(), "acme".parse().expect("acme domain")),
+            (
+                acme_receiver_id.clone(),
+                "acme".parse().expect("acme domain"),
+            ),
         ]);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
