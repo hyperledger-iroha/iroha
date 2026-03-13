@@ -230,6 +230,7 @@ fn multisig_role_for(
     home_domain: &iroha_data_model::domain::DomainId,
     account: &AccountId,
 ) -> RoleId {
+    const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
     let role_name = |suffix: &str| {
         format!(
             "{MULTISIG_SIGNATORY}{DELIMITER}{}{DELIMITER}{}",
@@ -237,7 +238,9 @@ fn multisig_role_for(
         )
     };
     if let Ok(canonical_suffix) = account.canonical_i105() {
-        if let Ok(role_id) = role_name(&canonical_suffix).parse() {
+        if canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN
+            && let Ok(role_id) = role_name(&canonical_suffix).parse()
+        {
             return role_id;
         }
     }

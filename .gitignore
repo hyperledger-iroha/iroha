@@ -100,6 +100,7 @@ docs/source/da/_generated/threat_model_report.json
 .cargo-temp/
 .cache/
 .swift_test_home/
+.swift_test_home/*
 .chat_history
 .pytest_cache/
 .swift-module-cache/
