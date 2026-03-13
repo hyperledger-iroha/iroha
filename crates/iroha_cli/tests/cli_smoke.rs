@@ -10,7 +10,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    str::FromStr,
     sync::LazyLock,
 };
 
