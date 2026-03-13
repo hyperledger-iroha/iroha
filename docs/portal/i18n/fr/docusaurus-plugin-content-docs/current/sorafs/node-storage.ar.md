@@ -120,8 +120,8 @@ Vous pouvez utiliser Norito JSON pour la sortie standard, ainsi que les scripts.
 >
 > تعرض بوابة Torii الآن مساعدات قراءة فقط مدعومة بنفس `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — Le manifeste Norito est (base64) avec digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — JSON (`chunk_fetch_specs`) en aval.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — Le manifeste Norito est (base64) avec digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — JSON (`chunk_fetch_specs`) en aval.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Utiliser la CLI pour les scripts et les scripts HTTP pour les applications HTTP المحللات.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -143,9 +143,9 @@ Vous pouvez utiliser Norito JSON pour la sortie standard, ainsi que les scripts.
 6. **الإخلاء/تطبيق الحصص** :
    - عند بلوغ السعة ترفض العقدة pins الجديدة افتراضيا. يمكن للمشغلين تكوين سياسات إخلاء (مثل TTL وLRU) عند توافق نموذج الحوكمة؛ حاليا يفترض التصميم حصصا صارمة وعمليات désépingler يطلقها المشغل.
 
-### تكامل إعلان السعة والجدولة- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة Il s'agit d'un chunker/lane similaire à celui-ci. يكشف المدير لقطات lecture seule للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر Lire.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Le point de terminaison `/v1/sorafs/capacity/schedule` est associé à `ReplicationOrderV1`. Il s'agit d'un chunker/lane ou d'un chunker/lane `ReplicationPlan` يصف السعة المتبقية لتتمكن أدوات orchestration من متابعة الإدخال. يتم الإقرار بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد مشغلين.【crates/iroha_torii/src/routing.rs:4845】
-- Crochets pour crochets (pour crochets) pour `POST /v1/sorafs/capacity/complete` pour `CapacityManager::complete_order`. L'orchestration `ReplicationRelease` (pour le chunker/lane) est utilisée pour l'orchestration pour le sondage. سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق Fichier.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+### تكامل إعلان السعة والجدولة- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v2/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة Il s'agit d'un chunker/lane similaire à celui-ci. يكشف المدير لقطات lecture seule للتليمترية (`GET /v2/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر Lire.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- Le point de terminaison `/v2/sorafs/capacity/schedule` est associé à `ReplicationOrderV1`. Il s'agit d'un chunker/lane ou d'un chunker/lane `ReplicationPlan` يصف السعة المتبقية لتتمكن أدوات orchestration من متابعة الإدخال. يتم الإقرار بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد مشغلين.【crates/iroha_torii/src/routing.rs:4845】
+- Crochets pour crochets (pour crochets) pour `POST /v2/sorafs/capacity/complete` pour `CapacityManager::complete_order`. L'orchestration `ReplicationRelease` (pour le chunker/lane) est utilisée pour l'orchestration pour le sondage. سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق Fichier.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`, مما يسمح لعمال الخلفية بتسجيل عينات PoR/uptime وفي النهاية Utilisez le planificateur `CapacityTelemetryV1` pour les composants internes du planificateur.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】### التكاملات والعمل المستقبلي
 
 - **الحوكمة** : توسيع `sorafs_pin_registry_tracker.md` بتليمترية التخزين (معدل نجاح PoR, استغلال القرص). Il y a des publicités sur les publicités PoR.

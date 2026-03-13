@@ -31,7 +31,7 @@ validadores possam confiar nos compromisos DA durante admissao ou checks de
   可用性を検討したり、台帳のストレージを調べたりします。
 - 顧客レベルでのメンバーシップの決定を決定する
   マニフェスト ハッシュを確認し、最終的なブロックを確認します。
-- リレーを許可する Torii (`/v1/da/commitments/*`) をエクスポートします。
+- リレーを許可する Torii (`/v2/da/commitments/*`) をエクスポートします。
   SDK と自動管理監査の可用性は、完全に再現されます。
 - マンター・オ・エンベロープ `SignedBlockWire` canonico ao enfiar as novas estruturas
   メタデータ Norito のヘッダーは、ハッシュ デ ブロックの派生です。
@@ -45,7 +45,7 @@ validadores possam confiar nos compromisos DA durante admissao ou checks de
 3. **永続化/インデックス** パラケオ WSV は、妥協の相談に応じます
    急速 (`iroha_core/src/wsv/mod.rs`)。
 4. **Adicoes RPC em Torii** エンドポイントのリスト/コンサルタ/プロバソブ
-   `/v1/da/commitments`。
+   `/v2/da/commitments`。
 5. **統合テストと治具** 検証、ワイヤレイアウト、耐フラックス防止
    em `integration_tests/tests/da/commitments.rs`。
 
@@ -136,9 +136,9 @@ Torii トレス エンドポイントを公開します:
 
 |ロタ |メトド |ペイロード |メモ |
 |------|--------|-----------|----------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンスの範囲フィルター、ページ) | Retorna `DaCommitmentPage` 合計、ハッシュ デ ブロコの妥協。 |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ トゥプラ `(epoch, sequence)`)。 | com `DaCommitmentProof` (レコード + カミーニョ マークル + ハッシュ デ ブロコ) に返信してください。 |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーはステートレスなクエリを実行し、ハッシュ デ ブロコと検証を含む計算を実行します。 SDK は `iroha_crypto` のポデム リンカー ディレクトリにあります。 |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンスの範囲フィルター、ページ) | Retorna `DaCommitmentPage` 合計、ハッシュ デ ブロコの妥協。 |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ トゥプラ `(epoch, sequence)`)。 | com `DaCommitmentProof` (レコード + カミーニョ マークル + ハッシュ デ ブロコ) に返信してください。 |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーはステートレスなクエリを実行し、ハッシュ デ ブロコと検証を含む計算を実行します。 SDK は `iroha_crypto` のポデム リンカー ディレクトリにあります。 |
 
 Todos OS ペイロードがすすり泣き `iroha_data_model::da::commitment` で表示されます。 OSルーター
 Torii モンタム OS ハンドラー、ラド、ドス、エンドポイントの取り込み DA 存在パラ

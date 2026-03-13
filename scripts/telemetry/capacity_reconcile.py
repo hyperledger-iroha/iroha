@@ -3,7 +3,7 @@
 Reconcile SoraFS capacity fee ledgers against executed XOR transfers.
 
 The capacity registry exposes expected settlements and penalties per provider in
-`fee_ledger` entries (via `/v1/sorafs/capacity/state`). This helper ingests that
+`fee_ledger` entries (via `/v2/sorafs/capacity/state`). This helper ingests that
 snapshot alongside a ledger export (JSON or NDJSON with provider IDs, amounts,
 and transfer kinds) and reports any missing/overpaid settlements or penalties.
 It can also emit Prometheus textfile metrics to feed alert rules and dashboards.

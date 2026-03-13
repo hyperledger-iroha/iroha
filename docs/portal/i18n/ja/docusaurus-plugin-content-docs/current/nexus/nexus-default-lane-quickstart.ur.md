@@ -165,7 +165,7 @@ TEU スナップショット、エイリアス メタデータ、マニフェス
 
 - **Rust/CLI.** `iroha_cli` Rust クライアント クレート `lane_id` フィールドを省略します。 `--lane-id` / `LaneSelector` はパスします。ありがとうキュー ルーター `default_lane` フォールバック明示的な `--lane-id`/`--dataspace-id` フラグ (デフォルト以外のレーン) とターゲット (ターゲット) のフラグ。
 - **JS/Swift/Android。** SDK リリース `laneId`/`lane_id` オプションの値 `/status` 値のフォールバックありがとうございますルーティング ポリシー、ステージング、本番環境、同期、モバイル アプリケーション、緊急時の再構成
-- **パイプライン/SSE テスト。** トランザクション イベント フィルター `tx_lane_id == <u32>` 述語 قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`)。 `/v1/pipeline/events/transactions` フィルター チャンネル登録 チャンネル登録 明示的なレーン チャンネル フォールバック レーン ID を書き込みますحت پہنچتی ہیں۔
+- **パイプライン/SSE テスト。** トランザクション イベント フィルター `tx_lane_id == <u32>` 述語 قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`)。 `/v2/pipeline/events/transactions` フィルター チャンネル登録 チャンネル登録 明示的なレーン チャンネル フォールバック レーン ID を書き込みますحت پہنچتی ہیں۔
 
 ## 7. 可観測性とガバナンスのフック- `/status` `nexus_lane_governance_sealed_total` 警告 `nexus_lane_governance_sealed_aliases` 警告を発行する アラートマネージャーが警告する 警告する レーンを警告する マニフェストを警告するऔर देखेंアラート、devnets、有効化されたアラート、devnets が有効になりました
 - スケジューラ テレメトリ マップ、レーン ガバナンス ダッシュボード (`dashboards/grafana/nexus_lanes.json`) カタログ、エイリアス/スラッグ フィールド、期待値エイリアスの名前変更、名前の変更、クラ ディレクトリのラベル変更、監査人の決定論的パス、 (NX-1 のトラック ہوتا ہے)۔

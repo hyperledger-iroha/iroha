@@ -76,7 +76,7 @@ Sinov:
 
 | Komponent | Vazifa | Ega(lar)i |
 |----------|------|----------|
-| Torii Xizmat | `/v1/sorafs/pin` (yuborish), `/v1/sorafs/pin/{cid}` (qidiruv), `/v1/sorafs/aliases` (roʻyxat/bogʻlash), `/v1/sorafs/replication` (buyurtmalar/kvitansiyalarni) oching. Sahifalar + filtrlashni ta'minlang. | Networking TL / Core Infra |
+| Torii Xizmat | `/v2/sorafs/pin` (yuborish), `/v2/sorafs/pin/{cid}` (qidiruv), `/v2/sorafs/aliases` (roʻyxat/bogʻlash), `/v2/sorafs/replication` (buyurtmalar/kvitansiyalarni) oching. Sahifalar + filtrlashni ta'minlang. | Networking TL / Core Infra |
 | Attestatsiya | Javoblarga registr balandligi/xeshini qo'shing; SDK tomonidan iste'mol qilinadigan Norito attestatsiya tuzilmasini qo'shing. | Yadro infra |
 | CLI | `sorafs_manifest_stub` yoki yangi `sorafs_pin` CLI ni `pin submit`, `alias bind`, `order issue`, `registry export` bilan kengaytiring. | Asboblar WG |
 | SDK | Norito sxemasidan mijoz ulanishlarini (Rust/Go/TS) yaratish; integratsiya testlarini qo'shing. | SDK jamoalari |
@@ -133,10 +133,10 @@ Boshqaruv paneli:
 SF-4 ostidagi yo'l xaritasi nazorat ro'yxatining har bir bandi taraqqiyotga erishilganda ushbu rejaga havola qilishi kerak.
 REST jabhasi endi tasdiqlangan ro'yxatning so'nggi nuqtalari bilan jo'natiladi:
 
-- `GET /v1/sorafs/pin` va `GET /v1/sorafs/pin/{digest}` qaytish manifestlari bilan
+- `GET /v2/sorafs/pin` va `GET /v2/sorafs/pin/{digest}` qaytish manifestlari bilan
   taxallus bog'lashlari, replikatsiya buyurtmalari va attestatsiya ob'ektidan olingan
   oxirgi blok xeshi.
-- `GET /v1/sorafs/aliases` va `GET /v1/sorafs/replication` faol moddalarni ochib beradi.
+- `GET /v2/sorafs/aliases` va `GET /v2/sorafs/replication` faol moddalarni ochib beradi.
   taxallus katalogi va izchil sahifalash bilan replikatsiya tartibi to'plami va
   holat filtrlari.
 

@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Norito-RPC کا جائزہ
 
-Norito-RPC Torii APIs کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/v1/pipeline` والی وہی HTTP راستے استعمال کرتا ہے لیکن Norito فریم والے payloads کا تبادلہ کرتا ہے جن میں schema hashes اور checksums شامل ہوتے ہیں۔ اسے وہاں استعمال کریں جہاں آپ کو متعین اور تصدیق شدہ جوابات درکار ہوں، یا جب pipeline کے JSON جوابات بوتل نیک بن جائیں۔
+Norito-RPC Torii APIs کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/v2/pipeline` والی وہی HTTP راستے استعمال کرتا ہے لیکن Norito فریم والے payloads کا تبادلہ کرتا ہے جن میں schema hashes اور checksums شامل ہوتے ہیں۔ اسے وہاں استعمال کریں جہاں آپ کو متعین اور تصدیق شدہ جوابات درکار ہوں، یا جب pipeline کے JSON جوابات بوتل نیک بن جائیں۔
 
 ## کیوں تبدیل کریں؟
 - CRC64 اور schema hashes کے ساتھ متعین framing ڈیکوڈنگ غلطیوں کو کم کرتی ہے۔
@@ -20,7 +20,7 @@ Norito-RPC Torii APIs کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/
 ## درخواست بھیجنا
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. اپنے payload کو Norito codec (`iroha_client`, SDK helpers، یا `norito::to_bytes`) سے سیریلائز کریں۔
@@ -39,7 +39,7 @@ SDK کے لحاظ سے رہنمائی:
 ڈویلپر پورٹل ایک Try It پراکسی فراہم کرتا ہے تاکہ ریویورز بغیر کسی مخصوص اسکرپٹ کے Norito payloads کو دوبارہ چلا سکیں۔
 
 1. [پراکسی شروع کریں](./try-it.md#start-the-proxy-locally) اور `TRYIT_PROXY_PUBLIC_URL` سیٹ کریں تاکہ widgets جان سکیں کہ ٹریفک کہاں بھیجنی ہے۔
-2. اس صفحے پر **Try it** کارڈ یا `/reference/torii-swagger` پینل کھولیں اور `POST /v1/pipeline/submit` جیسا endpoint منتخب کریں۔
+2. اس صفحے پر **Try it** کارڈ یا `/reference/torii-swagger` پینل کھولیں اور `POST /v2/pipeline/submit` جیسا endpoint منتخب کریں۔
 3. **Content-Type** کو `application/x-norito` پر سوئچ کریں، **Binary** ایڈیٹر منتخب کریں، اور `fixtures/norito_rpc/transfer_asset.norito` اپ لوڈ کریں (یا `fixtures/norito_rpc/transaction_fixtures.manifest.json` میں درج کوئی بھی payload)۔
 4. OAuth device-code widget یا دستی ٹوکن فیلڈ کے ذریعے bearer token فراہم کریں (جب `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` کنفیگر ہو تو پراکسی `X-TryIt-Auth` overrides قبول کرتا ہے)۔
 5. درخواست بھیجیں اور تصدیق کریں کہ Torii `fixtures/norito_rpc/schema_hashes.json` میں درج `schema_hash` واپس دیتا ہے۔ مطابقت پذیر hashes تصدیق کرتے ہیں کہ Norito header براؤزر/پراکسی hop سے محفوظ رہا۔

@@ -31,7 +31,7 @@ SCALE ni de JSON مخصص.
   حالة التوفر بدون استشارة المخزون خارج دفتر الأستاذ.
 - تقديم طلبات العضوية المحددة حتى يصبح العملاء قانونيين
   التحقق من تجزئة البيان إلى وضع اللمسات الأخيرة في كتلة دون.
-- عرض الطلبات Torii (`/v1/da/commitments/*`) والطلبات المسموح بها
+- عرض الطلبات Torii (`/v2/da/commitments/*`) والطلبات المسموح بها
   المرحلات ومجموعات SDK وأتمتة إدارة تدقيق التوافر
   بلا كتلة rejouer chaque.
 - الحفاظ على المغلف `SignedBlockWire` الكنسي ونقل الملفات الجديدة
@@ -46,7 +46,7 @@ SCALE ni de JSON مخصص.
 3. **الثبات/الفهارس** لتمكين WSV من الاستجابة السريعة لطلبات
    الالتزامات (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** لنقاط نهاية القائمة/المحاضرة/الإثبات
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **اختبارات التكامل + التركيبات** صالحة لتخطيط السلك وإثبات التدفق
    في `integration_tests/tests/da/commitments.rs`.
 
@@ -142,9 +142,9 @@ prochaine مؤقت ليه reprenne؛ قام المنشئ بتسجيل الجزء
 
 | الطريق | ميثود | الحمولة | ملاحظات |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (مرشح النطاق/العصر/التسلسل، ترقيم الصفحات) | Renvoie `DaCommitmentPage` مع الإجمالي والالتزامات وتجزئة الكتلة. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + التجزئة الواضحة أو الصف `(epoch, sequence)`). | الرد مع `DaCommitmentProof` (سجل + طريق ميركل + تجزئة الكتلة). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديمي الجنسية الذي يستمتع بحساب تجزئة الكتلة ويصلح التضمين؛ استخدم نفس حزم SDK التي لا يمكن أن تكون مباشرة `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (مرشح النطاق/العصر/التسلسل، ترقيم الصفحات) | Renvoie `DaCommitmentPage` مع الإجمالي والالتزامات وتجزئة الكتلة. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + التجزئة الواضحة أو الصف `(epoch, sequence)`). | الرد مع `DaCommitmentProof` (سجل + طريق ميركل + تجزئة الكتلة). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديمي الجنسية الذي يستمتع بحساب تجزئة الكتلة ويصلح التضمين؛ استخدم نفس حزم SDK التي لا يمكن أن تكون مباشرة `iroha_crypto`. |
 
 جميع الحمولات حية جدًا `iroha_data_model::da::commitment`. أجهزة التوجيه
 يقوم Torii بتركيب المعالجات على جميع نقاط النهاية لاستيعاب DA الموجود

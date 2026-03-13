@@ -78,7 +78,7 @@ Swift には以前プレースホルダーの JSON エンコーダ（`ConnectCod
 
 ## トランスポート契約
 
-- 主なトランスポートは WebSocket（`/v1/connect/ws?sid=<session_id>`）。
+- 主なトランスポートは WebSocket（`/v2/connect/ws?sid=<session_id>`）。
 - 将来的なオプションとして WebRTC を検討（初期ストローマンでは範囲外）。
 - SDK の責務:
   - Ping/Pong ハートビートを維持し、モバイルでの電池消費を抑制する。

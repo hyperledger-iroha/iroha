@@ -30,7 +30,7 @@ O fluxo de trabalho de embalagem SoraFS reforça o determinismo, pois passa do C
 
 ## Configuração do ambiente
 
-- Os gateways devem ativar o ponto final de streaming de prova (`POST /v1/sorafs/proof/stream`) para que a CLI possa gerar currículos de telefonia.
+- Os gateways devem ativar o ponto final de streaming de prova (`POST /v2/sorafs/proof/stream`) para que a CLI possa gerar currículos de telefonia.
 - Configure a política `sorafs_alias_cache` usando os valores padrão de `iroha_config` ou a CLI auxiliar (`sorafs_cli manifest submit --alias-*`).
 - Forneça tokens de fluxo (ou identificadores Torii) por meio de um gerenciador de segredos protegidos.
 - Ative os exportadores de telefonia (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) e envie-os para sua pilha Prometheus/OTel.

@@ -42,7 +42,7 @@ Los gateways PUEDEN extender la tabla con etiquetas de telemetria adicionales (p
 ### Chunker no soportado (`C1`)
 
 1. Inspeccionar la entrada de log del request para el hint `chunker_handle` emitido por Torii.
-2. Comparar con la lista de perfiles del manifiesto servida por el Pin Registry (`/v1/sorafs/pin/<cid>`). El manifiesto DEBE incluir un chunker que coincida con el request.
+2. Comparar con la lista de perfiles del manifiesto servida por el Pin Registry (`/v2/sorafs/pin/<cid>`). El manifiesto DEBE incluir un chunker que coincida con el request.
 3. Si el manifiesto falta, publicar un manifiesto sucesor via `sorafs-manifest submit` y esperar aprobacion de governance.
 4. Confirmar que la cache del gateway refresco dentro de `alias_refresh_window` (ver `docs/source/sorafs_alias_policy.md`). Si la cache excedio `alias_hard_expiry`, evacuar localmente y re-solicitar.
 

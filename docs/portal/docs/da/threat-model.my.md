@@ -219,7 +219,7 @@ PDP/PoTR စိန်ခေါ်မှုများကို အတုအပ 
 - DA replay cache နှင့် cursor စွဲမြဲမှုသည် DA-2 တွင် ဆင်းသက်လာသည်။ ကြည့်ပါ။
   `crates/iroha_core/src/da/replay_cache.rs` (cache logic) နှင့် အကောင်အထည်ဖော်ခြင်း။
   Torii ပေါင်းစည်းမှု `crates/iroha_torii/src/da/ingest.rs`၊
-  `/v1/da/ingest` မှတဆင့် လက်ဗွေစစ်ဆေးသည်။
+  `/v2/da/ingest` မှတဆင့် လက်ဗွေစစ်ဆေးသည်။
 - PDP/PoTR streaming simulations များကို proof-stream harness in မှတဆင့် ကျင့်သုံးပါသည်။
   `crates/sorafs_car/tests/sorafs_cli.rs`၊ PoR/PDP/PoTR တောင်းဆိုချက်စီးဆင်းမှုများကို အကျုံးဝင်သည်။
   နှင့် ခြိမ်းခြောက်မှုပုံစံတွင် သက်ဝင်လှုပ်ရှားနေသော ရှုံးနိမ့်မှုအခြေအနေများ။

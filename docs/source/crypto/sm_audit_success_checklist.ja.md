@@ -36,7 +36,7 @@ SM2/SM3/SM4 外部監査の完了。期間中に見直す必要がある
 - [ ] キャプチャされた最新の決定論的テスト出力:
       `scripts/sm_openssl_smoke.sh`、`cargo test -p iroha_crypto sm`、および
       Norito 往復フィクスチャ。
-- [ ] Torii `/v1/node/capabilities` アドバタイズ (`iroha runtime capabilities` 経由) が記録され、`crypto.sm` マニフェスト フィールドとアクセラレーション ポリシー スナップショットが検証されました。
+- [ ] Torii `/v2/node/capabilities` アドバタイズ (`iroha runtime capabilities` 経由) が記録され、`crypto.sm` マニフェスト フィールドとアクセラレーション ポリシー スナップショットが検証されました。
 
 # エンゲージメントの実行
 

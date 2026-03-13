@@ -203,7 +203,7 @@ liste blanche pour les utilisateurs et les utilisateurs.**ضوابط**
 
 **اين تتابع:**- replay cache et replay cache pour DA-2. راجع التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (cache supplémentaire) et Torii pour
-  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر vérifie les empreintes digitales par `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر vérifie les empreintes digitales par `/v2/da/ingest`.
 - Le streaming PDP/PoTR est également disponible pour exploiter le flux de preuve
   `crates/sorafs_car/tests/sorafs_cli.rs`, pour les projets PoR/PDP/PoTR
   الفشل المشار اليها في نموذج التهديدات.

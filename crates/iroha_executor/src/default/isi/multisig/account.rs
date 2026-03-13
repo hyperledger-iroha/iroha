@@ -43,9 +43,15 @@ impl VisitExecute for MultisigRegister {
             Account::new(multisig_account_id.to_account_id(home_domain.clone()))
                 .with_metadata(metadata),
         );
-        executor.visit_register_account(&register_account);
-        if executor.verdict().is_err() {
-            return executor.verdict().clone();
+        let original_authority = executor.context().authority.clone();
+        let register_result = (|| {
+            executor.context_mut().authority = domain_owner.clone();
+            executor.visit_register_account(&register_account);
+            executor.verdict().clone()
+        })();
+        executor.context_mut().authority = original_authority;
+        if register_result.is_err() {
+            return register_result;
         }
 
         materialize_missing_signatory_accounts(

@@ -31,7 +31,7 @@ Il s'agit de la référence `docs/source/sorafs/developer/deployment.md`. احر
 
 ## إعدادات البيئة
 
-- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v1/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
+- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v2/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
 - Utilisez le `sorafs_alias_cache` pour créer un lien vers le `iroha_config` et la CLI (`sorafs_cli manifest submit --alias-*`).
 - وفّر رموز البث (أو بيانات اعتماد Torii) عبر مدير أسرار آمن.
 - فعّل مصدّرات التليمترية (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et Prometheus/OTel الخاصة بك.

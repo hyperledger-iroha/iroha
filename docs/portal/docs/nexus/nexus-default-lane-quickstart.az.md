@@ -197,7 +197,7 @@ zolaqlı idarəetmə paneli.
   yenidən konfiqurasiyalar.
 - **Boru kəməri/SSE testləri.** Əməliyyat hadisəsi filtrləri qəbul edilir
   `tx_lane_id == <u32>` predikatları (bax: `docs/source/pipeline.md`). Abunə olun
-  `/v1/pipeline/events/transactions` yazın göndərildiyini sübut etmək üçün həmin filtrlə
+  `/v2/pipeline/events/transactions` yazın göndərildiyini sübut etmək üçün həmin filtrlə
   aydın zolaq olmadan geri qaytarma zolağı identifikatorunun altına çatır.
 
 ## 7. Müşahidə oluna bilənlik və idarəetmə qarmaqları

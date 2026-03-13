@@ -21,7 +21,7 @@ buscando toda a carga útil.
 ## Ponto final
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 O endpoint requer um cabeçalho `X-API-Token` correspondente a um dos configurados

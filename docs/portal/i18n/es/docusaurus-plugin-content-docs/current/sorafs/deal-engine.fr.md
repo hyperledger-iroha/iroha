@@ -55,12 +55,12 @@ le transfer-over de crédit avec les résultats de règlement.
 ## Integración Torii
 
 Torii expone los puntos finales deseados para que los proveedores señalen el uso y controlen
-El ciclo de vida de los acuerdos sin cableado específico:- `POST /v1/sorafs/deal/usage` acepta la televisión `DealUsageReport` y envía
+El ciclo de vida de los acuerdos sin cableado específico:- `POST /v2/sorafs/deal/usage` acepta la televisión `DealUsageReport` y envía
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalize la fenêtre courante, en streamant le
+- `POST /v2/sorafs/deal/settle` finalize la fenêtre courante, en streamant le
   `DealSettlementRecord` resultante con un `DealSettlementV1` codificado en base64
   prêt pour publication dans le DAG de gouvernance.
-- Le feed `/v1/events/sse` de Torii difuso desormais des enregistrements
+- Le feed `/v2/events/sse` de Torii difuso desormais des enregistrements
   `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (época, GiB-heures mesurés,
   compteurs de tickets, charge déterministes), des enregistrements
   `SorafsGatewayEvent::DealSettlement` que incluye la instantánea canónica del libro mayor de reglas

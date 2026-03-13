@@ -58,6 +58,254 @@ Last updated: 2026-03-13
   - `cargo fmt --all` (pass)
   - `cargo test -p connect_norito_bridge accel_tests:: -- --nocapture` (pass)
   - `cargo test -p connect_norito_bridge` (pass)
+## 2026-03-13 Follow-up: multilane endpoint alignment and runtime verification
+- Fixed client/API version drift that was breaking live multilane runs after stake-ID canonicalization:
+  - `crates/iroha/src/client.rs` now uses `/v2` for:
+    - `sumeragi/status` (all status helpers),
+    - `nexus/public_lanes/{lane}/(validators|stake|rewards/pending)`,
+    - `sumeragi/collectors`,
+    - `sumeragi/rbc/sessions`,
+    - `node/capabilities`.
+- Normalized integration tests to the active `/v2` Sumeragi telemetry/status/session paths where stale `/v1` URLs caused 404 polling loops:
+  - `integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `integration_tests/tests/sumeragi_prf_collectors.rs`
+  - `integration_tests/tests/sumeragi_da.rs`
+  - `integration_tests/tests/sumeragi_localnet_smoke.rs`
+  - `integration_tests/tests/sumeragi_npos_performance.rs`
+- Validation (runtime, not CI-only checks):
+  - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_stake_activation npos_election_filters_stake_and_applies_after_margin -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_happy_path_enforces_da_and_metrics_bounds -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_prf_collectors npos_prf_collectors_track_endpoint -- --exact --nocapture` (pass)
+
+## 2026-03-13 Follow-up: stored sorted fast-start with deferred continuation
+- Implemented a prepared-start path for stored metadata-sorted iterable queries:
+  - `crates/iroha_core/src/smartcontracts/isi/query.rs` now computes stored batch one via a bounded-prefix heap strategy and returns that first batch directly when parameters are within the streaming prefix limit.
+  - the same file now defers full sorted continuation materialization for stored queries until first `Continue`, while preserving ordering/pagination/cursor semantics and external response/cursor shapes.
+- Added deferred continuation plumbing in the live query store:
+  - `crates/iroha_core/src/query/store.rs` adds `PreparedQueryStart` + `DeferredQueryContinuation` and a prepared insertion API (`handle_iter_start_prepared`) so stored batch one is not re-batched/re-projected through a full iterator cycle.
+  - live query IDs now use a monotonic `AtomicU64` internal generator encoded into existing string `QueryId` payloads.
+  - capacity + per-authority quota checks are folded into the insertion path.
+  - `crates/iroha_core/src/query/cursor.rs` adds `ErasedQueryIterator::new_with_cursor(...)` for deferred iterators that start after the precomputed batch.
+- Bench + test coverage updates:
+  - `crates/iroha_core/benches/queries.rs` adds `snapshot_stored_sorted_asset_defs_first_continue`.
+  - `crates/iroha_core/src/smartcontracts/isi/query.rs` adds:
+    - `stored_sorted_fast_start_matches_legacy_first_batch_variants`
+    - `deferred_stored_start_first_continue_preserves_global_order`
+  - `crates/iroha_core/src/query/store.rs` adds:
+    - `query_ids_are_monotonic_decimal_strings`
+    - `capacity_limit_is_enforced_with_monotonic_ids`
+    - `dropping_prepared_query_does_not_materialize_deferred_state`
+- Validation (this follow-up):
+  - `cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::stored_sorted_fast_start_matches_legacy_first_batch_variants -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::deferred_stored_start_first_continue_preserves_global_order -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::query_ids_are_monotonic_decimal_strings -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::capacity_limit_is_enforced_with_monotonic_ids -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::dropping_prepared_query_does_not_materialize_deferred_state -- --exact --nocapture` (pass)
+  - `cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings remain)
+  - `cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` rerun spot checks:
+    - run A: ephemeral `[1.7408 ms 1.8339 ms 1.9485 ms]`, stored `[2.9138 ms 3.0254 ms 3.1472 ms]`
+    - run B: ephemeral `[1.5724 ms 1.6032 ms 1.6421 ms]`, stored `[2.8262 ms 2.8643 ms 2.9031 ms]`
+    - run C (noisy host outlier): ephemeral `[1.9372 ms 2.2100 ms 2.5627 ms]`, stored `[10.180 ms 11.412 ms 12.702 ms]`
+  - `cargo bench -p iroha_core --bench queries -- 'snapshot_stored_sorted_asset_defs_first_continue$'`:
+    - `[4.7476 ms 4.8255 ms 4.9098 ms]`
+  - `cargo test -p iroha_core` (failed in current worktree with unrelated baseline failures; summary: `3629 passed; 77 failed`; examples include `block::prefetch_tests::parse_account_literal_rejects_ambiguous_encoded_subject` and `state::tests::detached_can_modify_account_metadata_allows_domain_owner`)
+
+## 2026-03-13 Follow-up: streaming prefix for ephemeral sorted snapshot queries
+- Tightened `crates/iroha_core/src/smartcontracts/isi/query.rs` again for metadata-sorted ephemeral iterable queries:
+  - when `offset + first_batch_len` stays small, ephemeral sorted queries now keep only that bounded prefix in a `BinaryHeap` while counting total results, instead of materializing the full sorted candidate set before returning batch one.
+  - kept the existing full-collection fallback for large pagination windows, so wide offsets/limits still use the previous selection path.
+  - added `smartcontracts::isi::query::tests::ephemeral_sorted_query_respects_offset_and_limit` to lock the bounded-prefix path across offset + limit pagination.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::ephemeral_sorted_query_respects_offset_and_limit -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` (pass)
+  - benchmark spot checks:
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[1.4408 ms 1.4573 ms 1.4767 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[3.4591 ms 3.5806 ms 3.7059 ms]`
+
+## 2026-03-13 Follow-up: snapshot sorted-query first-batch fast paths
+- Tightened sorted iterable postprocessing in `crates/iroha_core/src/smartcontracts/isi/query.rs`:
+  - ephemeral iterable queries with metadata sorting now compute only the prefix needed for `offset + first_batch_len` using `select_nth_unstable_by(...)`, then sort that prefix and return the first batch directly as `QueryOutput`.
+  - stored cursor queries now use an incremental sorted-prefix iterator that prepares only the prefix needed for the current batch and extends it as cursors continue, instead of sorting the full result set up front before batch one.
+  - both sorted paths now cache metadata sort keys once per item and compare indices against that cache instead of re-reading metadata during every selection/sort comparison.
+  - added `query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor` and `query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order` to lock both ephemeral and stored sorted snapshot behavior.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo check -p iroha_core --benches -q` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` (pass)
+  - benchmark spot checks:
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[2.9423 ms 2.9672 ms 2.9945 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[3.3374 ms 3.5143 ms 3.7178 ms]`
+
+## 2026-03-13 Follow-up: direct asset-by-definition iteration for `FindAssets`
+- Tightened the definition/domain filter paths in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `FindAssets` no longer materializes `AssetId`s from `asset_definition_assets` and then does a second `world.assets().get(...)` lookup for each match.
+  - definition/domain query paths now pull owned `Asset` values directly through `world.assets_by_definition_iter(...)`, which reuses the exact asset-definition index without the extra map lookup hop.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'find_assets_filter_(definition_literal|domain_literal)'` (pass)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[695.35 µs 700.54 µs 706.01 µs]`
+    - `find_assets_filter_domain_literal`: `[1.1634 ms 1.1709 ms 1.1776 ms]`
+
+## 2026-03-13 Follow-up: snapshot bench cleanup + cheaper metadata-sort tie-breaks
+- Fixed the stored snapshot benchmark harness in `crates/iroha_core/benches/queries.rs`:
+  - `snapshot_stored_find_domains_first_batch`
+  - `snapshot_stored_find_assets_first_batch`
+  - `snapshot_stored_sorted_asset_defs_first_batch`
+  - each benchmark now drops the returned stored cursor after consuming batch one, so repeated iterations do not accumulate live queries and trip `Execution(CapacityLimit)`.
+- Tightened generic query postprocessing in `crates/iroha_core/src/smartcontracts/isi/query.rs`:
+  - `SortableQueryOutput` now returns typed tie-break keys instead of forcing every sortable item through canonical-byte `Vec<u8>` materialization.
+  - `Account`, `Domain`, `AssetDefinition`, `Asset`, `Nft`, `Role`, `Trigger`, `RepoAgreement`, and several offline/proof outputs now use cheaper native id-based tie-break keys where available.
+  - this reduces allocation pressure in metadata-sorted iterable queries, especially the snapshot asset-definition first-batch lane.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_accounts_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral|live).*'` (pass; full snapshot slice now runs end to end)
+  - benchmark spot checks:
+    - `find_asset_defs_iter_10k`: `[477.47 µs 482.39 µs 487.11 µs]`
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[6.1489 ms 6.2070 ms 6.2636 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[6.0003 ms 6.0505 ms 6.1010 ms]`
+
+## 2026-03-13 Multisig registration opened to arbitrary accounts
+- Removed the built-in multisig registration authority gate in `crates/iroha_core/src/smartcontracts/isi/multisig.rs`, so `MultisigRegister` no longer rejects non-owners/non-grantees with `not qualified to register multisig`.
+- Kept upgraded-executor parity in `crates/iroha_executor/src/default/isi/multisig/account.rs` by performing the controller account registration under the multisig home-domain owner context before materializing signatories and roles.
+- Updated multisig coverage and docs:
+  - `integration_tests/tests/multisig.rs` now exercises successful registration by an arbitrary outside account in the main multisig flow and by a same-domain non-signatory in both pre-upgrade and post-upgrade paths.
+  - `crates/iroha_cli/docs/multisig.md` now documents that any account may submit the registration transaction.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib register_allows_non_owner_without_permission -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p integration_tests --test multisig multisig_normal -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_by_non_signatory_materializes_missing_signatory_account -- --nocapture` (pass; matched both normal and executor-upgrade variants)
+
+## 2026-03-13 Follow-up: adaptive scan fast path for simple `FindAssets` predicates
+- Tightened `crates/iroha_core/src/smartcontracts/isi/asset.rs` for simple `definition` and `domain` predicates:
+  - added an adaptive materialization heuristic that compares the exact indexed match count against total asset count.
+  - when the selected asset set is large, `FindAssets` now scans `world.assets_iter()` directly and filters by definition/domain instead of paying `asset_id -> storage lookup` for every match.
+  - retained the existing exact-id/index walk for selective predicates, so sparse lookups still avoid full scans.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[576.19 µs 580.76 µs 586.33 µs]`
+    - `find_assets_filter_domain_literal`: `[998.02 µs 1.0028 ms 1.0073 ms]`
+
+## 2026-03-13 Follow-up: trigger query direct iteration + `PASS` fast path
+- Tightened `crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`:
+  - `FindActiveTriggerIds` now iterates triggers through `inspect_by_action(...)` instead of `ids_iter() -> inspect_by_id(...)`, removing an avoidable extra lookup per trigger.
+  - `FindTriggers` now uses the same direct action traversal and short-circuits `CompoundPredicate::PASS`.
+  - added regression coverage:
+    - `smartcontracts::isi::triggers::tests::find_triggers_returns_registered_triggers_for_pass_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib active_trigger_ids_excludes_depleted_after_burn -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib find_triggers_returns_registered_triggers_for_pass_predicate -- --nocapture` (pass)
+  - benchmark spot checks:
+    - `find_triggers_iter_10k`: `[2.8245 ms 2.8305 ms 2.8367 ms]`
+    - `find_active_trigger_ids_iter_10k`: `[882.56 µs 884.54 µs 886.64 µs]`
+
+## 2026-03-13 Follow-up: exact domain-to-definition index for `FindAssets`
+- Fixed an invalid asset-definition domain lookup in `crates/iroha_core/src/state.rs`:
+  - added a derived `domain_asset_definitions` index keyed by `DomainId` and storing exact `AssetDefinitionId`s.
+  - rebuilt it alongside the other asset-definition indexes, skipped it from serialization, and maintained it on asset-definition register/unregister paths and direct test/setup insertions.
+  - replaced `asset_definitions_in_domain_iter(...)`’s borrowed-key `BTreeMap::range(...)` with index-backed iteration, removing the old comparator shim.
+- Tightened the domain query hot path in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - domain filters now read definition ids directly from `domain_asset_definitions` instead of materializing full asset definitions just to recover their ids.
+  - this also removes the extra domain recheck in the simple domain path because the iterator is now exact.
+- Added regression coverage:
+  - `state::tests::asset_definition_domain_index_tracks_exact_membership`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_domain_index_tracks_exact_membership -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[4.0273 ms 4.0364 ms 4.0458 ms]`
+    - `find_assets_filter_domain_literal`: `[8.2203 ms 8.2674 ms 8.3175 ms]`
+
+## 2026-03-13 Follow-up: definition-to-asset index for `FindAssets`
+- Added a derived `asset_definition_assets` index in `crates/iroha_core/src/state.rs`:
+  - keyed by `AssetDefinitionId` and storing concrete `AssetId`s, including scoped partitions.
+  - rebuilt alongside `asset_definition_holders`, skipped from serialization, and maintained in the same asset insert/remove mutation hooks.
+- Switched definition scans to the new index:
+  - `assets_by_definition_iter(...)` now walks exact asset ids for the definition and fetches values directly, instead of traversing `holder -> account+definition range` for every holder.
+  - this directly reduces the fan-out cost for `FindAssets` definition/domain plans and simple paths.
+- Added regression coverage:
+  - `state::tests::assets_by_definition_iter_includes_all_tracked_partitions`
+  - extended holder-index lifecycle tests to assert the concrete asset-id index is updated on insert and partition removal.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::assets_by_definition_iter_includes_all_tracked_partitions -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[4.1008 ms 4.1216 ms 4.1430 ms]`
+    - `find_assets_filter_domain_literal`: `[9.7780 ms 9.9473 ms 10.122 ms]`
+
+## 2026-03-13 Follow-up: `PASS` short-circuit for full account/asset scans
+- Removed generic predicate overhead when queries are unconstrained:
+  - `crates/iroha_core/src/smartcontracts/isi/account.rs`
+    - `FindAccounts` now returns `world.accounts_iter()` directly when the predicate is `CompoundPredicate::PASS`.
+    - `FindAccountsWithAsset` now traverses holder/index state directly for `PASS` instead of paying JSON/predicate setup costs before the non-zero balance check.
+  - `crates/iroha_core/src/smartcontracts/isi/asset.rs`
+    - `FindAssets` now returns `world.assets_iter()` directly for `CompoundPredicate::PASS`.
+- Added regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_returns_registered_accounts_for_pass_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_accounts_iter_10k`: `[284.62 µs 285.80 µs 287.10 µs]`
+    - `find_assets_iter_10k`: `[418.83 µs 420.65 µs 422.70 µs]`
+
+## 2026-03-13 Follow-up: alias-planner closure + ID hot-path recovery
+- Closed remaining planner alias gaps in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `AssetPredicateView` now extracts planner keys from alias forms:
+    - account: `id.account`
+    - definition: `id.definition`
+    - domain: `definition.domain`, `id.definition.domain`
+- Refined `FindAssets` execution for constrained subject/definition plans:
+  - subject+definition plans now use `assets_in_account_by_definition_iter(...)` instead of scanning every subject asset partition.
+  - removed per-definition `collect::<Vec<_>>()` materialization in `Domains`/`Definitions` plan branches by aggregating once per branch.
+- Refined account-id narrowing in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - preserved mixed-predicate candidate narrowing (`equals`/`in_values` on `id|account|account_id`).
+  - restored dedicated simple-id shortcut (`equals`/`in_values` id-only) so hot-path latency stays in microsecond range.
+  - added `PublicKey` parsing fallback in `parse_account_id_value(...)` to handle domainless account literal forms used by benches.
+- Added regression coverage:
+  - `asset_predicate_view_extracts_alias_fields_for_planner`
+  - `find_assets_filters_by_id_account_alias_predicate`
+  - `find_assets_filters_by_id_definition_alias_predicate`
+  - `find_assets_filters_by_definition_domain_alias_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::asset_predicate_view_extracts_alias_fields_for_planner -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_accounts_filter_id_literal_10k`: `[21.573 µs 21.629 µs 21.688 µs]`
+    - `find_accounts_with_asset_id_literal_10k`: `[22.018 µs 22.274 µs 22.639 µs]`
+    - `find_assets_filter_definition_literal`: `[7.3978 ms 7.4408 ms 7.4839 ms]`
+    - `find_assets_filter_domain_literal`: `[13.311 ms 13.376 ms 13.442 ms]` (sequential rerun; change within noise threshold)
 
 ## 2026-03-13 Follow-up: candidate-ID narrowing + account-definition range scans
 - Tightened account/asset lookup paths:

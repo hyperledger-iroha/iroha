@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 - نوڈ 18.18 یا بعد میں `npm` یا `pnpm` کے ساتھ۔
 - `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے۔
-- ایڈریس Torii `/v1/sorafs/*` کو کسی اتھارٹی کے نجی اکاؤنٹ/کلید کے ساتھ ظاہر کرتا ہے جو ظاہر اور عرفی نام بھیج سکتا ہے۔
+- ایڈریس Torii `/v2/sorafs/*` کو کسی اتھارٹی کے نجی اکاؤنٹ/کلید کے ساتھ ظاہر کرتا ہے جو ظاہر اور عرفی نام بھیج سکتا ہے۔
 - `SIGSTORE_ID_TOKEN` ریلیز کے لئے OIDC ایکسپورٹر (گٹ ہب ایکشنز ، گٹ لیب ، ورک بوجھ کی شناخت ، وغیرہ)۔
 - اختیاری: خشک تجربات کے لئے `examples/sorafs_cli_quickstart.sh` اور Github/Gitlab میں ورک فلو ٹیمپلیٹس کے لئے `docs/source/sorafs_ci_templates.md`۔
 - کوشش کرنے کے لئے oauth متغیرات مرتب کریں (`DOCS_OAUTH_*`) اور چلائیں
@@ -584,7 +584,7 @@ SoraFS تعیناتی کے لئے اب DNS/گیٹ وے ڈائریکٹریوں ک
 
 | نام | مقصد |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | میزبان Torii جو `/v1/sorafs/pin/register` کو بے نقاب کرتا ہے۔ |
+| `DOCS_SORAFS_TORII_URL` | میزبان Torii جو `/v2/sorafs/pin/register` کو بے نقاب کرتا ہے۔ |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | ایپوچ ID ٹرانسمیٹر کے ساتھ رجسٹرڈ ہے۔ |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | منشور بھیجنے کے لئے اتھارٹی پر دستخط کرنا۔ |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` = `true` پر عرف ٹوپل پابند ہے۔ |

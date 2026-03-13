@@ -472,7 +472,7 @@ run_runtime() {
   pass_rate=$(rg -N "\[registration-perf\] iterations=" "${log_path}" | tail -n 1 | sed -nE 's/.*pass_rate=([0-9.]+)%.*/\1/p' || true)
   submitter_max=$(rg -N "submitter commit height delta min/avg/max" "${log_path}" | tail -n 1 | sed -nE 's/.*= [0-9]+\/[0-9.]+\/([0-9]+).*/\1/p' || true)
   cluster_max=$(rg -N "cluster max commit height delta min/avg/max" "${log_path}" | tail -n 1 | sed -nE 's/.*= [0-9]+\/[0-9.]+\/([0-9]+).*/\1/p' || true)
-  if rg -q "expected for control-plane /v1/nexus/lifecycle state mutation" "${log_path}"; then
+  if rg -q "expected for control-plane /v2/nexus/lifecycle state mutation" "${log_path}"; then
     note_zero_delta=1
   else
     note_zero_delta=0

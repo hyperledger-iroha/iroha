@@ -110,7 +110,7 @@ sorafs_cli proof verify \
 ```bash
 sorafs_cli proof stream \
   --manifest artifacts/video.manifest.to \
-  --gateway-url https://gateway.example/v1/sorafs/proof/stream \
+  --gateway-url https://gateway.example/v2/sorafs/proof/stream \
   --provider-id provider::alpha \
   --samples 32 \
   --stream-token "$(cat stream.token)" \

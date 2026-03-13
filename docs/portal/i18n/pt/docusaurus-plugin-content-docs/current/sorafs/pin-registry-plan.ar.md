@@ -77,7 +77,7 @@ Informações:
 
 | المكون | المهمة | Produtos/serviços |
 |--------|--------|------------------|
-| Modelo Torii | كشف `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recebimentos). توفير ترقيم + ترشيح. | Rede TL / Core Infra |
+| Modelo Torii | كشف `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (pesquisa), `/v2/sorafs/aliases` (listar/vincular), `/v2/sorafs/replication` (pedidos/recebimentos). توفير ترقيم + ترشيح. | Rede TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registro no site Use Norito para configurar SDKs. | Infra principal |
 | CLI | `sorafs_manifest_stub` e CLI são `sorafs_pin` como `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Ferramentaria |
 | SDK | Ligações de segurança para (Rust/Go/TS) com Norito; Faça isso com cuidado. | Equipes SDK |
@@ -132,9 +132,9 @@ Leia mais:
 Você não pode usar o SF-4 para obter mais informações.
 واجهة REST توفر الان نقاط نهاية قائمة مع اتستاشن:
 
-- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` manifestam manifestos
+- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` manifestam manifestos
   ربط aliases واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` تكشفان كتالوج alias
+- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` تكشفان كتالوج alias
   A máquina de lavar roupa pode ser usada e usada.
 
 Clique em CLI para obter mais informações (`iroha app sorafs pin list`, `pin show`, `alias list`,

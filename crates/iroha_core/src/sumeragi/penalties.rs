@@ -1720,6 +1720,9 @@ mod tests {
                 stake_asset_id.clone(),
                 AssetDefinition::numeric(stake_asset_id.clone()).build(&validator),
             );
+            block
+                .domain_asset_definitions
+                .insert(domain.clone(), BTreeSet::from([stake_asset_id.clone()]));
             let escrow_stake_asset_id =
                 AssetId::new(stake_asset_id.clone(), escrow_account.clone());
             block

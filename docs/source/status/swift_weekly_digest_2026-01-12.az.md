@@ -32,7 +32,7 @@ summary: Weekly Swift parity/CI update for the week of 2026-01-12.
       - swift-status-export: 38.7s
   Buildkite metadata artifact: artifacts/mobile/parity/pipeline_metadata.json
 - Acceleration: metal: enabled=True, parity=pass, perf_delta=-12.5%; neon: enabled=True, parity=pass; strongbox: enabled=False, parity=pending
-- Telemetry: salt_epoch=2026Q1; rotation_age=96.0h; overrides=0; profile_alignment=ok; schema=ios_metrics/v1
+- Telemetry: salt_epoch=2026Q1; rotation_age=96.0h; overrides=0; profile_alignment=ok; schema=ios_metrics/v2
   Notes:
     - Salt matches Rust/Android rotation.
     - No pending redaction overrides.
@@ -78,8 +78,8 @@ summary: Weekly Swift parity/CI update for the week of 2026-01-12.
 
 | Item | Owner | Status | Notes |
 |------|-------|--------|-------|
-| `/v1/pipeline` adoption | Swift Lead | Green | Routing parity validated in staging; Torii backlog review scheduled for 2026-01-19 to approve the final interface lock. |
-| Governance vote / readiness review | Program PM | On deck | GOV-2026-01-22 vote brief circulated; council to confirm `/v1/pipeline` gating metrics before beta cut. |
+| `/v2/pipeline` adoption | Swift Lead | Green | Routing parity validated in staging; Torii backlog review scheduled for 2026-01-19 to approve the final interface lock. |
+| Governance vote / readiness review | Program PM | On deck | GOV-2026-01-22 vote brief circulated; council to confirm `/v2/pipeline` gating metrics before beta cut. |
 | Risk owner spotlight | SDK Parity WG | Tracking | Fixture drift table now auto-generated via `scripts/swift_status_export.py`; Buildkite lane links added per governance request. |
 
 ## Upcoming Actions

@@ -78,7 +78,7 @@ Torii は、CLI と同様に、同一性を維持します。
 
 |コンポネ |タレファ |レスポンス |
 |-----------|----------|------|
-|サービコ Torii | `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領書) をエクスポートします。フォルネサー パギナカオ + フィルトラジェム。 |ネットワーキング TL / コア インフラ |
+|サービコ Torii | `/v2/sorafs/pin` (送信)、`/v2/sorafs/pin/{cid}` (検索)、`/v2/sorafs/aliases` (リスト/バインド)、`/v2/sorafs/replication` (注文/受領書) をエクスポートします。フォルネサー パギナカオ + フィルトラジェム。 |ネットワーキング TL / コア インフラ |
 |アテスタカオ |レジストリに altura/hash を含めます。 Norito の SDK を追加してください。 |コアインフラ |
 | CLI | Estender `sorafs_manifest_stub` または新しい CLI `sorafs_pin` com `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
 | SDK |クライアントのバインディング (Rust/Go/TS) の一部は Norito;アディショナー精巣デインテグラカオ。 | SDK チーム |
@@ -135,10 +135,10 @@ Torii は、CLI と同様に、同一性を維持します。
 CADA チェックリストは、SF-4 を参照して、エステ プランノ クアンド フーバー プログレスを実行します。
 com atestacao でエンドポイントのリストを作成する REST の詳細:
 
-- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` retornam マニフェスト com
+- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` retornam マニフェスト com
   バインディングのエイリアス、オブジェクトの複製、デリバドの実行
   ハッシュ・ドゥ・ウルティモ・ブロコ。
-- `GET /v1/sorafs/aliases` および `GET /v1/sorafs/replication` カタログの説明
+- `GET /v2/sorafs/aliases` および `GET /v2/sorafs/replication` カタログの説明
   別名、バックログ、レプリカのコンパニオンの順序、一貫性
   ステータスのフィルター。
 

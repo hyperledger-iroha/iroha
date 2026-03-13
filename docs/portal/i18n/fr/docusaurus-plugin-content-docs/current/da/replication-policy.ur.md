@@ -32,7 +32,7 @@ les répliques sont censées conserver l'intention de l'émetteur
 | _Par défaut (toutes les autres classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |
 
 یہ اقدار `torii.da_ingest.replication_policy` میں intégré ہیں اور تمام
-Soumissions `/v1/da/ingest` par پر لاگو ہوتی ہیں۔ Profil de rétention forcé Torii
+Soumissions `/v2/da/ingest` par پر لاگو ہوتی ہیں۔ Profil de rétention forcé Torii
 کے ساتھ manifeste des valeurs incompatibles entre les appelants et les appelants.
 Un avertissement concernant les opérateurs SDK obsolètes est également disponible### Cours de disponibilité de Taikai
 
@@ -144,5 +144,5 @@ les blobs non conformes peuvent être répliqués à nouveau1. **Drift پر نظ
    Les SRE et le résumé des preuves PDP se réfèrent à eux
 
 Couverture de régression `integration_tests/tests/da/replication_policy.rs` میں ہے؛
-suite `/v1/da/ingest` et politique de rétention incompatible et vérification des détails
+suite `/v2/da/ingest` et politique de rétention incompatible et vérification des détails
 L'intention manifeste de l'appelant a été récupérée et le profil appliqué est exposé.

@@ -146,7 +146,7 @@ firmadas al bundle automaticamente:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --status-url https://torii.example.com/v2/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -284,7 +284,7 @@ se publiquen directamente en tickets de gobernanza.
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v1/sumeragi/status \
+     --status-url https://torii.example.com/v2/sumeragi/status \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -343,7 +343,7 @@ Mientras el workload satura la lane:
 1. Snapshot de status + metrics de Torii:
 
    ```bash
-   curl -sS https://torii.example.com/v1/sumeragi/status \
+   curl -sS https://torii.example.com/v2/sumeragi/status \
      > artifacts/nexus/load/payments-2026q2/torii_status.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom

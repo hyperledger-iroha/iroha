@@ -74,13 +74,13 @@ Cet article propose de sélectionner un chunker de profil, ratifiant le paramèt
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Lancez la découverte de points de terminaison et découvrez quelle annonce est associée aux alias canoniques :
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Assurez-vous que `profile_aliases` ajoute `"sorafs.sf1@1.0.0"` à l'élément principal.

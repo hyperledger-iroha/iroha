@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/status
+//! Router-level test for GET /v2/sumeragi/status
 #![cfg(feature = "telemetry")]
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -121,7 +121,7 @@ async fn sumeragi_status_endpoint_shape() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -289,7 +289,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .header("Accept", "application/json")
                 .body(Body::empty())
                 .unwrap(),
@@ -318,7 +318,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
     let norito_resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .header("Accept", "application/x-norito")
                 .body(Body::empty())
                 .unwrap(),
@@ -432,7 +432,7 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -462,7 +462,7 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -484,7 +484,7 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -524,7 +524,7 @@ async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -675,7 +675,7 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status")
+                .uri("/v2/sumeragi/status")
                 .header("Accept", "application/x-norito")
                 .body(Body::empty())
                 .unwrap(),

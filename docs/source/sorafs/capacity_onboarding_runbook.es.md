@@ -25,13 +25,13 @@ Sigelo para cada admision, renovacion o retiro de provider.
 | Provider | Redactar spec `CapacityDeclarationV1`, capturar inventario de hardware, suministrar bundles de atestacion si lo exige `docs/source/sorafs/provider_admission_policy.md`. | `specs/<provider>.json`, affidavit de hardware, lista de contactos. |
 | Storage WG reviewer | Validar schema, correr regresion CLI, cross-check de stake y metadata de perfil de chunker. | Logs de CLI, outputs `sorafs_manifest_stub`, nota de revision firmada. |
 | Governance council | Aprobar declaracion final, registrar ID de voto y rastrear hooks de override/penalty. | ID de ballot del council, link a log de incidentes. |
-| Treasury/SRE | Confirmar dashboards y entradas de cuota, archivar hashes de reconciliacion/export, verificar alertas. | Capturas Grafana, dump `/v1/sorafs/capacity/state`, log de silencio Alertmanager si se uso. |
+| Treasury/SRE | Confirmar dashboards y entradas de cuota, archivar hashes de reconciliacion/export, verificar alertas. | Capturas Grafana, dump `/v2/sorafs/capacity/state`, log de silencio Alertmanager si se uso. |
 
 Checklist pre-flight:
 
 1. Provider aparece en la lista verificada de admision SF-2b (si no, rechazar).
 2. Las keys requeridas existen en el registry de providers (`iroha_torii` ->
-   `/v1/sorafs/providers`).
+   `/v2/sorafs/providers`).
 3. Provider anuncia los perfiles de chunker referenciados en la declaracion.
 4. Tesoreria confirma que existe una cuenta de reserva para el tier de staking esperado.
 
@@ -55,7 +55,7 @@ sorafs_manifest_stub capacity declaration \
 ```
 
 Este comando valida el schema localmente y emite cada artefacto requerido por
-`/v1/sorafs/capacity/declare`. Guardar stdout/stderr en
+`/v2/sorafs/capacity/declare`. Guardar stdout/stderr en
 `artifacts/sorafs/providers/acme/manifest_stub.log`.
 
 ### 2. Ejecutar smoke tests de admision
@@ -77,7 +77,7 @@ Enviar el request JSON via la app API de Torii. Puedes llamarlo manualmente:
 
 ```bash
 TORII="https://torii.example.net"
-curl -sS -X POST "$TORII/v1/sorafs/capacity/declare" \
+curl -sS -X POST "$TORII/v2/sorafs/capacity/declare" \
   -H 'Content-Type: application/json' \
   --data-binary @artifacts/sorafs/providers/acme/request.json \
   | tee artifacts/sorafs/providers/acme/declare_response.json
@@ -94,7 +94,7 @@ Despues de que Torii acepte la declaracion, exportar un snapshot de estado y
 el JSON amigable para governance llamando:
 
 ```bash
-curl -sS "$TORII/v1/sorafs/capacity/state" \
+curl -sS "$TORII/v2/sorafs/capacity/state" \
   | jq '.providers[] | select(.provider_id_hex=="0xACME...")' \
   > artifacts/sorafs/providers/acme/state_record.json
 ```
@@ -122,9 +122,9 @@ que SRE pueda probar cobertura de telemetria.
    --provider-id <hex>` hasta que no queden referencias de manifiesto. Encolar
    ballots de reasignacion para stragglers antes de aprobar el retiro.
 2. **Publicar telemetria final.** Usar `sorafs_manifest_stub capacity telemetry` para
-   generar el snapshot final y enviarlo via `POST /v1/sorafs/capacity/telemetry`.
+   generar el snapshot final y enviarlo via `POST /v2/sorafs/capacity/telemetry`.
    Registrar la respuesta y asegurar que la fila del provider en
-   `/v1/sorafs/capacity/state` pase a `status="retiring"` o `"inactive"`.
+   `/v2/sorafs/capacity/state` pase a `status="retiring"` o `"inactive"`.
 3. **Revocar acceso.** Remover las credenciales del provider de la distribucion
    de adverts, revocar tokens OAuth/API y rotar cualquier material de secreto
    compartido.
@@ -167,7 +167,7 @@ slashing.
 | Fase | Storage WG | Governance | Treasury/SRE |
 |------|------------|------------|--------------|
 | Validacion de spec | Verificar schema, correr test CLI, confirmar perfiles de chunker | — | — |
-| Submission Torii | Monitorear `/v1/sorafs/capacity/state`, actualizar ops log | Registrar ID de ballot, adjuntar artefacto de voto | Vigilar Grafana y reglas de alerta, capturar logs de reconciliacion |
+| Submission Torii | Monitorear `/v2/sorafs/capacity/state`, actualizar ops log | Registrar ID de ballot, adjuntar artefacto de voto | Vigilar Grafana y reglas de alerta, capturar logs de reconciliacion |
 | Salida | Verificar reasignacion + telemetria, compilar paquete | Aprobar retiro y enlazar log de disputa | Confirmar que dashboards bajan al provider, archivar auditoria de payouts |
 
 Mantener esta matriz junto al release checklist; auditores esperan ver nombres

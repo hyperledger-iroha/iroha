@@ -55,12 +55,12 @@ Sidebar_label: محرك الاتفاقات
 ## التكامل Torii
 
 يعرض Torii نقاط النهاية الأخيرة ليقوم الموردون بالإشارة إلى الاستخدام والقيادة
-دورة حياة الاتفاقات بدون أسلاك محددة:- `POST /v1/sorafs/deal/usage` اقبل التليفزيون `DealUsageReport` وأعد الاتصال
+دورة حياة الاتفاقات بدون أسلاك محددة:- `POST /v2/sorafs/deal/usage` اقبل التليفزيون `DealUsageReport` وأعد الاتصال
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` إنهاء النافذة الرئيسية، عبر البث المباشر
+- `POST /v2/sorafs/deal/settle` إنهاء النافذة الرئيسية، عبر البث المباشر
   `DealSettlementRecord` الناتج عن `DealSettlementV1` المشفر في base64
   جاهزة للنشر في DAG de Governance.
-- التغذية `/v1/events/sse` de Torii منتشرة في حالة خلل في التسجيلات
+- التغذية `/v2/events/sse` de Torii منتشرة في حالة خلل في التسجيلات
   `SorafsGatewayEvent::DealUsage` يستأنف كل نوع من الاستخدام (الفترة، ساعات قياس GiB،
   حاسبو التذاكر، الرسوم المحددة)، التسجيلات
   `SorafsGatewayEvent::DealSettlement` الذي يتضمن اللقطة القانونية لدفتر الأستاذ

@@ -13,12 +13,12 @@ Bridge proof submissions travel through the standard instruction path (`SubmitBr
 
 ## Torii API surface
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
+- `GET /v2/zk/proofs` and `GET /v2/zk/proofs/count` accept bridge-aware filters:
   - `bridge_only=true` returns only bridge proofs.
   - `bridge_pinned_only=true` narrows to pinned bridge proofs.
   - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v2/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
+- The full Norito proof record (including payload bytes) remains available via `GET /v2/proofs/{proof_id}` for off-node verifiers.
 
 ## Bridge receipt events
 

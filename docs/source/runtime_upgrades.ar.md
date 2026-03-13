@@ -121,12 +121,12 @@ translation_last_reviewed: 2026-01-01
 
 Torii و CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
-  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
-  - `GET /v1/runtime/upgrades` -> قائمة السجلات (implemented).
-  - `POST /v1/runtime/upgrades/propose` -> يغلف `ProposeRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
-  - `POST /v1/runtime/upgrades/activate/:id` -> يغلف `ActivateRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
-  - `POST /v1/runtime/upgrades/cancel/:id` -> يغلف `CancelRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
+  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
+  - `GET /v2/runtime/upgrades` -> قائمة السجلات (implemented).
+  - `POST /v2/runtime/upgrades/propose` -> يغلف `ProposeRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
+  - `POST /v2/runtime/upgrades/activate/:id` -> يغلف `ActivateRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
+  - `POST /v2/runtime/upgrades/cancel/:id` -> يغلف `CancelRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
 - CLI
   - `iroha runtime abi active` (implemented)
   - `iroha runtime abi hash` (implemented)

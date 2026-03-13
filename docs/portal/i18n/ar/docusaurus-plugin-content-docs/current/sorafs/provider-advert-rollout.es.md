@@ -46,7 +46,7 @@ translation_last_reviewed: 2026-02-07
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` مع `max_span` محدد
      - `allow_unknown_capabilities=<true|false>` cuando haya TLVs GREASE
-   - صالحة عبر `/v1/sorafs/providers` و`sorafs_fetch`؛ لاس advertencias sobre
+   - صالحة عبر `/v2/sorafs/providers` و`sorafs_fetch`؛ لاس advertencias sobre
      قدرات desconocidas يجب أن تكون triageadas.
 3. **جاهزية Validar متعددة الأصول.**
    - إخراج `sorafs_fetch` مع `--provider-advert=<path>`؛ إل CLI الآن فالا
@@ -186,9 +186,9 @@ groups:
 ## التواصل وإدارة الأحداث- **رسالة البريد الإلكتروني للحالة.** قام DevRel بتعميم استئناف مختصر للمقاييس
   القبول والإعلانات المعلقة والمواعيد النهائية القريبة.
 - **الرد على الأحداث.** إذا تم تنشيط التنبيهات `reject` عند الطلب:
-  1. استرد الإعلان الرائع عبر اكتشاف Torii (`/v1/sorafs/providers`).
+  1. استرد الإعلان الرائع عبر اكتشاف Torii (`/v2/sorafs/providers`).
   2. أعد تنفيذ التحقق من صحة الإعلان في خط أنابيب الموفر والمقارنة معه
-     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
   3. قم بالتنسيق مع مزود خدمة تدوير الإعلان قبل التحديث التالي
      الموعد النهائي.
 - **تجميع التغييرات.** لا يتم تطبيق تغييرات مخطط القدرات

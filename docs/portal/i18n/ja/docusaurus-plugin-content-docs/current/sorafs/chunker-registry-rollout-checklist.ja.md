@@ -78,7 +78,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ディレクトリへ、承認済み provider admission envelopes を配置します。
 3. discovery API 経由で provider adverts が伝播していることを確認します:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. ガバナンスヘッダー付きで manifest/plan エンドポイントを実行します:
    ```bash

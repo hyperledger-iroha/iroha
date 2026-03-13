@@ -25,17 +25,17 @@ Argon2 支持的入場券反映了中繼的 `pow.puzzle.*` 政策
 它公開了五個 HTTP 端點：
 
 - `GET /healthz` – 活性探針。
-- `GET /v1/puzzle/config` – 返回拉取的有效 PoW/謎題參數
+- `GET /v2/puzzle/config` – 返回拉取的有效 PoW/謎題參數
   來自繼電器 JSON（`handshake.descriptor_commit_hex`、`pow.*`）。
-- `POST /v1/puzzle/mint` – 鑄造一張 Argon2 票證；可選的 JSON 正文
+- `POST /v2/puzzle/mint` – 鑄造一張 Argon2 票證；可選的 JSON 正文
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   請求更短的 TTL（限製到策略窗口），將票證綁定到
   成績單哈希，並返回中繼簽名票+簽名指紋
   配置簽名密鑰時。
-- `GET /v1/token/config` – 當 `pow.token.enabled = true` 時，返回活動的
+- `GET /v2/token/config` – 當 `pow.token.enabled = true` 時，返回活動的
   准入令牌策略（發行者指紋、TTL/時鐘偏差邊界、中繼 ID、
   和合併的撤銷集）。
-- `POST /v1/token/mint` – 鑄造一個與所提供的綁定的 ML-DSA 准入令牌
+- `POST /v2/token/mint` – 鑄造一個與所提供的綁定的 ML-DSA 准入令牌
   恢復哈希；請求正文接受 `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`。
 
 該服務生成的票證在
@@ -78,19 +78,19 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 當機密由帶外管理時，`--token-secret-hex` 也可用
-工具管道。吊銷文件監視程序使 `/v1/token/config` 保持最新狀態；
+工具管道。吊銷文件監視程序使 `/v2/token/config` 保持最新狀態；
 使用 `soranet-admission-token revoke` 命令協調更新以避免滯後
 撤銷狀態。
 
 在中繼 JSON 中設置 `pow.signed_ticket_public_key_hex` 以通告 ML-DSA-44 公共
-用於驗證簽名 PoW 票據的密鑰； `/v1/puzzle/config` 與該鍵及其 BLAKE3 相呼應
+用於驗證簽名 PoW 票據的密鑰； `/v2/puzzle/config` 與該鍵及其 BLAKE3 相呼應
 指紋 (`signed_ticket_public_key_fingerprint_hex`)，以便客戶端可以固定驗證器。
 簽名票證根據中繼 ID 和轉錄本綁定進行驗證，並共享相同的內容
 撤銷存儲；當簽名票證驗證者處於有效狀態時，原始 74 字節 PoW 票證仍然有效
 配置。通過 `--signed-ticket-secret-hex` 傳遞簽名者機密或
 `--signed-ticket-secret-path` 啟動拼圖服務時；啟動拒絕不匹配
 密鑰對（如果密鑰未根據 `pow.signed_ticket_public_key_hex` 進行驗證）。
-`POST /v1/puzzle/mint` 接受 `"signed": true`（和可選的 `"transcript_hash_hex"`）
+`POST /v2/puzzle/mint` 接受 `"signed": true`（和可選的 `"transcript_hash_hex"`）
 返回 Norito 編碼的簽名票證以及原始票證字節；回應包括
 `signed_ticket_b64` 和 `signed_ticket_fingerprint_hex` 幫助跟踪重放指紋。
 如果未配置簽名者密鑰，則 `signed = true` 的請求將被拒絕。
@@ -108,10 +108,10 @@ cargo run -p soranet-puzzle-service -- \
 3. **分階段重啟。 ** 治理後重新加載 systemd 單元或容器
    宣布輪換切換。該服務不支持熱重載；一個
    需要重新啟動才能獲取新的描述符提交。
-4. **驗證。 ** 通過 `POST /v1/puzzle/mint` 出票並確認
+4. **驗證。 ** 通過 `POST /v2/puzzle/mint` 出票並確認
    返回的 `difficulty` 和 `expires_at` 與新策略匹配。浸泡報告
    (`docs/source/soranet/reports/pow_resilience.md`) 捕獲預期延遲
-   界限供參考。啟用令牌後，獲取 `/v1/token/config` 到
+   界限供參考。啟用令牌後，獲取 `/v2/token/config` 到
    確保公佈的發行者指紋和撤銷計數匹配
    預期值。
 
@@ -123,7 +123,7 @@ cargo run -p soranet-puzzle-service -- \
    Argon2 門已離線。
 3. 重新啟動中繼和拼圖服務以應用更改。
 4. 監控`soranet_handshake_pow_difficulty`，確保難度降至
-   預期的 hashcash 值，並驗證 `/v1/puzzle/config` 報告
+   預期的 hashcash 值，並驗證 `/v2/puzzle/config` 報告
    `puzzle = null`。
 
 ## 監控和警報
@@ -135,16 +135,16 @@ cargo run -p soranet-puzzle-service -- \
   調整 `pow.quotas` 冷卻時間 (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **拼圖對齊：** `soranet_handshake_pow_difficulty` 應匹配
-  `/v1/puzzle/config` 返回的難度。分歧表明中繼失效
+  `/v2/puzzle/config` 返回的難度。分歧表明中繼失效
   配置或重啟失敗。
-- **令牌準備情況：** 如果 `/v1/token/config` 降至 `enabled = false`，則發出警報
+- **令牌準備情況：** 如果 `/v2/token/config` 降至 `enabled = false`，則發出警報
   意外地或者如果 `revocation_source` 報告過時的時間戳。運營商
   每當令牌被使用時，應通過 CLI 輪換 Norito 吊銷文件
   已退休以保持此端點的準確性。
 - **服務運行狀況：** 以通常的活躍節奏和警報探測 `/healthz`
-  如果 `/v1/puzzle/mint` 返回 HTTP 500 響應（表示 Argon2 參數
+  如果 `/v2/puzzle/mint` 返回 HTTP 500 響應（表示 Argon2 參數
   不匹配或 RNG 失敗）。通過 HTTP 4xx/5xx 出現令牌鑄造錯誤
-  `/v1/token/mint` 上的回复；將重複失敗視為尋呼條件。
+  `/v2/token/mint` 上的回复；將重複失敗視為尋呼條件。
 
 ## 合規性和審計日誌記錄
 

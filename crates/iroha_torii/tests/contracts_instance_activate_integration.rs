@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for /v1/contracts/instance/activate
+//! Router-level test for /v2/contracts/instance/activate
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
 
@@ -38,7 +38,7 @@ async fn contracts_instance_activate_submits() {
 
     // Router
     let app = Router::new().route(
-        "/v1/contracts/instance/activate",
+        "/v2/contracts/instance/activate",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
@@ -67,7 +67,7 @@ async fn contracts_instance_activate_submits() {
     );
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v1/contracts/instance/activate")
+        .uri("/v2/contracts/instance/activate")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();

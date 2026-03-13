@@ -53,7 +53,7 @@ Bearer circulation remains the exception:
 5. Monitoring hooks (`offline.float_outstanding`, `offline_only_wallets`) should alarm when float
    exceeds the authorised envelope.
 6. Counter digests (`OfflineCounterSummary`) must continue to publish via
-   `iroha offline summary export --output counters.json` or `/v1/offline/summaries` so merchants can
+   `iroha offline summary export --output counters.json` or `/v2/offline/summaries` so merchants can
    reject duplicated `(certificate_id, counter)` tuples even while the ledger is unaware.
 
 ## 4. SDK toggles
@@ -118,7 +118,7 @@ settings screens.
    teams can export `{sender,receiver,asset,amount,timestamp}` rows and reconcile bearer receipts with
    treasury ledgers.【IrohaSwift/Sources/IrohaSwift/OfflineAuditLogger.swift:31】【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java:19】
 4. **Counter digests.** Schedule `iroha offline summary export --output counters.json` (or query
-   `/v1/offline/summaries`) to publish the latest `OfflineCounterSummary` digests for every wallet so
+   `/v2/offline/summaries`) to publish the latest `OfflineCounterSummary` digests for every wallet so
    merchants can verify `(certificate_id, counter)` pairs before accepting receipts.【crates/iroha_cli/src/offline.rs:110】
 
 ## 5. Treasury & accounting implications

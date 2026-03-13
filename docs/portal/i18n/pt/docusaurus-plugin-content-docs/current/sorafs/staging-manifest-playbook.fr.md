@@ -75,13 +75,13 @@ Este manual descreve a ativação do bloco de perfil ratificado pelo Parlamento 
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Interrogue a descoberta do endpoint e confirme se o anúncio aparece com o alias canônico:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Certifique-se de que `profile_aliases` inclui `"sorafs.sf1@1.0.0"` na estreia.

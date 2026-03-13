@@ -33,7 +33,7 @@ Suponha que a pilha de solicitação entregue abaixo do SF-6 esteja desplegada (
 ## 1. Validação prévia
 
 1. **Confirmar entradas de governo.**
-   - Todos os provedores candidatos devem publicar sobres `ProviderAdvertV1` com cargas úteis de capacidade de rango e pressupostos de stream. Valído por meio de `/v1/sorafs/providers` e comparado com os campos de capacidade esperados.
+   - Todos os provedores candidatos devem publicar sobres `ProviderAdvertV1` com cargas úteis de capacidade de rango e pressupostos de stream. Valído por meio de `/v2/sorafs/providers` e comparado com os campos de capacidade esperados.
    - Os instantes de telemetria que transmitem tarefas de latência/queda devem ter menos de 15 minutos antes de cada execução no Canadá.
 2. **Prepare a configuração.**
    - Mantenha a configuração JSON do orquestrador na árvore `iroha_config` pelas seguintes capas:

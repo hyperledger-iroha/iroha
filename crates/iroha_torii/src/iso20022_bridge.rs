@@ -419,8 +419,8 @@ impl IsoMessageRecord {
     }
 }
 
-const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
-const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
+const ISO_PACS008_CONTEXT: &str = "/v2/iso20022/pacs008";
+const ISO_PACS009_CONTEXT: &str = "/v2/iso20022/pacs009";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)

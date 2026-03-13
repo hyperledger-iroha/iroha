@@ -77,7 +77,7 @@ Sidebar_label: Список контактов
 
 | المكون | المهمة | المالك/المالكون |
 |--------|--------|------------------|
-| خدمة Torii | Например, `/v1/sorafs/pin` (отправка), `/v1/sorafs/pin/{cid}` (поиск), `/v1/sorafs/aliases` (список/привязка), `/v1/sorafs/replication` (заказы/поступления). توفير ترقيم + ترشيح. | Сетевые TL/Core Infra |
+| خدمة Torii | Например, `/v2/sorafs/pin` (отправка), `/v2/sorafs/pin/{cid}` (поиск), `/v2/sorafs/aliases` (список/привязка), `/v2/sorafs/replication` (заказы/поступления). توفير ترقيم + ترشيح. | Сетевые TL/Core Infra |
 | Новости | تضمين ارتفاع/هاش реестр в الاستجابات؛ Загрузите Norito для создания SDK. | Основная инфраструктура |
 | интерфейс командной строки | Используйте `sorafs_manifest_stub` в CLI `sorafs_pin` для `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
 | SDK | Крепления для крепления (Rust/Go/TS) для Norito; اضافة اختبارات تكامل. | Команды SDK |
@@ -132,9 +132,9 @@ Sidebar_label: Список контактов
 Он был убит в 1980-х годах в SF-4 в 1980-х годах в Нью-Йорке.
 Включите REST в следующий раз:
 
-- `GET /v1/sorafs/pin` и `GET /v1/sorafs/pin/{digest}` манифестирует
+- `GET /v2/sorafs/pin` и `GET /v2/sorafs/pin/{digest}` манифестирует
   Назовите псевдонимы واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- псевдоним `GET /v1/sorafs/aliases` и `GET /v1/sorafs/replication`
+- псевдоним `GET /v2/sorafs/aliases` и `GET /v2/sorafs/replication`
   Он был убит в 2007 году.
 
 Запуск CLI (`iroha app sorafs pin list`, `pin show`, `alias list`,

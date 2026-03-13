@@ -814,7 +814,7 @@ pub struct FheParamSetV1 {
     pub param_set: Name,
     /// Monotonic version number under the same `param_set` name.
     pub version: NonZeroU32,
-    /// Backend profile identifier (`fhe/bfv-rns/v1`, etc.).
+    /// Backend profile identifier (`fhe/bfv-rns/v2`, etc.).
     pub backend: String,
     /// Cryptosystem family used by this parameter set.
     pub scheme: FheSchemeV1,
@@ -3352,7 +3352,7 @@ mod tests {
             "model-1",
             "job-1",
             weight_artifact_hash,
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             training_config_hash,
             reproducibility_hash,
             provenance_attestation_hash,
@@ -3363,7 +3363,7 @@ mod tests {
             "model-1",
             "job-1",
             weight_artifact_hash,
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             training_config_hash,
             reproducibility_hash,
             provenance_attestation_hash,
@@ -3385,7 +3385,7 @@ mod tests {
             "job-1",
             Some("0.9.0"),
             weight_artifact_hash,
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             training_config_hash,
             reproducibility_hash,
             provenance_attestation_hash,
@@ -3398,7 +3398,7 @@ mod tests {
             "job-1",
             Some("0.9.0"),
             weight_artifact_hash,
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             training_config_hash,
             reproducibility_hash,
             provenance_attestation_hash,
@@ -3620,7 +3620,7 @@ mod tests {
             schema_version: FHE_PARAM_SET_VERSION_V1,
             param_set: "fhe_bfv_med".parse().expect("valid name"),
             version: NonZeroU32::new(2).expect("nonzero"),
-            backend: "fhe/bfv-rns/v1".to_string(),
+            backend: "fhe/bfv-rns/v2".to_string(),
             scheme: FheSchemeV1::Bfv,
             ciphertext_modulus_bits: vec![
                 NonZeroU16::new(60).expect("nonzero"),

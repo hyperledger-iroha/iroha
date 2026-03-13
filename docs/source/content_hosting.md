@@ -16,7 +16,7 @@ individual files directly from Torii.
   `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
 - **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
   hash with reference counts; retiring a bundle decrements and prunes chunks.
-- **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
+- **Serve**: Torii exposes `GET /v2/content/{bundle}/{path}`. Responses stream
   directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
   Range support, and Cache-Control derived from the manifest. Reads honour the
   manifest auth mode: role-gated and sponsor-gated responses require canonical

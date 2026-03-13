@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 የመግቢያ መንገዱ አሁን አንድ ለአንድ ካርታ የሚያሳዩ የኮንክሪት JSON ኤንቨሎፖችን ያጋልጣል
 Norito አይነቶች በI18NI0000018X ውስጥ ተተግብረዋል፡
 
-- **የአደጋ ቅበላ** - `POST /v1/fraud/query` የI18NI0000020X እቅድ ይቀበላል፡-
+- **የአደጋ ቅበላ** - `POST /v2/fraud/query` የI18NI0000020X እቅድ ይቀበላል፡-
   - `query_id` (`[u8; 32]`፣ ሄክስ ኮድ የተደረገ)
   - `subject` (`AccountId`፣ ቀኖናዊ I105 ቀጥተኛ፣ አማራጭ `@<domain>` ፍንጭ ወይም ተለዋጭ ስም)
   - `operation` (መለያ የተሰጠው enum ተዛማጅ `RiskOperation`፣ JSON `type`
@@ -94,14 +94,14 @@ Norito አይነቶች በI18NI0000018X ውስጥ ተተግብረዋል፡
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`፤ `tenant_id` ይይዛል፣ አማራጭ `session_id`፣
     አማራጭ `reason`)
-- ** የአደጋ ውሳኔ *** - `POST /v1/fraud/assessment` ይበላል።
+- ** የአደጋ ውሳኔ *** - `POST /v2/fraud/assessment` ይበላል።
   `FraudAssessment` ክፍያ (በአስተዳዳሪው ወደ ውጭ መላኮችም ይንጸባረቃል)
   - `query_id`፣ `engine_id`፣ `risk_score_bps`፣ `confidence_bps`፣
     `decision` (`AssessmentDecision` enum)፣ `rule_outcomes`
     (የ`{ rule_id, score_delta_bps, rationale? }` ድርድር)
   - `generated_at_ms`
   - `signature` (አማራጭ base64 Norito-encoded ግምገማ መጠቅለል)
-- ** አስተዳደር ወደ ውጭ መላክ *** - `GET /v1/fraud/governance/export` ይመልሳል
+- ** አስተዳደር ወደ ውጭ መላክ *** - `GET /v2/fraud/governance/export` ይመልሳል
   የ`GovernanceExport` መዋቅር የ`governance` ባህሪ ሲነቃ፣ ማያያዝ
   ንቁ መለኪያዎች፣ የቅርብ ጊዜ አፈጻጸም፣ የሞዴል ሥሪት፣ የፖሊሲ መፍጨት እና የ
   `DecisionAggregate` ሂስቶግራም.

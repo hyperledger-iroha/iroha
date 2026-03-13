@@ -25,7 +25,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 | Ishonchli translyatsiya (DA foydali yuk tashish) | ◉ | RBC xabarlar oqimi (Init/Chunk/Ready/Deliver) transport/tiklash yo'li sifatida `da_enabled=true` yoqilganda; Mavjudlik dalillari kuzatib boriladi (maslahat), daromadlar mustaqil ravishda amalga oshiriladi. | status.md:so'nggi |
 | QC holatini ildiz bilan bog'lash | ◉ | QCs `parent_state_root`/`post_state_root` ga ega; alohida ijro etuvchi-QC eshigi yo'q. | status.md:so'nggi |
 | Dalillarni tarqatish va auditning yakuniy nuqtalari | ◉ | ControlFlow::Dalillar, Torii dalil so'nggi nuqtalari va salbiy testlar qo'ndi. | status.md:176; status.md:760-761 |
-| RBC telemetriyasi, tayyorlik/etkazib berilgan ko'rsatkichlari | ◉ | Operatorlar uchun `/v1/sumeragi/rbc*` so'nggi nuqtalari va telemetriya hisoblagichlari/gistogrammasi mavjud. | status.md:283-284; status.md:772 |
+| RBC telemetriyasi, tayyorlik/etkazib berilgan ko'rsatkichlari | ◉ | Operatorlar uchun `/v2/sumeragi/rbc*` so'nggi nuqtalari va telemetriya hisoblagichlari/gistogrammasi mavjud. | status.md:283-284; status.md:772 |
 | Konsensus parametri reklama va topologiyani tekshirish | ◉ | Tugunlar `(collectors_k, redundant_send_r)` ni translyatsiya qiladi va tengdoshlar orasida tenglikni tasdiqlaydi. | status.md:255 |
 | Ruxsat berilgan PRF asosidagi aylanish | ◉ | Ruxsat berilgan yetakchi/kollektor tanlash kanonik ro‘yxat bo‘yicha PRF urug‘i + balandlik/ko‘rinishdan foydalanadi; oldingi xesh aylanishi eski yordamchi bo'lib qoladi. | status.md:so'nggi |
 
@@ -55,7 +55,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 |---------|--------|-------|----------|
 | Ish vaqtini yangilashga kirish (ABI gating) | ◉ | Faol ABI to'plami qabul qilinganda tuzilgan xatolar va testlar bilan amalga oshiriladi. | status.md:196 |
 | Himoyalangan nomlar maydonini joylashtirish gating | ▲ | Meta-ma'lumotlarga bo'lgan talablarni va simli o'tkazgichlarni o'rnatish; siyosat/UX hali ham rivojlanmoqda. | status.md:171 |
-| Torii boshqaruv so'nggi nuqtalarini o'qish | ◉ | `/v1/gov/*` marshrutizator sinovlari bilan yo'naltirilgan API'larni o'qish. | status.md:212 |
+| Torii boshqaruv so'nggi nuqtalarini o'qish | ◉ | `/v2/gov/*` marshrutizator sinovlari bilan yo'naltirilgan API'larni o'qish. | status.md:212 |
 | Tekshirish kaliti registrning hayot aylanishi va hodisalari | ◉ | VK registri/yangilash/bekor qilish, voqealar, CLI filtrlari va saqlash semantikasi amalga oshirildi. | status.md:236-239; status.md:595; status.md:603 |
 
 ## Nolinchi bilim infratuzilmasi
@@ -68,7 +68,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 | Himoyalangan ildiz tarixi gating | ◉ | Chegaralangan tarix va boʻsh ildiz konfiguratsiyasi bilan CoreHost-ga oʻrnatilgan ildiz suratlari. | status.md:303 |
 | ZK byulleten ijrosi va boshqaruv qulflari | ○ | Nullifier hosilasi, qulfni yangilash, tekshirish o'tish tugmalari amalga oshirildi; to'liq isbot hayot aylanishi hali etuk. | status.md:126-128; status.md:194-195 |
 | Tasdiqlash ilovasi oldindan tekshirish va dedup | ◉ | Backend-teg aql-idrok, deuplikatsiya va isbot yozuvlari ijrodan oldin davom etdi. | status.md:348; status.md:602 |
-| ZK Torii isbotlangan so'nggi nuqta | ◉ | `/v1/zk/proof/{backend}/{hash}` isbot yozuvlarini (holat, balandlik, vk_ref/commitment) ochib beradi. | status.md:94 |
+| ZK Torii isbotlangan so'nggi nuqta | ◉ | `/v2/zk/proof/{backend}/{hash}` isbot yozuvlarini (holat, balandlik, vk_ref/commitment) ochib beradi. | status.md:94 |
 
 ## IVM va Kotodama integratsiyasi| Xususiyat | Holati | Eslatmalar | Dalil |
 |---------|--------|-------|----------|
@@ -77,7 +77,7 @@ Legend: `◉` toʻliq amalga oshirildi · `○` asosan amalga oshirildi · `▲`
 | Pointer-ABI qat'iy tekshirish va hujjat sinxronlash | ◉ | TLV siyosati xost/IVM boʻylab oltin testlar va yaratilgan hujjatlar bilan qoʻllaniladi. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | CoreHost | orqali ZK syscall gating ◉ | Har bir operatsiya uchun navbatlar tekshirilgan konvertlarni o'tkazadi va ISI bajarilishidan oldin xesh mosligini ta'minlaydi. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama ko'rsatkichi-ABI hujjatlari va grammatika | ◉ | Grammatika/hujjatlar jonli konstruktorlar va SCALL xaritalari bilan sinxronlangan. | status.md:299-301 |
-| ISO 20022 sxemasiga asoslangan dvigatel va Torii ko'prigi | ◉ | Oʻrnatilgan kanonik ISO 20022 sxemalari, deterministik XML tahlili va `/v1/iso20022/status/{MsgId}` API ochilgan. | status.md:65-70 |
+| ISO 20022 sxemasiga asoslangan dvigatel va Torii ko'prigi | ◉ | Oʻrnatilgan kanonik ISO 20022 sxemalari, deterministik XML tahlili va `/v2/iso20022/status/{MsgId}` API ochilgan. | status.md:65-70 |
 
 ## Uskuna tezlashuvi
 

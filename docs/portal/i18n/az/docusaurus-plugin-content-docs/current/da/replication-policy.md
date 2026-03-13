@@ -36,7 +36,7 @@ təqdim edənin niyyətinə əsaslanmadan dövrlərin və replikaların sayı.
 | _Defolt (bütün digər siniflər)_ | 6 saat | 30 gün | 3 | `warm` | `da.default` |
 
 Bu dəyərlər `torii.da_ingest.replication_policy`-ə daxil edilib və tətbiq edilir
-bütün `/v1/da/ingest` təqdimatları. Torii manifestləri məcburi olanlarla yenidən yazır
+bütün `/v2/da/ingest` təqdimatları. Torii manifestləri məcburi olanlarla yenidən yazır
 saxlama profili və zəng edənlər uyğun olmayan dəyərlər təqdim etdikdə xəbərdarlıq verir
 operatorlar köhnəlmiş SDK-ları aşkar edə bilər.
 
@@ -158,6 +158,6 @@ ki, SoraFS uyğun olmayan blobları avtomatik olaraq təkrarlaya bilər.
    və PDP sübutları.
 
 Reqressiya əhatə dairəsi `integration_tests/tests/da/replication_policy.rs`-də yaşayır;
-paket `/v1/da/ingest`-ə uyğun olmayan saxlama siyasəti təqdim edir və təsdiqləyir
+paket `/v2/da/ingest`-ə uyğun olmayan saxlama siyasəti təqdim edir və təsdiqləyir
 ki, gətirilən manifest zəng edənin əvəzinə məcburi profili ifşa edir
 niyyət.

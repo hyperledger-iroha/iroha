@@ -95,7 +95,7 @@ query_and_write() {
   local query="$2"
   local target="${OUT_DIR}/${name}.prom"
 
-  curl -fsS -G "${PROM_URL%/}/api/v1/query" \
+  curl -fsS -G "${PROM_URL%/}/api/v2/query" \
     --data-urlencode "query=${query}" \
     > "${target}.tmp"
 

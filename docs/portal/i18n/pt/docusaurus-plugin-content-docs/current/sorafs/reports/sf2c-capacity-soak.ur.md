@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 Torii اب instantâneos de crédito do provedor کو livros de taxas کے ساتھ ظاہر کرتا ہے تاکہ painéis کم saldos اور penalidades پر portão کر سکیں:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` entradas واپس کرتا ہے جو teste de imersão میں verificar ہونے والے
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` entradas واپس کرتا ہے جو teste de imersão میں verificar ہونے والے
   campos contábeis کی عکاسی کرتے ہیں۔ دیکھیں
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importação Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` contadores de golpes exportados, totais de penalidades,

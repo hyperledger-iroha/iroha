@@ -390,7 +390,7 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
   failure counts and the disabled flag for each provider.
 - `chunk_receipts`, recording which provider ultimately served every chunk.
 - `local_proxy_manifest`, populated when `local_proxy` is enabled in the orchestrator config. The object mirrors the browser handshake manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt, telemetry hints) and the same payload is written to `--local-proxy-manifest-out=PATH` for browser extensions.
-- `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
+- `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. These fields mirror the manifest response returned by `/v2/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
 - `car_archive` now contains the assembled CAR diagnostics (`payload_digest_hex`, `archive_digest_hex`, `cid_hex`, `root_cids_hex`, `size`) alongside `verified=true` and `por_leaf_count`, proving that the CAR bytes emitted by the gateway match the manifest digests and PoR tree recorded on ingest.
 - `ineligible_providers`, listing any aliases filtered out by capability or
   validity window checks, so SREs can surface advert drift before re-running the
@@ -628,7 +628,7 @@ sorafs_cli por status \
   --limit=20
 ```
 
-The command queries `GET /v1/sorafs/por/status` and prints either a terse table
+The command queries `GET /v2/sorafs/por/status` and prints either a terse table
 (`--format=table`, the default) or the raw Norito JSON (`--format=json`). Status
 filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
@@ -648,7 +648,7 @@ sorafs_cli por trigger \
 
 The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
 manifest/provider pair is permitted, and submits a Norito
-`ManualPorChallengeV1` request to `POST /v1/sorafs/por/trigger`. Optional flags
+`ManualPorChallengeV1` request to `POST /v2/sorafs/por/trigger`. Optional flags
 (`--samples`, `--deadline-secs`) override the scheduler defaults on a per-call
 basis. Responses are surfaced verbatim so auditors capture the assigned
 `challenge_id` or any governance error codes.
@@ -664,7 +664,7 @@ sorafs_cli por export \
 ```
 
 `por export` streams the Parquet artefact produced by
-`GET /v1/sorafs/por/export` to disk and prints the number of bytes written,
+`GET /v2/sorafs/por/export` to disk and prints the number of bytes written,
 making it easy to wire into nightly governance or observability jobs. Start/end
 epochs are optional; omit them to fetch the most recent window.
 
@@ -677,7 +677,7 @@ sorafs_cli por report \
   --format=markdown
 ```
 
-Weekly reports are fetched from `GET /v1/sorafs/por/report/{iso_week}`. Markdown
+Weekly reports are fetched from `GET /v2/sorafs/por/report/{iso_week}`. Markdown
 output mirrors the governance briefing (aggregate metrics, provider summaries,
 slashing events, and VRF anomalies), while `--format=json` emits the canonical
 `PorWeeklyReportV1` payload for dashboards and downstream automation.

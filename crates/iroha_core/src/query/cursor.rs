@@ -146,12 +146,29 @@ impl ErasedQueryIterator {
             EvaluateSelector<I::Item> + Send + Sync,
         QueryOutputBatchBox: From<Vec<I::Item>>,
     {
+        Self::new_with_cursor(iter, selector, batch_size, 0)
+    }
+
+    /// Creates a new erased query iterator with a custom initial cursor value.
+    pub(crate) fn new_with_cursor<I>(
+        iter: I,
+        selector: SelectorTuple<I::Item>,
+        batch_size: NonZeroU64,
+        initial_cursor: u64,
+    ) -> Self
+    where
+        I: ExactSizeIterator + Send + Sync + 'static,
+        I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+        <I::Item as HasProjection<SelectorMarker>>::Projection:
+            EvaluateSelector<I::Item> + Send + Sync,
+        QueryOutputBatchBox: From<Vec<I::Item>>,
+    {
         Self {
             inner: Box::new(BatchedInner {
                 iter,
                 selector,
                 batch_size,
-                cursor: Some(0),
+                cursor: Some(initial_cursor),
             }),
         }
     }

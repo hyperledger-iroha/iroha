@@ -78,7 +78,7 @@ Sidebar_label: إمكانية المراقبة وSLOs
 | `sorafs_node_por_failure_total` | عداد | `provider_id` | Contador monotónico de muestras PoR Fallidas. |
 | `torii_sorafs_storage_bytes_*`، `torii_sorafs_storage_por_*` | مقياس | `provider` | توجد أجهزة قياس Prometheus للبايتات المستخدمة وعمق الكولا وحسابات PoR في السرعة. |
 | `torii_sorafs_capacity_*`، `torii_sorafs_uptime_bps`، `torii_sorafs_por_bps` | مقياس | `provider` | تظهر بيانات السعة/وقت التشغيل للمورد على لوحة معلومات السعة. |
-| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | يؤدي عمق تراكم البيانات إلى زيادة تراكم أجهزة القياس الصادرة كل مرة تقوم فيها بمراجعة `/v1/sorafs/por/ingestion/{manifest}`، ويتم تشغيل اللوحة/التنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | يؤدي عمق تراكم البيانات إلى زيادة تراكم أجهزة القياس الصادرة كل مرة تقوم فيها بمراجعة `/v2/sorafs/por/ingestion/{manifest}`، ويتم تشغيل اللوحة/التنبيه "PoR Stalls". |
 
 ### اختبار فرص الاسترداد (PoTR) وSLA للقطع| متريكا | تيبو | اتيكيت | المنتج | نوتاس |
 |--------|------|-----------|-----------|-------|

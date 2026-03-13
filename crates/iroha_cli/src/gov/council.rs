@@ -125,7 +125,7 @@ pub struct GenVrfArgs {
     /// Output path; if omitted, prints JSON to stdout
     #[arg(long)]
     pub out: Option<std::path::PathBuf>,
-    /// Fetch `seed/epoch/chain_id` from /v1/gov/council/audit (overrides --epoch/--beacon-hex when set)
+    /// Fetch `seed/epoch/chain_id` from /v2/gov/council/audit (overrides --epoch/--beacon-hex when set)
     #[arg(long, default_value_t = false)]
     pub from_audit: bool,
 }
@@ -380,7 +380,7 @@ pub struct DeriveAndPersistArgs {
     /// Private key (hex) for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
+    /// Wait for `CouncilPersisted` event and verify via /v2/gov/council/current
     #[arg(long, default_value_t = false)]
     pub wait: bool,
 }

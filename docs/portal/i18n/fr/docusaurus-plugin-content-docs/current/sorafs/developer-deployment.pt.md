@@ -29,7 +29,7 @@ Le flux de travail de mise en œuvre du SoraFS renforce le déterminisme, entre 
 - **Politica d'admission** - réviser les annonces des fournisseurs d'os assassinés et les preuves d'alias nécessaires pour `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook do pin registre** - gère `docs/source/sorafs/runbooks/pin_registry_ops.md` pour les scénarios de récupération (rotation d'alias, fausses répliques).
 
-## Configuration de l'ambiance- Les passerelles développent le streaming de preuve de point final (`POST /v1/sorafs/proof/stream`) pour que la CLI émette des résumés de télémétrie.
+## Configuration de l'ambiance- Les passerelles développent le streaming de preuve de point final (`POST /v2/sorafs/proof/stream`) pour que la CLI émette des résumés de télémétrie.
 - Configurez une politique `sorafs_alias_cache` en utilisant vos pilotes dans `iroha_config` ou l'assistant de la CLI (`sorafs_cli manifest submit --alias-*`).
 - Jetons de flux Forneca (ou identifiants Torii) via un gestionnaire de secrets sécurisé.
 - Habilite exportateurs de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et envie de votre pile Prometheus/OTel.

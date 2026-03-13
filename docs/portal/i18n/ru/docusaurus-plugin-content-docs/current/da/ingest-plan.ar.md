@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 ## Открытие API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -205,7 +205,7 @@ pub struct DaIngestReceipt {
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه الى манифест артефактов + план фрагментов
   (`--manifest`, `--plan`, `--manifest-id`) **او** Зарегистрируйте билет хранения для Torii
   عبر `--storage-ticket`. Создайте билет, откройте CLI и манифест.
-  `/v1/da/manifests/<ticket>`, а также `artifacts/da/fetch_<timestamp>/`
+  `/v2/da/manifests/<ticket>`, а также `artifacts/da/fetch_<timestamp>/`
   (переопределить `--manifest-cache-dir`), а также хеш-объект blob в `--manifest-id`,
   Для оркестратора используется `--gateway-provider`. Ручки تبقى جميع
   المتقدمة من جالب SoraFS كما هي (конверты манифеста, تسميات العميل, Guard
@@ -214,7 +214,7 @@ pub struct DaIngestReceipt {
   Доступность будет доступна в ближайшее время, когда появится сообщение `da`.
   оркестратор.
 - `iroha app da get-blob` проявляется в виде ошибки, связанной с Torii عبر.
-  `GET /v1/da/manifests/{storage_ticket}`. يكتب الامر
+  `GET /v2/da/manifests/{storage_ticket}`. يكتب الامر
   `manifest_{ticket}.norito` و`manifest_{ticket}.json` و`chunk_plan_{ticket}.json`
   تحت `artifacts/da/fetch_<timestamp>/` (او `--output-dir` يحدده المستخدم)
   طباعة امر `iroha app da get` الدقيق (Pما في ذلك `--manifest-id`)

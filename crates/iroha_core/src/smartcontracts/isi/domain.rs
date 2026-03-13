@@ -175,6 +175,7 @@ pub mod isi {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: std::collections::BTreeSet::new(),
         };
         let (account_id, account_value) = account.clone().into_key_value();
         state_transaction
@@ -529,13 +530,17 @@ pub mod isi {
     }
 
     fn resolve_config_account_literal(
-        _world: &impl crate::state::WorldReadOnly,
+        world: &impl crate::state::WorldReadOnly,
         raw: &str,
         field_path: &'static str,
     ) -> Result<AccountId, Error> {
-        AccountId::parse_encoded(raw)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|_| {
+        crate::block::parse_account_literal_with_world(world, raw)
+            .or_else(|| {
+                AccountId::parse_encoded(raw)
+                    .ok()
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            })
+            .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
                         "invalid {field_path} account literal `{raw}`: expected account identifier"
@@ -1700,6 +1705,9 @@ pub mod isi {
                 .world
                 .asset_definitions
                 .insert(asset_definition_id.clone(), asset_definition.clone());
+            state_transaction
+                .world
+                .track_asset_definition_domain(&asset_definition_id);
             if let Some(alias) = asset_definition.alias().as_ref().cloned() {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
                 state_transaction.world.bind_asset_definition_alias(
@@ -1997,6 +2005,9 @@ pub mod isi {
             {
                 return Err(FindError::AssetDefinition(asset_definition_id).into());
             }
+            state_transaction
+                .world
+                .untrack_asset_definition_domain(&asset_definition_id);
             state_transaction
                 .world
                 .clear_asset_definition_alias(&asset_definition_id);
@@ -2614,6 +2625,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: std::collections::BTreeSet::from([domain_id.clone()]),
         };
         let (account_id, account_value) = account.into_key_value();
         let subject = account_id.subject_id();

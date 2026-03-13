@@ -69,7 +69,7 @@ description: סיכום פורטל ללוחות Grafana של viewer/cache שמג
    איזה routing manifest (TRM) ואיזה חלון lineage היו פעילים. ה-helper
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    יעתיק את spool files, יפיק hashes ויחתום את הסיכום לפי הצורך.
-2. תעדו את פלט `/v1/status` המסונן ל-
+2. תעדו את פלט `/v2/status` המסונן ל-
    `.telemetry.taikai_alias_rotations[]` ושמרו אותו ליד spool files. ה-reviewers
    משווים את `manifest_digest_hex` והגבולות לחלון עם מצב ה-spool שהועתק.
 3. יצאו Prometheus snapshots עבור המטריקות לעיל וצילמו את לוחות viewer/cache עם

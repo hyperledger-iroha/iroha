@@ -18,11 +18,11 @@ Estado: Concluído 2026-03-21
 Responsáveis: Plataforma Torii, líder do programa SDK  
 Referência do roteiro: TORII-APP-1 - auditorias de paridade de `app_api`
 
-Esta página reflete os auditórios internos `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) para que os leitores fora do mono-repo possam ver que as superfícies `/v1/*` estão cabeadas, testadas e documentadas. Os auditórios rastreiam as rotas reexportadas através de `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` e `add_connect_routes`.
+Esta página reflete os auditórios internos `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) para que os leitores fora do mono-repo possam ver que as superfícies `/v2/*` estão cabeadas, testadas e documentadas. Os auditórios rastreiam as rotas reexportadas através de `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` e `add_connect_routes`.
 
 ## Alcance e método
 
-Os auditórios inspecionam as reexportações públicas em `crates/iroha_torii/src/lib.rs:256-522` e os construtores de rotas com recurso de gate. Para cada superfície `/v1/*` do roadmap verificamos:
+Os auditórios inspecionam as reexportações públicas em `crates/iroha_torii/src/lib.rs:256-522` e os construtores de rotas com recurso de gate. Para cada superfície `/v2/*` do roadmap verificamos:
 
 - Implementação do manipulador e definições DTO em `crates/iroha_torii/src/routing.rs`.
 - Registro do roteador abaixo dos grupos de recursos `app_api` ou `connect`.
@@ -40,25 +40,25 @@ As listas de ativos/transações de contas e a lista de titulares de ativos acei
 - Exemplos:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Inventário de endpoints
 
-### Permissões de conta (`/v1/accounts/{id}/permissions`) - Cubierto
+### Permissões de conta (`/v2/accounts/{id}/permissions`) - Cubierto
 - Manipulador: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Ligação do roteador: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Proprietário: Plataforma Torii.
 - Notas: A resposta é um corpo JSON Norito com `items`/`total`, que coincide com os auxiliares de paginação do SDK.
 
-### Avaliação OPRF de alias (`POST /v1/aliases/voprf/evaluate`) - Cubierto
+### Avaliação OPRF de alias (`POST /v2/aliases/voprf/evaluate`) - Cubierto
 - Manipulador: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -74,7 +74,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Testes: testes inline do manipulador (`crates/iroha_torii/src/lib.rs:9945-9986`) mas cobertura do SDK
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - Proprietário: Plataforma Torii.
-- Notas: A superfície de resposta impone hexadecimal determinístico e identificadores de backend; o SDK consome o DTO.### Eventos de prova SSE (`GET /v1/events/sse`) - Cubierto
+- Notas: A superfície de resposta impone hexadecimal determinístico e identificadores de backend; o SDK consome o DTO.### Eventos de prova SSE (`GET /v2/events/sse`) - Cubierto
 - Manipulador: `handle_v1_events_sse` com suporte de filtros (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) mas a fiação do filtro de prova.
 - Ligação do roteador: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Proprietário: Plataforma Torii (runtime), GT de Testes de Integração (fixtures).
 - Notas: As rotas de filtros de prova são válidas de ponta a ponta; a documentação vive em `docs/source/zk_app_api.md`.
 
-### Ciclo de vida de contratos (`/v1/contracts/*`) - Cubierto
+### Ciclo de vida de contratos (`/v2/contracts/*`) - Cubierto
 - Manipuladores: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Proprietário: Smart Contract WG com Plataforma Torii.
 - Notas: Los endpoints encolan transações firmadas e reutilizan métricas compartidas de telemetria (`handle_transaction_with_metrics`).
 
-### Ciclo de vida de chaves de verificação (`/v1/zk/vk/*`) - Cubierto
+### Ciclo de vida de chaves de verificação (`/v2/zk/vk/*`) - Cubierto
 - Manipuladores: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) e `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Proprietário: ZK Working Group com suporte para a plataforma Torii.
 - Notas: Os DTOs são alinhados com os esquemas Norito referenciados pelo SDK; A limitação de taxa é imposta via `limits.rs`.
 
-### Nexus Connect (`/v1/connect/*`) - Cubierto (recurso `connect`)
+### Nexus Connect (`/v2/connect/*`) - Cubierto (recurso `connect`)
 - Manipuladores: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

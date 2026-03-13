@@ -200,7 +200,7 @@ Envelope comum: `InstructionExecutionError` com variantes para erros de avaliaç
 - Mint por alias + componentes da conta:
   -`iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Resolver alias para ajuda canônica:
-  -`POST /v1/assets/aliases/resolve` com JSON `{ "alias": "pkr#ubl@sbp" }`
+  -`POST /v2/assets/aliases/resolve` com JSON `{ "alias": "pkr#ubl@sbp" }`
 
 Nota de migração:
 - Os IDs de definição de ativos textuais `name#domain` não são intencionalmente suportados na primeira versão.

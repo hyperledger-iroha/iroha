@@ -78,7 +78,7 @@ Test :
 
 | Composant | Задача | Ответственные |
 |-----------|--------|---------------|
-| Service Torii | Utilisez `/v1/sorafs/pin` (soumettre), `/v1/sorafs/pin/{cid}` (recherche), `/v1/sorafs/aliases` (liste/liaison), `/v1/sorafs/replication` (commandes/reçus). Обеспечить пагинацию + фильтрацию. | Mise en réseau TL / Core Infra |
+| Service Torii | Utilisez `/v2/sorafs/pin` (soumettre), `/v2/sorafs/pin/{cid}` (recherche), `/v2/sorafs/aliases` (liste/liaison), `/v2/sorafs/replication` (commandes/reçus). Обеспечить пагинацию + фильтрацию. | Mise en réseau TL / Core Infra |
 | Attestation | Включать высоту/хэш registre в ответы; créez l'attestation de structure Norito en utilisant le SDK. | Infrastructure de base |
 | CLI | Connectez `sorafs_manifest_stub` ou la nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Créer des liaisons client (Rust/Go/TS) avec les schémas Norito ; faire des tests d'intégration. | Équipes SDK |
@@ -133,10 +133,10 @@ Dachbords :
 Le SF-4 est désormais en mesure d'étudier ce plan en fonction du processus de programmation.
 La phase REST permet d'afficher les points de terminaison d'attestation en détail :
 
-- `GET /v1/sorafs/pin` et `GET /v1/sorafs/pin/{digest}` возвращают manifestes
+- `GET /v2/sorafs/pin` et `GET /v2/sorafs/pin/{digest}` возвращают manifestes
   liaisons d'alias, réplications de commandes et attestations d'objets, livraisons
   хэша последнего блока.
-- `GET /v1/sorafs/aliases` et `GET /v1/sorafs/replication` activés publiquement
+- `GET /v2/sorafs/aliases` et `GET /v2/sorafs/replication` activés publiquement
   Alias de catalogue et backlog de réplication avec une configuration cohérente et
   statut des filtres.
 

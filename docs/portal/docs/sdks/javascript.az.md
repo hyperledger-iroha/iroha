@@ -138,8 +138,8 @@ JS4/JS7.
 
 ## Təkrarlanan siyahılar və səhifələmə
 
-Səhifələmə köməkçiləri `/v1/accounts` üçün Python SDK erqonomikasını əks etdirir,
-`/v1/domains`, `/v1/assets/definitions`, NFT-lər, balanslar, aktiv sahibləri və
+Səhifələmə köməkçiləri `/v2/accounts` üçün Python SDK erqonomikasını əks etdirir,
+`/v2/domains`, `/v2/assets/definitions`, NFT-lər, balanslar, aktiv sahibləri və
 hesab əməliyyatı tarixi.
 
 ```ts
@@ -189,7 +189,7 @@ geri sayım köməkçiləri (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) növbəti bitən son tarixi vurğulayın (təzələyin → siyasət
 → sertifikat) beləliklə UI nişanları müavinət olduqda operatorları xəbərdar edə bilər
 <24 saat qalıb. SDK
-`/v1/offline/allowances` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
+`/v2/offline/allowances` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` və
 `requireVerdict` / `onlyMissingVerdict` booleanları. Yanlış birləşmələr (üçün
@@ -272,8 +272,8 @@ WebSocket son nöqtələri. Bütün axın köməkçiləri təkrar cəhdləri üz
 
 ## Explorer anlıq görüntüləri və QR yükləri
 
-Explorer telemetriyası `/v1/explorer/metrics` və üçün tipli köməkçilər təqdim edir
-`/v1/explorer/accounts/{account_id}/qr` son nöqtələr, beləliklə, tablosuna təkrar oxuya bilərsiniz
+Explorer telemetriyası `/v2/explorer/metrics` və üçün tipli köməkçilər təqdim edir
+`/v2/explorer/accounts/{account_id}/qr` son nöqtələr, beləliklə, tablosuna təkrar oxuya bilərsiniz
 portalı gücləndirən eyni görüntülər. `getExplorerMetrics()` normallaşdırır
 faydalı yük və marşrut qeyri-aktiv olduqda `null` qaytarır. ilə cütləşdirin
 `getExplorerAccountQr()` sizə lazım olduqda I105 (üstünlük verilir)/sora (ikinci ən yaxşı) literal üstəgəl inline
@@ -382,7 +382,7 @@ donanmanın cari məhdudiyyətlərindən.
 ### WebSocket yığımını birləşdirin
 
 `ToriiClient.openConnectWebSocket()` kanonikləri yığır
-`/v1/connect/ws` URL (`sid`, `role` və nişan parametrləri daxil olmaqla), təkmilləşdirmələr
+`/v2/connect/ws` URL (`sid`, `role` və nişan parametrləri daxil olmaqla), təkmilləşdirmələr
 `http→ws` / `https→wss` və yekun URL-ni hansı WebSocket-ə verir
 təmin etdiyiniz həyata keçirilməsi. Brauzerlər avtomatik olaraq qlobaldan yenidən istifadə edir
 `WebSocket`. Node.js zəng edənlər `ws` kimi konstruktordan keçməlidir:
@@ -464,7 +464,7 @@ standart `connect.queue_depth`, `connect.queue_overflow_total` və
 
 ## Axın izləyiciləri və hadisə kursorları
 
-`ToriiClient.streamEvents()` `/v1/events/sse` avtomatik asinxron iterator kimi təqdim edir
+`ToriiClient.streamEvents()` `/v2/events/sse` avtomatik asinxron iterator kimi təqdim edir
 təkrar cəhd edin, beləliklə, Node/Bun CLI-lər boru kəməri fəaliyyətini Rust CLI ilə eyni şəkildə dayandıra bilər.
 `Last-Event-ID` kursorunu runbook artefaktlarınızla birlikdə saxlayın ki, operatorlar
 proses yenidən başladıqda hadisələri atlamadan axını davam etdirin.
@@ -503,7 +503,7 @@ for await (const event of torii.streamEvents({
   siqnal qəbul edilir; yalnız ilk bir neçə hadisəyə ehtiyacınız olduqda `STREAM_MAX_EVENTS=25`-i keçin
   tüstü testi üçün.
 - `ToriiClient.streamSumeragiStatus()` eyni interfeysi əks etdirir
-  `/v1/sumeragi/status/sse` belə ki, konsensus telemetriyası ayrı-ayrılıqda aparıla bilər və
+  `/v2/sumeragi/status/sse` belə ki, konsensus telemetriyası ayrı-ayrılıqda aparıla bilər və
   iterator `Last-Event-ID`-i eyni şəkildə qiymətləndirir.
 - Açar təslim CLI üçün baxın `javascript/iroha_js/recipes/streaming.mjs` (kursorun davamlılığı,
   env-var filtrini ləğv edir və JS4-də istifadə olunan `extractPipelineStatusKind` girişi)
@@ -610,14 +610,14 @@ JS yol xəritəsi, həmçinin, operatorların məlumat əldə edə bilməsi üç
 Sumeragi vasitəsilə əldə etdikləri blokun təsdiqlədikləri yığın sübutlarına uyğun olduğunu sübut edin.
 Yükləri əl ilə qurmaq əvəzinə daxili köməkçilərdən istifadə edin:
 
-1. `getSumeragiRbcSessions()` güzgülər `/v1/sumeragi/rbc/sessions` və
+1. `getSumeragiRbcSessions()` güzgülər `/v2/sumeragi/rbc/sessions` və
    `findRbcSamplingCandidate()` blok hash ilə ilk çatdırılan sessiyanı avtomatik seçir
    (inteqrasiya dəsti istənilən vaxt ona qayıdır
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` qurulmayıb).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` `{blockHash,height,view}` normallaşdırır
    üstəgəl isteğe bağlı `{count,seed,apiToken}` səhv formalaşdırılmış hex və ya mənfi tam ədədləri heç vaxt ləğv edir
    Torii-ə çatın.
-3. `sampleRbcChunks()` sorğunu `/v1/sumeragi/rbc/sample` ünvanına göndərir, yığın sübutlarını qaytarır
+3. `sampleRbcChunks()` sorğunu `/v2/sumeragi/rbc/sample` ünvanına göndərir, yığın sübutlarını qaytarır
    və Merkle yolları (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) ilə arxivləşdirməlisiniz
    övladlığa götürmə sübutunuzun qalan hissəsi.
 4. `getSumeragiRbcDelivered(height, view)` auditorlar üçün kohortun çatdırılma metadatasını çəkir

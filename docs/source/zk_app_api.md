@@ -13,23 +13,23 @@ Key properties:
 Attachments store sanitized artifacts such as proof envelopes or JSON DTOs. Each attachment is addressed by a deterministic id derived from the sanitized bytes.
 
 Endpoints:
-- `POST /v1/zk/attachments` — store attachment, returns metadata `{ id, size, content_type, created_ms, provenance? }`.
-- `GET  /v1/zk/attachments` — list metadata for stored attachments (JSON array).
+- `POST /v2/zk/attachments` — store attachment, returns metadata `{ id, size, content_type, created_ms, provenance? }`.
+- `GET  /v2/zk/attachments` — list metadata for stored attachments (JSON array).
 - Supports filters via query params: `id`, `content_type` (substring), `since_ms`, `before_ms`, `has_tag=<TAG>` (ZK1 TLV tag present, e.g., `PROF`, `IPAK`), `limit`, `offset`, `order=asc|desc`, `ids_only=true`.
-- `GET  /v1/zk/attachments/:id` — fetch stored attachment bytes by id; content type is preserved.
-- `DELETE /v1/zk/attachments/:id` — delete stored attachment and metadata.
- - `GET  /v1/zk/attachments/count` — return `{ count }` for the same filter set as the list endpoint.
-- `GET  /v1/zk/proof/{backend}/{hash}` — fetch a proof record by backend and proof hash (64‑hex). Returns JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`.
- - `GET  /v1/zk/proofs` — list proof records with optional filters and pagination.
+- `GET  /v2/zk/attachments/:id` — fetch stored attachment bytes by id; content type is preserved.
+- `DELETE /v2/zk/attachments/:id` — delete stored attachment and metadata.
+ - `GET  /v2/zk/attachments/count` — return `{ count }` for the same filter set as the list endpoint.
+- `GET  /v2/zk/proof/{backend}/{hash}` — fetch a proof record by backend and proof hash (64‑hex). Returns JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`.
+ - `GET  /v2/zk/proofs` — list proof records with optional filters and pagination.
    - Filters: `backend`, `status=Submitted|Verified|Rejected`, `has_tag=<TAG>` (requires `zk-proof-tags` feature), `verified_from_height`, `verified_until_height`, `limit`, `offset`, `order=asc|desc`, `ids_only=true`.
- - `GET  /v1/zk/proofs/count` — return `{ count }` for the same filter set.
+ - `GET  /v2/zk/proofs/count` — return `{ count }` for the same filter set.
 - Proof endpoints enforce Torii’s dedicated guardrails:
   - Body limits: proof submission payloads exceeding `torii.proof_max_body_bytes` are rejected.
   - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_allow_cidrs` bypasses).
   - Pagination: `torii.proof_max_list_limit` caps `limit`; larger requests fail with `CapacityLimit` (429).
   - Timeout: list/count handlers abort after `torii.proof_request_timeout_ms` wall-clock.
   - Egress throttling: proof fetches are shaped by `torii.proof_egress_bytes_per_sec` + `torii.proof_egress_burst_bytes`; throttled responses return `Retry-After` with the proof retry hint.
-  - Caching: `GET /v1/zk/proof/...` emits `Cache-Control: public,max-age=torii.proof_cache_max_age_secs` and `ETag="<proof_hash>"`; `If-None-Match` returns `304 Not Modified` without body.
+  - Caching: `GET /v2/zk/proof/...` emits `Cache-Control: public,max-age=torii.proof_cache_max_age_secs` and `ETag="<proof_hash>"`; `If-None-Match` returns `304 Not Modified` without body.
   - Metrics: `torii_proof_requests_total`, `torii_proof_request_duration_seconds`, `torii_proof_response_bytes_total`, `torii_proof_cache_hits_total`, and `torii_proof_throttled_total` expose outcomes and cache hits per endpoint.
 
 Details:
@@ -51,14 +51,14 @@ Torii also exposes an app-facing helper endpoint to *generate* a proof attachmen
 or validation, and it can be disabled/unused without changing ledger results.
 
 Endpoints:
-- `POST /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only).
-- `POST /v1/zk/ivm/prove` — submit a prove job (returns `{ job_id }`).
-- `GET  /v1/zk/ivm/prove/{job_id}` — poll job status; returns `{ status, proved?, attachment?, error? }`.
-- `DELETE /v1/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
+- `POST /v2/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only).
+- `POST /v2/zk/ivm/prove` — submit a prove job (returns `{ job_id }`).
+- `GET  /v2/zk/ivm/prove/{job_id}` — poll job status; returns `{ status, proved?, attachment?, error? }`.
+- `DELETE /v2/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
 
 Backend support:
-- `/v1/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) (both require an `ivm-execution-v1` circuit/schema).
-- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
+- `/v2/zk/ivm/derive` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) (both require an `ivm-execution-v1` circuit/schema).
+- `/v2/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
 - For verification flows that use `stark/fri-v1` wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes, while concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
 
 Job status values:
@@ -83,7 +83,7 @@ Key resolution:
 
 Resource controls:
 - Job processing is bounded by `torii.zk_ivm_prove_max_inflight` (concurrent jobs) and
-  `torii.zk_ivm_prove_max_queue` (queued jobs). When saturated, `POST /v1/zk/ivm/prove` returns
+  `torii.zk_ivm_prove_max_queue` (queued jobs). When saturated, `POST /v2/zk/ivm/prove` returns
   `429` with `Retry-After` based on Torii’s proof retry hint.
 - Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL) and
   `torii.zk_ivm_prove_job_max_entries` (cap).
@@ -91,10 +91,10 @@ Resource controls:
 
 Privacy:
 - This API does not expose plaintext gas usage (`gas_used`). The proof binds commitments only.
-- `/v1/zk/ivm/derive` and `/v1/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+- `/v2/zk/ivm/derive` and `/v2/zk/ivm/prove` require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
 
 Execution semantics:
-- `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and
+- `/v2/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and
   derives the authoritative `IvmProved` payload before generating `ivm-execution-v1` proofs for the
   selected backend (`halo2/ipa` or `stark/fri-v1`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
@@ -121,7 +121,7 @@ Verification rules:
 - Supported backends currently include `halo2/ipa` and other `halo2/…` variants built into the node. The `stark/fri-v1` family is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`). `groth16/…` remains unsupported.
 
 Endpoints:
-- `GET /v1/zk/prover/reports` — list reports as a JSON array.
+- `GET /v2/zk/prover/reports` — list reports as a JSON array.
   - Supports optional query parameters for server-side filtering:
     - `ok_only=true|false` and `failed_only=true|false` (mutually exclusive)
     - `errors_only=true` (alias for `failed_only=true`)
@@ -136,9 +136,9 @@ Endpoints:
     - `latest=true` (return only the most recent report after filters)
     - `ids_only=true` (return only ids as an array of strings)
     - `messages_only=true` (return only `{ id, error }` objects for failed reports)
-- `GET /v1/zk/prover/reports/:id` — fetch a single report.
-- `DELETE /v1/zk/prover/reports` — bulk delete reports matching filters (same query parameters as list). Returns `{ deleted, ids }`.
-- `DELETE /v1/zk/prover/reports/:id` — delete a report by id.
+- `GET /v2/zk/prover/reports/:id` — fetch a single report.
+- `DELETE /v2/zk/prover/reports` — bulk delete reports matching filters (same query parameters as list). Returns `{ deleted, ids }`.
+- `DELETE /v2/zk/prover/reports/:id` — delete a report by id.
 
 Report schema (JSON):
 ```json
@@ -265,10 +265,10 @@ Use the CLI to interact with the app API (requires Torii URL and any API token i
 Torii exposes convenience endpoints to manage the on‑chain Verifying Key registry by submitting signed transactions or reading records. These endpoints are app‑facing shims; they build and submit ISIs on your behalf.
 
 Endpoints:
-- `POST /v1/zk/vk/register` — Submit `RegisterVerifyingKey`
-- `POST /v1/zk/vk/update` — Submit `UpdateVerifyingKey` (version must increase)
-- `POST /v1/zk/vk/deprecate` — Submit `DeprecateVerifyingKey`
-- `GET  /v1/zk/vk/{backend}/{name}` — Get a verifying key record as JSON
+- `POST /v2/zk/vk/register` — Submit `RegisterVerifyingKey`
+- `POST /v2/zk/vk/update` — Submit `UpdateVerifyingKey` (version must increase)
+- `POST /v2/zk/vk/deprecate` — Submit `DeprecateVerifyingKey`
+- `GET  /v2/zk/vk/{backend}/{name}` — Get a verifying key record as JSON
 
 `GET` responses normalise the data to:
 
@@ -378,8 +378,8 @@ iroha ledger trigger register \
 ## Governance Endpoints (ZK Ballots)
 
 For submitting ZK ballots and building transaction skeletons, refer to the Governance App API document. Torii submits the ballot when `private_key` is provided; otherwise it returns a skeleton for clients to sign and submit:
-- POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
-- POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts `BallotProof` JSON directly (feature `zk-ballot`).
+- POST `/v2/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
+- POST `/v2/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
+- POST `/v2/gov/ballots/zk-v1/ballot-proof` — accepts `BallotProof` JSON directly (feature `zk-ballot`).
 
 See docs/source/governance_api.md for details and examples.

@@ -200,7 +200,7 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 - عرف + اکاؤنٹ کے اجزاء کے لحاظ سے ٹکسال:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - کیننیکل امداد کے عرف کو حل کریں:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` کے ساتھ `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }` کے ساتھ `POST /v2/assets/aliases/resolve`
 
 نقل مکانی نوٹ:
 - `name#domain` ٹیکسٹول اثاثہ کی تعریف IDs پہلی ریلیز میں جان بوجھ کر غیر تعاون یافتہ ہیں۔

@@ -76,7 +76,7 @@ passo a passo detalhado.
    de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifique se os anúncios do provedor se propagam através de uma API de descoberta:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Exercer endpoints de manifesto/plano com cabeçalhos de governança:
    ```bash

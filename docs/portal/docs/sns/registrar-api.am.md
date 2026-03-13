@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 | መስፈርት | ዝርዝር |
 |------------|----|
-| ፕሮቶኮሎች | በ`/v1/sns/*` እና gRPC አገልግሎት `sns.v1.Registrar` ስር አርፈው። ሁለቱም Norito-JSON (`application/json`) እና Norito-RPC ሁለትዮሽ (`application/x-norito`) ይቀበላሉ። |
+| ፕሮቶኮሎች | በ`/v2/sns/*` እና gRPC አገልግሎት `sns.v1.Registrar` ስር አርፈው። ሁለቱም Norito-JSON (`application/json`) እና Norito-RPC ሁለትዮሽ (`application/x-norito`) ይቀበላሉ። |
 | Auth | `Authorization: Bearer` ማስመሰያዎች ወይም mTLS ሰርተፊኬቶች በቅጥያ መጋቢ የተሰጠ። ለአስተዳደር-ስሱ የመጨረሻ ነጥቦች (ማሰር/የማይቀዘቅዙ፣ የተያዙ ስራዎች) `scope=sns.admin` ያስፈልጋቸዋል። |
 | የዋጋ ገደቦች | ሬጅስትራሮች የI18NI0000038X ባልዲዎችን ከJSON ደዋዮች እና ከቅጥያ ፍንዳታ ኮፍያዎች ጋር ይጋራሉ፡ `sns.register`፣ `sns.renew`፣ `sns.controller`፣ `sns.freeze`። |
 | ቴሌሜትሪ | Torii `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` ለሬጅስትራር ተቆጣጣሪዎች ያጋልጣል (በ`scheme="norito_rpc"` ላይ ማጣሪያ); ኤፒአይ `sns_registrar_status_total{result, suffix_id}` ይጨምራል። |
@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | የመጨረሻ ነጥብ | ዘዴ | ጭነት | መግለጫ |
 |-------|--------|----
-| `/v1/sns/registrations` | መለጠፍ | `RegisterNameRequestV1` | ስም ይመዝገቡ ወይም እንደገና ይክፈቱ። የዋጋ ደረጃን ይፈታል፣ የክፍያ/የአስተዳደር ማረጋገጫዎችን ያጸድቃል፣ የመመዝገቢያ ክስተቶችን ያወጣል። |
-| `/v1/sns/registrations/{selector}/renew` | መለጠፍ | `RenewNameRequestV1` | ጊዜን ያራዝሙ። ከፖሊሲ የጸጋ/መቤዠት መስኮቶችን ያስገድዳል። |
-| `/v1/sns/registrations/{selector}/transfer` | መለጠፍ | `TransferNameRequestV1` | የአስተዳደር ማፅደቆች ከተያያዙ በኋላ ባለቤትነትን ያስተላልፉ። |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | የመቆጣጠሪያውን ስብስብ ይተኩ; የተፈረመ የመለያ አድራሻዎችን ያረጋግጣል። |
-| `/v1/sns/registrations/{selector}/freeze` | መለጠፍ | `FreezeNameRequestV1` | ጠባቂ/ካውንስል ቀረ። የአሳዳጊ ትኬት እና የአስተዳደር ሰነድ ማጣቀሻ ያስፈልገዋል። |
-| `/v1/sns/registrations/{selector}/freeze` | ሰርዝ | `GovernanceHookV1` | ከማስተካከያው በኋላ አይቀዘቅዙ; የምክር ቤቱ መሻር መመዝገቡን ያረጋግጣል። |
-| `/v1/sns/reserved/{selector}` | መለጠፍ | `ReservedAssignmentRequestV1` | የተያዙ ስሞች መጋቢ/ምክር ቤት ምደባ። |
-| `/v1/sns/policies/{suffix_id}` | አግኝ | - | የአሁኑን `SuffixPolicyV1` (መሸጎጫ) ያውጡ። |
-| `/v1/sns/registrations/{selector}` | አግኝ | - | የአሁኑን I18NI0000067X + ውጤታማ ሁኔታ ይመልሳል (ገባሪ፣ ጸጋ፣ ወዘተ)። |
+| `/v2/sns/registrations` | መለጠፍ | `RegisterNameRequestV1` | ስም ይመዝገቡ ወይም እንደገና ይክፈቱ። የዋጋ ደረጃን ይፈታል፣ የክፍያ/የአስተዳደር ማረጋገጫዎችን ያጸድቃል፣ የመመዝገቢያ ክስተቶችን ያወጣል። |
+| `/v2/sns/registrations/{selector}/renew` | መለጠፍ | `RenewNameRequestV1` | ጊዜን ያራዝሙ። ከፖሊሲ የጸጋ/መቤዠት መስኮቶችን ያስገድዳል። |
+| `/v2/sns/registrations/{selector}/transfer` | መለጠፍ | `TransferNameRequestV1` | የአስተዳደር ማፅደቆች ከተያያዙ በኋላ ባለቤትነትን ያስተላልፉ። |
+| `/v2/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | የመቆጣጠሪያውን ስብስብ ይተኩ; የተፈረመ የመለያ አድራሻዎችን ያረጋግጣል። |
+| `/v2/sns/registrations/{selector}/freeze` | መለጠፍ | `FreezeNameRequestV1` | ጠባቂ/ካውንስል ቀረ። የአሳዳጊ ትኬት እና የአስተዳደር ሰነድ ማጣቀሻ ያስፈልገዋል። |
+| `/v2/sns/registrations/{selector}/freeze` | ሰርዝ | `GovernanceHookV1` | ከማስተካከያው በኋላ አይቀዘቅዙ; የምክር ቤቱ መሻር መመዝገቡን ያረጋግጣል። |
+| `/v2/sns/reserved/{selector}` | መለጠፍ | `ReservedAssignmentRequestV1` | የተያዙ ስሞች መጋቢ/ምክር ቤት ምደባ። |
+| `/v2/sns/policies/{suffix_id}` | አግኝ | - | የአሁኑን `SuffixPolicyV1` (መሸጎጫ) ያውጡ። |
+| `/v2/sns/registrations/{selector}` | አግኝ | - | የአሁኑን I18NI0000067X + ውጤታማ ሁኔታ ይመልሳል (ገባሪ፣ ጸጋ፣ ወዘተ)። |
 
 ** የመራጭ ኢንኮዲንግ፡** የ`{selector}` ዱካ ክፍል I105 (ተመራጭ)፣ የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)፣ ወይም ቀኖናዊ ሄክስ በ ADDR-5 ይቀበላል። Torii በ I18NI0000070X በኩል መደበኛ ያደርገዋል።
 
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` ትክክለኛ የ`GovernanceHookV1` መዝገብ (የፕሮፖዛል መታወቂያ፣የድምፅ ሃሽ፣የመጋቢ/አሳዳጊ ፊርማ) መያዝ አለበት። እያንዳንዱ ትዕዛዝ ተጓዳኝ `/v1/sns/registrations/{selector}/…` የመጨረሻ ነጥብን ያንፀባርቃል ስለዚህ የቅድመ-ይሁንታ ኦፕሬተሮች ኤስዲኬዎች የሚጠሩትን ትክክለኛ የTorii ወለል መልመድ ይችላሉ።
+`--governance-json` ትክክለኛ የ`GovernanceHookV1` መዝገብ (የፕሮፖዛል መታወቂያ፣የድምፅ ሃሽ፣የመጋቢ/አሳዳጊ ፊርማ) መያዝ አለበት። እያንዳንዱ ትዕዛዝ ተጓዳኝ `/v2/sns/registrations/{selector}/…` የመጨረሻ ነጥብን ያንፀባርቃል ስለዚህ የቅድመ-ይሁንታ ኦፕሬተሮች ኤስዲኬዎች የሚጠሩትን ትክክለኛ የTorii ወለል መልመድ ይችላሉ።
 
 ## 4. gRPC አገልግሎት
 
@@ -216,7 +216,7 @@ service Registrar {
 
 Torii ማረጋገጫዎችን በማረጋገጥ ያረጋግጣል፡-
 
-1. የፕሮፖዛል መታወቂያ በአስተዳደር ደብተር (`/v1/governance/proposals/{id}`) ውስጥ አለ እና ደረጃው `Approved` ነው።
+1. የፕሮፖዛል መታወቂያ በአስተዳደር ደብተር (`/v2/governance/proposals/{id}`) ውስጥ አለ እና ደረጃው `Approved` ነው።
 2. Hashes ከተመዘገቡት የድምጽ ቅርሶች ጋር ይዛመዳል።
 3. መጋቢ/አሳዳጊ ፊርማዎች የሚጠበቁትን የህዝብ ቁልፎች ከI18NI0000096X ይጠቅሳሉ።
 
@@ -271,7 +271,7 @@ Torii ማረጋገጫዎችን በማረጋገጥ ያረጋግጣል፡-
 ## 8. የትግበራ ማስታወሻዎች
 
 - Torii በ `NameRecordV1.auction` ጨረታ በመጠባበቅ ላይ ያከማቻል እና ቀጥተኛ የምዝገባ ሙከራዎችን አይቀበልም `PendingAuction`።
-- የክፍያ ማረጋገጫዎች Norito የመመዝገቢያ ደረሰኞችን እንደገና ጥቅም ላይ ማዋል; የግምጃ ቤት አገልግሎቶች አጋዥ APIs (`/v1/finance/sns/payments`) ይሰጣሉ።
+- የክፍያ ማረጋገጫዎች Norito የመመዝገቢያ ደረሰኞችን እንደገና ጥቅም ላይ ማዋል; የግምጃ ቤት አገልግሎቶች አጋዥ APIs (`/v2/finance/sns/payments`) ይሰጣሉ።
 - የኪስ ቦርሳዎች ግልጽ የስህተት ምክንያቶችን (`ERR_SNS_RESERVED`፣ ወዘተ) እንዲያቀርቡ ኤስዲኬዎች እነዚህን የመጨረሻ ነጥቦች በጠንካራ የተተየቡ ረዳቶች መጠቅለል አለባቸው።
 
 ## 9. ቀጣይ ደረጃዎች

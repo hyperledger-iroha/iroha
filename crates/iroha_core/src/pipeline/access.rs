@@ -496,8 +496,15 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset_def:") {
-            let id: AssetDefinitionId = rest.parse().ok()?;
-            canonical.push(CanonicalStateKey::AssetDefinition(id));
+            if let Ok(id) = rest.parse::<AssetDefinitionId>() {
+                canonical.push(CanonicalStateKey::AssetDefinition(id));
+            } else if !rest.is_empty() {
+                // Compatibility: accept legacy alias-shaped asset definition hints
+                // (e.g. `asset_def:name#domain`) and preserve them verbatim.
+                state_keys.insert(raw.to_owned());
+            } else {
+                return None;
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {

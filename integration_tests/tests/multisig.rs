@@ -20,7 +20,6 @@ use iroha::{
     },
     executor_data_model::isi::multisig::*,
 };
-use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use iroha_test_network::*;
 use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
@@ -166,9 +165,9 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
 }
 
 #[test]
-fn multisig_register_rejected_does_not_materialize_missing_signatory_account() -> Result<()> {
+fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -> Result<()> {
     let context =
-        stringify!(multisig_register_rejected_does_not_materialize_missing_signatory_account);
+        stringify!(multisig_register_by_non_signatory_materializes_missing_signatory_account);
     let builder = NetworkBuilder::new();
     let Some((network, _rt)) = start_network(builder, context) else {
         return Ok(());
@@ -212,18 +211,21 @@ fn multisig_register_rejected_does_not_materialize_missing_signatory_account() -
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
-    let _err = alt_client(non_signatory, &test_client)
+    alt_client(non_signatory, &test_client)
         .submit_blocking::<InstructionBox>(register.into())
-        .expect_err("non-signatory without grant must not register multisig");
+        .expect("non-signatory should register multisig without a separate grant");
 
-    let missing_found = test_client
+    let created_via_key: Name = "iroha:created_via".parse().unwrap();
+    let created = test_client
         .query(FindAccounts::new())
         .execute_all()?
         .into_iter()
-        .any(|account| account.id() == &missing_signer.0);
-    assert!(
-        !missing_found,
-        "rejected register must not materialize missing signatories"
+        .find(|account| account.id() == &missing_signer.0)
+        .expect("missing signatory account should be created during multisig register");
+    assert_eq!(
+        created.metadata().get(&created_via_key),
+        Some(&Json::new("multisig")),
+        "materialized signatory should be marked as multisig-created"
     );
 
     Ok(())
@@ -291,10 +293,10 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
 }
 
 #[test]
-fn multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade()
+fn multisig_register_by_non_signatory_materializes_missing_signatory_account_after_executor_upgrade()
 -> Result<()> {
     let context = stringify!(
-        multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade
+        multisig_register_by_non_signatory_materializes_missing_signatory_account_after_executor_upgrade
     );
     let builder = NetworkBuilder::new().with_ivm_fuel(IvmFuelConfig::Auto);
     let Some((network, _rt)) = start_network(builder, context) else {
@@ -341,18 +343,21 @@ fn multisig_register_rejected_does_not_materialize_missing_signatory_account_aft
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
-    let _err = alt_client(non_signatory, &test_client)
+    alt_client(non_signatory, &test_client)
         .submit_blocking::<InstructionBox>(register.into())
-        .expect_err("non-signatory without grant must not register multisig");
+        .expect("non-signatory should register multisig without a separate grant");
 
-    let missing_found = test_client
+    let created_via_key: Name = "iroha:created_via".parse().unwrap();
+    let created = test_client
         .query(FindAccounts::new())
         .execute_all()?
         .into_iter()
-        .any(|account| account.id() == &missing_signer.0);
-    assert!(
-        !missing_found,
-        "rejected register must not materialize missing signatories"
+        .find(|account| account.id() == &missing_signer.0)
+        .expect("missing signatory account should be created during multisig register");
+    assert_eq!(
+        created.metadata().get(&created_via_key),
+        Some(&Json::new("multisig")),
+        "materialized signatory should be marked as multisig-created"
     );
 
     Ok(())
@@ -549,7 +554,7 @@ impl TestSuite {
 /// # Scenario
 ///
 /// 1. Signatories are populated and ready to join a multisig account
-/// 2. Someone in the domain registers a multisig account
+/// 2. An arbitrary account registers a multisig account for the domain
 /// 3. One of the signatories of the multisig account proposes a multisig transaction
 /// 4. Other signatories approve the multisig transaction
 /// 5. The multisig transaction executes when all of the following are met:
@@ -625,41 +630,12 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         spec.clone(),
     );
 
-    // Any account in another domain cannot register a multisig account without special permission
-    let _err = alt_client(
+    alt_client(
         (CARPENTER_ID.clone(), CARPENTER_KEYPAIR.clone()),
         &test_client,
     )
-    .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
-    .expect_err("multisig account should not be registered by account of another domain");
-
-    // Non-signatory account in the same domain cannot register a multisig account without special permission
-    let _err = alt_client(non_signatory.clone(), &test_client)
-        .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
-        .expect_err(
-            "multisig account should not be registered by non-signatory account of the same domain",
-        );
-
-    // All but the first signatory approve the proposal
-    let signatory = signatories.pop_first().unwrap();
-
-    // Signatory account cannot register a multisig account without special permission
-    let _err = alt_client(signatory, &test_client)
-        .submit_blocking::<InstructionBox>(register_multisig_account.clone().into())
-        .expect_err("multisig account should not be registered by signatory account");
-
-    // Account with permission can register a multisig account
-    test_client
-        .submit_blocking(Grant::account_permission(
-            CanRegisterAccount {
-                domain: domain.clone(),
-            },
-            non_signatory.0.clone(),
-        ))
-        .wrap_err("grant domain account-registration permission to multisig registrar")?;
-    alt_client(non_signatory.clone(), &test_client)
-        .submit_blocking::<InstructionBox>(register_multisig_account.into())
-        .expect("multisig account should be registered by account with permission");
+    .submit_blocking::<InstructionBox>(register_multisig_account.into())
+    .expect("multisig account should be registered by an arbitrary account");
     let resident_ids: Vec<AccountId> = core::iter::once(non_signatory.0.clone())
         .chain(signatories.keys().cloned())
         .collect();
@@ -678,6 +654,9 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
             account.id()
         );
     }
+
+    // All but the first signatory approve the proposal.
+    let _non_approving_signatory = signatories.pop_first().unwrap();
     let multisig_account_id = canonical_multisig_account_id(&spec);
 
     let key: Name = "success_marker".parse().unwrap();

@@ -169,7 +169,7 @@ I18NT000000006X-RPC གིས་ JSON འགྲུལ་ལམ་ཚུ་བཟ
 1. `fixtures/norito_rpc/transfer_asset.norito` བཟུམ། འ་ནཱི་འདི་ཚུ
    ཡིག་སྣོད་ཚུ་ Norito ཡིག་ཤུབས་ཚུ་ཨིན། do **not** base64-encode .
 ༢ སཝ་གར་ཡང་ན་ རེ་པི་ཌོག་ནང་ ཨེན་ཨར་པི་སི་མཐའ་ཐིག་འདི་ འཚོལ་ཞིབ་འབད།(དཔེར་ན་ དཔེར་ན།
-   `POST /v1/pipeline/submit`) དེ་ལས་ **Content-Type** སེལ་འཐུ་འབད་མི་འདི་ ལུ་སོར་བསྒྱུར་འབད།
+   `POST /v2/pipeline/submit`) དེ་ལས་ **Content-Type** སེལ་འཐུ་འབད་མི་འདི་ ལུ་སོར་བསྒྱུར་འབད།
    `application/x-norito`.
 3. **གཉིས་ལྡན་** ལུ་ ཞུ་བ་གཟུགས་ཀྱི་ཞུན་དག་པ་འདི་ སོར་བསྒྱུར་འབད།
    RapiDoc གི་ "Binary/File" སེལ་འཐུ་འབད་མི་) དང་ `.norito` ཡིག་སྣོད་སྐྱེལ་བཙུགས་འབད། ཝིཌི་གེཊ།
@@ -195,7 +195,7 @@ I18NF0000029X
 `transaction_fixtures.manifest.json` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ཐོ་བཀོད་གང་རུང་ཅིག་གི་དོན་ལུ་ སྒྲིག་བཀོད་འདི་བརྗེ་སོར་འབད།
 ཡང་ན་ ཁྱོད་རའི་ པེ་ལོཌ་ `cargo xtask norito-rpc-fixtures` དང་མཉམ་དུ་ བཀོད་སྒྲིག་འབད། Torii སྐབས།
 འདི་ ཀ་ནཱར་ཐབས་ལམ་ནང་ ཁྱོད་ཀྱིས་ འབད་རྩོལ་ཅན་གྱི་ པོརོག་སི་ལུ་ `curl` འདི་ བསྟན་ཚུགས།
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) དེ་འདྲའི་ལག་ལེན།
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) དེ་འདྲའི་ལག་ལེན།
 དྲྭ་ཚིགས་ཀྱི་ཝིཌི་གེཊི་གིས་ལག་ལེན་འཐབ་མི་ གཞི་རྟེན་མཐུན་རྐྱེན་ཚུ།
 
 ## བལྟ་རྟོག་དང་བཀོལ་སྤྱོད།ཞུ་བ་རེ་རེ་བཞིན་དུ་ ཐབས་ལམ་དང་ འགྲུལ་ལམ་ འབྱུང་ཁུངས་ ཡར་འགྲོས་གནས་རིམ་ དེ་ལས་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
@@ -211,7 +211,7 @@ I18NF0000029X
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
 npm run probe:tryit-proxy
 ```
 

@@ -18,14 +18,14 @@ translator: machine-google-reviewed
 လမ်းပြမြေပုံရည်ညွှန်း- TORII-APP-1 — `app_api` တူညီမှုစာရင်းစစ်
 
 ဤစာမျက်နှာသည် အတွင်းပိုင်း `TORII-APP-1` စာရင်းစစ် (`docs/source/torii/app_api_parity_audit.md`) ကို ထင်ဟပ်စေသည်
-Mono-repo အပြင်ဘက်ရှိ စာဖတ်သူများသည် မည်သည့် `/v1/*` မျက်နှာပြင်များကို ကြိုးတပ်၍ စမ်းသပ်ထားသည်၊
+Mono-repo အပြင်ဘက်ရှိ စာဖတ်သူများသည် မည်သည့် `/v2/*` မျက်နှာပြင်များကို ကြိုးတပ်၍ စမ်းသပ်ထားသည်၊
 မှတ်တမ်းတင်ထားသည်။ စာရင်းစစ်သည် `Torii::add_app_api_routes` မှတစ်ဆင့် ပြန်လည်တင်ပို့သည့် လမ်းကြောင်းများကို ခြေရာခံခြင်း၊
 `add_contracts_and_vk_routes` နှင့် `add_connect_routes`။
 
 ## နယ်ပယ်နှင့် နည်းလမ်း
 
 စာရင်းစစ်သည် `crates/iroha_torii/src/lib.rs:256-522` တွင် အများသူငှာ ပြန်လည်တင်ပို့မှုများကို ကြည့်ရှုစစ်ဆေးသည်၊
-feature-gated လမ်းကြောင်းတည်ဆောက်သူများ။ လမ်းပြမြေပုံရှိ `/v1/*` မျက်နှာပြင်တိုင်းအတွက် ကျွန်ုပ်တို့ အတည်ပြုထားသည်-
+feature-gated လမ်းကြောင်းတည်ဆောက်သူများ။ လမ်းပြမြေပုံရှိ `/v2/*` မျက်နှာပြင်တိုင်းအတွက် ကျွန်ုပ်တို့ အတည်ပြုထားသည်-
 
 - `crates/iroha_torii/src/routing.rs` ရှိ Handler အကောင်အထည်ဖော်မှုနှင့် DTO အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ။
 - `app_api` သို့မဟုတ် `connect` အင်္ဂါရပ်အုပ်စုများအောက်တွင် Router မှတ်ပုံတင်ခြင်း။
@@ -44,25 +44,25 @@ feature-gated လမ်းကြောင်းတည်ဆောက်သူမ
 - ဥပမာ အတိုအထွာများ
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## အဆုံးမှတ်စာရင်း
 
-### အကောင့်ခွင့်ပြုချက်များ (`/v1/accounts/{id}/permissions`) — အကျုံးဝင်သည်။
+### အကောင့်ခွင့်ပြုချက်များ (`/v2/accounts/{id}/permissions`) — အကျုံးဝင်သည်။
 - ကိုင်တွယ်သူ- `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)။
 - DTOs- `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)။
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)။
@@ -70,7 +70,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ပိုင်ရှင်- Torii ပလပ်ဖောင်း။
 - မှတ်ချက်များ- တုံ့ပြန်မှုသည် SDK pagination အကူအညီပေးသူများနှင့် ကိုက်ညီသော `items`/`total` ပါသော Norito JSON ကိုယ်ထည်ဖြစ်သည်။
 
-### Alias OPRF အကဲဖြတ်ခြင်း (`POST /v1/aliases/voprf/evaluate`) — ဖုံးအုပ်ထားသည်
+### Alias OPRF အကဲဖြတ်ခြင်း (`POST /v2/aliases/voprf/evaluate`) — ဖုံးအုပ်ထားသည်
 - ကိုင်တွယ်သူ- `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)။
 - DTO များ- `AliasVoprfEvaluateRequestDto`၊ `AliasVoprfEvaluateResponseDto`၊ `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`)။
@@ -80,7 +80,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ပိုင်ရှင်- Torii ပလပ်ဖောင်း။
 - မှတ်စုများ- တုံ့ပြန်မှုမျက်နှာပြင်သည် အဆုံးအဖြတ်ပေးသော hex နှင့် backend identifiers များကို တွန်းအားပေးသည်။ SDK များသည် DTO ကိုစားသုံးသည်။
 
-### သက်သေဖြစ်ရပ်များ SSE (`GET /v1/events/sse`) — ဖုံးအုပ်ထားသည်။
+### သက်သေဖြစ်ရပ်များ SSE (`GET /v2/events/sse`) — ဖုံးအုပ်ထားသည်။
 - ကိုင်တွယ်သူ- `handle_v1_events_sse` (`crates/iroha_torii/src/routing.rs:14008-14133`)။
 - DTOs- `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) နှင့် အထောက်အထား စစ်ထုတ်ခြင်း ဝိုင်ယာကြိုးများ။
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)။
@@ -90,7 +90,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ပိုင်ရှင်- Torii Platform (runtime), Integration Tests WG (Fixtures)။
 - မှတ်စုများ- အထောက်အထား စစ်ထုတ်ခြင်း လမ်းကြောင်းများကို အဆုံးမှ အဆုံးအထိ အတည်ပြုထားသည်။ စာရွက်စာတမ်းသည် `docs/source/zk_app_api.md` အောက်တွင်ရှိသည်။
 
-### စာချုပ်သက်တမ်း (`/v1/contracts/*`) — အကျုံးဝင်သည်။
+### စာချုပ်သက်တမ်း (`/v2/contracts/*`) — အကျုံးဝင်သည်။
 - လက်ကိုင်ကိရိယာများ- `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)၊
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)၊
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)၊
@@ -105,7 +105,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ပိုင်ရှင်- Torii ပလပ်ဖောင်းဖြင့် Smart Contract WG။
 - မှတ်စုများ- Endpoints များသည် လက်မှတ်ထိုးထားသော ငွေပေးငွေယူများကို တန်းစီစောင့်ဆိုင်းပြီး မျှဝေထားသော တယ်လီမီတာမက်ထရစ်များ (`handle_transaction_with_metrics`) ကို ပြန်သုံးပါ။
 
-### သော့ဘဝသံသရာ (`/v1/zk/vk/*`) ကို အတည်ပြုခြင်း — အကျုံးဝင်သည်။
+### သော့ဘဝသံသရာ (`/v2/zk/vk/*`) ကို အတည်ပြုခြင်း — အကျုံးဝင်သည်။
 - လက်ကိုင်များ- `handle_post_vk_register`၊ `handle_post_vk_update`၊ `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) နှင့် `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)။
 - DTO များ- `ZkVkRegisterDto`၊ `ZkVkUpdateDto`၊ `ZkVkDeprecateDto`၊ `VkListQuery`၊ `ProofFindByIdQueryDto`
@@ -117,7 +117,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ပိုင်ရှင်- Torii ပလပ်ဖောင်းပံ့ပိုးမှုဖြင့် ZK အလုပ်အဖွဲ့။
 - မှတ်စုများ- DTOs များသည် SDKs မှရည်ညွှန်းထားသော Norito schemas နှင့် ချိန်ညှိသည်။ နှုန်းထားကန့်သတ်ချက်ကို `limits.rs` မှတစ်ဆင့် ပြဋ္ဌာန်းထားသည်။
 
-### Nexus ချိတ်ဆက်မှု (`/v1/connect/*`) — ဖုံးအုပ်ထားသည် (အင်္ဂါရပ် `connect`)
+### Nexus ချိတ်ဆက်မှု (`/v2/connect/*`) — ဖုံးအုပ်ထားသည် (အင်္ဂါရပ် `connect`)
 - လက်ကိုင်ကိရိယာများ- `handle_connect_session`၊ `handler_connect_session_delete`၊ `handle_connect_ws`၊
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)။
 - DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)၊

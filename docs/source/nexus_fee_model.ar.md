@@ -26,14 +26,14 @@ translation_last_reviewed: 2026-01-08
   `dislocated`). تغذي هذه الاعلام موجّه التسوية كي يطابق تسعير XOR الناتج TWAP القياسي و
   طبقة haircut الخاصة بالـ lane.
 - يجب ان تتضمن معاملات IVM بيانات وصفية `gas_limit` (`u64`, > 0) للحد من التعرض للرسوم. تتطلب نقطة النهاية
-  `/v1/contracts/call` وجود `gas_limit` صراحة، وتُرفض القيم غير الصحيحة.
+  `/v2/contracts/call` وجود `gas_limit` صراحة، وتُرفض القيم غير الصحيحة.
 - عند ضبط البيانات الوصفية `fee_sponsor`، يجب على الراعي منح
   `CanUseFeeSponsor { sponsor }` للجهة المستدعية. تُرفض محاولات الرعاية غير المصرح بها ويجري تسجيلها.
 - كل معاملة تدفع gas تسجل `LaneSettlementReceipt`. يحفظ كل ايصال معرّف المصدر الذي يقدمه المستدعي،
   مقدار الميكرو المحلي، قيمة XOR المستحقة فورا، وقيمة XOR المتوقعة بعد haircut،
   هامش الامان المحقق (`xor_variance_micro`)، والطابع الزمني للكتلة بالميلي ثانية.
 - تنفيذ الكتلة يجمع الايصالات لكل lane/dataspace وينشرها عبر `lane_settlement_commitments` في
-  `/v1/sumeragi/status`. تظهر المجاميع `total_local_micro` و`total_xor_due_micro` و
+  `/v2/sumeragi/status`. تظهر المجاميع `total_local_micro` و`total_xor_due_micro` و
   `total_xor_after_haircut_micro` مجمعة على مستوى الكتلة لتصديرات التسوية الليلية.
 - عداد جديد `total_xor_variance_micro` يتتبع مقدار هامش الامان المستهلك (الفرق بين XOR المستحق
   والتوقع بعد haircut)، و`swap_metadata` يوثق معلمات التحويل الحتمية (TWAP، epsilon،

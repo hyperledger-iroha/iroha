@@ -71,7 +71,7 @@ Provedores com の範囲には、メタデータが含まれています:
 ゲートウェイは、メタデータの HTTP 決定を要求します
 広告。
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 |レクシト |デタルヘス |
 |----------|----------|
@@ -79,7 +79,7 @@ Provedores com の範囲には、メタデータが含まれています:
 | **レスポスタ** | `206` com `Content-Type: application/vnd.ipld.car`、`Content-Range` は、ジャネラ サービス、メタデータ `X-Sora-Chunk-Range` チャンカー/トークン エコードのヘッダーを記述します。 |
 | **ファルハス** | `416` はサリンハドスの範囲、`401` はトークンの有効/無効、`429` はストリーム/バイトの超過予算です。 |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 チャンクを取得して、ユニコ コムのメスモス ヘッダーを取得し、チャンクをダイジェストで決定します。
 再試行して、必要な CAR のスライスをダウンロードするまで使用します。
@@ -129,11 +129,11 @@ Provedores com の範囲には、メタデータが含まれています:
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` は OS に関与します
   エンドポイント REST do pin-registry e imprimem Norito JSON ブルート コム ブロック
   聴覚的証拠の証明。
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` アセチタムマニフェスト
+- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` アセチタムマニフェスト
   Norito ou JSON com エイリアス証明と後継オプション。マルフォルマドの証拠
   geram `400`、証明が古い retornam `503` com `Warning: 110`、e 証明 expirados
   レトルナム`412`。
-- エンドポイント REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
+- エンドポイント REST (`/v2/sorafs/pin`、`/v2/sorafs/aliases`、`/v2/sorafs/replication`)
   顧客の検証に必要な証明書を含める
   究極のヘッダーデブロコアンテスデアジール。
 

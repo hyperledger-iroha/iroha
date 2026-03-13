@@ -64,7 +64,7 @@ translation_last_reviewed: 2026-02-07
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`۔
 
 ## ٹولز اور فکسچر- سپلائر AD پے لوڈز میں میٹا ڈیٹا `range_capability` شامل ہونا ضروری ہے ،
-  `stream_budget` اور `transport_hints`۔ `/v1/sorafs/providers` جوابات اور اس کے ذریعے توثیق کریں
+  `stream_budget` اور `transport_hints`۔ `/v2/sorafs/providers` جوابات اور اس کے ذریعے توثیق کریں
   انٹیک فکسچر ؛ JSON کے خلاصے میں پارس کی صلاحیت ، اسٹریم بجٹ شامل ہونا چاہئے
   اور ٹیلی میٹرک ادخال کے لئے اشارے کی میزیں۔
 - Torii اسٹریم بجٹ اور ٹرانسپورٹ کے اشارے کو بے نقاب کرتا ہے
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 
 ## آرکسٹریٹر اور Torii کے ساتھ انضمام
 
-- Torii `/v1/sorafs/providers` رینج رینج کی گنجائش میٹا ڈیٹا کے ساتھ تجزیہ کیا گیا
+- Torii `/v2/sorafs/providers` رینج رینج کی گنجائش میٹا ڈیٹا کے ساتھ تجزیہ کیا گیا
   `stream_budget` اور `transport_hints`۔ ڈاون گریڈ انتباہات جب متحرک ہوتے ہیں
   فراہم کرنے والے نئے میٹا ڈیٹا ، اور گیٹ وے رینج کے اختتامی مقامات کو چھوڑ دیتے ہیں
   براہ راست صارفین کے لئے وہی رکاوٹیں لگائیں۔

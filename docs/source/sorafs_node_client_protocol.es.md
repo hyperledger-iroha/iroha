@@ -200,8 +200,8 @@ performs the following steps:
    exceeded.
 4. **Chunk scheduling.** The orchestrator selects a provider for each chunk
    using weighted round-robin scheduling. Selection honours alignment and burst
-   limits before dispatching `GET /v1/sorafs/storage/car/{manifest_id}` (for
-   multi-chunk ranges) or `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+   limits before dispatching `GET /v2/sorafs/storage/car/{manifest_id}` (for
+   multi-chunk ranges) or `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
    (for individual chunks). Responses are verified against the manifest digest
    and chunk length before being assembled.
 5. **Failure handling.** When a provider fails a request, the orchestrator
@@ -224,7 +224,7 @@ Clients should capture the JSON fetch summary returned by the CLI or SDK,
 persisting `provider_reports`, `chunk_receipts`, and `ineligible_providers`.
 These artefacts form the audit trail for staged rollouts and blacklisting.
 
-#### `GET /v1/sorafs/storage/car/{manifest_id}`
+#### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 Fetches a CAR slice aligned to full chunk boundaries. Required headers:
 
@@ -281,7 +281,7 @@ Telemetry emitted alongside each session records:
 
 Set `telemetry_region` on the orchestrator configuration (or `--telemetry-region` when exposed via wrappers) to keep dashboards partitioned by fleet. Persisted scoreboard artefacts should accompany change requests and incident reports so operators can replay the session deterministically.
 
-#### `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}`
+#### `GET /v2/sorafs/storage/chunk/{manifest_id}/{chunk_digest}`
 
 Returns a single chunk (BLAKE3-256 digest) for the given manifest. Required
 headers:
@@ -313,7 +313,7 @@ session threshold is reached.
 
 ### Alias Resolution & CLI helpers
 
-The Torii REST surface exposes alias discovery under `/v1/sorafs/alias`. The
+The Torii REST surface exposes alias discovery under `/v2/sorafs/alias`. The
 Iroha CLI bundles thin wrappers so operators can validate bindings without
 manually crafting HTTP requests:
 
@@ -362,12 +362,12 @@ ordering with `manifest_id` tie-breakers.
 Torii now exposes read-only views of the on-chain pin registry so operators
 and SDKs can inspect manifests without issuing ad-hoc queries:
 
-- `GET /v1/sorafs/pin` returns the paginated manifest catalogue alongside an
+- `GET /v2/sorafs/pin` returns the paginated manifest catalogue alongside an
   `attestation` block hash. Optional query parameters:
   - `status=pending|approved|retired`
   - `limit` (defaults to 50, capped at 500)
   - `offset`
-- `GET /v1/sorafs/pin/{manifest_digest_hex}` fetches a single manifest together
+- `GET /v2/sorafs/pin/{manifest_digest_hex}` fetches a single manifest together
   with its bound alias (if any) and associated replication orders. The server
   rejects malformed digests (non-hex / wrong length) with HTTP 400 and missing
   manifests with HTTP 404. Alias proofs are evaluated on the fly and surfaced
@@ -385,16 +385,16 @@ and SDKs can inspect manifests without issuing ad-hoc queries:
   via `cache_state` (`fresh`, `expired`, `hard-expired`) and, when the proof is
   still inside the refresh window, a `proof_expires_in_seconds` field so SDKs
   can pro-actively renew the bundle.
-- `POST /v1/sorafs/pin/register` accepts the manifest metadata, policy, optional
+- `POST /v2/sorafs/pin/register` accepts the manifest metadata, policy, optional
   alias proof, and an optional `successor_of_hex` (BLAKE3-256) pointer. Both
   JSON and Norito payloads are supported (set `Content-Type:
   application/x-norito` for the latter). The alias proof payload must be valid
   base64 (rejects with HTTP 400 otherwise). Torii rejects unknown, unapproved,
   or retired predecessors with HTTP 400 so cycles never enter the registry.
-- `GET /v1/sorafs/aliases` lists active alias bindings with filters for
+- `GET /v2/sorafs/aliases` lists active alias bindings with filters for
   `namespace` and `manifest_digest`, sharing the same `limit`/`offset` controls
   as the manifest listing.
-- `GET /v1/sorafs/replication` surfaces governance-issued replication orders.
+- `GET /v2/sorafs/replication` surfaces governance-issued replication orders.
   Clients can scope the response via `status=pending|completed|expired` and
   `manifest_digest` query parameters.
 
@@ -435,7 +435,7 @@ feed into scripting or capture in attestation logs.
 
 ### Storage Scheduler State
 
-Operators and monitoring agents can query `/v1/sorafs/storage/state` to
+Operators and monitoring agents can query `/v2/sorafs/storage/state` to
 retrieve the latest scheduler snapshot exposed by Torii. The response mirrors
 `StorageStateResponseDto` and includes queue depth, fetch throughput, PoR worker
 utilisation, and the raw bytes-per-second counters wired from
@@ -464,15 +464,15 @@ the SLO work in SF-7:
 The end-to-end storage tests follow a deterministic sequence to confirm the API
 and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1150】
 
-1. `POST /v1/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
+1. `POST /v2/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
    and payload (`payload_b64`). A successful pin returns `manifest_id_hex`,
    `payload_digest_hex`, and the canonical content length.
-2. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
+2. `POST /v2/sorafs/storage/fetch` using the returned manifest id, an offset,
    and a bounded length. The response echoes the request fields and streams the
    chunk data as `data_b64`.
-3. `POST /v1/sorafs/storage/por-sample` to request deterministic PoR leaves.
+3. `POST /v2/sorafs/storage/por-sample` to request deterministic PoR leaves.
    The sampler returns the flattened indices and proofs encoded as JSON maps.
-4. `GET /v1/sorafs/storage/state` to verify the scheduler snapshot. A fully
+4. `GET /v2/sorafs/storage/state` to verify the scheduler snapshot. A fully
    successful cycle drives `pin_queue_depth`, `fetch_inflight`, and
    `por_inflight` back to zero, bumps `fetch_bytes_per_sec` above zero (smoothing
    accounts for elapsed time), and increments `por_samples_success_total` by the
@@ -485,7 +485,7 @@ before reaching step four, ensuring operators can reproduce the test locally.
 ### Stream Token Issuance
 
 Range-enabled gateways mint deterministic stream tokens through
-`POST /v1/sorafs/storage/token`. Clients must supply deterministic headers and
+`POST /v2/sorafs/storage/token`. Clients must supply deterministic headers and
 the canonical request payload:
 
 - Header `X-SoraFS-Client`: ASCII identifier for the authenticated caller.
@@ -547,7 +547,7 @@ for that token and keeps `X-SoraFS-Client-Quota-Remaining` set to `unlimited`.
 ### Chunk Range Fetch RPC
 
 Once a manifest is pinned, clients retrieve deterministic byte ranges via
-`POST /v1/sorafs/storage/fetch`. The request body mirrors the DTO defined in
+`POST /v2/sorafs/storage/fetch`. The request body mirrors the DTO defined in
 Torii (`StorageFetchRequestDto`) and must include the manifest digest, the byte
 offset, and the number of bytes to return.【crates/iroha_torii/src/sorafs/api.rs:68】
 

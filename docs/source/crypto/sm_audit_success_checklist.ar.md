@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] تم التقاط أحدث مخرجات الاختبار الحتمي:
       `scripts/sm_openssl_smoke.sh`، `cargo test -p iroha_crypto sm`، و
       تركيبات Norito ذهابًا وإيابًا.
-- [ ] تم تسجيل إعلان Torii `/v1/node/capabilities` (عبر `iroha runtime capabilities`)، للتحقق من حقول البيان `crypto.sm` ولقطات سياسة التسريع.
+- [ ] تم تسجيل إعلان Torii `/v2/node/capabilities` (عبر `iroha runtime capabilities`)، للتحقق من حقول البيان `crypto.sm` ولقطات سياسة التسريع.
 
 #تنفيذ الخطوبة
 

@@ -26,7 +26,7 @@ Etiquetas: [SF-2c, aceptación, lista de verificación]
 
 ### Incorporación de proveedores| Consultar | Validación | Evidencia |
 |-------|------------|----------|
-| Declaraciones de capacidad canónica del Registro قبول کرتا ہے | Aplicación de prueba de integración API کے ذریعے `/v1/sorafs/capacity/declare` چلایا جاتا ہے، manejo de firmas, captura de metadatos, اور registro de nodos تک traspaso کو verificar کرتا ہے۔ | `crates/iroha_torii/src/routing.rs:7654` |
+| Declaraciones de capacidad canónica del Registro قبول کرتا ہے | Aplicación de prueba de integración API کے ذریعے `/v2/sorafs/capacity/declare` چلایا جاتا ہے، manejo de firmas, captura de metadatos, اور registro de nodos تک traspaso کو verificar کرتا ہے۔ | `crates/iroha_torii/src/routing.rs:7654` |
 | Cargas útiles no coincidentes de contratos inteligentes کو rechazar کرتا ہے | Prueba unitaria یقینی بناتا ہے کہ ID de proveedor اور campos GiB comprometidos declaración firmada کے مطابق ہوں قبل از persistencia۔ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Los artefactos de incorporación canónicos de CLI emiten کرتا ہے | CLI aprovecha las salidas deterministas Norito/JSON/Base64 لکھتا ہے اور ida y vuelta validar کرتا ہے تاکہ operadores declaraciones fuera de línea تیار کر سکیں۔ | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Flujo de trabajo de admisión de la guía del operador اور barandillas de gobierno کو portada کرتا ہے | Esquema de declaración de documentación, valores predeterminados de políticas, pasos de revisión del consejo y enumerar کرتی ہے۔ | `../storage-capacity-marketplace.md` |

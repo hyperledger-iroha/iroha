@@ -47,7 +47,7 @@ Il s'agit de morceaux de morceaux. وهي تركز على
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` ou `max_span`
      - `allow_unknown_capabilities=<true|false>` pour les TLV et la GRAISSE
-   - تحقق عبر `/v1/sorafs/providers` و`sorafs_fetch` ; يجب triage تحذيرات
+   - تحقق عبر `/v2/sorafs/providers` و`sorafs_fetch` ; يجب triage تحذيرات
      capacités غير المعروفة.
 3. **التحقق من جاهزية multi-source.**
    - نفذ `sorafs_fetch` ou `--provider-advert=<path>`؛ يفشل CLI الآن عندما
@@ -183,9 +183,9 @@ groups:
 ## التواصل ومعالجة الحوادث- **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
   والمواعيد القادمة.
 - **استجابة للحوادث.** إذا انطلقت تنبيهات `reject`, يقوم on-call بما يلي:
-  1. Publier une annonce de découverte sur Torii (`/v1/sorafs/providers`).
+  1. Publier une annonce de découverte sur Torii (`/v2/sorafs/providers`).
   2. Ajouter une publicité pour un pipeline en ligne
-     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
   3. La publicité doit être actualisée pour actualiser la page.
 - **Détails du schéma.** Pour les fonctionnalités du schéma et des capacités, pour R1/R2 comme pour
   يوافق عليها فريق déploiement؛ يجب جدولة تجارب GREASE ضمن نافذة الصيانة الأسبوعية

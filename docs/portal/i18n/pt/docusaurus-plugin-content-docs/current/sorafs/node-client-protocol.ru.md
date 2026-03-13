@@ -69,7 +69,7 @@ Ferramentas adicionais:
 
 ## Gateway de endpoints de intervaloOs gateways determinam a definição de protocolos HTTP, fornecendo metadados.
 
-###`GET /v1/sorafs/storage/car/{manifest_id}`
+###`GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Treino | Detalhes |
 |------------|--------|
@@ -77,7 +77,7 @@ Ferramentas adicionais:
 | **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, `Content-Range`, descrição do arquivo, metadaнными `X-Sora-Chunk-Range` e outros cabeçalhos pedaço/token. |
 | **Modos de falha** | `416` para novos dias úteis, `401` para novos tokens/novos tokens, `429` при превышении orçamento de fluxo/byte. |
 
-###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Buscar um pedaço diferente com os cabeçalhos e determinar o pedaço de resumo.
 Полезно для ретраев или downloads forenses, когда CAR slices не нужны.
@@ -126,12 +126,12 @@ SDKs são `sorafs_orchestrator`):
 ## CLI e REST ajuda- `iroha app sorafs pin list|show`, `alias list` e `replication list` atualizados
   endpoints REST pin-registry e печатают сырой Norito JSON com atestado de bloco
   para o auditor.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` são usados Norito
+- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` são usados Norito
   ou manifestos JSON плюс опциональные provas de alias e sucessores; provas malformadas
   возвращают `400`, provas obsoletas de `503` com `Warning: 110`, uma provas expiradas
   instale `412`.
-- Pontos de extremidade REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) включают структуры atestado, чтобы клиенты могли
+- Pontos de extremidade REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) включают структуры atestado, чтобы клиенты могли
   проверить данные относительно последних block headers antes de действием.
 
 ## Ссылки

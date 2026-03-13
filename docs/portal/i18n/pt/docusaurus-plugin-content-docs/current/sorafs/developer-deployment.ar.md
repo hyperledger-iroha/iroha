@@ -31,7 +31,7 @@ A solução SoraFS é uma ferramenta que pode ser usada no CI para obter mais in
 
 ## إعدادات البيئة
 
-- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v1/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
+- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v2/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
 - Altere o valor do `sorafs_alias_cache` para o `iroha_config` ou use o CLI. (`sorafs_cli manifest submit --alias-*`).
 - وفّر رموز البث (أو بيانات اعتماد Torii) عبر مدير أسرار آمن.
 - فعّل مصدّرات التليمترية (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) e أرسلها إلى حزمة Prometheus/OTel الخاصة بك.

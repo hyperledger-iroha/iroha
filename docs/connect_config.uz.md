@@ -15,8 +15,8 @@ translator: machine-google-reviewed
 Iroha Torii ixtiyoriy WalletConnect uslubidagi WebSocket so'nggi nuqtalari va minimal tugun ichidagi o'rni ochib beradi
 `connect` yuk funksiyasi yoqilganda (standart). Ish vaqtining xatti-harakati konfiguratsiya bilan bog'langan:
 
-- Barcha Connect marshrutlarini (`/v1/connect/*`) o'chirish uchun `connect.enabled=false` sozlang.
-- WS sessiyasining so'nggi nuqtalari va `/v1/connect/status` ni yoqish uchun uni `true` (standart) qoldiring.
+- Barcha Connect marshrutlarini (`/v2/connect/*`) o'chirish uchun `connect.enabled=false` sozlang.
+- WS sessiyasining so'nggi nuqtalari va `/v2/connect/status` ni yoqish uchun uni `true` (standart) qoldiring.
 
 Atrof-muhitni bekor qilish (foydalanuvchi konfiguratsiyasi → haqiqiy konfiguratsiya):
 
@@ -44,8 +44,8 @@ Eslatmalar:
   server WebSocket-ni yopishdan oldin `ping_miss_tolerance` ketma-ket o'tkazib yuborilgan ponglarga toqat qiladi va
   `connect.ping_miss_total` ko'rsatkichini oshiradi.
 - Ishlash vaqtida o'chirilgan bo'lsa (`connect.enabled=false`), WS va holat yo'nalishlarini ulanmaydi
-  ro'yxatdan o'tgan; `/v1/connect/ws` va `/v1/connect/status` so'rovlari 404 ni qaytaradi.
-- Server `/v1/connect/session` (base64url yoki hex, 32 bayt) uchun mijoz tomonidan taqdim etilgan `sid` ni talab qiladi.
+  ro'yxatdan o'tgan; `/v2/connect/ws` va `/v2/connect/status` so'rovlari 404 ni qaytaradi.
+- Server `/v2/connect/session` (base64url yoki hex, 32 bayt) uchun mijoz tomonidan taqdim etilgan `sid` ni talab qiladi.
   U endi zaxira `sid` hosil qilmaydi.
 
 Shuningdek qarang: `crates/iroha_config/src/parameters/{user,actual}.rs` va standart sozlamalar

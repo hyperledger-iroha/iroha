@@ -74,7 +74,7 @@ Les fournisseurs SoraFS diffusent des payloads `ProviderAdvertV1` (voir)
 要求を受け入れるゲートウェイ HTTP 決定要求を反映するゲートウェイ
 広告のメタドンネ。
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 |エクシジェンス |詳細 |
 |----------|----------|
@@ -82,7 +82,7 @@ Les fournisseurs SoraFS diffusent des payloads `ProviderAdvertV1` (voir)
 | **返答** | `206` avec `Content-Type: application/vnd.ipld.car`、`Content-Range` フェネット サービスの定義、メタドン、`X-Sora-Chunk-Range`、およびヘッダー チャンカー/トークンの監視。 |
 | **モード デシェック** | `416` プラージュ・マル・アライン、`401` トークンのマンカント/無効、`429` lorsque les Budgets ストリーム/オクテット・ソント・デパス。 |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ヘッダーのチャンクを取得し、さらにダイジェストを取得します
 チャンク。再検査や犯罪捜査の利用を可能にする
@@ -135,12 +135,12 @@ SDK (`sorafs_orchestrator` 経由):1. **エントリの収集** — マニフェ
 - `iroha app sorafs pin list|show`、`alias list` および `replication list` 保護ファイル
   エンドポイント REST のピン レジストリと Norito JSON ブルート アベック ブロックの実装
   d'attestation pour l'audit。
-- `iroha app sorafs storage pin` および `torii /v1/sorafs/pin/register` は受け入れられます
+- `iroha app sorafs storage pin` および `torii /v2/sorafs/pin/register` は受け入れられます
   マニフェスト Norito ou JSON、および証明、エイリアス オプション、および後継者。
   不正な形式の証明 `400`、廃止された証明 `503` avec
   `Warning: 110`、および証明の有効期限は `412` です。
-- エンドポイント REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
-  `/v1/sorafs/replication`) 構造証明に含まれる情報
+- エンドポイント REST (`/v2/sorafs/pin`、`/v2/sorafs/aliases`、
+  `/v2/sorafs/replication`) 構造証明に含まれる情報
   クライアントは、ブロックの前のヘッダーを確認します。
 
 ## 参照

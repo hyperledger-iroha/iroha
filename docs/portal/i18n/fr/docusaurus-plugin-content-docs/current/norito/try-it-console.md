@@ -72,10 +72,10 @@ Lorsque les variables OAuth sont presentes, le sandbox affiche un bouton **Sign 
 1. Construisez un payload `.norito` avec le CLI ou les extraits decrits dans le [quickstart Norito](./quickstart.md). Le proxy transfere les corps `application/x-norito` sans modification, vous pouvez donc reutiliser le meme artefact que vous enverriez avec `curl`.
 2. Ouvrez `/reference/torii-rapidoc` (prefere pour les payloads binaires) ou `/reference/torii-swagger`.
 3. Selectionnez le snapshot Torii souhaite dans la liste deroulante. Les snapshots sont signes ; le panneau affiche le digest du manifeste enregistre dans `static/openapi/manifest.json`.
-4. Choisissez le type de contenu `application/x-norito` dans le tiroir "Try it", cliquez sur **Choose File**, et selectionnez votre payload. Le proxy reecrit la requete vers `/proxy/v1/pipeline/submit` et la tague avec `X-TryIt-Client=docs-portal-rapidoc`.
+4. Choisissez le type de contenu `application/x-norito` dans le tiroir "Try it", cliquez sur **Choose File**, et selectionnez votre payload. Le proxy reecrit la requete vers `/proxy/v2/pipeline/submit` et la tague avec `X-TryIt-Client=docs-portal-rapidoc`.
 5. Pour telecharger les reponses Norito, definissez `Accept: application/x-norito`. Swagger/RapiDoc exposent le selecteur d'en-tete dans le meme tiroir et renvoient le binaire via le proxy.
 
-Pour les routes uniquement JSON, le sandbox Try it integre est souvent plus rapide : saisissez le chemin (par exemple `/v1/accounts/i105.../assets`), selectionnez la methode HTTP, collez un corps JSON si necessaire, et cliquez sur **Send request** pour inspecter les en-tetes, la duree et les payloads en ligne.
+Pour les routes uniquement JSON, le sandbox Try it integre est souvent plus rapide : saisissez le chemin (par exemple `/v2/accounts/i105.../assets`), selectionnez la methode HTTP, collez un corps JSON si necessaire, et cliquez sur **Send request** pour inspecter les en-tetes, la duree et les payloads en ligne.
 
 ## Depannage
 

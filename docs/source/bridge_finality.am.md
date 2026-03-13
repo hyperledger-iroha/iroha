@@ -60,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0
 የኤምኤምአር ጫፎች ከግራ ወደ ቀኝ ታዝዘዋል። ቁንጮዎችን በመያዝ `mmr_root`ን እንደገና ያስሉ።
 ከቀኝ ወደ ግራ: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-ኤፒአይ፡ `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)።
+ኤፒአይ፡ `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON)።
 
 ማረጋገጫው ከመሠረታዊ ማረጋገጫው ጋር ተመሳሳይ ነው፡ `block_hash`ን እንደገና ያስሉ
 ራስጌ፣ የምስክር ወረቀት ፊርማዎችን ያረጋግጡ እና ቁርጠኝነትን ያረጋግጡ
@@ -103,10 +103,10 @@ validator-ስብስብ እና ዘመን መልህቆች. ራስጌ/ብሎክ-ሃ
 
 ## የኤፒአይ ወለል
 
-- `GET /v1/bridge/finality/{height}` - `BridgeFinalityProof` ለ
+- `GET /v2/bridge/finality/{height}` - `BridgeFinalityProof` ለ
   የተጠየቀው የማገጃ ቁመት. በ`Accept` በኩል የሚደረግ የይዘት ድርድር Norito ወይም ይደግፋል
   ጄሰን
-- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` ይመልሳል
+- `GET /v2/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` ይመልሳል
   (ቁርጠኝነት + መጽደቅ + ራስጌ / የምስክር ወረቀት) ለተጠየቀው ቁመት.
 
 ## ማስታወሻዎች እና ክትትሎች

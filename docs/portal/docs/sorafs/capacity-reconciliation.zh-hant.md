@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 路線圖項目 **SF-2c** 要求財務部門證明容量費用分類賬
 匹配每晚執行的 XOR 傳輸。使用
 `scripts/telemetry/capacity_reconcile.py` 幫助程序比較
-`/v1/sorafs/capacity/state` 針對執行的傳輸批次的快照以及
+`/v2/sorafs/capacity/state` 針對執行的傳輸批次的快照以及
 為 Alertmanager 發出 Prometheus 文本文件指標。
 
 ## 先決條件

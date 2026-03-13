@@ -68,7 +68,7 @@ translation_last_reviewed: 2026-02-07
 ## Конечные точки диапазона шлюзаШлюзы принимают детерминированные HTTP-запросы, а также метаданные рекламы и зеркало.
 کرتی ہیں۔
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Требование | Подробности |
 |-------------|---------|
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 | **Ответы** | `206` с `Content-Type: application/vnd.ipld.car`, `Content-Range` в обслуживаемом окне, а также метаданные `X-Sora-Chunk-Range`, заголовки чанка/токена и echo. |
 | **Режимы отказа** | невыровненные диапазоны — `416`, отсутствующие/недействительные токены — `401`, бюджеты потоков/байтов превышают `429`. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Одночастотная выборка заголовков и детерминированный дайджест фрагментов. повторные попытки
 Загрузки для судебно-медицинской экспертизы и фрагменты CAR.
@@ -125,11 +125,11 @@ translation_last_reviewed: 2026-02-07
 ## CLI и помощники REST- `iroha app sorafs pin list|show`, `alias list`, или `replication list` контактный реестр
   Обертывание конечных точек REST и доказательства аудита, а также блоки аттестации.
   raw Norito Печать JSON کرتے ہیں۔
-- `iroha app sorafs storage pin` или `torii /v1/sorafs/pin/register` Norito یا JSON
+- `iroha app sorafs storage pin` или `torii /v2/sorafs/pin/register` Norito یا JSON
   манифестирует کے ساتھ необязательные доказательства псевдонима اور преемники принимают کرتے ہیں؛ уродливый
   доказательства پر `400`, устаревшие доказательства پر `503` مع `Warning: 110`, доказательства с истекшим сроком годности
   پر `412`۔
-- Конечные точки REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- Конечные точки REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   Структуры аттестации شامل کرتے ہیں تاکہ клиенты последние заголовки блоков کے
   Проверка данных کر سکیں۔
 

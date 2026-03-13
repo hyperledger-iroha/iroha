@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ## 1. 飛行前驗證
 
 1. **確認治理投入。 **
-   - 所有候選提供商必鬚髮布包含範圍能力有效負載和流預算的 `ProviderAdvertV1` 信封。通過 `/v1/sorafs/providers` 進行驗證並與預期的功能字段進行比較。
+   - 所有候選提供商必鬚髮布包含範圍能力有效負載和流預算的 `ProviderAdvertV1` 信封。通過 `/v2/sorafs/providers` 進行驗證並與預期的功能字段進行比較。
    - 在每次金絲雀運行之前，提供延遲/故障率的遙測快照應小於 15 分鐘。
 2. **舞台配置。 **
    - 將 Orchestrator JSON 配置保留在分層 `iroha_config` 樹中：

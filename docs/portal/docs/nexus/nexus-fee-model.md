@@ -27,7 +27,7 @@ operators can reconcile gas debits against the Nexus fee model.
   the XOR due immediately, the XOR expected after the haircut, the realised
   variance (`xor_variance_micro`), and the block timestamp in milliseconds.
 - Block execution aggregates receipts per lane/dataspace and publishes them
-  via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
+  via `lane_settlement_commitments` in `/v2/sumeragi/status`.  The totals
   expose `total_local_micro`, `total_xor_due_micro`, and
   `total_xor_after_haircut_micro` summed over the block for nightly
   reconciliation exports.

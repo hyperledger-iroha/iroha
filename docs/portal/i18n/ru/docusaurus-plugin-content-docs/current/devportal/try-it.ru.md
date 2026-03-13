@@ -130,7 +130,7 @@ Norito-RPC использует тот же прокси и каналы OAuth, 
 ### Отправка Norito payload из консоли Try It
 
 1. Выберите приспособление, например `fixtures/norito_rpc/transfer_asset.norito`. Эти файлы представляют собой сырые конверты Norito; **не** кодируйте их в base64.
-2. В Swagger или RapiDoc перейдите к конечной точке NRPC (например, `POST /v1/pipeline/submit`) и переключите селектор **Content-Type** на `application/x-norito`.
+2. В Swagger или RapiDoc перейдите к конечной точке NRPC (например, `POST /v2/pipeline/submit`) и переключите селектор **Content-Type** на `application/x-norito`.
 3. Переключите редактор запроса тела в **binary** (режим «Файл» в Swagger или «Binary/File» в RapiDoc) и загрузите файл `.norito`. Виджет отправляет байты через прокси без изменений.
 4. Отправьте запрос. Если Torii возвращает `X-Iroha-Error-Code: schema_mismatch`, убедитесь, что возникает конечная точка, принимающая двоичные полезные данные, и подтвердите, что хеш схемы в `fixtures/norito_rpc/schema_hashes.json` соответствует сборке Torii.
 
@@ -143,10 +143,10 @@ Norito-RPC использует тот же прокси и каналы OAuth, 
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-Замените приспособление на любую запись из `transaction_fixtures.manifest.json` или закодируйте свою полезную нагрузку командой `cargo xtask norito-rpc-fixtures`. Когда Torii работает в канареечном режиме, можно направить `curl` на пробный прокси (`https://docs.sora.example/proxy/v1/pipeline/submit`), чтобы проверить ту же инфраструктуру, что и виджеты портала.## Наблюдаемость и операции
+Замените приспособление на любую запись из `transaction_fixtures.manifest.json` или закодируйте свою полезную нагрузку командой `cargo xtask norito-rpc-fixtures`. Когда Torii работает в канареечном режиме, можно направить `curl` на пробный прокси (`https://docs.sora.example/proxy/v2/pipeline/submit`), чтобы проверить ту же инфраструктуру, что и виджеты портала.## Наблюдаемость и операции
 
 Каждый запрос регистрируется один раз с методом, путем, источником, статусом восходящего потока и доказательством аутентификации (`override`, `default` или `client`). Токены не определяют — заголовки носителей всегда и значения `X-TryIt-Auth` редактируются перед регистрацией, поэтому можно пересылать стандартный вывод в центральный сборщик без риска утечки секретов.
 
@@ -156,7 +156,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Ручки окружения:

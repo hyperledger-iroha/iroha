@@ -39,7 +39,7 @@ proposto、実装用の API の有効性を確認するための機能
 ## 上位 API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -222,7 +222,7 @@ O カンポ `compression` は、発信者がペイロードを準備している
   栄養補給`iroha app sorafs fetch`。オペラドール ポデム アポンタル パラ アートファトス
   マニフェスト + チャンク プラン (`--manifest`、`--plan`、`--manifest-id`) **ou**
   `--storage-ticket` 経由でストレージ チケット Torii を渡します。クアンド・オ・カミーニョ・ド
-  チケットと使用法、`/v1/da/manifests/<ticket>` の CLI バイシャ マニフェスト、
+  チケットと使用法、`/v2/da/manifests/<ticket>` の CLI バイシャ マニフェスト、
   永続化またはバンドル sob `artifacts/da/fetch_<timestamp>/` (com をオーバーライド)
   `--manifest-cache-dir`)、`--manifest-id` の BLOB からの派生ハッシュ、エンタオ
   リスト `--gateway-provider` フォルネシダを実行します。トドOS
@@ -233,7 +233,7 @@ O カンポ `compression` は、発信者がペイロードを準備している
   エンドツーエンドの可用性は、名前空間 `da` sem duplicar を有効にします
   ロジカ・ド・オルケストラドール。
 - `iroha app da get-blob` baixa は、Torii 経由で canonicos direto をマニフェストします。
-  `GET /v1/da/manifests/{storage_ticket}`。おお、コマンドー・エスクリーブ
+  `GET /v2/da/manifests/{storage_ticket}`。おお、コマンドー・エスクリーブ
   `manifest_{ticket}.norito`、`manifest_{ticket}.json` e
   `chunk_plan_{ticket}.json` すすり泣く `artifacts/da/fetch_<timestamp>/` (うーん
   `--output-dir` fornecido pelo usuario) enquanto imprime o commando exato de

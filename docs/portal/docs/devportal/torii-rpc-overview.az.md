@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # Norito-RPC İcmal
 
 Norito-RPC Torii API-ləri üçün ikili nəqliyyatdır. Eyni HTTP yollarını təkrar istifadə edir
-`/v1/pipeline` kimi, lakin sxem daxil olan Norito çərçivəli faydalı yükləri mübadilə edir
+`/v2/pipeline` kimi, lakin sxem daxil olan Norito çərçivəli faydalı yükləri mübadilə edir
 hash və yoxlama məbləğləri. Deterministik, təsdiqlənmiş cavablara ehtiyacınız olduqda istifadə edin və ya
 boru kəmərinin JSON cavabları darboğaza çevrildikdə.
 
@@ -32,7 +32,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Yükünüzü Norito kodek (`iroha_client`, SDK köməkçiləri və ya) ilə seriyalaşdırın
@@ -59,7 +59,7 @@ sifarişli skriptlər yazmadan faydalı yüklər.
    `TRYIT_PROXY_PUBLIC_URL` beləliklə, vidjetlər trafikin hara göndəriləcəyini bilir.
 2. Bu səhifədə **Sınaq** kartını və ya `/reference/torii-swagger` açın
    For MCP/agent flows, use `/reference/torii-mcp`.
-   paneli seçin və `POST /v1/pipeline/submit` kimi son nöqtəni seçin.
+   paneli seçin və `POST /v2/pipeline/submit` kimi son nöqtəni seçin.
 3. **Məzmun növü**-ni `application/x-norito`-ə dəyişin, **İkili** seçin
    redaktoru və `fixtures/norito_rpc/transfer_asset.norito` yükləyin
    (və ya siyahıda göstərilən hər hansı faydalı yük

@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 - Las propuestas de gobernanza se ejecutan como: proponente → referéndum → recuento → promulgación. Los períodos de referéndum y los umbrales de participación/aprobación se aplican como se describe en `gov.md`; los bloqueos son de solo extensión y se desbloquean al vencimiento.
 - La selección del Parlamento utiliza sorteos basados ​​en VRF con ordenamiento y límites de mandatos deterministas; cuando no existe una lista persistente, Torii deriva un respaldo usando la configuración `gov.parliament_*`. Las verificaciones de quórum y control del consejo se realizan en las pruebas `gov_parliament_bodies` / `gov_pipeline_sla`.
 - Modos de votación: ZK (predeterminado, requiere `Active` VK con bytes en línea) y Simple (peso cuadrático). Se rechazan las discrepancias de modo; La creación/extensión de bloqueo es monótona en ambos modos con pruebas de regresión para ZK y nuevas votaciones simples.
-- La mala conducta del validador se actúa a través del canal de evidencia (`/v1/sumeragi/evidence*`, ayudantes de CLI) con transferencias de consenso conjunto aplicadas por `NextMode` + `ModeActivationHeight`.
+- La mala conducta del validador se actúa a través del canal de evidencia (`/v2/sumeragi/evidence*`, ayudantes de CLI) con transferencias de consenso conjunto aplicadas por `NextMode` + `ModeActivationHeight`.
 - Los espacios de nombres protegidos, los enlaces de actualización del tiempo de ejecución y la admisión del manifiesto de gobernanza están documentados en `governance_api.md` y cubiertos por telemetría (`governance_manifest_*`, `governance_protected_namespace_total`).
 
 # En vuelo/atrasos

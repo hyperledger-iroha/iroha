@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. **ドキュメント**
    - `docs/source/crypto/sm_program.md` にコンプライアンスの付録を追加し、商用暗号化のステータス、申請の期待、および連絡先を記載します。
    - オペレーターがファイリングを準備するときに使用できる Norito マニフェスト フィールド (`crypto.sm.enabled=true`、`crypto.sm.approval=l0|l1`) を公開します。
-   - Torii `/v1/node/capabilities` アドバタイズ (および `iroha runtime capabilities` CLI エイリアス) がすべてのリリースに付属していることを確認して、オペレータが MLPS/密评 証拠の `crypto.sm` マニフェスト スナップショットをキャプチャできるようにします。
+   - Torii `/v2/node/capabilities` アドバタイズ (および `iroha runtime capabilities` CLI エイリアス) がすべてのリリースに付属していることを確認して、オペレータが MLPS/密评 証拠の `crypto.sm` マニフェスト スナップショットをキャプチャできるようにします。
    - 義務を要約したバイリンガル (EN/ZH) コンプライアンスのクイックスタートを提供します。
 2. **アーティファクトの解放**
    - SM 対応ビルド用の SBOM/CycloneDX ファイルを配布します。

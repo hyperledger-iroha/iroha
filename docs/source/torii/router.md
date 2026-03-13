@@ -50,8 +50,8 @@ the test optionally diffs a generated specification against a snapshot:
   the current output for manual inspection or diff tooling.
 
 If the OpenAPI endpoint is unavailable the diff is skipped automatically. The
-test also performs feature-gated smoke requests (e.g., `/v1/domains` under
-`app_api`, `/v1/connect/status` under `connect`) to verify the staged builder
+test also performs feature-gated smoke requests (e.g., `/v2/domains` under
+`app_api`, `/v2/connect/status` under `connect`) to verify the staged builder
 covers every route group.
 
 ## Migration Notes
@@ -75,4 +75,4 @@ reassigning intermediate `Router` values.
 ## Further Reading
 
 - `docs/source/torii/app_api_parity_audit.md` — parity matrix covering the `app_api` and `connect` route groups, their DTOs, and existing test coverage.
-- `crates/iroha_torii/docs/mcp_api.md` — canonical Torii MCP JSON-RPC contract (`/v1/mcp`) for agent/tool integrations.
+- `crates/iroha_torii/docs/mcp_api.md` — canonical Torii MCP JSON-RPC contract (`/v2/mcp`) for agent/tool integrations.

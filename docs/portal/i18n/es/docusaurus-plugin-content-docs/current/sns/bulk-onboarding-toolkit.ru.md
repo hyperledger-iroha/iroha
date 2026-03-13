@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Ayudante del usuario `POST /v1/sns/registrations` en zapros y останавливается при
+- Ayudante del usuario `POST /v2/sns/registrations` en zapros y останавливается при
   первой HTTP ошибке. Ответы добавляются в лог как NDJSON записи.
-- `--poll-status` повторно запрашивает `/v1/sns/registrations/{selector}` после
+- `--poll-status` повторно запрашивает `/v2/sns/registrations/{selector}` после
   каждой отправки (до `--poll-attempts`, по умолчанию 5), чтобы подтвердить
   видимость записи. Utilice `--suffix-map` (mapeo JSON `suffix_id` en la base
   "sufijo"), este instrumento es el más importante `{label}.{suffix}` para el sondeo.

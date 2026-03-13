@@ -73,7 +73,7 @@ Each phase requires explicit rollback instructions: disable the Norito stage fla
 ### 6. Brownout & Dual-stack Guardrails
 
 The rollout must remain reversible without starving JSON callers. This section
-defines the brownout signals, the config switches that protect `/v1/pipeline`,
+defines the brownout signals, the config switches that protect `/v2/pipeline`,
 and the validation steps required before closing an incident.
 
 #### 6.1 Detection & Entry Criteria
@@ -115,8 +115,8 @@ and the validation steps required before closing an incident.
    stage/limits following the canary runbook and update the stage report with a
    close-out summary.
 
-#### 6.3 JSON `/v1/pipeline` Fallback Validation
-- `/v1/pipeline` stays live even when Norito is degraded (coexistence is defined
+#### 6.3 JSON `/v2/pipeline` Fallback Validation
+- `/v2/pipeline` stays live even when Norito is degraded (coexistence is defined
   in `docs/source/torii/norito_rpc.md:170`), so every brownout must prove the
   JSON path is healthy:
   1. Issue a Norito probe (allowlisted token) using the Python helper  
@@ -125,10 +125,10 @@ and the validation steps required before closing an incident.
      the expected `norito_rpc_canary_denied`/`norito_rpc_disabled` codes.
   2. Exercise the JSON pipeline with a standard submission/status pair, e.g.:
      ```bash
-     curl -sS -X POST "$TORII_URL/v1/pipeline/transactions" \
+     curl -sS -X POST "$TORII_URL/v2/pipeline/transactions" \
        -H 'Content-Type: application/json' \
        -d @<signed_tx.json>
-     curl -sS "$TORII_URL/v1/pipeline/transactions/status?hash=<tx_hash>"
+     curl -sS "$TORII_URL/v2/pipeline/transactions/status?hash=<tx_hash>"
      ```
      or the equivalent SDK helper. Attach the responses to the incident log.
 - Re-run the JSON smoke after Norito is re-enabled to confirm both transports

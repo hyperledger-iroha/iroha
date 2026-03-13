@@ -62,7 +62,7 @@ N1（公開發布）之前面向運營商的參考。
 |治理委員會|起草和批准章程、後綴政策、爭議裁決和管家輪換。 | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`，通過 `sns governance charter submit` 存儲的議會選票。 |理事會主席+治理日程跟踪器。 |
 |監護委員會|發佈軟/硬凍結、緊急規則和 72 小時審查。 | `sns governance freeze` 發出的監護人票證，覆蓋 `artifacts/sns/guardian/*` 下記錄的清單。 |監護人值班輪換（≤15 分鐘 ACK）。 |
 |後綴管家|運行註冊商隊列、拍賣、定價等級和客戶通信；確認合規性。 | `SuffixPolicyV1` 中的管家政策、定價參考表、存儲在監管備忘錄旁邊的管家致謝。 | Steward 程序主線 + 後綴特定的 PagerDuty。 |
-|註冊商和計費操作 |操作 `/v1/sns/*` 端點、協調付款、發出遙測數據並維護 CLI 快照。 |註冊商 API（[`registrar-api.md`](./registrar-api.md)）、`sns_registrar_status_total` 指標、在 `artifacts/sns/payments/*` 下存檔的付款證明。 |登記官值班經理和財務聯絡人。 |
+|註冊商和計費操作 |操作 `/v2/sns/*` 端點、協調付款、發出遙測數據並維護 CLI 快照。 |註冊商 API（[`registrar-api.md`](./registrar-api.md)）、`sns_registrar_status_total` 指標、在 `artifacts/sns/payments/*` 下存檔的付款證明。 |登記官值班經理和財務聯絡人。 |
 |解析器和網關運營商 |保持 SoraDNS、GAR 和網關狀態與註冊商事件保持一致；流透明度指標。 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 |解析器 SRE 待命 + 網關操作橋接。 |
 |財務與金融 |應用 70/30 的收入分成、推薦分拆、稅務/財務申報和 SLA 證明。 |應計收入清單、Stripe/國庫出口、`docs/source/sns/regulatory/` 下的季度 KPI 附錄。 |財務總監+合規官。 |
 |合規與監管聯絡|跟踪全球義務（EU DSA 等）、更新 KPI 契約並歸檔披露。 | `docs/source/sns/regulatory/` 中的監管備忘錄、參考資料、`ops/drill-log.md` 桌面排練條目。 |合規計劃負責人。 |
@@ -180,7 +180,7 @@ N1（公開發布）之前面向運營商的參考。
 |信號|來源 |描述/行動|
 |--------|--------|----------------------|
 | `sns_registrar_status_total{result,suffix}` | Torii 註冊商處理程序 |註冊、續訂、凍結、轉讓的成功/錯誤計數器；當每個後綴的 `result="error"` 峰值時發出警報。 |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii 指標 | API 處理程序的延遲 SLO；從 `torii_norito_rpc_observability.json` 構建的提要儀表板。 |
+| `torii_request_duration_seconds{route="/v2/sns/*"}` | Torii 指標 | API 處理程序的延遲 SLO；從 `torii_norito_rpc_observability.json` 構建的提要儀表板。 |
 | `soradns_bundle_proof_age_seconds` 和 `soradns_bundle_cid_drift_total` |旋轉變壓器透明度裁剪器 |檢測過時的證明或 GAR 漂移； `dashboards/alerts/soradns_transparency_rules.yml` 中定義的護欄。 |
 | `sns_governance_activation_total` |治理 CLI |每當章程/附錄激活時，計數器就會遞增；用於協調理事會決定與已發布的附錄。 |
 | `guardian_freeze_active` 儀表 |守護者 CLI |跟踪每個選擇器的軟/硬凍結窗口；如果值保持 `1` 超出聲明的 SLA，則頁 SRE。 |

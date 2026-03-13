@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 Torii اب provider credit snapshots کو fee ledgers کے ساتھ ظاہر کرتا ہے تاکہ dashboards کم balances اور penalty strikes پر gate کر سکیں:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` entries واپس کرتا ہے جو soak test میں verify ہونے والے
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` entries واپس کرتا ہے جو soak test میں verify ہونے والے
   ledger fields کی عکاسی کرتے ہیں۔ دیکھیں
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` exported strikes counters، penalty totals،

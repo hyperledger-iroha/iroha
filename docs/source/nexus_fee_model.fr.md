@@ -23,7 +23,7 @@ operateurs puissent reconciler les debits de gas avec le modele de frais Nexus.
   `elevated`, `dislocated`). Ces drapeaux alimentent le settlement router pour que le quote XOR
   resultant corresponde au TWAP canonique et au tier de haircut de la lane.
 - Les transactions IVM doivent inclure les metadonnees `gas_limit` (`u64`, > 0) pour limiter l'exposition
-  aux frais. L'endpoint `/v1/contracts/call` exige `gas_limit` explicitement et les valeurs invalides
+  aux frais. L'endpoint `/v2/contracts/call` exige `gas_limit` explicitement et les valeurs invalides
   sont rejetees.
 - Quand une transaction definit les metadonnees `fee_sponsor`, le sponsor doit accorder
   `CanUseFeeSponsor { sponsor }` a l'appelant. Les tentatives de sponsorship non autorisees sont
@@ -33,7 +33,7 @@ operateurs puissent reconciler les debits de gas avec le modele de frais Nexus.
   immediatement, le XOR attendu apres le haircut, la marge de securite realisee
   (`xor_variance_micro`), et l'horodatage du bloc en millisecondes.
 - L'execution du bloc agrege les recus par lane/dataspace et les publie via `lane_settlement_commitments`
-  dans `/v1/sumeragi/status`. Les totaux exposent `total_local_micro`, `total_xor_due_micro`, et
+  dans `/v2/sumeragi/status`. Les totaux exposent `total_local_micro`, `total_xor_due_micro`, et
   `total_xor_after_haircut_micro` additionnes sur le bloc pour les exports nocturnes de reconciliation.
 - Un nouveau compteur `total_xor_variance_micro` suit la marge de securite consommee (difference entre
   le XOR du et l'attendu post-haircut), et `swap_metadata` documente les parametres deterministes de

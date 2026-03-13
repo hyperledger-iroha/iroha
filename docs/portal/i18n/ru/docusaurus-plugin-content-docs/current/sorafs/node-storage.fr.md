@@ -165,9 +165,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Шлюз Torii выставляет напоказ помощников на лекциях, основанных на мемах
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — отправка манифеста
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — отправка манифеста
 > Norito стандартный (base64) с дайджестом/метадонническими.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — отправка плана фрагмента
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — отправка плана фрагмента
 > определите JSON (`chunk_fetch_specs`) для последующих действий.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Эти конечные точки отражают сортировку CLI в зависимости от того, какие конвейеры могут быть прохожими.
@@ -208,18 +208,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      une fois le modele de gouvernance défini; для мгновенного приготовления, предполагаемый дизайн
      строгие квоты и операции по откреплению начатых операторов.
 
-### Декларация мощности и интеграция планирования- Torii реле разочаровывающих людей в течение дня `CapacityDeclarationRecord` от `/v1/sorafs/capacity/declare`
+### Декларация мощности и интеграция планирования- Torii реле разочаровывающих людей в течение дня `CapacityDeclarationRecord` от `/v2/sorafs/capacity/declare`
   Версия `CapacityManager` помещена в сортировку, которую можно создать в своей памяти
   распределения блоков/занятых полос. Менеджер предоставляет снимки только для чтения для телеметрии
-  (`GET /v1/sorafs/capacity/state`) и аппликация резерваций по профилю или по полосе перед тем, как
+  (`GET /v2/sorafs/capacity/state`) и аппликация резерваций по профилю или по полосе перед тем, как
   Новые команды не принимаются.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Конечная точка `/v1/sorafs/capacity/schedule` принимает полезные нагрузки `ReplicationOrderV1` по принципу управления.
+- Конечная точка `/v2/sorafs/capacity/schedule` принимает полезные нагрузки `ReplicationOrderV1` по принципу управления.
   Лорск имеет местный поставщик услуг, менеджер проверяет планировку в дублоне, подтверждает
   емкость блока/полосы, резервирование транша и отправка `ReplicationPlan`, декривант оставшейся емкости
   afin que les outils d'orchestration puissent poursuivre l'egestion. Поставщики услуг Les ordres pour d'autres
   Он оправдан с ответом `ignored` для облегчения рабочих процессов с несколькими операторами.【crates/iroha_torii/src/routing.rs:4845】
 - Крючки для завершения (например, Déclenchés после успешного проглатывания) апеллянты
-  `POST /v1/sorafs/capacity/complete` для освобождения резервирований через `CapacityManager::complete_order`.
+  `POST /v2/sorafs/capacity/complete` для освобождения резервирований через `CapacityManager::complete_order`.
   Ответ включает снимок `ReplicationRelease` (все оставшиеся, остатки, фрагменты/дорожки) в ближайшее время.
   мощные инструменты оркестрации могут поставить в очередь команду suivante без опроса. Un travail futur reliera
   cela au Pipeline de Chunk Store или логика приема sera prête.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】

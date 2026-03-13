@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v1/zk/submit-proof minimal handler.
+//! Integration test for /v2/zk/submit-proof minimal handler.
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
 
@@ -12,7 +12,7 @@ use tower::ServiceExt as _;
 async fn zk_submit_proof_endpoint_accepts_json_and_norito_and_returns_id() {
     // Router with submit-proof handler
     let app = Router::new().route(
-        "/v1/zk/submit-proof",
+        "/v2/zk/submit-proof",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
                 iroha_torii::handle_v1_zk_submit_proof(headers, body).await
@@ -41,7 +41,7 @@ async fn zk_submit_proof_endpoint_accepts_json_and_norito_and_returns_id() {
     let body_json = json::to_string(&body_json_value).expect("serialize json body");
     let req_json = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/submit-proof")
+        .uri("/v2/zk/submit-proof")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_json.clone()))
         .unwrap();
@@ -67,7 +67,7 @@ async fn zk_submit_proof_endpoint_accepts_json_and_norito_and_returns_id() {
     };
     let req_norito = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/submit-proof")
+        .uri("/v2/zk/submit-proof")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(norito_bytes))
         .unwrap();
@@ -84,7 +84,7 @@ async fn zk_submit_proof_endpoint_accepts_json_and_norito_and_returns_id() {
     // Norito path negative: empty body should return ok=false; id still present
     let req_empty = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/submit-proof")
+        .uri("/v2/zk/submit-proof")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(Vec::<u8>::new()))
         .unwrap();

@@ -72,7 +72,7 @@ SN13-C レビューでは、各 drill/インシデントが Taikai anchor runboo
    lineage window が有効だったかを証明する。ヘルパー
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    が spool files をコピーし、hashes を出力し、必要に応じて要約を署名する。
-2. `/v1/status` の出力を `.telemetry.taikai_alias_rotations[]` にフィルタし、
+2. `/v2/status` の出力を `.telemetry.taikai_alias_rotations[]` にフィルタし、
    spool files の横に保存する。レビュアは `manifest_digest_hex` と window bounds を
    spool state と比較する。
 3. 上記のメトリクスに対する Prometheus snapshots をエクスポートし、

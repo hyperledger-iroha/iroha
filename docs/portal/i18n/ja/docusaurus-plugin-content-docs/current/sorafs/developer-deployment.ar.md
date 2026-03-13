@@ -31,7 +31,7 @@ ID: 開発者デプロイメント
 
 ## إعدادات البيئة
 
-- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v1/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصاتああ。
+- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v2/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصاتああ。
 - 回答 `sorafs_alias_cache` 評価 `iroha_config` 評価 CLI 評価(`sorafs_cli manifest submit --alias-*`)。
 - وفّر رموز البث (أو بيانات اعتماد Torii) عبر مدير أسرار آمن.
 - فعّل مصدّرات التليمترية (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) وأرسلها إلى حزمة Prometheus/OTel الخاصةああ。

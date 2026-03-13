@@ -45,7 +45,7 @@ corte de superficie کو کوآرڈی نیٹ کرتا ہے جو recuperación de
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` اور واضح `max_span`
      - GREASE TLVs کی صورت میں `allow_unknown_capabilities=<true|false>`
-   - `/v1/sorafs/providers` اور `sorafs_fetch` سے validar کریں؛ desconocido
+   - `/v2/sorafs/providers` اور `sorafs_fetch` سے validar کریں؛ desconocido
      capacidades کی advertencias کو triaje کریں۔
 3. **Validar la preparación para múltiples fuentes.**
    - `sorafs_fetch` کو `--provider-advert=<path>` کے ساتھ چلائیں؛ Por `chunk_range_fetch`
@@ -159,8 +159,8 @@ groups:
 
 ## Comunicación y manejo de incidentes- **Anuncio publicitario de estado semanal.** Métricas de admisión de DevRel, advertencias pendientes, fechas límite, fechas límite, fechas límite
 - **Respuesta a incidentes.** اگر `reject` alertas فائر ہوں تو de guardia انجینئر:
-  1. Descubrimiento Torii (`/v1/sorafs/providers`) سے búsqueda de anuncios infractores کریں۔
-  2. canalización del proveedor میں validación de anuncios دوبارہ چلائیں اور `/v1/sorafs/providers` سے comparar کریں تاکہ error reproducir ہو۔
+  1. Descubrimiento Torii (`/v2/sorafs/providers`) سے búsqueda de anuncios infractores کریں۔
+  2. canalización del proveedor میں validación de anuncios دوبارہ چلائیں اور `/v2/sorafs/providers` سے comparar کریں تاکہ error reproducir ہو۔
   3. proveedor کے ساتھ coordinar کریں تاکہ اگلی fecha límite de actualización سے پہلے rotación de anuncios ہو جائے۔
 - **El cambio se congela.** R1/R2 کے دوران esquema de capacidad میں تبدیلیاں نہ کریں جب تک rollout کمیٹی منظوری نہ دے؛ Pruebas de GREASE کو ہفتہ وار ventana de mantenimiento میں cronograma کریں اور libro mayor de migración میں registro کریں۔
 

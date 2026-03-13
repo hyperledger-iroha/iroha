@@ -34,25 +34,25 @@ translator: manual
 
 ## Torii エンドポイント（feature `app_api`）
 
-- **POST `/v1/contracts/deploy`**  
+- **POST `/v2/contracts/deploy`**  
   リクエスト: `DeployContractDto`（`authority`, `private_key`, `code_b64`）。ハッシュ計算とマニフェスト生成後、`RegisterSmartContractCode` と `RegisterSmartContractBytes` を単一トランザクションで送信します。レスポンス: `{ ok, code_hash_hex, abi_hash_hex }`。
-- **POST `/v1/contracts/code`**  
+- **POST `/v2/contracts/code`**  
   リクエスト: `RegisterContractCodeDto`（`authority`, `private_key`, `manifest`）。マニフェストのみ登録します。
-- **POST `/v1/contracts/instance`**  
+- **POST `/v2/contracts/instance`**  
   リクエスト: `DeployAndActivateInstanceDto`（`authority`, `private_key`, `namespace`, `contract_id`, `code_b64`, 任意の `manifest` 上書き）。デプロイとアクティベーションを原子的に実行します。レスポンス: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`。
-- **POST `/v1/contracts/instance/activate`**  
+- **POST `/v2/contracts/instance/activate`**  
   リクエスト: `ActivateInstanceDto`（`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`）。既存アーティファクトを指定インスタンスにバインドします。レスポンス: `{ ok: true }`。
-- **GET `/v1/contracts/code/{code_hash}`**  
+- **GET `/v2/contracts/code/{code_hash}`**  
   `{ manifest: { code_hash, abi_hash } }` を返します。
-- **GET `/v1/contracts/code-bytes/{code_hash}`**  
+- **GET `/v2/contracts/code-bytes/{code_hash}`**  
   保存済み `.to` バイト列を Base64 で返します（`{ code_b64 }`）。
 
 全てのコントラクト系エンドポイントは共有レートリミッタ `torii.deploy_rate_per_origin_per_sec` / `torii.deploy_burst_per_origin` を使用します（既定 4 req/s、バースト 8。`X-API-Token`、リモート IP、エンドポイント名の組み合わせでオリジンを識別）。無効化する場合は `null` を指定します。制限に達すると HTTP 429 とともに `torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` が増加し、ハンドラー内エラーは `torii_contract_errors_total{endpoint=…}` に記録されます。
 
 ## ガバナンス統合と保護ネームスペース
 
-- カスタムパラメータ `gov_protected_namespaces`（JSON 配列）を設定すると受理ゲートが有効化されます。Torii `/v1/gov/protected-namespaces` と CLI (`iroha_cli app gov protected set/get`) が補助します。
-- `ProposeDeployContract`（または `/v1/gov/proposals/deploy-contract`）で作成される提案は `(namespace, contract_id, code_hash, abi_hash, abi_version)` を記録します。
+- カスタムパラメータ `gov_protected_namespaces`（JSON 配列）を設定すると受理ゲートが有効化されます。Torii `/v2/gov/protected-namespaces` と CLI (`iroha_cli app gov protected set/get`) が補助します。
+- `ProposeDeployContract`（または `/v2/gov/proposals/deploy-contract`）で作成される提案は `(namespace, contract_id, code_hash, abi_hash, abi_version)` を記録します。
 - 住民投票が可決し `EnactReferendum` で施行されると、同じメタデータとコードを持つデプロイが受理されます。
 - トランザクションには `gov_namespace` / `gov_contract_id` のペアを必ず指定します。CLI は `--namespace` / `--contract-id` で自動付与します。
 

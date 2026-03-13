@@ -47,7 +47,7 @@ Après l'achat, vous devrez acheter des billets et utiliser le PoR.
 
 - Pour que le processus Torii soit téléchargé/installé sur `data_dir`.
 - Подтвердите, что узел объявляет ожидаемую ёмкость через
-  `GET /v1/sorafs/capacity/state` suite à cette déclaration.
+  `GET /v2/sorafs/capacity/state` suite à cette déclaration.
 - Lors de l'ouverture des frontières du bord, vous pourrez trouver le sang, ainsi que le liquide.
   счётчики GiB·hour/PoR, чтобы подчёркивать тренды без джиттера рядом с
   мгновенными значениями.
@@ -95,8 +95,8 @@ Cliquez sur → Documentation → Consultez la page d'accueil de l'API HTTP.
 Après avoir téléchargé Torii, vous pouvez utiliser les articles correspondant à HTTP :
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Pour une entreprise travaillant dans le secteur du stockage, des tests de fumée CLI et
@@ -107,7 +107,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 2. Ouvrez le manifeste dans le code base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -117,7 +117,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 3. Получите закреплённые данные:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -134,7 +134,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 2. Exécutez le processus Torii (ou votre utilisation).
 3. Повторно отправьте запрос fetch. La charge utile est maintenant disponible, un résumé dans
    ответе должен совпасть с предшествующим перезапуску.
-4. Vérifiez le `GET /v1/sorafs/storage/state` pour savoir ce que `bytes_used` indique.
+4. Vérifiez le `GET /v2/sorafs/storage/state` pour savoir ce que `bytes_used` indique.
    сохранённые se manifeste après перезагрузки.
 
 ## 4. Testez votre achat
@@ -152,7 +152,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 2. Choisissez PoR-выборку :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 - Les Daschbords должны отслеживать:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - счётчики успехов/неудач PoR, публикуемые через `/v1/sorafs/capacity/state`
+  - счётчики успехов/неудач PoR, публикуемые через `/v2/sorafs/capacity/state`
   - Règlement des publications populaires par `sorafs_node_deal_publish_total{result=success|failure}`
 
 Assurez-vous de bénéficier de la garantie que le travailleur de stockage professionnel a accepté

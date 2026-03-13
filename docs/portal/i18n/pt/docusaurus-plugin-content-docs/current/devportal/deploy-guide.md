@@ -24,7 +24,7 @@ execucoes locais podem carrega-los a partir de exports do shell.
 
 - Node 18.18+ com `npm` ou `pnpm`.
 - `sorafs_cli` a partir de `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL de Torii que expoe `/v1/sorafs/*` mais uma conta/chave privada de autoridade que possa enviar manifestos e alias.
+- URL de Torii que expoe `/v2/sorafs/*` mais uma conta/chave privada de autoridade que possa enviar manifestos e alias.
 - Emissor OIDC (GitHub Actions, GitLab, workload identity, etc.) para emitir um `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para dre runs e `docs/source/sorafs_ci_templates.md` para scaffolding de workflows de GitHub/GitLab.
 - Configura as variables OAuth de Tre it (`DOCS_OAUTH_*`) e execute a
@@ -849,7 +849,7 @@ Configura os seguintes repositore secrets/variables antes de disparar o job:
 
 | Name | Proposito |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii que expoe `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii que expoe `/v2/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de epoch registrado com submissions. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autoridad de assinatura para o submit del manifesto. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tuple de alias enlazado al manifesto quando `perform_submit` es `true`. |

@@ -18,14 +18,14 @@ translator: machine-google-reviewed
 Ճանապարհային քարտեզի հղում՝ TORII-APP-1 — `app_api` հավասարության աուդիտ
 
 Այս էջը արտացոլում է ներքին `TORII-APP-1` աուդիտը (`docs/source/torii/app_api_parity_audit.md`)
-այնպես որ մոնո-ռեպոից դուրս ընթերցողները կարող են տեսնել, թե որ `/v1/*` մակերեսներն են լարով, փորձարկված,
+այնպես որ մոնո-ռեպոից դուրս ընթերցողները կարող են տեսնել, թե որ `/v2/*` մակերեսներն են լարով, փորձարկված,
 և փաստաթղթավորված: Աուդիտը հետևում է `Torii::add_app_api_routes`-ի միջոցով վերաարտահանվող երթուղիներին,
 `add_contracts_and_vk_routes` և `add_connect_routes`:
 
 ## Շրջանակ և մեթոդ
 
 Աուդիտը ստուգում է `crates/iroha_torii/src/lib.rs:256-522`-ի հանրային վերաարտահանումները և
-հատուկ դարպասներով երթուղի կառուցողներ. Ճանապարհային քարտեզի յուրաքանչյուր `/v1/*` մակերեսի համար մենք ստուգել ենք.
+հատուկ դարպասներով երթուղի կառուցողներ. Ճանապարհային քարտեզի յուրաքանչյուր `/v2/*` մակերեսի համար մենք ստուգել ենք.
 
 - Կառավարիչի ներդրում և DTO սահմանումներ `crates/iroha_torii/src/routing.rs`-ում:
 - Երթուղիչի գրանցում `app_api` կամ `connect` առանձնահատկությունների խմբերի ներքո:
@@ -44,25 +44,25 @@ translator: machine-google-reviewed
 - Հատվածների օրինակներ.
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Վերջնակետի գույքագրում
 
-### Հաշվի թույլտվություններ (`/v1/accounts/{id}/permissions`) — Ծածկված
+### Հաշվի թույլտվություններ (`/v2/accounts/{id}/permissions`) — Ծածկված
 - Կառավարիչ՝ `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`):
 - DTO-ներ՝ `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`):
 - Երթուղիչի միացում՝ `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`):
@@ -70,7 +70,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Սեփականատեր՝ Torii հարթակ:
 - Նշումներ. Response-ը Norito JSON մարմին է `items`/`total`-ով, որը համապատասխանում է SDK էջագրման օգնականներին:
 
-### Alias OPRF գնահատում (`POST /v1/aliases/voprf/evaluate`) — Ծածկված
+### Alias OPRF գնահատում (`POST /v2/aliases/voprf/evaluate`) — Ծածկված
 - Կառավարիչ՝ `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`):
 - DTO-ներ՝ `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`):
@@ -80,7 +80,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Սեփականատեր՝ Torii հարթակ:
 - Ծանոթագրություններ. արձագանքման մակերեսը պարտադրում է դետերմինիստական ​​վեցանկյուն և հետնամասի նույնացուցիչները; SDK-ները սպառում են DTO-ն:
 
-### Ապացուցողական իրադարձություններ SSE (`GET /v1/events/sse`) — Ծածկված
+### Ապացուցողական իրադարձություններ SSE (`GET /v2/events/sse`) — Ծածկված
 - Կառավարիչ՝ `handle_v1_events_sse` ֆիլտրի աջակցությամբ (`crates/iroha_torii/src/routing.rs:14008-14133`):
 - DTO-ներ՝ `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) գումարած ֆիլտրի պաշտպանիչ էլեկտրալարեր:
 - Երթուղիչի միացում՝ `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`):
@@ -90,7 +90,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Սեփականատեր՝ Torii հարթակ (աշխատանքի ժամանակ), Ինտեգրման թեստեր WG (հարմարանքներ):
 - Ծանոթագրություններ. Ապացուցիչ ֆիլտրի ուղիները վավերացված են վերջից մինչև վերջ; փաստաթղթերը գործում են `docs/source/zk_app_api.md`-ի ներքո:
 
-### Պայմանագրի կյանքի ցիկլը (`/v1/contracts/*`) — Ծածկված
+### Պայմանագրի կյանքի ցիկլը (`/v2/contracts/*`) — Ծածկված
 - Կառավարիչներ՝ `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -105,7 +105,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Սեփականատեր՝ Smart Contract WG Torii հարթակով:
 - Ծանոթագրություններ. վերջնակետերը հերթագրում են ստորագրված գործարքները և վերօգտագործում ընդհանուր հեռաչափության չափումները (`handle_transaction_with_metrics`):
 
-### Բանալին հաստատող կյանքի ցիկլը (`/v1/zk/vk/*`) — Ծածկված
+### Բանալին հաստատող կյանքի ցիկլը (`/v2/zk/vk/*`) — Ծածկված
 - Կառավարիչներ՝ `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) և `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`):
 - DTO-ներ՝ `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -117,7 +117,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Սեփականատեր՝ ZK աշխատանքային խումբ՝ Torii պլատֆորմի աջակցությամբ:
 - Ծանոթագրություններ. DTO-ները համընկնում են Norito սխեմաների հետ, որոնք հղում են կատարում SDK-ների կողմից; տոկոսադրույքի սահմանափակում, որն իրականացվում է `limits.rs`-ի միջոցով:
 
-### Nexus Connect (`/v1/connect/*`) — Ծածկված (հատկանիշ `connect`)
+### Nexus Connect (`/v2/connect/*`) — Ծածկված (հատկանիշ `connect`)
 - Կառավարիչներ՝ `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`):
 - DTO-ներ՝ `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

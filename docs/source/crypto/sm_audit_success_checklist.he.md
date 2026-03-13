@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] תפוקות הבדיקה הדטרמיניסטיות האחרונות שנתפסו:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, ו
       גופי Norito הלוך ושוב.
-- [ ] פרסומת Torii `/v1/node/capabilities` (באמצעות `iroha runtime capabilities`) נרשמה, אימות שדות המניפסט `crypto.sm` ותמונת מצב של מדיניות האצה.
+- [ ] פרסומת Torii `/v2/node/capabilities` (באמצעות `iroha runtime capabilities`) נרשמה, אימות שדות המניפסט `crypto.sm` ותמונת מצב של מדיניות האצה.
 
 # ביצוע אירוסין
 

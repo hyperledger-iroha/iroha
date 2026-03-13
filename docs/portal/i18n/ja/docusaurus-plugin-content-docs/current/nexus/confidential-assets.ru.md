@@ -44,7 +44,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Детерминированные фикстуры
 
-メモ-конверты теперь поставляются с каноническим фикстуром в `fixtures/confidential/encrypted_payload_v1.json`. Набор данных включает положительный v1-конверт и негативные поврежденные образцы, чтобы SDK могли проверятьそうです。 Rust データモデル (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) と Swift スイート (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) の組み合わせNorito-кодирование, поверхности обок и регрессионное покрытие остаются согласованными по мере эволюции кодека。Swift SDK のシールド - カスタム ビスポーク JSON グルー: `ShieldRequest` 32-байтным コミットメント、ペイロード、デビットメタデータ、`IrohaSDK.submit(shield:keypair:)` (`submitAndWait`)、чтобы подписать и отправить транзакцию через `/v1/pipeline/transactions`。コミットメント、`ConfidentialEncryptedPayload`、Norito エンコーダ、レイアウト `zk::Shield`、Хелпер валидирует、пропускает錆びる、錆びる。
+メモ-конверты теперь поставляются с каноническим фикстуром в `fixtures/confidential/encrypted_payload_v1.json`. Набор данных включает положительный v1-конверт и негативные поврежденные образцы, чтобы SDK могли проверятьそうです。 Rust データモデル (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) と Swift スイート (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) の組み合わせNorito-кодирование, поверхности обок и регрессионное покрытие остаются согласованными по мере эволюции кодека。Swift SDK のシールド - カスタム ビスポーク JSON グルー: `ShieldRequest` 32-байтным コミットメント、ペイロード、デビットメタデータ、`IrohaSDK.submit(shield:keypair:)` (`submitAndWait`)、чтобы подписать и отправить транзакцию через `/v2/pipeline/transactions`。コミットメント、`ConfidentialEncryptedPayload`、Norito エンコーダ、レイアウト `zk::Shield`、Хелпер валидирует、пропускает錆びる、錆びる。
 
 ## Коммитменты консенсуса и gating возможностей
 - Заголовки блоков раскрывают `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`;ダイジェスト консенсуса と должен совпадать с локальным представлением レジストリ для принятия блока。
@@ -71,7 +71,7 @@ SPDX-License-Identifier: Apache-2.0
 - Genesis マニフェスト、CLI および ожидающие など。入場料は、Лолитику во время исполнения、подтверждая、что каждая конфиденциальная инструкция разрезенаです。
 - チェックリスト миграции — см. 「移行シーケンス」 は、マイルストーン M0 を実行します。
 
-#### Мониторинг переходов через Torii`GET /v1/confidential/assets/{definition_id}/transitions`、чтобы проверить активную `AssetConfidentialPolicy`。 JSON ペイロード всегда включает канонический アセット ID、последнюю наблюдаемую высоту блока、`current_mode` политики、режим、 эффективный на этой высоте (окна конверсии временно отдают `Convertible`)、и ожидаемые идентификаторы параметров `vk_set_hash`/ポセイドン/ペダーセン。ガバナンスを強化する:
+#### Мониторинг переходов через Torii`GET /v2/confidential/assets/{definition_id}/transitions`、чтобы проверить активную `AssetConfidentialPolicy`。 JSON ペイロード всегда включает канонический アセット ID、последнюю наблюдаемую высоту блока、`current_mode` политики、режим、 эффективный на этой высоте (окна конверсии временно отдают `Convertible`)、и ожидаемые идентификаторы параметров `vk_set_hash`/ポセイドン/ペダーセン。ガバナンスを強化する:
 
 - `transition_id` — 監査ハンドル、`ScheduleConfidentialPolicyTransition`。
 - `previous_mode`/`new_mode`。
@@ -115,7 +115,7 @@ SPDX-License-Identifier: Apache-2.0
 
 1. **テスト結果:** 検証者とテストを実行し、テストを実行します。 `conf_features` は、ピアと同じです。
 2. **Спланировать переход:** Отправить `ScheduleConfidentialPolicyTransition` с `effective_height`, учитывающей `policy_transition_delay_blocks`. При движении к `ShieldedOnly` указать окно конверсии (`window ≥ policy_transition_window_blocks`)。
-3. **詳細情報:** オンランプ/オフランプの Runbook を確認します。 Кольки и аудиторы подписываются на `/v1/confidential/assets/{id}/transitions`、чтобы узнать высоту открытия окна.
+3. **詳細情報:** オンランプ/オフランプの Runbook を確認します。 Кольки и аудиторы подписываются на `/v2/confidential/assets/{id}/transitions`、чтобы узнать высоту открытия окна.
 4. **Применение окна:** Когда окно открывается、ランタイム переключает политику в `Convertible`, эмитирует `PolicyTransitionWindowOpened { transition_id }` およびガバナンスを強化する必要があります。
 5. ** Финализировать или отменить:** На `effective_height` ランタイム проверяет предпосылки перехода (нулевое прозрачное) предложение、отсутствие 緊急出金、т.п.)。 Успех переключает политику в запроденный режим; `PolicyTransitionPrerequisiteFailed`、保留中の移行と оставляет политику без изменений。
 6. **説明:** ガバナンス機能 (например、`asset_definition.v2`)、CLI ツールтребует `confidential_policy` はマニフェストを表示します。ジェネシスとジェネシスの両方を取得し、レジストリを確認してください。 Аалидаторов。
@@ -223,7 +223,7 @@ SPDX-License-Identifier: Apache-2.0
 - 派生クラス:
   - `sk_spend` → `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - ペイロードに関するメモ、AEAD および ECDH 由来の共有キー。監査ビューのキーと出力を確認できます。
-- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、аудит-инструменты для расзифровки メモおよびヘルパー `iroha app zk envelope` 日создания/инспекции Norito メモ封筒 офлайн。 Torii フローの導出、`POST /v1/confidential/derive-keyset`、16 進数、base64 の数値、чтобы кольки моглиあなたのことを考えてください。## Газ、лимиты、DoS-контроли
+- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、аудит-инструменты для расзифровки メモおよびヘルパー `iroha app zk envelope` 日создания/инспекции Norito メモ封筒 офлайн。 Torii フローの導出、`POST /v2/confidential/derive-keyset`、16 進数、base64 の数値、чтобы кольки моглиあなたのことを考えてください。## Газ、лимиты、DoS-контроли
 - ロシアのガススケジュール:
   - Halo2 (Plonkish): `250_000` ガス + `2_000` ガス - каждый パブリック入力。
   - `5` ガスの安全性、無効化子ごと (`300`) およびコミットメントごと (`500`) の機能。

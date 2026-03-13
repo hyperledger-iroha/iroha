@@ -78,7 +78,7 @@ pour que le contrat, les facades Torii et la CLI partagent des invariants identi
 
 | קומפוזיטור | טאצ'ה | בעלים |
 |---------|------|--------|
-| שירות Torii | Exposer `/v1/sorafs/pin` (שלח), `/v1/sorafs/pin/{cid}` (חיפוש), `/v1/sorafs/aliases` (רשימה/כריכה), `/v1/sorafs/replication` (הזמנות/קבלות). עימוד פורניר + סינון. | Networking TL / Core Infra |
+| שירות Torii | Exposer `/v2/sorafs/pin` (שלח), `/v2/sorafs/pin/{cid}` (חיפוש), `/v2/sorafs/aliases` (רשימה/כריכה), `/v2/sorafs/replication` (הזמנות/קבלות). עימוד פורניר + סינון. | Networking TL / Core Infra |
 | אישור | כלול la hauteur/hash du registry dans les réponses; ajouter une structure d'attestation Norito consommée par les SDKs. | אינפרא ליבה |
 | CLI | Étendre `sorafs_manifest_stub` או une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Générer des bindings client (Rust/Go/TS) depuis le schéma Norito ; ajouter des tests d'integration. | צוותי SDK |
@@ -133,10 +133,10 @@ pour que le contrat, les facades Torii et la CLI partagent des invariants identi
 צ'ק פריט רשימת SF-4 דויט référencer ce plan lorsque le progrès est registré.
 La facade REST livre désormais des endpoints של רישום עדויות:
 
-- `GET /v1/sorafs/pin` et `GET /v1/sorafs/pin/{digest}` renvoient des manifests avec
+- `GET /v2/sorafs/pin` et `GET /v2/sorafs/pin/{digest}` renvoient des manifests avec
   כריכות ד'alias, orders de réplication et un objet d'attestation dérivé du hash
   גוש du dernier.
-- קטלוג `GET /v1/sorafs/aliases` ו-`GET /v1/sorafs/replication` חשוף
+- קטלוג `GET /v2/sorafs/aliases` ו-`GET /v2/sorafs/replication` חשוף
   d'alias actif et le backlog des ordres de réplication avec une pagetion cohérente
   et des filtres de statut.La CLI encapsule ces appels (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) pour permettre aux opérateurs d'automatiser les audits du

@@ -67,7 +67,7 @@ Alət dəstəyi:
 
 Şlüzlər reklam metadatasını əks etdirən deterministik HTTP sorğularını qəbul edir.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Tələb | Təfərrüatlar |
 |-------------|---------|
@@ -75,7 +75,7 @@ Alət dəstəyi:
 | **Cavablar** | `206` ilə `Content-Type: application/vnd.ipld.car`, xidmət göstərilən pəncərəni təsvir edən `Content-Range`, `X-Sora-Chunk-Range` metadata və əks-sədalanan chunker/token başlıqları. |
 | **Uğursuzluq rejimləri** | Yanlış düzülmüş diapazonlar üçün `416`, çatışmayan/etibarsız nişanlar üçün `401`, axın/bayt büdcələri aşıldığında `429`. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Eyni başlıqlar və deterministik yığın həzmi ilə tək yığın gətirmə.
 CAR dilimləri lazımsız olduqda təkrar cəhdlər və ya məhkəmə endirmələri üçün faydalıdır.
@@ -126,7 +126,7 @@ Operatorlara/SDK-lara verilən ümumi səhvlər:
 - `iroha app sorafs pin list|show`, `alias list` və `replication list`
   pin-reyestr REST son nöqtələri və attestasiya blokları ilə xam Norito JSON çap edin
   audit sübutları üçün.
-- `iroha app sorafs storage pin` və `torii /v1/sorafs/pin/register` Norito qəbul edir
+- `iroha app sorafs storage pin` və `torii /v2/sorafs/pin/register` Norito qəbul edir
   və ya JSON manifestləri üstəgəl əlavə ləqəb sübutları və varisləri; qüsurlu sübutlar
   `400` qaldırın, köhnəlmiş səthi `503` ilə `Warning: 110` və
   müddəti bitmiş sübutlar `412` qaytarır.
@@ -142,8 +142,8 @@ Operatorlara/SDK-lara verilən ümumi səhvlər:
   ən son keçidlərlə məhdudlaşır.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` yalnız oxumaq üçün buraxılır
   audit sübutları üçün yerli manifest mağazasından saxlama hesabatları.
-- REST son nöqtələri (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) müştərilərin edə bilməsi üçün attestasiya strukturlarını ehtiva edir
+- REST son nöqtələri (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) müştərilərin edə bilməsi üçün attestasiya strukturlarını ehtiva edir
   tədbir görməzdən əvvəl məlumatları ən son blok başlıqları ilə yoxlayın.
 
 ## İstinadlar

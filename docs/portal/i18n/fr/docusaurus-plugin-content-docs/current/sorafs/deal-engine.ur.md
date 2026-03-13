@@ -52,12 +52,12 @@ les opérateurs de micropaiement gagnent et le report de crédit et les résulta
 ## Intégration Torii
 
 Les points de terminaison dédiés Torii exposent le rapport d'utilisation des fournisseurs de services.
-Pour le câblage sur mesure et le cycle de vie des transactions, voici :- `POST /v1/sorafs/deal/usage` `DealUsageReport` télémétrie acceptée
+Pour le câblage sur mesure et le cycle de vie des transactions, voici :- `POST /v2/sorafs/deal/usage` `DealUsageReport` télémétrie acceptée
   les résultats comptables déterministes (`UsageOutcome`) renvoient کرتا ہے۔
-- `POST /v1/sorafs/deal/settle` finalisation de la fenêtre actuelle
+- `POST /v2/sorafs/deal/settle` finalisation de la fenêtre actuelle
   Il s'agit d'un flux de données `DealSettlementRecord` encodé en base64 `DealSettlementV1`.
   جو gouvernance DAG publication کے لیے تیار ہوتا ہے۔
-- Torii vers `/v1/events/sse` flux vers `SorafsGatewayEvent::DealUsage` enregistrements diffusés par ici
+- Torii vers `/v2/events/sse` flux vers `SorafsGatewayEvent::DealUsage` enregistrements diffusés par ici
   Il s'agit de la soumission d'utilisation et de la date d'achat (époque, GiB-heures mesurés, compteurs de billets,
   frais déterministes), enregistrements `SorafsGatewayEvent::DealSettlement` et instantané du grand livre de règlement canonique
   artefact de gouvernance sur disque par BLAKE3 digest/size/base64

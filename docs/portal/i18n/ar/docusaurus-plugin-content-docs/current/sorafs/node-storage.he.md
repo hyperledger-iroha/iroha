@@ -133,8 +133,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > تعرض بوابة Torii الآن مساعدات قراءة فقط مدعومة بنفس `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — يعيد manifest Norito المخزن (base64) مع digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — يعيد خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — يعيد manifest Norito المخزن (base64) مع digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — يعيد خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > تعكس هذه النقاط خرج CLI بحيث يمكن للخطوط التحويل من scripts محلية إلى فحوصات HTTP دون تغيير المحللات.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -161,9 +161,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 ### تكامل إعلان السعة والجدولة
 
-- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات chunker/lane الملتزم بها. يكشف المدير لقطات read-only للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- يقبل endpoint `/v1/sorafs/capacity/schedule` حمولات `ReplicationOrderV1` الصادرة عن الحوكمة. عندما يستهدف الأمر المزوّد المحلي، يتحقق المدير من التكرار، ويفحص سعة chunker/lane، ويحجز الشريحة، ويعيد `ReplicationPlan` يصف السعة المتبقية لتتمكن أدوات orchestration من متابعة الإدخال. يتم الإقرار بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد المشغلين.【crates/iroha_torii/src/routing.rs:4845】
-- تقوم hooks الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v1/sorafs/capacity/complete` لإطلاق الحجوزات عبر `CapacityManager::complete_order`. يتضمن الرد لقطة `ReplicationRelease` (الإجماليات المتبقية وبقايا chunker/lane) حتى تتمكن أدوات orchestration من جدولة الأمر التالي دون polling. سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق الإدخال.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v2/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات chunker/lane الملتزم بها. يكشف المدير لقطات read-only للتليمترية (`GET /v2/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- يقبل endpoint `/v2/sorafs/capacity/schedule` حمولات `ReplicationOrderV1` الصادرة عن الحوكمة. عندما يستهدف الأمر المزوّد المحلي، يتحقق المدير من التكرار، ويفحص سعة chunker/lane، ويحجز الشريحة، ويعيد `ReplicationPlan` يصف السعة المتبقية لتتمكن أدوات orchestration من متابعة الإدخال. يتم الإقرار بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد المشغلين.【crates/iroha_torii/src/routing.rs:4845】
+- تقوم hooks الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v2/sorafs/capacity/complete` لإطلاق الحجوزات عبر `CapacityManager::complete_order`. يتضمن الرد لقطة `ReplicationRelease` (الإجماليات المتبقية وبقايا chunker/lane) حتى تتمكن أدوات orchestration من جدولة الأمر التالي دون polling. سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق الإدخال.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`، مما يسمح لعمال الخلفية بتسجيل عينات PoR/uptime وفي النهاية اشتقاق حمولات `CapacityTelemetryV1` القياسية دون لمس internals الـ scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### التكاملات والعمل المستقبلي

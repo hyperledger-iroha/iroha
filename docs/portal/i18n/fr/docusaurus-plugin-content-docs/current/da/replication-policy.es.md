@@ -30,7 +30,7 @@ le nombre requis d’époques et de répliques ne dépend pas de l’intention d
 | `nexus_lane_sidecar` | 6 heures | 7 jours | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 heures | 180 jours | 3 | `cold` | `da.governance` |
 | _Par défaut (toutes les classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |Ces valeurs sont incrustan en `torii.da_ingest.replication_policy` et sont appliquées à
-todas las sollicitudes `/v1/da/ingest`. Torii réécrire les manifestes avec le profil de
+todas las sollicitudes `/v2/da/ingest`. Torii réécrire les manifestes avec le profil de
 retenir l'impôt et émettre une publicité lorsque les appelants entrent des valeurs
 Il n'y a aucune coïncidence pour que les opérateurs détectent des SDK désactualisés.
 
@@ -149,5 +149,5 @@ hors du cumul de forme automatique.
 
 La couverture de régression vive en
 `integration_tests/tests/da/replication_policy.rs` ; la suite envoie une politique de
-la rétention ne coïncide pas avec `/v1/da/ingest` et vérifie que le manifeste obtenu
+la rétention ne coïncide pas avec `/v2/da/ingest` et vérifie que le manifeste obtenu
 expose le profil impuesto à l’endroit de l’intention de l’appelant.

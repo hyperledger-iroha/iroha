@@ -32,7 +32,7 @@ replicas کی تعداد retain کرے بغیر submitter intent پر انحصا
 | _ברירת מחדל (כל המחלקות האחרות)_ | 6 שעות | 30 ימים | 3 | `warm` | `da.default` |
 
 یہ اقدار `torii.da_ingest.replication_policy` میں embedded ہیں اور تمام
-`/v1/da/ingest` submissions پر لاگو ہوتی ہیں۔ Torii פרופיל שמירה נאכף
+`/v2/da/ingest` submissions پر لاگو ہوتی ہیں۔ Torii פרופיל שמירה נאכף
 کے ساتھ manifests دوبارہ لکھتا ہے اور جب callers mismatch values فراہم کرتے ہیں
 تو warning دیتا ہے تاکہ operators stale SDKs پکڑ سکیں۔
 
@@ -150,5 +150,5 @@ non-compliant blobs کو خودکار طور پر re-replicate کر سکے۔
    ساتھ جوڑیں تاکہ SREs وہی digest اور PDP evidence refer کر سکیں۔
 
 Regression coverage `integration_tests/tests/da/replication_policy.rs` میں ہے؛
-suite `/v1/da/ingest` کو mismatched retention policy بھیجتی ہے اور verify کرتی ہے
+suite `/v2/da/ingest` کو mismatched retention policy بھیجتی ہے اور verify کرتی ہے
 کہ fetched manifest caller intent کے بجائے enforced profile expose کرے۔

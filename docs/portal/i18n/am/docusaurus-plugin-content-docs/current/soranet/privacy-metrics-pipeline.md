@@ -117,14 +117,14 @@ SNNet-8a ሚስጥራዊ የተጋሩ የPrio ባልዲዎችን የሚያመነ
 Torii አሁን ሁለት የቴሌሜትሪ-ጌድ የኤችቲቲፒ ማለቂያ ነጥቦችን ያጋልጣል ስለዚህ ቅብብሎሽ እና ሰብሳቢዎች
 የታሰበ መጓጓዣ ሳይጨምር ምልከታዎችን ማስተላለፍ ይችላል፡-
 
-- `POST /v1/soranet/privacy/event` አንድ ይቀበላል
+- `POST /v2/soranet/privacy/event` አንድ ይቀበላል
   `RecordSoranetPrivacyEventDto` ጭነት. የሰውነት መጠቅለያዎች ሀ
   `SoranetPrivacyEventV1` እና አማራጭ I18NI0000090X መለያ። Torii ያረጋግጣል
   ንቁ በሆነው የቴሌሜትሪ ፕሮፋይል ላይ መጠየቅ፣ክስተቱን መዝግቦ ምላሽ ይሰጣል
   በ HTTP `202 Accepted` ከ Norito JSON ኤንቨሎፕ ጋር
   የተሰላ ባልዲ መስኮት (`bucket_start_unix`፣ `bucket_duration_secs`) እና
   የማስተላለፊያ ሁነታ.
-- `POST /v1/soranet/privacy/share` I18NI0000095X ይቀበላል
+- `POST /v2/soranet/privacy/share` I18NI0000095X ይቀበላል
   ጭነት. አካሉ I18NI0000096X እና አማራጭን ይይዛል
   ኦፕሬተሮች ሰብሳቢ ፍሰቶችን ኦዲት ማድረግ እንዲችሉ `forwarded_by` ፍንጭ ይሰጣል። ስኬታማ
   ማስረከቦች HTTP I18NI0000098X ከ Norito JSON ፖስታ ማጠቃለያ ጋር ይመልሳል
@@ -254,7 +254,7 @@ cargo xtask soranet-privacy-report \
 መስኮት (ነባሪ 10%) ወይም ገና ምንም ባልዲዎች በማይገኙበት ጊዜ። የሚመከር ፍሰት፡
 
 1. NDJSONን ከሪሌይ አስተዳዳሪ የመጨረሻ ነጥብ(ዎች) እና ኦርኬስትራውን ወደ ውጭ ላክ
-   `/v1/soranet/privacy/event|share` ዥረት ወደ ውስጥ
+   `/v2/soranet/privacy/event|share` ዥረት ወደ ውስጥ
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. ረዳቱን በፖሊሲ በጀት ያሂዱ፡-
 

@@ -46,7 +46,7 @@ in release dockets:
   “SoraNet transport” requirement. Pair it with the SF-6 rollout checklist and
   attach the captured artefacts to governance packets.
 - [`da_ingestion_rollback.md`](./da_ingestion_rollback.md) — rollback plan for the
-  Torii `/v1/da/ingest` surface (DA-2/DA-7), including ingress block templates,
+  Torii `/v2/da/ingest` surface (DA-2/DA-7), including ingress block templates,
   rent/manifest evidence capture, and governance communications.
 
 > Playbooks for the SNS registrar and CDN launches track under the same roadmap

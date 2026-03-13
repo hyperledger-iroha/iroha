@@ -59,7 +59,7 @@ SF-3, Iroha/Torii prosesini SoraFS yaddaş provayderinə çevirən ilk işlək `
 - `norito::json` faydalı yükləri ilə Torii-in Axum yığınından istifadə edin.
 - Cavablar üçün Norito sxemləri əlavə edin (`PinResultV1`, `FetchErrorV1`, telemetriya strukturları).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` indi geriləmə dərinliyini və ən qədim dövrü/son tarixi və
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` indi geriləmə dərinliyini və ən qədim dövrü/son tarixi və
   tərəfindən dəstəklənən hər bir provayder üçün ən son uğur/uğursuzluq zaman damğaları
   `sorafs_node::NodeHandle::por_ingestion_status` və Torii qeyd edir
   `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` üçün ölçü cihazları tablosuna.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】

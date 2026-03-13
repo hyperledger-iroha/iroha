@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/receipts{,/query}` endpoints.
+//! Integration tests for the `/v2/offline/receipts{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -54,7 +54,7 @@ use tower::ServiceExt as _;
 #[tokio::test]
 async fn offline_receipts_list_returns_flattened_receipts() {
     let harness = build_receipt_harness();
-    let uri = "/v1/offline/receipts";
+    let uri = "/v2/offline/receipts";
 
     let resp = harness
         .app
@@ -121,7 +121,7 @@ async fn offline_receipts_query_filters_by_invoice_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/receipts/query")
+                .uri("/v2/offline/receipts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),

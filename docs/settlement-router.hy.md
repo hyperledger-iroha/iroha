@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## Ապացույցներ և հղումներ
 - NX-3 հաշվարկային երթուղիչի ընդունման նշումներ. `status.md` (NX-3 բաժին):
 - Օպերատորի մակերեսները՝ `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`:
-- Ստացական սխեման և API-ի մակերեսները՝ `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`:
+- Ստացական սխեման և API-ի մակերեսները՝ `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`:

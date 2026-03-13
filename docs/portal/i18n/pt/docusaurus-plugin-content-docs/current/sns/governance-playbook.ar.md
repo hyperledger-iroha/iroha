@@ -46,7 +46,7 @@ Você pode usar o CLI `sns governance ...` e o Norito
 | مجلس الحوكمة | يصيغ ويصادق على المواثيق, وسياسات اللاحقات, واحكام النزاعات, e mordomos. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, você pode usar o `sns governance charter submit`. | رئيس المجلس + متعقب جدول اعمال الحوكمة. |
 | Guardião principal | يصدر تجميدات macio/duro, وقوانين طارئة, ومراجعات 72 h. | Guarde o guardião do `sns governance freeze`, e o guardião do `artifacts/sns/guardian/*`. | دورية guardião de plantão (<=15 min ACK). |
 | comissários de bordo | يديرون طوابير المسجل, والمزادات, وشرائح التسعير, واتصالات العملاء؛ ويقرون بالامتثال. | Você pode usar o steward em `SuffixPolicyV1`, você pode usar o steward para saber mais sobre o assunto. | قائد برنامج steward + PagerDuty خاص بكل لاحقة. |
-| Ferramentas e equipamentos | Selecione `/v1/sns/*`, verifique o código, clique no link e clique na CLI. | API API ([`registrar-api.md`](./registrar-api.md)), مقاييس `sns_registrar_status_total`, اثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`. | Isso significa que você pode fazer isso. |
+| Ferramentas e equipamentos | Selecione `/v2/sns/*`, verifique o código, clique no link e clique na CLI. | API API ([`registrar-api.md`](./registrar-api.md)), مقاييس `sns_registrar_status_total`, اثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`. | Isso significa que você pode fazer isso. |
 | Resolvedores de problemas e soluções | يحافظون على SoraDNS e GAR e وحالة البوابة متوافقة مع احداث المسجل؛ ويبثون مقاييس الشفافية. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | Resolvedor SRE de plantão + جسر عمليات البوابة. |
 | Produtos e serviços | 70/30, e referência, e SLA. | Você pode usar o Stripe/الخزينة, o KPI definido como `docs/source/sns/regulatory/`. | مراقب المالية + مسؤول الامتثال. |
 | Produtos de higiene pessoal | تتبع الالتزامات العالمية (EU DSA), وتحدث مواثيق KPI, وتقدم الافصاحات. | Você pode usar `docs/source/sns/regulatory/`, عروض مرجعية, e `ops/drill-log.md`. | قائد برنامج الامتثال. |
@@ -121,7 +121,7 @@ A máquina de lavar roupa e a máquina de lavar roupa são `docs/source/sns/regu
 | الاشارة | المصدر | الوصف / الاجراء |
 |--------|--------|-----------------|
 | `sns_registrar_status_total{result,suffix}` | معالجات مسجل Torii | عداد نجاح/خطا للتسجيلات, التجديدات, التجميدات, التحويلات; Verifique se o `result="error"` está danificado. |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Mecanismo Torii | SLO para API de API; Verifique se o produto está em `torii_norito_rpc_observability.json`. |
+| `torii_request_duration_seconds{route="/v2/sns/*"}` | Mecanismo Torii | SLO para API de API; Verifique se o produto está em `torii_norito_rpc_observability.json`. |
 | `soradns_bundle_proof_age_seconds` e `soradns_bundle_cid_drift_total` | alfaiataria resolvedor | تكشف ادلة قديمة او انحراف GAR; O item está em `dashboards/alerts/soradns_transparency_rules.yml`. |
 | `sns_governance_activation_total` | CLI الحوكمة | عداد يزداد عند تفعيل ميثاق/ملحق؛ Verifique se o dispositivo está funcionando corretamente. |
 | Medidor `guardian_freeze_active` | Guardião CLI | يتتبع نوافذ تجميد macio/duro para fazer isso O SRE não possui o código `1` ou o SLA. |

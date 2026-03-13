@@ -225,7 +225,7 @@ liste blanche des fournisseurs malveillants, ou alertes suprêmes.
 **Onde olhar a seguir:**- Le cache de relecture et la persistance des curseurs sur le DA-2. Veja un
   implémentation dans `crates/iroha_core/src/da/replay_cache.rs` (logique du cache)
   et une intégration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui enchaîne les vérifications de
-  empreinte digitale via `/v1/da/ingest`.
+  empreinte digitale via `/v2/da/ingest`.
 - En tant que simulations de streaming PDP/PoTR à partir d'exercices via ou Harness Proof-Stream
   dans `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR et scénarios de faux animés sur le modèle des amis.

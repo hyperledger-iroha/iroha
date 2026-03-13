@@ -39,7 +39,7 @@ serde/JSON のフォールバック。
 ## 上位 API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -223,7 +223,7 @@ hashear、chunking、verificar はオプションを示します。
   ケ・ヤ・ポテンシア`iroha app sorafs fetch`。ロス オペラドーレス プエデン アプンタルロ
   マニフェストのアーティファクト + チャンク プラン (`--manifest`、`--plan`、`--manifest-id`)
   **o** `--storage-ticket` 経由で Torii のストレージ チケットを取得します。クアンド・セ・アメリカ
-  チケットのパス、CLI バハのマニフェスト `/v1/da/manifests/<ticket>`、
+  チケットのパス、CLI バハのマニフェスト `/v2/da/manifests/<ticket>`、
   永続化エルバンドルバジョ `artifacts/da/fetch_<timestamp>/` (オーバーライドコン
   `--manifest-cache-dir`)、`--manifest-id` の BLOB からの派生、ルエゴ
   `--gateway-provider` suministrada を出してください。トドス
@@ -234,7 +234,7 @@ hashear、chunking、verificar はオプションを示します。
   que los は、名前空間全体の可用性をエンドツーエンドでチェックします
   `da` 罪の二重論理的オルケスタドール。
 - `iroha app da get-blob` baja マニフェスト canonicos directo desde Torii via
-  `GET /v1/da/manifests/{storage_ticket}`。エルコマンドエスクライブ
+  `GET /v2/da/manifests/{storage_ticket}`。エルコマンドエスクライブ
   `manifest_{ticket}.norito`、`manifest_{ticket}.json` y
   `chunk_plan_{ticket}.json` バジョ `artifacts/da/fetch_<timestamp>/` (o un
   `--output-dir` 利用規約) 重要な命令を実行する

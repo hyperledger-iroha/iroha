@@ -6,10 +6,10 @@
 //! - Deterministic id: Blake2b-32 of the sanitized request bytes (lowercase hex).
 //! - Multi-tenant: attachments are isolated per tenant (API token when enforced, otherwise remote IP).
 //! - Endpoints:
-//!   - POST `/v1/zk/attachments` – store attachment, returns metadata `{ id, size, content_type, created_ms }`.
-//!   - GET  `/v1/zk/attachments` – list metadata for stored attachments.
-//!   - GET  `/v1/zk/attachments/{id}` – fetch stored attachment bytes by id.
-//!   - DELETE `/v1/zk/attachments/{id}` – delete stored attachment and its metadata.
+//!   - POST `/v2/zk/attachments` – store attachment, returns metadata `{ id, size, content_type, created_ms }`.
+//!   - GET  `/v2/zk/attachments` – list metadata for stored attachments.
+//!   - GET  `/v2/zk/attachments/{id}` – fetch stored attachment bytes by id.
+//!   - DELETE `/v2/zk/attachments/{id}` – delete stored attachment and its metadata.
 //! - A background GC task periodically deletes entries older than a TTL;
 //!   TTL and size caps are provided via `iroha_config` (Torii).
 
@@ -996,7 +996,7 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
     true
 }
 
-/// POST /v1/zk/attachments — store an attachment and return its metadata.
+/// POST /v2/zk/attachments — store an attachment and return its metadata.
 pub async fn handle_post_attachment(
     tenant: AttachmentTenant,
     headers: axum::http::HeaderMap,
@@ -1128,7 +1128,7 @@ pub async fn handle_post_attachment(
         .into_response()
 }
 
-/// GET /v1/zk/attachments — list stored attachments metadata.
+/// GET /v2/zk/attachments — list stored attachments metadata.
 pub async fn handle_list_attachments(tenant: AttachmentTenant) -> impl IntoResponse {
     handle_list_attachments_filtered(tenant, NoritoQuery(AttachmentListQuery::default())).await
 }
@@ -1158,7 +1158,7 @@ pub struct AttachmentListQuery {
     pub ids_only: Option<bool>,
 }
 
-/// GET /v1/zk/attachments with filters
+/// GET /v2/zk/attachments with filters
 pub async fn handle_list_attachments_filtered(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
@@ -1251,7 +1251,7 @@ pub async fn handle_list_attachments_filtered(
         .unwrap()
 }
 
-/// GET /v1/zk/attachments/count — return number of attachments matching filters
+/// GET /v2/zk/attachments/count — return number of attachments matching filters
 pub async fn handle_count_attachments(
     tenant: AttachmentTenant,
     NoritoQuery(q): NoritoQuery<AttachmentListQuery>,
@@ -1459,7 +1459,7 @@ fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
         .map_or(true, |prov| prov.sanitizer.archive_depth > 0)
 }
 
-/// GET /v1/zk/attachments/{id} — return the stored attachment bytes.
+/// GET /v2/zk/attachments/{id} — return the stored attachment bytes.
 pub async fn handle_get_attachment(
     tenant: AttachmentTenant,
     AxumPath(id): AxumPath<String>,
@@ -1518,7 +1518,7 @@ pub async fn handle_get_attachment(
         .unwrap()
 }
 
-/// DELETE /v1/zk/attachments/{id} — delete an attachment and its metadata.
+/// DELETE /v2/zk/attachments/{id} — delete an attachment and its metadata.
 pub async fn handle_delete_attachment(
     tenant: AttachmentTenant,
     AxumPath(id): AxumPath<String>,

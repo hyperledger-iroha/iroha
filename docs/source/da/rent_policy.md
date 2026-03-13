@@ -3,7 +3,7 @@
 _Status: Drafting — Owners: Economics WG / Treasury / Storage Team_
 
 Roadmap item **DA-7** introduces an explicit XOR-denominated rent for every blob
-submitted to `/v1/da/ingest`, plus bonuses that reward PDP/PoTR execution and
+submitted to `/v2/da/ingest`, plus bonuses that reward PDP/PoTR execution and
 egress served to fetch clients. This document defines the initial parameters,
 their data-model representation, and the calculation workflow used by Torii,
 SDKs, and Treasury dashboards.
@@ -151,7 +151,7 @@ audits to prove which parameters were in force for any given blob.
 
 ## Operational flow
 
-1. **Ingest:** `/v1/da/ingest` loads the active `DaRentPolicyV1`, quotes rent
+1. **Ingest:** `/v2/da/ingest` loads the active `DaRentPolicyV1`, quotes rent
    based on blob size and retention, and embeds the quote into the Norito
    manifest. The submitter signs a statement that references the rent hash and
    the storage ticket id.
@@ -171,7 +171,7 @@ audits to prove which parameters were in force for any given blob.
 Torii nodes expose rent usage via the following Prometheus metrics (labels:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-months quoted by `/v1/da/ingest`.
+- `torii_da_rent_gib_months_total` — GiB-months quoted by `/v2/da/ingest`.
 - `torii_da_rent_base_micro_total` — base rent (micro XOR) accrued at ingest.
 - `torii_da_protocol_reserve_micro_total` — protocol reserve contributions.
 - `torii_da_provider_reward_micro_total` — provider-side rent payouts.
@@ -188,7 +188,7 @@ volume and payouts.
 
 ## Next steps
 
-- ✅ `/v1/da/ingest` receipts now embed `rent_quote` and the CLI/SDK surfaces display the quoted
+- ✅ `/v2/da/ingest` receipts now embed `rent_quote` and the CLI/SDK surfaces display the quoted
   base rent, reserve share, and PDP/PoTR bonuses so submitters can review the XOR obligations before
   committing payloads.
 - Integrate the rent ledger with the forthcoming DA reputation/order-book feeds

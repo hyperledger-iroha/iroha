@@ -200,7 +200,7 @@ ID-ներն ունեն կայուն լարային ձևեր `Display`/`FromStr` 
 - Անանուխը կեղծանունով + հաշվի բաղադրիչներ.
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Լուծեք կանոնական օգնության կեղծանունները.
-  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#ubl@sbp" }`-ով
+  - `POST /v2/assets/aliases/resolve` JSON `{ "alias": "pkr#ubl@sbp" }`-ով
 
 Միգրացիոն նշում.
 - `name#domain` տեքստային ակտիվների սահմանման ID-ները միտումնավոր չեն աջակցվում առաջին թողարկումում:

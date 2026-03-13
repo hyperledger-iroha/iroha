@@ -132,7 +132,7 @@ parity = clamp(ceil((loss_ewma * 1.25 + 0.005) * 12), 0, 6)
 
 - `hpke_suite_mask`, ‏`supports_datagram`, ‏`max_segment_datagram_size`, ‏`fec_feedback_interval_ms`, ‏`privacy_bucket_granularity_ms` ב-`StreamingConfig`.
 - CLI `iroha_cli streaming capabilities` מציג את המצב.
-- המניפסט מכיל `transport_capabilities_hash`; `/v1/streaming/manifest` מאפשר אימות חיצוני.
+- המניפסט מכיל `transport_capabilities_hash`; `/v2/streaming/manifest` מאפשר אימות חיצוני.
 
 ## רפרנסים
 

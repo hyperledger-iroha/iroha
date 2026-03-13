@@ -130,7 +130,7 @@ motivo). Al probar alerting, envia un payload conocido y valido via:
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-Monitorea `/v1/events/sse` con un stream filtrado para probar que los SDKs ven los
+Monitorea `/v2/events/sse` con un stream filtrado para probar que los SDKs ven los
 mismos datos: reutiliza el one-liner de Python de {doc}`torii/sumeragi_evidence_app_api`
 para construir el filtro y captura los frames `data:` sin procesar. Los payloads
 SSE deben reflejar el kind de evidencia y el signer que aparecio en la salida del CLI.
@@ -171,6 +171,6 @@ Seguir este checklist mantiene auditables las pruebas de aleatoriedad VRF y la
 - **Evidence ingestion stalls** - Cuando `sumeragi_evidence_records_total`
   se estanca mientras las pruebas de caos emiten fallas, ejecuta
   `iroha ops sumeragi evidence count` en varios validadores y confirma que
-  `/v1/sumeragi/evidence/count` coincide con la salida del CLI. Cualquier divergencia
+  `/v2/sumeragi/evidence/count` coincide con la salida del CLI. Cualquier divergencia
   implica que consumidores SSE/webhook pueden estar desactualizados, asi que reenvia
   un fixture conocido y escala a los mantenedores de Torii si el contador no incrementa.

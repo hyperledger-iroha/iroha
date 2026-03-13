@@ -11,13 +11,13 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: JavaScript Connect پیش نظارہ ترکیب
-description: Connect پیش نظارہ سیشنز تیار کریں، قطار کی ٹیلی میٹری خارج کریں، اور `@iroha/iroha-js` کے ساتھ `/v1/connect/ws` ساکٹ ڈائل کریں۔
+description: Connect پیش نظارہ سیشنز تیار کریں، قطار کی ٹیلی میٹری خارج کریں، اور `@iroha/iroha-js` کے ساتھ `/v2/connect/ws` ساکٹ ڈائل کریں۔
 slug: /sdks/recipes/javascript-connect-preview
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-یہ ترکیب دکھاتی ہے کہ `bootstrapConnectPreviewSession` کو `ToriiClient.openConnectWebSocket()` کے ذریعے فراہم کردہ WebSocket ڈائلر کے ساتھ کیسے ملایا جائے۔ اسکرپٹ JS SDK roadmap کے Connect حصے کی عکاسی کرتا ہے: یہ تعیینی پیش نظارہ URIs بناتا ہے، قطار کی گہرائی کی ٹیلی میٹری ریکارڈ کرتا ہے، اور `ws` پیکج کے ذریعے کینونیکل `/v1/connect/ws` اینڈپوائنٹ کھولتا ہے تاکہ Node.js ایپس براؤزرز والا ہی فلو چلا سکیں۔
+یہ ترکیب دکھاتی ہے کہ `bootstrapConnectPreviewSession` کو `ToriiClient.openConnectWebSocket()` کے ذریعے فراہم کردہ WebSocket ڈائلر کے ساتھ کیسے ملایا جائے۔ اسکرپٹ JS SDK roadmap کے Connect حصے کی عکاسی کرتا ہے: یہ تعیینی پیش نظارہ URIs بناتا ہے، قطار کی گہرائی کی ٹیلی میٹری ریکارڈ کرتا ہے، اور `ws` پیکج کے ذریعے کینونیکل `/v2/connect/ws` اینڈپوائنٹ کھولتا ہے تاکہ Node.js ایپس براؤزرز والا ہی فلو چلا سکیں۔
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

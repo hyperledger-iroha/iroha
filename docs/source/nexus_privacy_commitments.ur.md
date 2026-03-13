@@ -200,7 +200,7 @@ LanePrivacyCommitment::snark(id, circuit)
 
 ### Operator Visibility
 
-Torii کا `/v1/sumeragi/status` endpoint اب `lane_governance[].privacy_commitments` array expose کرتا
+Torii کا `/v2/sumeragi/status` endpoint اب `lane_governance[].privacy_commitments` array expose کرتا
 ہے تاکہ operators اور SDKs live registry کو published manifests کے ساتھ diff کر سکیں بغیر bundle
 دوبارہ پڑھنے کے۔ snapshot `crates/iroha_core/src/sumeragi/status.rs` میں بنتا ہے، Torii کے REST/JSON
 handlers (`crates/iroha_torii/src/routing.rs`) کے ذریعے export ہوتا ہے، اور ہر client

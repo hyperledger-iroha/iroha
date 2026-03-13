@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник по запросу `POST /v1/sns/registrations` по запросу и по прибытии в премьер-министр
+- Помощник по запросу `POST /v2/sns/registrations` по запросу и по прибытии в премьер-министр
   ошибка HTTP. Ответы присылаются в журнале регистрации NDJSON.
-- `--poll-status` повторный опрос `/v1/sns/registrations/{selector}` после перерыва
+- `--poll-status` повторный опрос `/v2/sns/registrations/{selector}` после перерыва
   soumission (jusqu'a `--poll-attempts`, по умолчанию 5) для подтверждения того, что
   регистрация est видна. Фурнисс `--suffix-map` (JSON de `suffix_id`
   vers des valeurs «суффикс») для того, чтобы получить мусор

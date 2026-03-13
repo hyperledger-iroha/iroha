@@ -146,7 +146,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` の JSON を反映します。標準アカウント ID、標準 I105 リテラル、ネットワーク接頭辞/誤り訂正メタデータ、QR 寸法、ウォレットが直接埋め込める inline SVG を含みます。
+`ExplorerAccountQrSnapshot` は `/v2/explorer/accounts/{id}/qr` の JSON を反映します。標準アカウント ID、標準 I105 リテラル、ネットワーク接頭辞/誤り訂正メタデータ、QR 寸法、ウォレットが直接埋め込める inline SVG を含みます。
 
 ## 7. イベントに購読
 

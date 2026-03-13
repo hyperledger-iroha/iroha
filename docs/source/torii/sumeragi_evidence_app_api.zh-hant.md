@@ -15,8 +15,8 @@ Status: Completed 2026-03-21
 Owners: Torii Platform, Integration Tests WG  
 Roadmap reference: TORII-APP-3 — Evidence endpoints & SSE parity
 
-This note documents the `/v1/sumeragi/evidence/*` HTTP surfaces and the proof
-signals emitted over `/v1/events/sse`. The handlers already ship in Torii, but
+This note documents the `/v2/sumeragi/evidence/*` HTTP surfaces and the proof
+signals emitted over `/v2/events/sse`. The handlers already ship in Torii, but
 the contract was tracked in the roadmap until we captured the DTO shapes,
 filters, and sample payloads for SDK parity.
 
@@ -30,7 +30,7 @@ Requests accept Norito (`application/x-norito`) or JSON payloads via the shared
 URL encoding and are decoded through the Norito JSON codec, so booleans,
 integers, and strings are parsed without additional quoting.
 
-### `GET /v1/sumeragi/evidence/count`
+### `GET /v2/sumeragi/evidence/count`
 
 - Returns a monotonic count of unique evidence records observed by the node
   during the retention horizon.
@@ -45,7 +45,7 @@ integers, and strings are parsed without additional quoting.
 - Binary parity: `CountResponse` (`norito::derive::NoritoSerialize`) is sent
   when `Accept: application/x-norito` is supplied.【crates/iroha_torii/src/routing.rs:263】【crates/iroha_torii/src/routing.rs:2855】
 
-### `GET /v1/sumeragi/evidence`
+### `GET /v2/sumeragi/evidence`
 
 Lists recent evidence records from the in-memory snapshot. Supported query
 parameters (`EvidenceListQuery`):
@@ -95,7 +95,7 @@ The keys vary per `EvidenceKind` and mirror the JSON produced by
 `evidence_to_json`. When `Accept: application/x-norito` the response is a binary
 `EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
 
-### `POST /v1/sumeragi/evidence/submit`
+### `POST /v2/sumeragi/evidence/submit`
 
 Submits slashing evidence to the running Sumeragi instance.
 
@@ -121,13 +121,13 @@ Submits slashing evidence to the running Sumeragi instance.
 
 Norito bodies are also accepted (`Content-Type: application/x-norito`).【crates/iroha_torii/src/routing.rs:3078】【crates/iroha_torii/src/routing.rs:3085】
 
-## Proof & Pipeline SSE (`GET /v1/events/sse`)
+## Proof & Pipeline SSE (`GET /v2/events/sse`)
 
 The SSE handler and DTO live at
 `crates/iroha_torii/src/routing.rs:14376-14571` and expose the shared
 `EventsSender` broadcast stream.【crates/iroha_torii/src/routing.rs:14376】【crates/iroha_torii/src/lib.rs:6602】
 
-- Endpoint: `GET /v1/events/sse`
+- Endpoint: `GET /v2/events/sse`
 - Protocol: `text/event-stream`; each `data:` line is a single JSON document.
 - Query: optional `filter` query parameter containing a JSON-encoded Norito
   `FilterExpr`. Standard pipeline filters (`tx_status`, `tx_hash`,
@@ -141,7 +141,7 @@ The SSE handler and DTO live at
 Example request filtering proof verifications for a specific backend/call hash:
 
 ```sh
-curl -N "$TORII/v1/events/sse?filter=$(python3 - <<'PY'
+curl -N "$TORII/v2/events/sse?filter=$(python3 - <<'PY'
 import json, urllib.parse
 expr = {
   "op": "and",

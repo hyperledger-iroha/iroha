@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for /v1/zk/proofs and /v1/zk/proofs/count.
+//! Integration tests for /v2/zk/proofs and /v2/zk/proofs/count.
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
 
@@ -93,7 +93,7 @@ async fn proofs_list_and_count_with_filters() {
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let app = Router::new()
         .route(
-            "/v1/zk/proofs",
+            "/v2/zk/proofs",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -103,7 +103,7 @@ async fn proofs_list_and_count_with_filters() {
             }),
         )
         .route(
-            "/v1/zk/proofs/count",
+            "/v2/zk/proofs/count",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -119,7 +119,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs")
+                .uri("/v2/zk/proofs")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -137,7 +137,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs/count?status=Verified")
+                .uri("/v2/zk/proofs/count?status=Verified")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -158,7 +158,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs?has_tag=PROF&ids_only=true")
+                .uri("/v2/zk/proofs?has_tag=PROF&ids_only=true")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -186,7 +186,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs?verified_from_height=2&ids_only=true")
+                .uri("/v2/zk/proofs?verified_from_height=2&ids_only=true")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -211,7 +211,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs?verified_until_height=1&ids_only=true")
+                .uri("/v2/zk/proofs?verified_until_height=1&ids_only=true")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -236,7 +236,7 @@ async fn proofs_list_and_count_with_filters() {
         .oneshot(
             http::Request::builder()
                 .method("GET")
-                .uri("/v1/zk/proofs?verified_from_height=10&verified_until_height=5")
+                .uri("/v2/zk/proofs?verified_from_height=10&verified_until_height=5")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

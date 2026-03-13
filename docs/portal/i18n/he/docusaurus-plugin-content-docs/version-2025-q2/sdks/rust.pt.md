@@ -168,7 +168,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
+`ExplorerAccountQrSnapshot` mirrors the `/v2/explorer/accounts/{id}/qr` JSON
 surface: it includes the canonical account id, the canonical I105 literal, network prefix/error-correction metadata, QR dimensions, and
 the inline SVG payload that wallets/explorers can embed directly.
 

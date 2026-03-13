@@ -100,9 +100,9 @@ LaneCompliancePolicy {
 
 Torii が公開する API:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — 最新の policy reference を取得。
-- `POST /v1/lane-compliance/policies` — governance 専用 endpoint (ISI の proposal helpers を反映)。
-- `GET /v1/lane-compliance/decisions` — `lane_id`, `decision`, `jurisdiction`, `reason_code`
+- `GET /v2/lane-compliance/policies/{lane_id}` — 最新の policy reference を取得。
+- `POST /v2/lane-compliance/policies` — governance 専用 endpoint (ISI の proposal helpers を反映)。
+- `GET /v2/lane-compliance/decisions` — `lane_id`, `decision`, `jurisdiction`, `reason_code`
   のフィルタを備えた監査ログのページング取得。
 
 CLI/SDK コマンドはこれらの HTTP サーフェスをラップし、オペレーターがレビューを
@@ -112,7 +112,7 @@ CLI/SDK コマンドはこれらの HTTP サーフェスをラップし、オペ
 
 1. **アドミッション (Torii)**
    - `Torii` は lane manifest の変更時、またはキャッシュ署名の期限切れ時にアクティブポリシーを取得する。
-   - `/v1/pipeline` キューに入る各トランザクションは `LaneComplianceContext`
+   - `/v2/pipeline` キューに入る各トランザクションは `LaneComplianceContext`
      (participant ids, UAID, dataspace manifest metadata, policy id, `crates/iroha_core/src/interlane/mod.rs`
      に記載された最新の `LanePrivacyRegistry` snapshot) とともにタグ付けされる。
    - UAID を持つ権限者は、ルーティング対象 dataspace の Space Directory manifest を有効化済みでなければならない。

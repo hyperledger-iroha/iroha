@@ -158,7 +158,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` ასახავს `/v1/explorer/accounts/{id}/qr` JSON-ს
+`ExplorerAccountQrSnapshot` ასახავს `/v2/explorer/accounts/{id}/qr` JSON-ს
 ზედაპირი: მასში შედის ანგარიშის კანონიკური id,
 კანონიკური I105 literal, ქსელის პრეფიქსი/შეცდომის გამოსწორების მეტამონაცემები, QR ზომები და
 inline SVG დატვირთვა, რომელიც საფულეებს/გამომძიებლებს შეუძლიათ პირდაპირ ჩასვან.

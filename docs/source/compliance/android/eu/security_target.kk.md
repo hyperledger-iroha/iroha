@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | Бұзылған конфигурация манифесті | `ClientConfig` қолданбас бұрын манифесттерді (хэш + схема) тексереді және `android.telemetry.config.reload` арқылы тыйым салынған қайта жүктеулерді журналға жазады. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Қол қою кілттерінің бұзылуы | StrongBox талап ететін саясаттар, аттестаттау қондырғылары және құрылғы матрицалық аудиттер дрейфті анықтайды; оқиғаға құжатталған қайта анықтайды. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Телеметриядағы PII ағуы | Blake2b-хэширленген органдар, шелектелген құрылғы профильдері, тасымалдаушының өткізілмеуі, журналды қайта анықтау. | `docs/source/sdk/android/telemetry_redaction.md`; Қолдау ойнау кітабы §8. |
-| Torii RPC | қайта ойнату немесе төмендету `/v1/pipeline` сұрау құрастырушысы TLS бекітуді, шу арнасының саясатын және хэштелген өкілеттік мәтінмәні бар бюджеттерді қайталауды қамтамасыз етеді. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (жоспарланған). |
+| Torii RPC | қайта ойнату немесе төмендету `/v2/pipeline` сұрау құрастырушысы TLS бекітуді, шу арнасының саясатын және хэштелген өкілеттік мәтінмәні бар бюджеттерді қайталауды қамтамасыз етеді. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (жоспарланған). |
 | Қол қойылмаған немесе қайталанбайтын шығарылымдар | AND6 бақылау парағымен бекітілген CycloneDX SBOM + Sigstore сертификаттары; шығару RFCs `docs/source/release/provenance/android/` дәлелдерін талап етеді. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Толық емес оқиғаны өңдеу | Runbook + playbook қайта анықтауды, хаос жаттығуларын және эскалация тармағын анықтайды; телеметрияны қайта анықтау қол қойылған Norito сұрауларын қажет етеді. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 Қол жеткізуді басқару | StrongBox саясаттары + қол қойылған Norito артефактілерін талап ететін жұмыс процесін қайта анықтау. |
 | 7.5 Криптографиялық басқару элементтері | AND2 кілтін жасау, сақтау және аттестаттау талаптары (негізді басқару нұсқаулығы). |
 | 7.6 Операциялардың қауіпсіздігі | Телеметриялық хэшинг, хаос репетициясы, оқиғаға жауап беру және дәлелдемелерді босату. |
-| 7.7 Байланыс қауіпсіздігі | `/v1/pipeline` TLS саясаты + хэштелген органдар (телеметриялық редакциялау құжаты). |
+| 7.7 Байланыс қауіпсіздігі | `/v2/pipeline` TLS саясаты + хэштелген органдар (телеметриялық редакциялау құжаты). |
 | 7.8 Жүйені алу/дамыту | AND5/AND6 жоспарларындағы қайталанатын Gradle конструкциялары, SBOM және шығу қақпалары. |
 | 7.9 Жеткізушімен қарым-қатынастар | Buildkite + Sigstore сертификаттары үшінші тарапқа тәуелді SBOMs бірге жазылған. |
 | 7.10 Оқиғаларды басқару | Runbook/Playbook эскалациясы, журналды қайта анықтау, телеметрия сәтсіз санауыштары. |

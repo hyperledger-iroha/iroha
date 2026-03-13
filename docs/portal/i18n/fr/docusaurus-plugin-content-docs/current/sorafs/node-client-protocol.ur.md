@@ -66,13 +66,13 @@ Prise en charge de l'outillage :
 Les requêtes HTTP déterministes des passerelles acceptent les métadonnées publicitaires et les miroirs
 کرتی ہیں۔
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Exigence | Détails |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Exigence | Détails |
 |-------------|---------|
 | **En-têtes** | `Range` (fenêtre unique alignée sur les décalages de blocs), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` en option, et base64 `X-SoraFS-Stream-Token`. |
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` et fenêtre servie pour les métadonnées `X-Sora-Chunk-Range` et les en-têtes de chunker/token et d'écho |
 | **Modes de défaillance** | plages mal alignées pour `416`, jetons manquants/invalides pour `401`, et les budgets de flux/octets dépassent ہونے pour `429`۔ |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Récupération d'un seul morceau d'en-têtes et d'un résumé de fragments déterministes nouvelles tentatives
 Téléchargements médico-légaux pour les tranches de CAR
@@ -119,11 +119,11 @@ Opérateurs/SDK et erreurs suivantes :
 - `iroha app sorafs pin list|show`, `alias list`, et `replication list` registre de broches
   Les points de terminaison REST enveloppent les éléments de preuve d'audit et les blocs d'attestation.
   raw Norito Impression JSON en anglais
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` Norito et JSON
+- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` Norito et JSON
   manifeste des preuves d'alias facultatives et les successeurs acceptent des preuves d'alias facultatives mal formé
   épreuves پر `400`, épreuves périmées پر `503` مع `Warning: 110`, اور épreuves périmées
   par `412`۔
--Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+-Points de terminaison REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   structures d'attestation شامل کرتے ہیں تاکہ clients derniers en-têtes de bloc کے
   خلاف données vérifier کر سکیں۔
 

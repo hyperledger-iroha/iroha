@@ -6,7 +6,7 @@ source: docs/portal/docs/sdks/recipes/javascript-connect-preview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
 translator: machine-google-reviewed
 translation_last_reviewed: 2026-02-07
 ---
@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 WebSocket հավաքիչը ցուցադրվում է `ToriiClient.openConnectWebSocket()`-ի կողմից: Սցենարը
 արտացոլում է JS SDK ճանապարհային քարտեզի Connect բաժինը. այն դետերմինիստական է
 նախադիտեք URI-ները, գրանցում է հերթի խորության հեռաչափությունը և բացում կանոնականը
-`/v1/connect/ws` վերջնակետը՝ օգտագործելով `ws` փաթեթը, որպեսզի Node.js հավելվածները կարողանան իրականացնել
+`/v2/connect/ws` վերջնակետը՝ օգտագործելով `ws` փաթեթը, որպեսզի Node.js հավելվածները կարողանան իրականացնել
 նույն հոսքը, ինչ բրաուզերները:
 
 <Նմուշի ներբեռնում

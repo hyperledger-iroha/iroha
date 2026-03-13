@@ -54,12 +54,12 @@ Créditos permanentes con resultados de búsqueda.
 ## Integración Torii
 
 Torii muestra los puntos finales más importantes, cuáles son los proveedores que mejoran el uso y la ropa
-жизненный цикл сделок без специального cableado:- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
+жизненный цикл сделок без специального cableado:- `POST /v2/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
   детерминированные результаты учета (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает текущий ventana, стримя
+- `POST /v2/sorafs/deal/settle` завершает текущий ventana, стримя
   Este `DealSettlementRecord` se integra con el codificador base64 `DealSettlementV1`,
   готовым к публикации в gobernancia DAG.
-- Лента Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
+- Лента Torii `/v2/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
   суммирующие каждую отправку uso (época, измеренные GiB-horas, счетчики билетов,
   cargos детерминированные), записи `SorafsGatewayEvent::DealSettlement`,
   Libro mayor de instantáneas de varios archivos adicionales BLAKE3 digest/size/base64

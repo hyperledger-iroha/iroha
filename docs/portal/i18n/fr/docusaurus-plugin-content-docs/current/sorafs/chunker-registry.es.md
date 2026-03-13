@@ -87,13 +87,13 @@ qui nécessite une négociation explicite du client (`Accept-Chunker` + `Accept-
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Supporté | Validez la poignée canonique + alias, transmettez les rapports via `--json-out=-` et appliquez la carte du registre avec `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ Retraité | Constructeur de manifeste hors support ; usa `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
-| `sorafs_provider_advert_stub` | ⚠️ Retraité | Aide à la validation hors ligne uniquement ; Les annonces du fournisseur doivent être produites par le pipeline de publication et validées via `/v1/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ Retraité | Aide à la validation hors ligne uniquement ; Les annonces du fournisseur doivent être produites par le pipeline de publication et validées via `/v2/sorafs/providers`. |
 | `sorafs_fetch` (orchestrateur développeur) | ✅ Supporté | Lee `chunk_fetch_specs`, contient des charges utiles de capacité `range` et un ensemble de sortie CARv2. |
 | Montages du SDK (Rust/Go/TS) | ✅ Supporté | Régénérées via `export_vectors` ; Le manche canonique apparaît d’abord sur chaque liste d’alias et est confirmé par le conseiller. |
 | Négociation de profils et passerelle Torii | ✅ Supporté | Implémentez la grammaire complète de `Accept-Chunker`, y compris les en-têtes `Content-Chunker` et exposez le pont CARv1 uniquement dans les demandes de rétrogradation explicites. |
 
 Despligue de télémétrie:- **Télémétrie de récupération des fragments** — la CLI de Iroha `sorafs toolkit pack` émet des résumés de fragments, des métadonnées CAR et des sources PoR pour l'ingestion dans les tableaux de bord.
-- **Annonces du fournisseur** — les charges utiles des annonces incluent des métadonnées de capacités et d'alias ; valida cobertura via `/v1/sorafs/providers` (p. ex., présence de la capacité `range`).
+- **Annonces du fournisseur** — les charges utiles des annonces incluent des métadonnées de capacités et d'alias ; valida cobertura via `/v2/sorafs/providers` (p. ex., présence de la capacité `range`).
 - **Surveillance de la passerelle** — les opérateurs doivent signaler les pareos `Content-Chunker`/`Content-Digest` pour détecter les déclassements indésirables ; j'espère que l'utilisation du pont sera à zéro avant la dépréciation.
 
 Politique de dépréciation : une fois que vous avez ratifié un profil successeur, programmez une double fenêtre de publication

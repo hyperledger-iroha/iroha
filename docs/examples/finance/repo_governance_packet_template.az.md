@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Təsdiqdən Sonra Konfiqurasiya Snapshotları
 
 Referendum və ya idarəetmə səsverməsi başa çatdıqdan və `[settlement.repo]`
-Dəyişiklik yayıldı, hər bir həmyaşıddan `/v1/configuration` anlıq görüntüləri çəkin
+Dəyişiklik yayıldı, hər bir həmyaşıddan `/v2/configuration` anlıq görüntüləri çəkin
 auditorlar təsdiq edilmiş siyasətin bütün klasterdə canlı olduğunu sübut edə bilərlər (bax
 Sübut iş axını üçün `docs/source/finance/repo_ops.md` §2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

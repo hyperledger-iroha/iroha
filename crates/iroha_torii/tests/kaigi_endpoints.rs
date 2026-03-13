@@ -153,7 +153,7 @@ async fn kaigi_endpoints_report_metadata() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays")
+                .uri("/v2/kaigi/relays")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -169,7 +169,7 @@ async fn kaigi_endpoints_report_metadata() {
     );
 
     // Detail endpoint
-    let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
+    let detail_path = format!("/v2/kaigi/relays/{relay_literal}");
     let detail_resp = app
         .clone()
         .oneshot(
@@ -197,7 +197,7 @@ async fn kaigi_endpoints_report_metadata() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays/health")
+                .uri("/v2/kaigi/relays/health")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -220,7 +220,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays")
+                .uri("/v2/kaigi/relays")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -234,7 +234,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
         Some(relay_literal.as_str())
     );
 
-    let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
+    let detail_path = format!("/v2/kaigi/relays/{relay_literal}");
     let detail_resp = app
         .clone()
         .oneshot(
@@ -264,7 +264,7 @@ async fn kaigi_endpoints_honor_json_accept_header() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays")
+                .uri("/v2/kaigi/relays")
                 .header("Accept", "application/json")
                 .body(Body::empty())
                 .unwrap(),
@@ -283,7 +283,7 @@ async fn kaigi_endpoints_honor_json_accept_header() {
         Some(relay_literal.as_str())
     );
 
-    let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
+    let detail_path = format!("/v2/kaigi/relays/{relay_literal}");
     let detail_resp = app
         .clone()
         .oneshot(
@@ -316,7 +316,7 @@ async fn kaigi_sse_accepts_i105_relay_filter() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/kaigi/relays/events?relay={relay_literal}"))
+                .uri(format!("/v2/kaigi/relays/events?relay={relay_literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -332,7 +332,7 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")
+                .uri("/v2/kaigi/relays/events?relay=sorainvalid@kaigi")
                 .body(Body::empty())
                 .unwrap(),
         )

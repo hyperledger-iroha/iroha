@@ -119,12 +119,12 @@ translation_last_reviewed: 2026-01-01
 
 Torii ו-CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (ממומש)
-  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (ממומש)
-  - `GET /v1/runtime/upgrades` -> רשימת רשומות (ממומש).
-  - `POST /v1/runtime/upgrades/propose` -> עוטף את `ProposeRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
-  - `POST /v1/runtime/upgrades/activate/:id` -> עוטף את `ActivateRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
-  - `POST /v1/runtime/upgrades/cancel/:id` -> עוטף את `CancelRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
+  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (ממומש)
+  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (ממומש)
+  - `GET /v2/runtime/upgrades` -> רשימת רשומות (ממומש).
+  - `POST /v2/runtime/upgrades/propose` -> עוטף את `ProposeRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
+  - `POST /v2/runtime/upgrades/activate/:id` -> עוטף את `ActivateRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
+  - `POST /v2/runtime/upgrades/cancel/:id` -> עוטף את `CancelRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
 - CLI
   - `iroha runtime abi active` (ממומש)
   - `iroha runtime abi hash` (ממומש)

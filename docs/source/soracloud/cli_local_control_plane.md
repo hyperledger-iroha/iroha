@@ -19,32 +19,32 @@
 - `iroha app soracloud deploy`
   - validates a deployment bundle and registers a new service revision.
   - when `--torii-url` is supplied, signs the bundle payload with the
-    configured client keypair and calls `POST /v1/soracloud/deploy`.
+    configured client keypair and calls `POST /v2/soracloud/deploy`.
 - `iroha app soracloud status`
   - prints machine-readable registry status (local mode by default).
   - when `--torii-url` is supplied, fetches a live control-plane snapshot from
-    `GET /v1/soracloud/status`.
+    `GET /v2/soracloud/status`.
 - `iroha app soracloud upgrade`
   - validates manifests and appends an upgrade revision.
   - when `--torii-url` is supplied, signs the bundle payload with the
-    configured client keypair and calls `POST /v1/soracloud/upgrade`.
+    configured client keypair and calls `POST /v2/soracloud/upgrade`.
 - `iroha app soracloud rollback`
   - switches service state to a previous (or explicit) version and records an
     audit event.
   - when `--torii-url` is supplied, signs rollback payload metadata and calls
-    `POST /v1/soracloud/rollback`.
+    `POST /v2/soracloud/rollback`.
 - `iroha app soracloud rollout`
   - advances or fails a rollout step for an active canary handle.
   - accepts health signals (`--health healthy|unhealthy`) and optional
     traffic promotion (`--promote-to-percent`).
   - records/forwards `--governance-tx-hash` for deterministic audit linkage.
   - when `--torii-url` is supplied, signs rollout metadata and calls
-    `POST /v1/soracloud/rollout`.
+    `POST /v2/soracloud/rollout`.
 - `iroha app soracloud agent-deploy`
   - validates `AgentApartmentManifestV1` and registers apartment runtime state.
   - initializes lease expiry (`--lease-ticks`) and append-only apartment events.
   - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/deploy`.
+    `POST /v2/soracloud/agent/deploy`.
 - `iroha app soracloud agent-lease-renew`
   - extends lease duration for an existing apartment.
   - revives expired leases into `Running` status in local scheduler state.
@@ -64,7 +64,7 @@
   - revokes a declared apartment policy capability (for example `wallet.sign`).
   - updates runtime guardrails without mutating the original manifest payload.
   - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/policy/revoke`.
+    `POST /v2/soracloud/agent/policy/revoke`.
 - `iroha app soracloud agent-message-send`
   - enqueues a deterministic mailbox message to another apartment.
   - requires active `agent.mailbox.send` on sender and `agent.mailbox.receive` on recipient.
@@ -78,64 +78,64 @@
     optional required `provenance_hash`) for one apartment.
   - requires active `governance.audit` or `agent.autonomy.allow`.
   - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/autonomy/allow`.
+    `POST /v2/soracloud/agent/autonomy/allow`.
 - `iroha app soracloud agent-autonomy-run`
   - approves a deterministic autonomous run for an allowlisted artifact.
   - requires active `agent.autonomy.run`, allowlist match, optional provenance
     match, and available budget (`--budget-units`).
   - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/autonomy/run`.
+    `POST /v2/soracloud/agent/autonomy/run`.
 - `iroha app soracloud agent-autonomy-status`
   - shows autonomy budget ceiling/remaining, artifact allowlist entries, and
     recent autonomous run approvals for one apartment.
   - when `--torii-url` is supplied, queries
-    `GET /v1/soracloud/agent/autonomy/status`.
+    `GET /v2/soracloud/agent/autonomy/status`.
 - `iroha app soracloud training-job-start`
   - starts a signed distributed training job (`service_name`, `model_name`,
     `job_id`, worker/budget/checkpoint controls).
   - requires `--torii-url`; local simulation mode does not implement this flow.
-  - calls `POST /v1/soracloud/training/job/start`.
+  - calls `POST /v2/soracloud/training/job/start`.
 - `iroha app soracloud training-job-checkpoint`
   - submits a signed monotonic checkpoint update (`completed_step`,
     `checkpoint_size_bytes`, `metrics_hash`).
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/training/job/checkpoint`.
+  - calls `POST /v2/soracloud/training/job/checkpoint`.
 - `iroha app soracloud training-job-retry`
   - submits a signed retry request with an explicit reason string.
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/training/job/retry`.
+  - calls `POST /v2/soracloud/training/job/retry`.
 - `iroha app soracloud training-job-status`
   - queries one training job status entry by `service_name` + `job_id`.
   - requires `--torii-url`.
-  - calls `GET /v1/soracloud/training/job/status`.
+  - calls `GET /v2/soracloud/training/job/status`.
 - `iroha app soracloud model-artifact-register`
   - submits signed artifact-attestation metadata for a completed training job
     (`weight_artifact_hash`, `dataset_ref`, config/repro/provenance hashes).
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/artifact/register`.
+  - calls `POST /v2/soracloud/model/artifact/register`.
 - `iroha app soracloud model-artifact-status`
   - queries artifact-attestation status by `service_name` + `training_job_id`.
   - requires `--torii-url`.
-  - calls `GET /v1/soracloud/model/artifact/status`.
+  - calls `GET /v2/soracloud/model/artifact/status`.
 - `iroha app soracloud model-weight-register`
   - submits a signed model weight version registration (optional
     `--parent-version`) linked to a completed/attested training job.
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/register`.
+  - calls `POST /v2/soracloud/model/weight/register`.
 - `iroha app soracloud model-weight-promote`
   - submits a signed promotion decision with `--gate-approved` and
     `--gate-report-hash`.
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/promote`.
+  - calls `POST /v2/soracloud/model/weight/promote`.
 - `iroha app soracloud model-weight-rollback`
   - submits a signed rollback decision to an already-registered target version.
   - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/rollback`.
+  - calls `POST /v2/soracloud/model/weight/rollback`.
 - `iroha app soracloud model-weight-status`
   - queries model lineage/current-version status by `service_name` +
     `model_name`.
   - requires `--torii-url`.
-  - calls `GET /v1/soracloud/model/weight/status`.
+  - calls `GET /v2/soracloud/model/weight/status`.
 
 ## Deterministic admission checks
 
@@ -313,7 +313,7 @@ Strict runtime env contract for both templates:
 
 Torii now exposes a signed control-plane mutation path:
 
-- `POST /v1/soracloud/state/mutate`
+- `POST /v2/soracloud/state/mutate`
 
 This endpoint is intended for SCR-hosted services to request canonical state
 mutations under declared `state_bindings` and enforces:
@@ -376,8 +376,8 @@ deploy/upgrade/rollback transitions.
 
 Torii exposes signed policy-gated disclosure endpoints for regulated workloads:
 
-- `POST /v1/soracloud/decrypt/request`
-- `POST /v1/soracloud/health/access/request` (health-oriented alias)
+- `POST /v2/soracloud/decrypt/request`
+- `POST /v2/soracloud/health/access/request` (health-oriented alias)
 
 Both endpoints enforce `DecryptionAuthorityPolicyV1` + `DecryptionRequestV1`
 admission constraints, including:
@@ -393,7 +393,7 @@ admission constraints, including:
 Torii also exposes a compliance report-pack endpoint for regulated workload
 operations:
 
-- `GET /v1/soracloud/health/compliance/report`
+- `GET /v2/soracloud/health/compliance/report`
 
 Supported query parameters:
 
@@ -427,10 +427,10 @@ The Torii Soracloud suite covers the minimum regulated-workload matrix:
 
 Torii now exposes signed distributed-training runtime endpoints:
 
-- `POST /v1/soracloud/training/job/start`
-- `POST /v1/soracloud/training/job/checkpoint`
-- `POST /v1/soracloud/training/job/retry`
-- `GET /v1/soracloud/training/job/status?service_name=<name>&job_id=<id>`
+- `POST /v2/soracloud/training/job/start`
+- `POST /v2/soracloud/training/job/checkpoint`
+- `POST /v2/soracloud/training/job/retry`
+- `GET /v2/soracloud/training/job/status?service_name=<name>&job_id=<id>`
 
 The runtime enforces deterministic policy and accounting semantics:
 
@@ -449,10 +449,10 @@ Core regressions:
 
 Torii also exposes signed model-weight lifecycle endpoints:
 
-- `POST /v1/soracloud/model/weight/register`
-- `POST /v1/soracloud/model/weight/promote`
-- `POST /v1/soracloud/model/weight/rollback`
-- `GET /v1/soracloud/model/weight/status?service_name=<name>&model_name=<name>`
+- `POST /v2/soracloud/model/weight/register`
+- `POST /v2/soracloud/model/weight/promote`
+- `POST /v2/soracloud/model/weight/rollback`
+- `GET /v2/soracloud/model/weight/status?service_name=<name>&model_name=<name>`
 
 Registry semantics:
 
@@ -473,8 +473,8 @@ Core regressions:
 
 Torii also exposes signed artifact-attestation endpoints for training outputs:
 
-- `POST /v1/soracloud/model/artifact/register`
-- `GET /v1/soracloud/model/artifact/status?service_name=<name>&training_job_id=<id>`
+- `POST /v2/soracloud/model/artifact/register`
+- `GET /v2/soracloud/model/artifact/status?service_name=<name>&training_job_id=<id>`
 
 Pipeline semantics:
 
@@ -510,11 +510,11 @@ paths is implemented in Torii Soracloud tests:
 Torii now exposes signed autonomy runtime endpoints for SCR-side apartment
 controls (beyond local CLI simulation):
 
-- `POST /v1/soracloud/agent/deploy`
-- `POST /v1/soracloud/agent/policy/revoke`
-- `POST /v1/soracloud/agent/autonomy/allow`
-- `POST /v1/soracloud/agent/autonomy/run`
-- `GET /v1/soracloud/agent/autonomy/status?apartment_name=<name>`
+- `POST /v2/soracloud/agent/deploy`
+- `POST /v2/soracloud/agent/policy/revoke`
+- `POST /v2/soracloud/agent/autonomy/allow`
+- `POST /v2/soracloud/agent/autonomy/run`
+- `GET /v2/soracloud/agent/autonomy/status?apartment_name=<name>`
 
 These endpoints enforce deterministic runtime policy checks:
 

@@ -40,7 +40,7 @@ Norito ኮዴኮችን ይጠቀሙ; ምንም serde/JSON መውደቅ አይፈ
 ## API Surface (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -213,7 +213,7 @@ pub struct DaIngestReceipt {
   ስም-አልባ ማጓጓዣ ይሽራል፣ የውጤት ሰሌዳ ወደ ውጪ መላክ እና `--output` መንገዶች)፣ እና የገለጻው የመጨረሻ ነጥብ
   ለበጁ Torii አስተናጋጆች በ`--manifest-endpoint` በኩል ይሰረዛሉ፣ ስለዚህ ከጫፍ እስከ ጫፍ ያለው ተገኝነት በቀጥታ ይፈትሻል
   የኦርኬስትራ ሎጂክን ሳያባዙ ሙሉ በሙሉ በ`da` የስም ቦታ ስር።
-- `iroha app da get-blob` ቀኖናዊ መግለጫዎችን በቀጥታ ከTorii በ `GET /v1/da/manifests/{storage_ticket}` ይጎትታል።
+- `iroha app da get-blob` ቀኖናዊ መግለጫዎችን በቀጥታ ከTorii በ `GET /v2/da/manifests/{storage_ticket}` ይጎትታል።
   ትዕዛዙ `manifest_{ticket}.norito`፣ `manifest_{ticket}.json` እና `chunk_plan_{ticket}.json` ይጽፋል።
   በ `artifacts/da/fetch_<timestamp>/` (ወይም በተጠቃሚ የቀረበ `--output-dir`) ትክክለኛውን እያስተጋባ
   `iroha app da get` ጥሪ (`--manifest-id`ን ጨምሮ) ለተከታዮቹ ኦርኬስትራ ማምጣት ያስፈልጋል።
@@ -260,10 +260,10 @@ pub struct DaIngestReceipt {
   ያልታወቁ ስሪቶች፣ አዲስ አንጸባራቂ አቀማመጦች ሲርከብ የሚወስኑ ማሻሻያዎችን ዋስትና ይሰጣል።【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR መንጠቆዎች *** - የ PDP ቁርጠኝነት በቀጥታ ከ chunk መደብር የተገኙ እና ጸንተዋል
   የDA-5 መርሐግብር አውጪዎች ከቀኖናዊ መረጃዎች የናሙና ፈተናዎችን እንዲጀምሩ ከማስረጃው በተጨማሪ
-  `/v1/da/ingest` እና `/v1/da/manifests/{ticket}` አሁን የ `Sora-PDP-Commitment` ራስጌን ያካትታል
+  `/v2/da/ingest` እና `/v2/da/manifests/{ticket}` አሁን የ `Sora-PDP-Commitment` ራስጌን ያካትታል
   የመሠረት 64 Norito ጭነትን ተሸክሞ ኤስዲኬዎች ትክክለኛውን ቁርጠኝነት DA-5 የመመርመሪያ ኢላማውን ያሸሻሉ ።
 
-## የትግበራ ማስታወሻዎች- የ Torii's `/v1/da/ingest` የመጨረሻ ነጥብ አሁን የደመወዝ ጭነት መጨናነቅን መደበኛ ያደርገዋል፣ የመልሶ ማጫወት መሸጎጫውን ያስፈጽማል፣
+## የትግበራ ማስታወሻዎች- የ Torii's `/v2/da/ingest` የመጨረሻ ነጥብ አሁን የደመወዝ ጭነት መጨናነቅን መደበኛ ያደርገዋል፣ የመልሶ ማጫወት መሸጎጫውን ያስፈጽማል፣
   ቀኖናዊ ባይቶችን በቆራጥነት ቆርጧል፣ `DaManifestV1`ን እንደገና ገነባ፣ የተመሰጠረውን ጭነት ይጥላል።
   ወደ `config.da_ingest.manifest_store_dir` ለ SoraFS ኦርኬስትራ፣ እና `Sora-PDP-Commitment` ይጨምራል
   ርዕስ ስለዚህ ኦፕሬተሮች የ PDP መርሐግብር አውጪዎች የሚጠቅሱትን ቁርጠኝነት ይይዛሉ።【crates/iroha_torii/src/da/ingest.rs:220】
@@ -275,7 +275,7 @@ pub struct DaIngestReceipt {
   የ Rust crate `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python ን ወደ ውጭ ይልካል
   `ToriiClient` አሁን `decode_pdp_commitment_header` እና `IrohaSwift` መርከቦችን ያጠቃልላል
   `decodePdpCommitmentHeader` ከመጠን በላይ ጭነቶች ለጥሬ ራስጌ ካርታዎች ወይም `HTTPURLResponse` አጋጣሚዎች.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/ምንጮች/IrohaSwift/ToriiClient.swift:1】
-- Torii በተጨማሪም `GET /v1/da/manifests/{storage_ticket}` ያጋልጣል ስለዚህ ኤስዲኬዎች እና ኦፕሬተሮች ማኒፌክቶችን ማምጣት ይችላሉ።
+- Torii በተጨማሪም `GET /v2/da/manifests/{storage_ticket}` ያጋልጣል ስለዚህ ኤስዲኬዎች እና ኦፕሬተሮች ማኒፌክቶችን ማምጣት ይችላሉ።
   እና የመስቀለኛ መንገዱን የስፑል ማውጫ ሳይነኩ ቸንክ እቅዶች። ምላሹ Norito ባይት ይመልሳል
   (ቤዝ64)፣ የተሰራው አንጸባራቂ JSON፣ `chunk_plan` JSON blob ለ`sorafs fetch` ዝግጁ ነው፣ ተገቢነቱ
   ሄክስ ዳይጀስት (`storage_ticket`፣ `client_blob_id`፣ `blob_hash`፣ `chunk_root`)፣ እና መስተዋቱን ያሳያል።
@@ -287,7 +287,7 @@ pub struct DaIngestReceipt {
 ### ትልቅ የክፍያ ጭነት ፍሰት ፍሰት
 
 ከተዋቀረው የነጠላ ጥያቄ ገደብ በላይ የሆኑ ንብረቶችን ማስገባት የሚፈልጉ ደንበኞች ሀ
-የዥረት ክፍለ ጊዜ `POST /v1/da/ingest/chunk/start` በመደወል። Torii በ ሀ
+የዥረት ክፍለ ጊዜ `POST /v2/da/ingest/chunk/start` በመደወል። Torii በ ሀ
 `ChunkSessionId` (BLAKE3-ከተጠየቀው የብሎብ ሜታዳታ የተገኘ) እና የተደራደረው ቸንክ መጠን።
 እያንዳንዱ ተከታይ የ`DaIngestChunk` ጥያቄ የሚከተሉትን ይይዛል፡-
 
@@ -300,7 +300,7 @@ pub struct DaIngestReceipt {
 ድህነትን ለማክበር በድጋሚ አጫውት መሸጎጫ ውስጥ ያለውን ሂደት ይመዘግባል። የመጨረሻው ቁራጭ ሲያርፍ፣ Torii
 ክፍያውን በዲስክ ላይ እንደገና ይሰበስባል (የማስታወሻ እጢዎችን ለማስወገድ በ chunk directory በኩል በዥረት መልቀቅ)
 ቀኖናዊውን አንጸባራቂ/ደረሰኝ ልክ በነጠላ ምት ሰቀላ ያሰላል እና በመጨረሻም ምላሽ ይሰጣል
-`POST /v1/da/ingest` የተደረደሩትን ቅርሶች በመብላት። ያልተሳኩ ክፍለ ጊዜዎች በግልጽ ሊሰረዙ ይችላሉ ወይም
+`POST /v2/da/ingest` የተደረደሩትን ቅርሶች በመብላት። ያልተሳኩ ክፍለ ጊዜዎች በግልጽ ሊሰረዙ ይችላሉ ወይም
 ከ `config.da_ingest.replay_cache_ttl` በኋላ በቆሻሻ የተሰበሰቡ ናቸው። ይህ ንድፍ የአውታረ መረብ ቅርጸቱን ያስቀምጣል
 Norito-ተስማሚ፣ ደንበኛ-ተኮር የሆኑ ድጋሚ ሊደረጉ የሚችሉ ፕሮቶኮሎችን ያስወግዳል፣ እና ያለውን አንጸባራቂ ቧንቧ እንደገና ይጠቀማል።
 ያልተለወጠ.

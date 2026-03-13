@@ -1,8 +1,12 @@
 //! This module contains [`LiveQueryStore`] actor.
 
 use std::{
+    fmt,
     num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -22,7 +26,101 @@ use tokio::task::JoinHandle;
 
 use super::cursor::ErasedQueryIterator;
 
-type LiveQuery = ErasedQueryIterator;
+type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
+
+/// Prepared output for iterable query start.
+///
+/// This lets the caller precompute the first response batch and defer iterator
+/// materialization until the first continuation call.
+pub(crate) struct PreparedQueryStart {
+    /// Precomputed first response batch.
+    pub first_batch: QueryOutputBatchBoxTuple,
+    /// Remaining item count after the first batch.
+    pub remaining_items: u64,
+    /// Deferred continuation state. `None` means query is already drained.
+    pub deferred_continuation: Option<DeferredQueryContinuation>,
+}
+
+/// Deferred continuation for stored iterable queries.
+pub(crate) struct DeferredQueryContinuation {
+    expected_cursor: NonZeroU64,
+    remaining_items: u64,
+    materialize: Option<DeferredMaterializer>,
+}
+
+impl DeferredQueryContinuation {
+    /// Construct deferred continuation state.
+    pub(crate) fn new<F>(expected_cursor: NonZeroU64, remaining_items: u64, materialize: F) -> Self
+    where
+        F: FnOnce() -> ErasedQueryIterator + Send + Sync + 'static,
+    {
+        Self {
+            expected_cursor,
+            remaining_items,
+            materialize: Some(Box::new(materialize)),
+        }
+    }
+
+    fn expected_cursor(&self) -> NonZeroU64 {
+        self.expected_cursor
+    }
+
+    fn take_materializer(&mut self) -> DeferredMaterializer {
+        self.materialize
+            .take()
+            .expect("deferred continuation must materialize at most once")
+    }
+}
+
+impl fmt::Debug for DeferredQueryContinuation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeferredQueryContinuation")
+            .field("expected_cursor", &self.expected_cursor)
+            .field("remaining_items", &self.remaining_items)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+enum LiveQuery {
+    Ready(ErasedQueryIterator),
+    Deferred(DeferredQueryContinuation),
+}
+
+impl LiveQuery {
+    fn ready(iter: ErasedQueryIterator) -> Self {
+        Self::Ready(iter)
+    }
+
+    fn deferred(continuation: DeferredQueryContinuation) -> Self {
+        Self::Deferred(continuation)
+    }
+
+    fn next_batch(
+        &mut self,
+        cursor: u64,
+    ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
+        match self {
+            Self::Ready(live_query) => live_query.next_batch(cursor),
+            Self::Deferred(continuation) => {
+                if continuation.expected_cursor().get() != cursor {
+                    return Err(QueryExecutionFail::CursorMismatch);
+                }
+                let mut live_query = continuation.take_materializer()();
+                let next_batch = live_query.next_batch(cursor);
+                *self = Self::Ready(live_query);
+                next_batch
+            }
+        }
+    }
+
+    fn remaining(&self) -> u64 {
+        match self {
+            Self::Ready(live_query) => live_query.remaining(),
+            Self::Deferred(continuation) => continuation.remaining_items,
+        }
+    }
+}
 
 /// Service which stores queries which might be non fully consumed by a client.
 ///
@@ -31,6 +129,7 @@ type LiveQuery = ErasedQueryIterator;
 pub struct LiveQueryStore {
     queries: DashMap<QueryId, QueryInfo>,
     queries_per_user: DashMap<AccountId, usize>,
+    next_query_id: AtomicU64,
     // The maximum number of queries in the store
     capacity: NonZeroUsize,
     // The maximum number of queries in the store per user
@@ -53,6 +152,7 @@ impl LiveQueryStore {
         Self {
             queries: DashMap::new(),
             queries_per_user: DashMap::new(),
+            next_query_id: AtomicU64::new(1),
             idle_time: cfg.idle_time,
             capacity: cfg.capacity,
             capacity_per_user: cfg.capacity_per_user,
@@ -121,16 +221,6 @@ impl LiveQueryStore {
         expired
     }
 
-    fn insert(&self, query_id: QueryId, live_query: ErasedQueryIterator, authority: AccountId) {
-        *self.queries_per_user.entry(authority.clone()).or_insert(0) += 1;
-        let query_info = QueryInfo {
-            live_query,
-            last_access_time: Instant::now(),
-            authority,
-        };
-        self.queries.insert(query_id, query_info);
-    }
-
     fn remove(&self, query_id: &str) -> Option<QueryInfo> {
         let (_, query_info) = self.queries.remove(query_id)?;
         self.decrease_queries_per_user(query_info.authority.clone());
@@ -149,15 +239,54 @@ impl LiveQueryStore {
         }
     }
 
+    fn next_query_id(&self) -> QueryId {
+        self.next_query_id
+            .fetch_add(1, Ordering::Relaxed)
+            .to_string()
+    }
+
     fn insert_new_query(
         &self,
         query_id: QueryId,
-        live_query: ErasedQueryIterator,
+        live_query: LiveQuery,
         authority: AccountId,
     ) -> Result<(), QueryExecutionFail> {
         trace!(%query_id, "Inserting new query");
-        self.check_capacity(&authority)?;
-        self.insert(query_id, live_query, authority);
+        if self.queries.len() >= self.capacity.get() {
+            warn!(
+                max_queries = self.capacity,
+                "Reached maximum allowed number of queries in LiveQueryStore"
+            );
+            return Err(QueryExecutionFail::CapacityLimit);
+        }
+
+        let mut user_count = self.queries_per_user.entry(authority.clone()).or_insert(0);
+        if *user_count >= self.capacity_per_user.get() {
+            warn!(
+                max_queries_per_user = self.capacity_per_user,
+                %authority,
+                "Account reached maximum allowed number of queries in LiveQueryStore"
+            );
+            return Err(QueryExecutionFail::AuthorityQuotaExceeded);
+        }
+        *user_count += 1;
+        drop(user_count);
+
+        let previous = self.queries.insert(
+            query_id,
+            QueryInfo {
+                live_query,
+                last_access_time: Instant::now(),
+                authority: authority.clone(),
+            },
+        );
+        if previous.is_some() {
+            self.decrease_queries_per_user(authority);
+            debug_assert!(
+                false,
+                "monotonic query id generation should never collide in LiveQueryStore"
+            );
+        }
         Ok(())
     }
 
@@ -183,29 +312,6 @@ impl LiveQueryStore {
             self.remove(query_id);
         }
         Ok((next_batch, remaining, next_cursor))
-    }
-
-    fn check_capacity(&self, authority: &AccountId) -> Result<(), QueryExecutionFail> {
-        if self.queries.len() >= self.capacity.get() {
-            warn!(
-                max_queries = self.capacity,
-                "Reached maximum allowed number of queries in LiveQueryStore"
-            );
-            return Err(QueryExecutionFail::CapacityLimit);
-        }
-        if self
-            .queries_per_user
-            .get(authority)
-            .is_some_and(|value| *value >= self.capacity_per_user.get())
-        {
-            warn!(
-                max_queries_per_user = self.capacity_per_user,
-                %authority,
-                "Account reached maximum allowed number of queries in LiveQueryStore"
-            );
-            return Err(QueryExecutionFail::AuthorityQuotaExceeded);
-        }
-        Ok(())
     }
 }
 
@@ -237,7 +343,7 @@ impl LiveQueryStoreHandle {
         authority: &AccountId,
         gas_budget: Option<u64>,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let query_id = uuid::Uuid::new_v4().to_string();
+        let query_id = self.store.next_query_id();
 
         let curr_cursor = 0;
         let (batch, next_cursor) = live_query.next_batch(curr_cursor)?;
@@ -247,11 +353,51 @@ impl LiveQueryStoreHandle {
 
         // if the cursor is `None` - the query has ended, we can remove it from the store
         if next_cursor.is_some() {
-            self.store
-                .insert_new_query(query_id.clone(), live_query, authority.clone())?;
+            self.store.insert_new_query(
+                query_id.clone(),
+                LiveQuery::ready(live_query),
+                authority.clone(),
+            )?;
         }
         Ok(Self::construct_query_response(
             batch,
+            remaining_items,
+            query_id,
+            next_cursor,
+            gas_budget,
+        ))
+    }
+
+    /// Construct and store a query response when the first batch and continuation
+    /// state were precomputed by the caller.
+    ///
+    /// # Errors
+    /// Mirrors [`Self::handle_iter_start`] for capacity and authority quota failures.
+    pub(crate) fn handle_iter_start_prepared(
+        &self,
+        PreparedQueryStart {
+            first_batch,
+            remaining_items,
+            deferred_continuation,
+        }: PreparedQueryStart,
+        authority: &AccountId,
+        gas_budget: Option<u64>,
+    ) -> Result<QueryOutput, QueryExecutionFail> {
+        let query_id = self.store.next_query_id();
+        let next_cursor = deferred_continuation
+            .as_ref()
+            .map(DeferredQueryContinuation::expected_cursor);
+
+        if let Some(deferred_continuation) = deferred_continuation {
+            self.store.insert_new_query(
+                query_id.clone(),
+                LiveQuery::deferred(deferred_continuation),
+                authority.clone(),
+            )?;
+        }
+
+        Ok(Self::construct_query_response(
+            first_batch,
             remaining_items,
             query_id,
             next_cursor,
@@ -327,7 +473,14 @@ impl LiveQueryStoreHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, time::Duration};
+    use std::{
+        num::NonZeroU64,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use iroha_data_model::{
         permission::Permission,
@@ -543,5 +696,126 @@ mod tests {
         assert_eq!(batch.len(), 1);
         assert_eq!(remaining, 0);
         assert!(next.is_none(), "query should be drained");
+    }
+
+    #[test]
+    fn capacity_limit_is_enforced_with_monotonic_ids() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(4_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+
+        let build_iter = || {
+            let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+            let query_params = QueryParams {
+                fetch_size: FetchSize {
+                    fetch_size: Some(nonzero!(1_u64)),
+                },
+                ..QueryParams::default()
+            };
+            crate::smartcontracts::query::apply_query_postprocessing(
+                query_output,
+                SelectorTuple::default(),
+                &query_params,
+                QueryLimits::default(),
+            )
+            .unwrap()
+        };
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start(build_iter(), &ALICE_ID, Some(1))
+            .expect("first query")
+            .into_parts();
+        assert!(cursor.is_some(), "first query should allocate a cursor");
+
+        let err = handle
+            .handle_iter_start(build_iter(), &ALICE_ID, Some(1))
+            .expect_err("capacity");
+        assert_eq!(err, QueryExecutionFail::CapacityLimit);
+    }
+
+    #[test]
+    fn query_ids_are_monotonic_decimal_strings() {
+        let handle = LiveQueryStore::start_test();
+        let build_iter = || {
+            let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+            let query_params = QueryParams {
+                fetch_size: FetchSize {
+                    fetch_size: Some(nonzero!(1_u64)),
+                },
+                ..QueryParams::default()
+            };
+            crate::smartcontracts::query::apply_query_postprocessing(
+                query_output,
+                SelectorTuple::default(),
+                &query_params,
+                QueryLimits::default(),
+            )
+            .unwrap()
+        };
+
+        let (_batch, _remaining, first_cursor) = handle
+            .handle_iter_start(build_iter(), &ALICE_ID, None)
+            .expect("first query")
+            .into_parts();
+        let first_cursor = first_cursor.expect("first cursor");
+        let first_id: u64 = first_cursor.query.parse().expect("decimal query id");
+        handle.drop_query(first_cursor.query());
+
+        let (_batch, _remaining, second_cursor) = handle
+            .handle_iter_start(build_iter(), &ALICE_ID, None)
+            .expect("second query")
+            .into_parts();
+        let second_cursor = second_cursor.expect("second cursor");
+        let second_id: u64 = second_cursor.query.parse().expect("decimal query id");
+
+        assert!(
+            second_id > first_id,
+            "query ids must increase monotonically"
+        );
+    }
+
+    #[test]
+    fn dropping_prepared_query_does_not_materialize_deferred_state() {
+        let handle = LiveQueryStore::start_test();
+        let materialized = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&materialized);
+
+        let prepared = PreparedQueryStart {
+            first_batch: QueryOutputBatchBoxTuple {
+                tuple: vec![iroha_data_model::query::QueryOutputBatchBox::Permission(
+                    vec![Permission::new("p0".to_owned(), Json::from(false))],
+                )],
+            },
+            remaining_items: 1,
+            deferred_continuation: Some(DeferredQueryContinuation::new(
+                nonzero!(1_u64),
+                1,
+                move || {
+                    flag.store(true, Ordering::SeqCst);
+                    ErasedQueryIterator::new_with_cursor(
+                        vec![Permission::new("p1".to_owned(), Json::from(false))].into_iter(),
+                        SelectorTuple::default(),
+                        nonzero!(1_u64),
+                        1,
+                    )
+                },
+            )),
+        };
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_prepared(prepared, &ALICE_ID, None)
+            .expect("prepared start")
+            .into_parts();
+        let cursor = cursor.expect("stored cursor");
+        handle.drop_query(cursor.query());
+
+        assert!(
+            !materialized.load(Ordering::SeqCst),
+            "dropping a stored cursor should not force deferred materialization"
+        );
     }
 }

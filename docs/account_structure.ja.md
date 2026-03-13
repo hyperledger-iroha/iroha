@@ -669,8 +669,8 @@ HTTP エンドポイントにより、監査人は検証手順をそのまま再
 
 ### 鳥居応答フォーマット
 
-- `GET /v1/accounts` は、オプションの `canonical I105 rendering` クエリ パラメータを受け入れ、
-  `POST /v1/accounts/query` は、JSON エンベロープ内の同じフィールドを受け入れます。
+- `GET /v2/accounts` は、オプションの `canonical I105 rendering` クエリ パラメータを受け入れ、
+  `POST /v2/accounts/query` は、JSON エンベロープ内の同じフィールドを受け入れます。
   サポートされている値は次のとおりです。
   - `i105` (デフォルト) — 応答は正規の I105 Base58 ペイロードを出力します (例:
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`)。
@@ -679,7 +679,7 @@ HTTP エンドポイントにより、監査人は検証手順をそのまま再
 - 無効な値は `400` (`QueryExecutionFail::Conversion`) を返します。これにより、
   ウォレットとエクスプローラーは、Sora のみの UX の圧縮文字列をリクエストします。
   I105 を相互運用可能なデフォルトとして維持します。
-- アセットホルダーのリスト (`GET /v1/assets/{definition_id}/holders`) とその JSON
+- アセットホルダーのリスト (`GET /v2/assets/{definition_id}/holders`) とその JSON
   対応する封筒 (`POST …/holders/query`) も `canonical I105 rendering` を尊重します。
   `items[*].account_id` フィールドは、
   パラメータ/エンベロープ フィールドが `i105_default` に設定され、アカウントがミラーリングされます

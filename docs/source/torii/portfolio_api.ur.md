@@ -23,7 +23,7 @@ which accounts/dataspaces a UAID is active in. The response is grouped first by
 dataspace and then by account for deterministic diffing.
 
 ```
-GET /v1/accounts/{uaid}/portfolio
+GET /v2/accounts/{uaid}/portfolio
 ```
 
 ## Path parameters
@@ -127,7 +127,7 @@ Roadmap item **NX-16** calls for auditable fixtures covering the UAID portfolio
 pipeline. The repository now ships `fixtures/nexus/uaid_portfolio/global_default_portfolio.json`
 plus a README explaining how to refresh it. The deterministic integration test
 `crates/iroha_torii/tests/accounts_portfolio.rs::accounts_portfolio_snapshot_matches_fixture`
-seeds a predictable dataspace/domain and asserts `/v1/accounts/{uaid}/portfolio`
+seeds a predictable dataspace/domain and asserts `/v2/accounts/{uaid}/portfolio`
 returns exactly the JSON stored in the fixture. SDKs and ops runbooks can use
 the same file to diff client implementations, and updating the fixture is as
 simple as re-running the test with `--nocapture` and copying the emitted JSON as
@@ -139,7 +139,7 @@ To troubleshoot capability manifests or simply query where a UAID has active
 permissions, Torii exposes a lightweight bindings snapshot:
 
 ```
-GET /v1/space-directory/uaids/{uaid}
+GET /v2/space-directory/uaids/{uaid}
 ```
 
 | Query | Description |
@@ -184,7 +184,7 @@ payload (`AssetPermissionManifest`), ledger bindings, and lifecycle metadata in
 one response:
 
 ```
-GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
+GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}
 ```
 
 | Query | Description |
@@ -246,8 +246,8 @@ Sample response:
   `limit`/`offset` to page through large UAID histories.
 - `status` filters help operators focus on active manifests. `inactive` returns
 
-The endpoint shares the same access controls as `/v1/accounts/{uaid}/portfolio`
-and `/v1/space-directory/uaids/{uaid}`. See `docs/space-directory.md` for the
+The endpoint shares the same access controls as `/v2/accounts/{uaid}/portfolio`
+and `/v2/space-directory/uaids/{uaid}`. See `docs/space-directory.md` for the
 operational playbooks tied to these responses.
 
 ## Manifest Publish Endpoint
@@ -255,7 +255,7 @@ operational playbooks tied to these responses.
 Capability manifests can now be published over HTTP:
 
 ```
-POST /v1/space-directory/manifests
+POST /v2/space-directory/manifests
 ```
 
 Body schema:
@@ -305,7 +305,7 @@ Torii also exposes a write surface so operators can trigger emergency
 revocations without switching tools:
 
 ```
-POST /v1/space-directory/manifests/revoke
+POST /v2/space-directory/manifests/revoke
 ```
 
 Body fields mirror the `RevokeSpaceDirectoryManifest` ISI:

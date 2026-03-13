@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 - **Norito кодлогчийн тойм** – `reference/norito-codec.md` эрх бүхий байгууллага руу шууд холбогддог.
   Портал хүснэгтийг бөглөж байх үед `norito.md` тодорхойлолт.
 - **Torii OpenAPI** – `/reference/torii-openapi` нь хамгийн сүүлийн үеийн Torii REST үзүүлэлтийг ашиглан харуулав.
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
   Redoc. `npm run sync-openapi -- --version=current --latest` (нэмэх) ашиглан техникийн үзүүлэлтийг сэргээнэ үү
   `--mirror=<label>` агшин зуурын зургийг нэмэлт түүхэн хувилбарт хуулах).
 - **Тохиргооны хүснэгтүүд** – Параметрийн бүрэн каталогийг хадгална

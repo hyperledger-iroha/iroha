@@ -233,7 +233,7 @@ auditorlar va regulyatorlar aniq baytlarni keyinroq takrorlashlari uchun katalog
 
 1. **Line manifestlari:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Rejalashtiruvchi kvotalar:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manuel tutun:** CBDC fayllariga ishora qiluvchi manifest katalogi bilan `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, keyin `/v1/sumeragi/status` tugmasini bosing va CBDC qatori uchun `lane_governance.manifest_ready=true` ni tekshiring.
+3. **Manuel tutun:** CBDC fayllariga ishora qiluvchi manifest katalogi bilan `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, keyin `/v2/sumeragi/status` tugmasini bosing va CBDC qatori uchun `lane_governance.manifest_ready=true` ni tekshiring.
 4. **Oq roʻyxat muvofiqligi testi:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` mashqlari `integration_tests/tests/nexus/cbdc_whitelist.rs`, tahlil qilish `fixtures/space_directory/profile/cbdc_lane_profile.json` va havola qilingan qobiliyatlar oq roʻyxatga kiritilgan har bir kirishning UAID, maʼlumotlar maydoni, faollashtirish davri va I18000000 roʻyxat ruxsatnomalariga mos kelishini taʼminlaydi. `fixtures/space_directory/capability/` ostida. Oq ro'yxat yoki manifestlar o'zgarganda sinov jurnalini NX-6 dalillar to'plamiga biriktiring.
 
 ### 2.2 CLI parchalari
@@ -243,7 +243,7 @@ auditorlar va regulyatorlar aniq baytlarni keyinroq takrorlashlari uchun katalog
 - Agar operatsiya stoli masofaviy avtomatlashtirishni ishga tushirsa, HTTP orqali nashr qiling:
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ auditorlar va regulyatorlar aniq baytlarni keyinroq takrorlashlari uchun katalog
 - Favqulodda bekor qilish Torii manziliga POST yuborish orqali masofadan turib berilishi mumkin:
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

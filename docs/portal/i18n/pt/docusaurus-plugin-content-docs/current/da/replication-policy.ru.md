@@ -32,7 +32,7 @@ Não há nenhum arquivo e uma réplica que não tenha um nome aberto.
 | _Padrão (qualquer classe padrão)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
 
 Ele está localizado em `torii.da_ingest.replication_policy` e é usado
-всем `/v1/da/ingest` отправкам. Torii переписывает manifestos с примененным
+всем `/v2/da/ingest` отправкам. Torii переписывает manifestos с примененным
 retenção de perfil e выдает предупреждение, если chamadores передают несоответствующие
 Obviamente, todos os operadores podem usar o SDK.
 
@@ -150,5 +150,5 @@ O SoraFS pode replicar automaticamente blobs desconhecidos.
    на тот же resumo e evidência PDP.
 
 Cobertura de regressão fornecida em `integration_tests/tests/da/replication_policy.rs`;
-suíte отправляет несовпадающую политику retenção em `/v1/da/ingest` e prova,
+suíte отправляет несовпадающую политику retenção em `/v2/da/ingest` e prova,
 Este manifesto específico contém um perfil específico, um chamador sem intenção.

@@ -165,9 +165,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Torii კარიბჭე ახლა ამჟღავნებს მხოლოდ წაკითხვის დამხმარეებს, რომლებსაც მხარს უჭერს იგივე
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — აბრუნებს შენახულს
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — აბრუნებს შენახულს
 > Norito მანიფესტი (base64) დაიჯესტთან/მეტამონაცემებთან ერთად.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — აბრუნებს დეტერმინისტს
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — აბრუნებს დეტერმინისტს
 > ცალი გეგმა JSON (`chunk_fetch_specs`) ქვედა დინების ინსტრუმენტებისთვის.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > ეს ბოლო წერტილები ასახავს CLI-ის გამომავალს, რათა მილსადენებმა გადაერთონ ლოკალურიდან
@@ -210,19 +210,19 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      შეთანხმებულია მმართველობის მოდელი; ამჟამად დიზაინი ითვალისწინებს მკაცრ კვოტებს და
      ოპერატორის მიერ ინიცირებული მოხსნის ოპერაციები.
 
-### სიმძლავრის დეკლარაცია და განრიგის ინტეგრაცია- Torii ახლა გადასცემს `CapacityDeclarationRecord` განახლებებს `/v1/sorafs/capacity/declare`-დან
+### სიმძლავრის დეკლარაცია და განრიგის ინტეგრაცია- Torii ახლა გადასცემს `CapacityDeclarationRecord` განახლებებს `/v2/sorafs/capacity/declare`-დან
   ჩაშენებულ `CapacityManager`-ზე, ასე რომ, თითოეული კვანძი ქმნის მეხსიერებაში მის ხედს
   ჩადენილი ჩუნკერისა და ზოლის გამოყოფა. მენეჯერი ასახავს მხოლოდ წასაკითხად კადრებს
-  ტელემეტრიისთვის (`GET /v1/sorafs/capacity/state`) და აიძულებს პროფილს ან ზოლს
+  ტელემეტრიისთვის (`GET /v2/sorafs/capacity/state`) და აიძულებს პროფილს ან ზოლს
   დაჯავშნა ახალი შეკვეთების მიღებამდე.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` საბოლოო წერტილი იღებს მმართველობით გაცემულ `ReplicationOrderV1`-ს
+- `/v2/sorafs/capacity/schedule` საბოლოო წერტილი იღებს მმართველობით გაცემულ `ReplicationOrderV1`-ს
   ტვირთამწეობა. როდესაც შეკვეთა მიზნად ისახავს ადგილობრივ პროვაიდერს, მენეჯერი ამოწმებს
   განრიგის დუბლიკატი, ამოწმებს ცუნკერის/ზოლის სიმძლავრეს, ინახავს ნაჭერს და
   აბრუნებს `ReplicationPlan`-ს, რომელიც აღწერს დარჩენილ სიმძლავრეს, ასე რომ, ორკესტრირების ხელსაწყოებს
   შეუძლია გააგრძელოს მიღება. შეკვეთები სხვა პროვაიდერებისთვის აღიარებულია ა
   `ignored` პასუხი მრავალ ოპერატორის მუშაობის პროცესის გასაადვილებლად.【crates/iroha_torii/src/routing.rs:4845】
 - დასრულებული კაკვები (მაგ., გააქტიურებული მას შემდეგ, რაც გადაყლაპვა წარმატებულია) მოხვდა
-  `POST /v1/sorafs/capacity/complete` გაათავისუფლოს ჯავშნები მეშვეობით
+  `POST /v2/sorafs/capacity/complete` გაათავისუფლოს ჯავშნები მეშვეობით
   `CapacityManager::complete_order`. პასუხი მოიცავს `ReplicationRelease`
   სნეპშოტი (დარჩენილი ჯამები, ცუნკერი/ზოლის ნარჩენები) ასე რომ, ორკესტრირების ინსტრუმენტები შეიძლება
   რიგით შემდეგი შეკვეთა გამოკითხვის გარეშე. შემდგომი სამუშაო ამ ნაწილზე გადაიყვანს

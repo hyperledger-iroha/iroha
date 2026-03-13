@@ -76,7 +76,7 @@ governance charter.
    указанный в `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Проверьте, что provider adverts распространяются через discovery API:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Прогоните endpoints manifest/plan с governance headers:
    ```bash

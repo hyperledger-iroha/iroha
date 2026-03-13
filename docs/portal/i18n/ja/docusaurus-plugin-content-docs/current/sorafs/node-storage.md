@@ -114,8 +114,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > Torii gateway は同じ `NodeHandle` を使う読み取り専用ヘルパーを公開しています:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 保存済み Norito manifest (base64) と digest/メタデータを返します。【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — 決定的なチャンク計画 JSON (`chunk_fetch_specs`) を下流ツール向けに返します。【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — 保存済み Norito manifest (base64) と digest/メタデータを返します。【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — 決定的なチャンク計画 JSON (`chunk_fetch_specs`) を下流ツール向けに返します。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > これらのエンドポイントは CLI 出力を反映しているため、パイプラインはローカルスクリプトから HTTP プローブへ切り替えてもパーサを変更せずに済みます。【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -142,9 +142,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 ### 容量宣言とスケジューリング連携
 
-- Torii は `/v1/sorafs/capacity/declare` の `CapacityDeclarationRecord` 更新を組み込み `CapacityManager` に中継するため、各ノードはチャンクャ/レーン割当のメモリ内ビューを構築します。マネージャはテレメトリ向けの read-only スナップショット (`GET /v1/sorafs/capacity/state`) を公開し、新規オーダー受理前にプロファイル/レーンごとの予約を適用します。【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` エンドポイントはガバナンス発行の `ReplicationOrderV1` を受け取ります。オーダーがローカルプロバイダを対象とする場合、マネージャは重複スケジュールを確認し、チャンクャ/レーン容量を検証し、スライスを予約し、残容量を示す `ReplicationPlan` を返します。その他のプロバイダ向けオーダーは `ignored` 応答で acknowledge し、マルチオペレータのワークフローを円滑にします。【crates/iroha_torii/src/routing.rs:4845】
-- 完了フック (例: 取り込み成功後にトリガ) は `POST /v1/sorafs/capacity/complete` を呼び、`CapacityManager::complete_order` で予約を解放します。応答は `ReplicationRelease` スナップショット (残り総量、チャンクャ/レーン残量) を含み、オーケストレーションツールがポーリングなしで次のオーダーをキューできます。今後の作業で取り込みロジックが入ったらチャンクストアパイプラインに接続します。【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- Torii は `/v2/sorafs/capacity/declare` の `CapacityDeclarationRecord` 更新を組み込み `CapacityManager` に中継するため、各ノードはチャンクャ/レーン割当のメモリ内ビューを構築します。マネージャはテレメトリ向けの read-only スナップショット (`GET /v2/sorafs/capacity/state`) を公開し、新規オーダー受理前にプロファイル/レーンごとの予約を適用します。【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v2/sorafs/capacity/schedule` エンドポイントはガバナンス発行の `ReplicationOrderV1` を受け取ります。オーダーがローカルプロバイダを対象とする場合、マネージャは重複スケジュールを確認し、チャンクャ/レーン容量を検証し、スライスを予約し、残容量を示す `ReplicationPlan` を返します。その他のプロバイダ向けオーダーは `ignored` 応答で acknowledge し、マルチオペレータのワークフローを円滑にします。【crates/iroha_torii/src/routing.rs:4845】
+- 完了フック (例: 取り込み成功後にトリガ) は `POST /v2/sorafs/capacity/complete` を呼び、`CapacityManager::complete_order` で予約を解放します。応答は `ReplicationRelease` スナップショット (残り総量、チャンクャ/レーン残量) を含み、オーケストレーションツールがポーリングなしで次のオーダーをキューできます。今後の作業で取り込みロジックが入ったらチャンクストアパイプラインに接続します。【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - 組み込み `TelemetryAccumulator` は `NodeHandle::update_telemetry` で更新でき、バックグラウンドワーカーが PoR/稼働サンプルを記録し、`CapacityTelemetryV1` の正規ペイロードをスケジューラ内部に触れずに導出できるようになります。【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### 統合と将来作業

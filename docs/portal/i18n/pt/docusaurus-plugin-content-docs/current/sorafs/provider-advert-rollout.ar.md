@@ -47,7 +47,7 @@ A melhor opção para SF-2b/2c é
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` ou `max_span`
      - `allow_unknown_capabilities=<true|false>` e TLVs com GREASE
-   - تحقق عبر `/v1/sorafs/providers` e `sorafs_fetch`; يجب triagem تحذيرات
+   - تحقق عبر `/v2/sorafs/providers` e `sorafs_fetch`; يجب triagem تحذيرات
      capacidades غير المعروفة.
 3. **التحقق من جاهزية multi-fonte.**
    - Nome `sorafs_fetch` ou `--provider-advert=<path>`; يفشل CLI الآن عندما
@@ -183,9 +183,9 @@ Verifique se o dispositivo está conectado ao `promtool check rules`.
 ## التواصل ومعالجة الحوادث- **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
   والمواعيد القادمة.
 - **استجابة للحوادث.** إذا انطلقت تنبيهات `reject`، يقوم on-call بما يلي:
-  1. Abra o anúncio de descoberta em Torii (`/v1/sorafs/providers`).
+  1. Abra o anúncio de descoberta em Torii (`/v2/sorafs/providers`).
   2. Coloque um anúncio no pipeline e envie-o para o pipeline.
-     `/v1/sorafs/providers` não funciona.
+     `/v2/sorafs/providers` não funciona.
   3. O anúncio do anúncio pode ser atualizado para atualizar o site.
 - **تجميد التغييرات.** para definir o esquema, os recursos, o R1/R2, mas não
   Implementação de يوافق عليها فريق; Use GREASE para usar com graxa

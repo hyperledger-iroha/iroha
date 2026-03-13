@@ -74,13 +74,13 @@ Bu dərslik istehsala dəyişikliyi təşviq etməzdən əvvəl Parlament tərə
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Tapıntının son nöqtəsini sorğulayın və reklamın kanonik ləqəblərlə göründüyünü təsdiqləyin:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    `profile_aliases`-ə ilk giriş kimi `"sorafs.sf1@1.0.0"` daxil olduğundan əmin olun.

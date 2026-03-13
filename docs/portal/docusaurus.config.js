@@ -237,7 +237,7 @@ const config = {
       defaultBearer: tryItDefaultBearer,
       sampleRequest: {
         method: 'GET',
-        path: '/v1/status'
+        path: '/v2/status'
       }
     },
     oauth: oauthConfig

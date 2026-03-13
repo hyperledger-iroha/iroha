@@ -21,7 +21,7 @@ Espelha `docs/source/sorafs/runbooks/pin_registry_ops.md`. Mantenha ambas as ver
 
 ## Visa général
 
-Ce runbook documente comment surveiller et faciliter le triage du registre des broches du SoraFS et ses accords de niveau de service (SLA) de réplication. Les mesures proviennent de `iroha_torii` et sont exportées via Prometheus sur l'espace de noms `torii_sorafs_*`. Torii sauvegarde l'état du registre dans un intervalle de 30 secondes par seconde plan, ce qui permet aux tableaux de bord d'être actualisés en permanence lorsque l'opérateur consulte les points de terminaison `/v1/sorafs/pin/*`. Importez le tableau de bord sélectionné (`docs/source/grafana_sorafs_pin_registry.json`) pour une mise en page de Grafana immédiatement pour l'utiliser directement comme suit.
+Ce runbook documente comment surveiller et faciliter le triage du registre des broches du SoraFS et ses accords de niveau de service (SLA) de réplication. Les mesures proviennent de `iroha_torii` et sont exportées via Prometheus sur l'espace de noms `torii_sorafs_*`. Torii sauvegarde l'état du registre dans un intervalle de 30 secondes par seconde plan, ce qui permet aux tableaux de bord d'être actualisés en permanence lorsque l'opérateur consulte les points de terminaison `/v2/sorafs/pin/*`. Importez le tableau de bord sélectionné (`docs/source/grafana_sorafs_pin_registry.json`) pour une mise en page de Grafana immédiatement pour l'utiliser directement comme suit.
 
 ## Référence des mesures
 
@@ -120,7 +120,7 @@ groups:
 
 1. **Identifier la cause**
    - Si les échecs du SLA augmentent en ce qui concerne le retard permanent, il ne faut pas utiliser les fournisseurs (falhas de PoR, conclusoes tardias).
-   - Pour voir l'arriéré crescer com misses estaveis, inspecione a admissao (`/v1/sorafs/pin/*`) pour confirmer les manifestes aguardando aprovacao do conselho.
+   - Pour voir l'arriéré crescer com misses estaveis, inspecione a admissao (`/v2/sorafs/pin/*`) pour confirmer les manifestes aguardando aprovacao do conselho.
 2. **Statut valide des fournisseurs de dos**
    - Exécutez `iroha app sorafs providers list` et vérifiez si les capacités annoncées correspondent aux exigences de réplication.
    - Vérifiez les jauges `torii_sorafs_capacity_*` pour confirmer le GiB fourni et le succès de PoR.
@@ -139,7 +139,7 @@ Voici cette procédure dans les étapes visant à habiliter ou à supporter la p
 2. **Essai de mise en scène**
    - Implanter un changement de configuration dans un cluster de staging qui correspond à la topologie de production.
    - Exécuter `cargo xtask sorafs-pin-fixtures` pour confirmer que les appareils canoniques de l'alias sont également décodifiés et fazem aller-retour ; tout décalage implique une dérive en amont qui doit être résolue en premier.
-   - Exerca os endpoints `/v1/sorafs/pin/{digest}` et `/v1/sorafs/aliases` com provas sinteticas cobrindo casos Fresh, Actualiser la fenêtre, expiré et dur-expiré. Validez les codes HTTP, les en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et les champs du corps JSON contre ce runbook.
+   - Exerca os endpoints `/v2/sorafs/pin/{digest}` et `/v2/sorafs/aliases` com provas sinteticas cobrindo casos Fresh, Actualiser la fenêtre, expiré et dur-expiré. Validez les codes HTTP, les en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et les champs du corps JSON contre ce runbook.
 3. **Habiliter la production**
    - Implanter une nouvelle configuration sur Janela Padrao de Mudancas. Appliquez d'abord sur Torii et après avoir réinitialisé le SDK des passerelles/services en aidant le nœud à confirmer la nouvelle politique de nos journaux.
    - Importez `docs/source/grafana_sorafs_pin_registry.json` dans Grafana (ou actualisez les tableaux de bord existants) et corrigez les tâches d'actualisation du cache d'alias dans aucun espace de travail du NOC.

@@ -78,7 +78,7 @@ Tarefas:
 
 | רכיב | טארפה | Responsavel(is) |
 |------------|--------|----------------|
-| Servico Torii | Expor `/v1/sorafs/pin` (שלח), `/v1/sorafs/pin/{cid}` (חיפוש), `/v1/sorafs/aliases` (רשימה/כריכה), `/v1/sorafs/replication` (הזמנות/קבלות). Fornecer paginacao + פילטרגם. | Networking TL / Core Infra |
+| Servico Torii | Expor `/v2/sorafs/pin` (שלח), `/v2/sorafs/pin/{cid}` (חיפוש), `/v2/sorafs/aliases` (רשימה/כריכה), `/v2/sorafs/replication` (הזמנות/קבלות). Fornecer paginacao + פילטרגם. | Networking TL / Core Infra |
 | אטסטקאו | כולל אפשרויות/hash לעשות רישום ותשובות; Adicionar estrutura de atestacao Norito SDK consumida pelos. | אינפרא ליבה |
 | CLI | Estender `sorafs_manifest_stub` ou um novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Gerar bindings de cliente (Rust/Go/TS) a partir do esquema Norito; אדיקיוניר אשכים דה אינטגראקאו. | צוותי SDK |
@@ -133,10 +133,10 @@ Tarefas:
 רשימת בדיקה עבור SF-4 deve referenciar este plano quando howver progresso.
 A Fachada REST agora entrega נקודות קצה de listgem com atestacao:
 
-- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` retornam manifests com
+- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` retornam manifests com
   bindings de alias, ordens de replicacao e um objeto de atestacao derivado do
   hash do ultimo bloco.
-- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` תערוכת או קטלוג
+- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` תערוכת או קטלוג
   כינוי ativo e o backlog de ordens de replicacao com paginacao consistente e
   filtros de status.A CLI encapsula essas chamadas (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) para que operadores possam automatizar auditorias do

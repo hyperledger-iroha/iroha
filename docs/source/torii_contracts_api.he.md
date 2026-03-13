@@ -16,7 +16,7 @@ translator: manual
 
 ## נקודות קצה
 
-- **POST `/v1/contracts/code`** – עוטף `RegisterSmartContractCode` בטרנזקציה חתומה ושולח אותה.
+- **POST `/v2/contracts/code`** – עוטף `RegisterSmartContractCode` בטרנזקציה חתומה ושולח אותה.
   - גוף: `RegisterContractCodeDto` (JSON או Norito JSON; ראו סכימה בהמשך).
   - תשובה: `202 Accepted` עם קבלה; שגיאות קבלה אחרות בהתאם.
   - הרשאה: נדרש `CanRegisterSmartContractCode`.
@@ -30,7 +30,7 @@ translator: manual
     | `manifest.code_hash`/`abi_hash` אינם hex חוקי | `400 Bad Request` | הודעת `invalid JSON body` | בדיקה בשכבת Norito JSON. |
     | התור מלא | `429 Too Many Requests` | JSON מובנה (`code`, `message`, `queue`, `retry_after_seconds`) | כולל `Retry-After` והידוק עומס. |
 
-    דוגמה לסטטוס שנרשם ב-`/v1/pipeline/transactions/status` במקרה הרשאה חסרה:
+    דוגמה לסטטוס שנרשם ב-`/v2/pipeline/transactions/status` במקרה הרשאה חסרה:
 
     ```json
     {
@@ -61,19 +61,19 @@ translator: manual
     }
     ```
 
-- **GET `/v1/contracts/code/{code_hash}`** – מחזיר `ContractManifest` לפי `code_hash`.
-- **POST `/v1/contracts/deploy`** – מקבל bytecode Base64, מחשב `code_hash`/`abi_hash`, ושולח `RegisterSmartContractCode` + `RegisterSmartContractBytes` בטרנזקציה אחת.
+- **GET `/v2/contracts/code/{code_hash}`** – מחזיר `ContractManifest` לפי `code_hash`.
+- **POST `/v2/contracts/deploy`** – מקבל bytecode Base64, מחשב `code_hash`/`abi_hash`, ושולח `RegisterSmartContractCode` + `RegisterSmartContractBytes` בטרנזקציה אחת.
   - גוף: `DeployContractDto`; תשובה: `DeployContractResponseDto`.
   - גודל הקוד מוכתב ע"י הפרמטר המותאם `max_contract_code_bytes` (ברירת מחדל 16 MiB). יש לעדכן את הערך לפני העלאת תוכניות גדולות יותר.
   - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="deploy"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="deploy"}`.
-- **POST `/v1/contracts/instance`** – מקבל bytecode Base64 ויעד `(namespace, contract_id)`, ומבצע `RegisterSmartContractCode` + `RegisterSmartContractBytes` + `ActivateContractInstance` באותה טרנזקציה.
+- **POST `/v2/contracts/instance`** – מקבל bytecode Base64 ויעד `(namespace, contract_id)`, ומבצע `RegisterSmartContractCode` + `RegisterSmartContractBytes` + `ActivateContractInstance` באותה טרנזקציה.
   - תשובה: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
   - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="instance"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="instance"}`.
-- **GET `/v1/contracts/code-bytes/{code_hash}`** – מחזיר `{ code_b64 }`.
-- **POST `/v1/contracts/instance/activate`** – שולח `ActivateContractInstance` עבור `(namespace, contract_id)`.
+- **GET `/v2/contracts/code-bytes/{code_hash}`** – מחזיר `{ code_b64 }`.
+- **POST `/v2/contracts/instance/activate`** – שולח `ActivateContractInstance` עבור `(namespace, contract_id)`.
   - גוף: `ActivateInstanceDto`; תשובה: `ActivateInstanceResponseDto`.
   - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="activate"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="activate"}`.
-- **GET `/v1/contracts/instances/{ns}`** – מציג מופעי חוזים פעילים ב-`ns` עם פרמטרי סינון/מיון זהים לאנדפוינט הגוורננס.
+- **GET `/v2/contracts/instances/{ns}`** – מציג מופעי חוזים פעילים ב-`ns` עם פרמטרי סינון/מיון זהים לאנדפוינט הגוורננס.
 
 ## סכימות
 
@@ -203,7 +203,7 @@ translator: manual
 
 ### ריסון קצב וטלמטריה
 
-- `torii.deploy_rate_per_origin_per_sec` ו-`torii.deploy_burst_per_origin` מגדירים את דלי-הטוקנים המשותף לנקודות הקצה `/v1/contracts/{code,deploy,instance,instance/activate}`. ברירת מחדל: 4 בקשות לשנייה עם burst של 8 לכל מקור (`X-API-Token`, כתובת IP, וזוג נקודת קצה).
+- `torii.deploy_rate_per_origin_per_sec` ו-`torii.deploy_burst_per_origin` מגדירים את דלי-הטוקנים המשותף לנקודות הקצה `/v2/contracts/{code,deploy,instance,instance/activate}`. ברירת מחדל: 4 בקשות לשנייה עם burst של 8 לכל מקור (`X-API-Token`, כתובת IP, וזוג נקודת קצה).
 - בקשות שנחסמות על ידי ה-limiter מעלות את `torii_contract_throttled_total{endpoint}` כש־`endpoint` הוא `code` / `deploy` / `instance` / `activate`.
 - כל שגיאה במעבד (גוף לא תקין, חוסר הרשאה, כשל תור) מעלה את `torii_contract_errors_total{endpoint}`. מומלץ לנטר יחד עם מדדי התור.
 
@@ -212,13 +212,13 @@ translator: manual
 פרסום מניפסט:
 
 ```bash
-curl -s -X POST ... http://127.0.0.1:8080/v1/contracts/code
+curl -s -X POST ... http://127.0.0.1:8080/v2/contracts/code
 ```
 
 שליפת מניפסט או קוד בייטס:
 
 ```bash
-curl -s http://127.0.0.1:8080/v1/contracts/code/<hash>
+curl -s http://127.0.0.1:8080/v2/contracts/code/<hash>
 # …
 ```
 
@@ -234,7 +234,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_b64": "…"
       }' \
-  http://127.0.0.1:8080/v1/contracts/instance | jq .
+  http://127.0.0.1:8080/v2/contracts/instance | jq .
 ```
 
 הפעלה של מופע קיים (לאחר שה-bytecode וה manifest כבר נשמרו):
@@ -249,7 +249,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_hash": "<32-byte-hex>"
       }' \
-  http://127.0.0.1:8080/v1/contracts/instance/activate | jq .
+  http://127.0.0.1:8080/v2/contracts/instance/activate | jq .
 ```
 
 ### חישוב `abi_hash`
