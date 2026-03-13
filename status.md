@@ -2,6 +2,63 @@
 
 Last updated: 2026-03-13
 
+## 2026-03-13 Follow-up: FASTPQ stage2 balanced backend fixture refresh
+- Refreshed stale Stage 2 backend regression fixtures to match current canonical
+  prover output:
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+- This resolves fixture parity failures in:
+  - `stage2_artifact_balanced_1k_matches_fixture`
+  - `stage2_artifact_balanced_5k_matches_fixture`
+  - `golden_stage2_proof_matches_fixture`
+- Validation (this follow-up):
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture` (pass)
+
+## 2026-03-13 Follow-up: fastpq trace-commitment transfer fixture refresh
+- Fixed `crates/fastpq_prover/tests/trace_commitment.rs` regression that was
+  failing with `TransferMetadataDecode` for `AssetDefinitionId` by refreshing
+  the stale `transfer.norito` fixture to the current Norito layout.
+- Updated transfer golden vectors to match the refreshed canonical fixture:
+  - `crates/fastpq_prover/tests/fixtures/ordering_hash.json` (`transfer`)
+  - `crates/fastpq_prover/tests/trace_commitment.rs` (`commitment transfer`)
+- Validation (this follow-up):
+  - `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass)
+
+## 2026-03-13 Follow-up: `fastpq_row_bench` canonical asset-definition IDs
+- Fixed `crates/fastpq_prover/src/bin/fastpq_row_bench.rs` transfer-row generation to stop
+  parsing legacy `name#domain` asset-definition literals.
+  - `RowGenerator` now builds transfer asset definitions with
+    `AssetDefinitionId::new(domain, name)` so emitted keys use canonical
+    `aid:<32-lower-hex>` IDs.
+- Added regression coverage:
+  - `tests::transfer_keys_use_canonical_aid_literals` verifies generated transfer keys
+    start with `asset/aid:` and do not contain legacy `#` literals.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --bin fastpq_row_bench` (pass)
+
+## 2026-03-13 Follow-up: `connect_norito_bridge` asset-definition parsing compatibility
+- Restored bridge compatibility for asset-definition literals in
+  `crates/connect_norito_bridge/src/lib.rs`:
+  - `parse_asset_definition(...)` now accepts both canonical
+    `aid:<32-lower-hex>` and legacy `<name>#<domain>` forms.
+  - this unblocked transfer/mint/burn/zk-transfer encoder paths that were
+    failing with `ERR_ASSET_DEFINITION_PARSE` (`-5`) before quantity/nonce checks.
+- Extended regression coverage in bridge unit tests:
+  - `accel_tests::parse_asset_definition_accepts_legacy_literal`
+  - `accel_tests::parse_asset_definition_accepts_canonical_aid_literal`
+- Synced the fixture generator parser in
+  `crates/connect_norito_bridge/src/bin/swift_parity_regen.rs`:
+  - added `parse_asset_definition_argument(...)` with the same dual-format
+    behavior to keep payload-fixture tests aligned with bridge FFI expectations.
+  - added `tests::parse_asset_definition_argument_accepts_canonical_literal`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p connect_norito_bridge accel_tests:: -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge` (pass)
+
 ## 2026-03-13 Follow-up: candidate-ID narrowing + account-definition range scans
 - Tightened account/asset lookup paths:
   - `crates/iroha_core/src/state.rs` now exposes `AssetByAccountDefinitionBounds` +

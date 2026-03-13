@@ -340,6 +340,7 @@ struct RowGenerator {
     grant_index: usize,
     revoke_index: usize,
     meta_index: usize,
+    asset_domain: DomainId,
     sender_accounts: Vec<AccountId>,
     receiver_accounts: Vec<AccountId>,
 }
@@ -367,9 +368,19 @@ impl RowGenerator {
             grant_index: 0,
             revoke_index: 0,
             meta_index: 0,
+            asset_domain: domain,
             sender_accounts,
             receiver_accounts,
         }
+    }
+
+    fn asset_definition_for_group(&self, asset_group: usize) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            self.asset_domain.clone(),
+            format!("bench_asset_{asset_group}")
+                .parse()
+                .expect("asset definition name"),
+        )
     }
 
     fn next_transfer_pair(
@@ -379,10 +390,9 @@ impl RowGenerator {
         let pair_idx = self.transfer_index;
         self.transfer_index = self.transfer_index.wrapping_add(1);
         let asset_group = pair_idx % 128;
-        let asset_id = format!("bench_asset_{asset_group}#lane");
         let from_account = self.sender_accounts[pair_idx % self.sender_accounts.len()].clone();
         let to_account = self.receiver_accounts[pair_idx % self.receiver_accounts.len()].clone();
-        let asset_definition = AssetDefinitionId::from_str(&asset_id).expect("asset definition");
+        let asset_definition = self.asset_definition_for_group(asset_group);
         let rotation = u32::try_from(pair_idx % 31).expect("rotation fits in u32") + 1;
         let base = 1_000_000_u64
             .wrapping_add(self.seed.rotate_left(rotation))
@@ -587,5 +597,19 @@ mod tests {
         assert_eq!(summary.rows, counts.total_rows());
         assert_eq!(summary.row_usage.transfer_rows, counts.transfer_rows);
         assert_eq!(summary.padded_len, 65_536);
+    }
+
+    #[test]
+    fn transfer_keys_use_canonical_aid_literals() {
+        let mut generator = RowGenerator::new(7);
+        let (_, sender, receiver) = generator.next_transfer_pair(false);
+
+        let sender_key = String::from_utf8(sender.key).expect("sender key utf8");
+        let receiver_key = String::from_utf8(receiver.key).expect("receiver key utf8");
+
+        assert!(sender_key.starts_with("asset/aid:"));
+        assert!(receiver_key.starts_with("asset/aid:"));
+        assert!(!sender_key.contains('#'));
+        assert!(!receiver_key.contains('#'));
     }
 }

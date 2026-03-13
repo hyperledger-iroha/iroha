@@ -398,7 +398,21 @@ fn parse_destination(value: String) -> BridgeResult<AccountId> {
 }
 
 fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
-    value.parse().map_err(|_| BridgeError::AssetDefinition)
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::AssetDefinition);
+    }
+
+    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
+        return Ok(id);
+    }
+
+    let (name, domain) = trimmed
+        .split_once('#')
+        .ok_or(BridgeError::AssetDefinition)?;
+    let name = Name::from_str(name).map_err(|_| BridgeError::AssetDefinition)?;
+    let domain = DomainId::from_str(domain).map_err(|_| BridgeError::AssetDefinition)?;
+    Ok(AssetDefinitionId::new(domain, name))
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
@@ -7559,6 +7573,32 @@ mod accel_tests {
         let signed_bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
         let signed = decode_signed_transaction(signed_bytes).expect("decode signed transaction");
         assert_eq!(out_hash, *signed.hash().as_ref());
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_legacy_literal() {
+        let parsed = parse_asset_definition("usd#bank".to_owned())
+            .expect("legacy asset definition should parse");
+        let expected = AssetDefinitionId::new(
+            DomainId::from_str("bank").expect("domain"),
+            Name::from_str("usd").expect("name"),
+        );
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_canonical_aid_literal() {
+        let canonical = AssetDefinitionId::new(
+            DomainId::from_str("wonderland").expect("domain"),
+            Name::from_str("rose").expect("name"),
+        )
+        .to_string();
+        let parsed = parse_asset_definition(canonical.clone())
+            .expect("canonical aid asset definition should parse");
+        let expected = canonical
+            .parse::<AssetDefinitionId>()
+            .expect("canonical aid should parse");
+        assert_eq!(parsed, expected);
     }
 
     #[test]

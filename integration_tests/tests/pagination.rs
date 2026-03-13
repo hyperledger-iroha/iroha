@@ -5,7 +5,7 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    data_model::{asset::AssetDefinition, prelude::*},
+    data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::*;
@@ -80,20 +80,25 @@ fn pagination_behaves() -> Result<()> {
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
 
-    let register: Vec<_> = ('a'..='j')
+    let register: Vec<InstructionBox> = ('a'..='j')
         .map(|c| c.to_string())
-        .map(|name| (name + "#wonderland").parse().expect("Valid"))
+        .map(|name| {
+            (name + "#wonderland")
+                .parse::<AssetDefinitionId>()
+                .expect("Valid")
+        })
         .map(|asset_definition_id| {
             Register::asset_definition({
                 let __asset_definition_id = asset_definition_id;
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             })
+            .into()
         })
         .collect();
 
     for chunk in register.chunks(MAX_INSTRUCTIONS_PER_TX) {
-        client.submit_all_blocking(chunk.iter().cloned())?;
+        client.submit_all_blocking::<InstructionBox>(chunk.iter().cloned())?;
     }
 
     Ok(())
