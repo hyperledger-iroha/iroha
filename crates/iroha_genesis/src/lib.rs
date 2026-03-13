@@ -94,7 +94,11 @@ impl GenesisSpec {
             .wrap_err("failed to access genesis file metadata")?
             .len();
         if size >= Self::WARN_ON_GENESIS_GTE {
-            eprintln!("Genesis is quite large, it will take some time to process it (size = {}, threshold = {})", size, Self::WARN_ON_GENESIS_GTE);
+            iroha_logger::warn!(
+                size,
+                threshold = Self::WARN_ON_GENESIS_GTE,
+                "Genesis file is large and may take time to process"
+            );
         }
         let reader = BufReader::new(file);
 

@@ -23,6 +23,7 @@ serde_with = { workspace = true }
 eyre = { workspace = true }
 parity-scale-codec = { workspace = true }
 humantime = { workspace = true }
+iroha_logger = { workspace = true }
 
 [dev-dependencies]
 iroha_crypto = { workspace = true, features = ["rand"] }
