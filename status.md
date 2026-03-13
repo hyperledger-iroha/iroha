@@ -16,6 +16,18 @@ Last updated: 2026-03-13
   - `cargo test -p integration_tests --test mod nexus::multilane_router::multilane_router_provisions_storage_and_routes_rules -- --exact --nocapture` (pass)
   - `cargo test -p integration_tests --test mod nexus::multilane_pipeline::multilane_catalog_sets_up_storage_and_routing -- --exact --nocapture` (pass)
 
+## 2026-03-13 Follow-up: address canonicalisation integration suite stability
+- Mitigated `integration_tests/tests/address_canonicalisation.rs` SIGKILL instability by
+  installing a process-wide network-parallelism override for this test binary:
+  - wrapped `start_network_async_or_skip(...)` in-file and pinned
+    `override_network_parallelism(None, Some(2))` via `OnceLock`.
+  - this keeps startup concurrency bounded while avoiding long serialized queues that can trip
+    external watchdog kills.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation --no-run` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
+
 ## 2026-03-13 Follow-up: FASTPQ stage2 balanced backend fixture refresh
 - Refreshed stale Stage 2 backend regression fixtures to match current canonical
   prover output:

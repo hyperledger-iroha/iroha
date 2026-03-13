@@ -6,12 +6,15 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Result, WrapErr, eyre};
-use integration_tests::sandbox::start_network_async_or_skip;
+use integration_tests::sandbox::{
+    self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
+};
 use iroha::data_model::{
     isi::{SetKeyValue, offline::RegisterOfflineAllowance, repo::RepoIsi},
     kaigi::{
@@ -33,6 +36,21 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT
 use reqwest::Client;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
+fn install_network_parallelism_override() {
+    static NETWORK_PARALLELISM_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
+    // Keep this suite bounded to avoid startup stampedes while still allowing overlap so the
+    // binary does not exceed external watchdog time limits.
+    NETWORK_PARALLELISM_GUARD.get_or_init(|| sandbox::override_network_parallelism(None, Some(2)));
+}
+
+async fn start_network_async_or_skip(
+    builder: NetworkBuilder,
+    context: &str,
+) -> Result<Option<sandbox::SerializedNetwork>> {
+    install_network_parallelism_override();
+    sandbox_start_network_async_or_skip(builder, context).await
+}
 
 fn http_client() -> Client {
     Client::builder()
