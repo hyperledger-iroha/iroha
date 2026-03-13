@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
+
+## 2026-03-14 Follow-up: offline app API account domain-link compile fix
+- Fixed `crates/iroha_torii/tests/offline_app_api.rs` account fixtures that failed
+  to compile after `Account::linked_domains` became an explicit field.
+  - Added `linked_domains` initialization for `controller`, `receiver`, and
+    `operator` seeded from the fixture allowance domain.
+  - Added `std::collections::BTreeSet` import for deterministic set construction.
+- Validation (this follow-up):
+  - `cargo test -p iroha_torii --test offline_app_api --no-run` (pass)
+  - `cargo test -p iroha_torii --test offline_app_api` (pass)
+  - `cargo fmt --all` (pass)
 
 ## 2026-03-13 Follow-up: cross-dataspace localnet runtime stabilization
 - Stabilized `integration_tests/tests/nexus/cross_dataspace_localnet.rs` setup so the

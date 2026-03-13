@@ -5,6 +5,7 @@
 mod offline_balance_proof_utils;
 
 use std::{
+    collections::BTreeSet,
     fs,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -692,6 +693,13 @@ async fn assert_replay_final_settlement_status(
 }
 
 fn world_from_fixtures(fixtures: &Fixtures) -> World {
+    let domain_id = fixtures
+        .certificate
+        .allowance
+        .asset
+        .definition()
+        .domain()
+        .clone();
     let domains = [Domain {
         id: fixtures
             .certificate
@@ -711,6 +719,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id.clone()]),
     };
     let receiver = Account {
         id: fixtures.receiver.clone(),
@@ -718,6 +727,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id.clone()]),
     };
     let operator = Account {
         id: fixtures.certificate.operator.clone(),
@@ -725,6 +735,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id]),
     };
 
     // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
