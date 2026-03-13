@@ -547,6 +547,7 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: std::collections::BTreeSet::new(),
     };
     let mut asset_definition_metadata = Metadata::default();
     asset_definition_metadata.insert(
