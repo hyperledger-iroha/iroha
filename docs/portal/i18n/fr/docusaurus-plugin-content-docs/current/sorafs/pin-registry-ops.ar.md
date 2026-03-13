@@ -21,7 +21,7 @@ Voir `docs/source/sorafs/runbooks/pin_registry_ops.md`. حافظ على النس
 
 ## نظرة عامة
 
-Il s'agit d'un registre PIN avec SoraFS et d'un registre de broches (SLA). Utilisez `iroha_torii` et Prometheus pour `torii_sorafs_*`. Il s'agit d'un Torii mis en place pour le registre depuis 30 ans dans le cadre d'une procédure de registre. حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v1/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
+Il s'agit d'un registre PIN avec SoraFS et d'un registre de broches (SLA). Utilisez `iroha_torii` et Prometheus pour `torii_sorafs_*`. Il s'agit d'un Torii mis en place pour le registre depuis 30 ans dans le cadre d'une procédure de registre. حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v2/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
 
 ## مرجع المقاييس
 
@@ -120,7 +120,7 @@ groups:
 
 1. **تحديد السبب**
    - Les fournisseurs SLA sont également des fournisseurs de services (PoR, الاكتمال المتاخر).
-   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v1/sorafs/pin/*`) لتاكيد manifeste le التي تنتظر موافقة المجلس.
+   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v2/sorafs/pin/*`) لتاكيد manifeste le التي تنتظر موافقة المجلس.
 2. ** Fournisseurs de services **
    - شغّل `iroha app sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
    - Jauges `torii_sorafs_capacity_*` pour GiB et PoR.
@@ -139,7 +139,7 @@ Vous pouvez également utiliser le cache pour l'alias de l'alias :1. **تحضي
 2. **Exécution à sec et mise en scène**
    - انشر تغيير الاعدادات على عنقود mise en scène يعكس طوبولوجيا الانتاج.
    - شغّل `cargo xtask sorafs-pin-fixtures` لتاكيد ان luminaires الكنسية للـ alias ما زالت تفك التشفير وتقوم بعملية aller-retour؛ اي عدم تطابق يعني drift في المنبع يجب معالجته اولا.
-   - Les points de terminaison `/v1/sorafs/pin/{digest}` et `/v1/sorafs/aliases` ont des points de terminaison frais, une fenêtre d'actualisation, une date d'expiration et une date d'expiration matérielle. Vous pouvez utiliser les en-têtes HTTP et (`Sora-Proof-Status`, `Retry-After`, `Warning`) et JSON pour les applications.
+   - Les points de terminaison `/v2/sorafs/pin/{digest}` et `/v2/sorafs/aliases` ont des points de terminaison frais, une fenêtre d'actualisation, une date d'expiration et une date d'expiration matérielle. Vous pouvez utiliser les en-têtes HTTP et (`Sora-Proof-Status`, `Retry-After`, `Warning`) et JSON pour les applications.
 3. **التفعيل في الانتاج**
    - اطرح الاعدادات الجديدة في نافذة التغيير القياسية. Utilisez Torii pour créer des passerelles/SDK pour les utilisateurs les plus exigeants. السجلات.
    - Utilisez `docs/source/grafana_sorafs_pin_registry.json` pour Grafana (et utilisez le cache pour l'alias du NOC.

@@ -159,9 +159,9 @@ Los manifiestos y cargas útiles se corrigen de ida y vuelta antes de la llegada
 > Le gateway Torii expone el desorden de los ayudantes en una conferencia solo básica sobre el mismo
 > `NodeHandle` :
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — enviar el manifiesto
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — enviar el manifiesto
 > Norito almacenado (base64) con digest/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — enviar el plan de fragmento
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — enviar el plan de fragmento
 > Determina JSON (`chunk_fetch_specs`) para las herramientas posteriores.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Estos puntos finales reflejan la salida CLI para que las tuberías puedan pasar
@@ -201,18 +201,18 @@ Los manifiestos y cargas útiles se corrigen de ida y vuelta antes de la llegada
      une fois le modèle de gouvernance défini ; Para el instante, el diseño supone des
      cuotas estrictas y des operaciones de desconexión iniciadas por el operador.
 
-### Declaración de capacidad e integración de la programación- Torii relé desormado las actualizaciones del día `CapacityDeclarationRecord` después de `/v1/sorafs/capacity/declare`
+### Declaración de capacidad e integración de la programación- Torii relé desormado las actualizaciones del día `CapacityDeclarationRecord` después de `/v2/sorafs/capacity/declare`
   vers le `CapacityManager` embarqué, de sorte que cada nœud construit una vista en memoria de ses
   asignaciones de fragmentadores/carriles comprometidos. El administrador expone las instantáneas de solo lectura para la televisión
-  (`GET /v1/sorafs/capacity/state`) y apliques de reservas por perfil o por carril delante de
+  (`GET /v2/sorafs/capacity/state`) y apliques de reservas por perfil o por carril delante de
   Los nuevos comandos no son aceptados.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- El punto final `/v1/sorafs/capacity/schedule` acepta las cargas útiles `ReplicationOrderV1` emitidas por el gobierno.
+- El punto final `/v2/sorafs/capacity/schedule` acepta las cargas útiles `ReplicationOrderV1` emitidas por el gobierno.
   Cuando el pedido se haga efectivo con el proveedor local, el administrador verificará la planificación en doble, validará la
   capacidad fragmentada/carril, reserve el tramo y envíe un `ReplicationPlan` decrivant la capacidad restante
   afin que les utilils d'orchestration puissent poursuivre l'ingestion. Las órdenes para otros proveedores
   Sont adquiridos con una respuesta `ignored` para facilitar los flujos de trabajo de múltiples operadores. 【crates/iroha_torii/src/routing.rs:4845】
 - Des hooks de complétion (par ex. déclenchés après succès d'ingestion) apelante
-  `POST /v1/sorafs/capacity/complete` para liberar las reservas a través de `CapacityManager::complete_order`.
+  `POST /v2/sorafs/capacity/complete` para liberar las reservas a través de `CapacityManager::complete_order`.
   La respuesta incluye una instantánea `ReplicationRelease` (totaux restants, résiduels fragmenter/lane) después de
   les outils d'orchestration puissent queue la commande suivante sans polling. Un trabajo futuro relieracela au pipeline de chunk store lorsque la lógica de ingestión será prête.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - El `TelemetryAccumulator` embarqué peut être muté vía `NodeHandle::update_telemetry`, permiso auxiliar

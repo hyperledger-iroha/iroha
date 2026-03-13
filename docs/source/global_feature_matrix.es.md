@@ -25,7 +25,7 @@ Leyenda: `◉` completamente implementado · `○` mayormente implementado · `�
 | Transmisión confiable (transporte de carga útil DA) | ◉ | El flujo de mensajes RBC (Init/Chunk/Ready/Deliver) está habilitado cuando `da_enabled=true` como ruta de transporte/recuperación; Se realiza un seguimiento de la evidencia de disponibilidad (asesoramiento) mientras que la confirmación se realiza de forma independiente. | estado.md:último |
 | Confirmar enlace estado-raíz de control de calidad | ◉ | Los controles de calidad de confirmación llevan `parent_state_root`/`post_state_root`; no existe una puerta de control de calidad de ejecución separada. | estado.md:último |
 | Propagación de evidencia y puntos finales de auditoría | ◉ | Se obtuvieron ControlFlow::Evidence, puntos finales de evidencia Torii y pruebas negativas. | estado.md:176; estado.md:760-761 |
-| Telemetría RBC, métricas de preparación/entregadas | ◉ | Puntos finales `/v1/sumeragi/rbc*` y contadores/histograma de telemetría disponibles para los operadores. | estado.md:283-284; estado.md:772 |
+| Telemetría RBC, métricas de preparación/entregadas | ◉ | Puntos finales `/v2/sumeragi/rbc*` y contadores/histograma de telemetría disponibles para los operadores. | estado.md:283-284; estado.md:772 |
 | Anuncio de parámetros de consenso y verificación de topología | ◉ | Los nodos transmiten `(collectors_k, redundant_send_r)` y validan la igualdad entre pares. | estado.md:255 |
 | Rotación basada en PRF autorizada | ◉ | La selección de líder/recolector autorizado utiliza semilla PRF + altura/vista sobre la lista canónica; La rotación del hash anterior sigue siendo una ayuda heredada. | estado.md:último |
 
@@ -55,7 +55,7 @@ Leyenda: `◉` completamente implementado · `○` mayormente implementado · `�
 |---------|--------|-------|----------|
 | Admisión de actualización en tiempo de ejecución (puerta ABI) | ◉ | Conjunto de ABI activo aplicado en el momento de la admisión con pruebas y errores estructurados. | estado.md:196 |
 | Puerta de implementación de espacios de nombres protegidos | ▲ | Implementar requisitos de metadatos y activación por cable; La política/UX sigue evolucionando. | estado.md:171 |
-| Puntos finales de lectura de gobierno Torii | ◉ | `/v1/gov/*` leyó las API enrutadas con pruebas de enrutador. | estado.md:212 |
+| Puntos finales de lectura de gobierno Torii | ◉ | `/v2/gov/*` leyó las API enrutadas con pruebas de enrutador. | estado.md:212 |
 | Eventos y ciclo de vida del registro de claves de verificación | ◉ | Registro/actualización/obsolescencia de VK, eventos, filtros CLI y semántica de retención implementadas. | estado.md:236-239; estado.md:595; estado.md:603 |
 
 ## Infraestructura de conocimiento cero
@@ -68,7 +68,7 @@ Leyenda: `◉` completamente implementado · `○` mayormente implementado · `�
 | Puerta blindada del historial de raíces | ◉ | Instantáneas de raíz conectadas a CoreHost con historial limitado y configuración de raíz vacía. | estado.md:303 |
 | Bloqueos de gobernanza y ejecución de boletas de ZK | ○ | Derivación de anulador, actualizaciones de bloqueo, alternancias de verificación implementadas; El ciclo de vida completo de la prueba aún está madurando. | estado.md:126-128; estado.md:194-195 |
 | Adjunto de prueba, verificación previa y desduplicación | ◉ | Los registros de prueba, deduplicación y cordura de las etiquetas de backend persistieron antes de la ejecución. | estado.md:348; estado.md:602 |
-| Punto final de búsqueda de prueba ZK Torii | ◉ | `/v1/zk/proof/{backend}/{hash}` expone registros de prueba (estado, altura, vk_ref/compromiso). | estado.md:94 |
+| Punto final de búsqueda de prueba ZK Torii | ◉ | `/v2/zk/proof/{backend}/{hash}` expone registros de prueba (estado, altura, vk_ref/compromiso). | estado.md:94 |
 
 ## Integración IVM e Kotodama| Característica | Estado | Notas | Evidencia |
 |---------|--------|-------|----------|
@@ -77,7 +77,7 @@ Leyenda: `◉` completamente implementado · `○` mayormente implementado · `�
 | Validación estricta de Pointer-ABI y sincronización de documentos | ◉ | Política TLV aplicada en todo el host/IVM con pruebas doradas y documentos generados. | estado.md:227; estado.md:317; estado.md:344; estado.md:366; estado.md:527 |
 | Puerta de llamada al sistema ZK a través de CoreHost | ◉ | Las colas por operación controlan los sobres verificados y aplican la coincidencia de hash antes de la ejecución de ISI. | cajas/iroha_core/src/smartcontracts/ivm/host.rs:213; cajas/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama puntero-Documentos y gramática ABI | ◉ | Gramática/docs sincronizados con constructores en vivo y asignaciones SCALL. | estado.md:299-301 |
-| Motor basado en esquemas ISO 20022 y puente Torii | ◉ | Esquemas canónicos ISO 20022 integrados, análisis XML determinista y API `/v1/iso20022/status/{MsgId}` expuesta. | estado.md:65-70 |
+| Motor basado en esquemas ISO 20022 y puente Torii | ◉ | Esquemas canónicos ISO 20022 integrados, análisis XML determinista y API `/v2/iso20022/status/{MsgId}` expuesta. | estado.md:65-70 |
 
 ## Aceleración de hardware
 

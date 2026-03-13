@@ -18,7 +18,7 @@ O endpoint `sorafs_cli` (ou seja, `--features cli`) e o endpoint Torii são igua
 
 - Nó 18.18 e `npm` e `pnpm`.
 - `sorafs_cli` em `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- O Torii é o `/v1/sorafs/*`, o que significa que você pode usar o cabo de segurança para obter mais informações. المستعارة.
+- O Torii é o `/v2/sorafs/*`, o que significa que você pode usar o cabo de segurança para obter mais informações. المستعارة.
 - Use OIDC (GitHub Actions, GitLab, identidade de carga de trabalho), como `SIGSTORE_ID_TOKEN`.
 - `examples/sorafs_cli_quickstart.sh` para fluxos de trabalho no GitHub/GitLab.
 - اضبط متغيرات OAuth الخاصة بـ Try it (`DOCS_OAUTH_*`) وشغّل
@@ -576,7 +576,7 @@ Coloque segredos/variáveis no lugar:
 
 | Nome | الغرض |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | O Torii é o mesmo do `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | O Torii é o mesmo do `/v2/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف época المسجل مع الارسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | سلطة التوقيع لارسال المانيفست. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | alias tupla é igual a `perform_submit` = `true`. |

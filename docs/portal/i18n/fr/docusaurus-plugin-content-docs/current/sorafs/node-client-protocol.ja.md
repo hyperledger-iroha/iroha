@@ -84,7 +84,7 @@ Support tooling :
 Les gateways acceptent des requêtes HTTP déterministes qui reflètent les
 métadonnées des adverts.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Exigence | Détails |
 |----------|---------|
@@ -92,7 +92,7 @@ métadonnées des adverts.
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` décrivant la fenêtre servie, métadonnées `X-Sora-Chunk-Range`, et headers chunker/token renvoyés. |
 | **Modes d'échec** | `416` pour plages mal alignées, `401` pour tokens manquants/invalides, `429` lorsque les budgets stream/octet sont dépassés. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch d'un seul chunk avec les mêmes headers, plus le digest déterministe du
 chunk. Utile pour les retries ou les téléchargements forensiques quand les
@@ -147,12 +147,12 @@ Erreurs courantes remontées aux opérateurs/SDKs :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` emballent les
   endpoints REST du pin-registry et impriment du Norito JSON brut avec blocs
   d'attestation pour l'audit.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` acceptent des
+- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` acceptent des
   manifests Norito ou JSON, plus des proofs d'alias optionnels et des successors ;
   des proofs mal formés renvoient `400`, des proofs obsolètes exposent `503` avec
   `Warning: 110`, et des proofs expirés renvoient `412`.
-- Les endpoints REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) incluent des structures d'attestation pour que les
+- Les endpoints REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) incluent des structures d'attestation pour que les
   clients vérifient les données avec les derniers headers de bloc avant d'agir.
 
 ## Références

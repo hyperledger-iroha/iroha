@@ -99,14 +99,14 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
 
     let app = torii.api_router_for_tests();
 
-    // POST /v1/zk/verify with minimal JSON; accept OK or 429
+    // POST /v2/zk/verify with minimal JSON; accept OK or 429
     let resp = app
         .clone()
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/zk/verify")
+                .uri("/v2/zk/verify")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
@@ -118,12 +118,12 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // GET /v1/zk/attachments (empty list by default); accept OK or 429
+    // GET /v2/zk/attachments (empty list by default); accept OK or 429
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/zk/attachments")
+                .uri("/v2/zk/attachments")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -134,11 +134,11 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // GET /v1/zk/attachments/{id} with a placeholder id; accept 200, 404, or 429
+    // GET /v2/zk/attachments/{id} with a placeholder id; accept 200, 404, or 429
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/zk/attachments/placeholder-id")
+                .uri("/v2/zk/attachments/placeholder-id")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

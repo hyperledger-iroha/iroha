@@ -167,9 +167,9 @@ API の到着前にマニフェストとペイロードを往復修正する Tor
 > ゲートウェイ Torii は、講義の基礎となるヘルパーのデソルメを公開します
 > `NodeHandle` :
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — レンボイスファイルマニフェスト
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — レンボイスファイルマニフェスト
 > Norito Stocké (base64) avec Digest/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — チャンクの計画を実行する
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — チャンクの計画を実行する
 > 決定的な JSON (`chunk_fetch_specs`) をダウンストリームに注ぎます。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Ces エンドポイントは、パイプラインのパイプラインを通過する CLI を反映しています
@@ -212,18 +212,18 @@ API の到着前にマニフェストとペイロードを往復修正する Tor
 
 ### 能力とスケジュールの統合に関する宣言
 
-- Torii 日々のレミゼ・デソルメ `CapacityDeclarationRecord` ピュイ `/v1/sorafs/capacity/declare`
+- Torii 日々のレミゼ・デソルメ `CapacityDeclarationRecord` ピュイ `/v2/sorafs/capacity/declare`
   vers le `CapacityManager` embarqué, de sorte que Chaque no construit une vue en memoire de ses
   チャンカー/レーンの割り当て。ル マネージャーがスナップショットを読み取り専用で公開し、テレメトリーを提供します
-  (`GET /v1/sorafs/capacity/state`) プロフィールと前衛的なレーンのアップリケ予約
+  (`GET /v2/sorafs/capacity/state`) プロフィールと前衛的なレーンのアップリケ予約
   nouvelles commandes ne soient acceptées.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- エンドポイント `/v1/sorafs/capacity/schedule` ペイロード `ReplicationOrderV1` を政府として受け入れます。
+- エンドポイント `/v2/sorafs/capacity/schedule` ペイロード `ReplicationOrderV1` を政府として受け入れます。
   ローカルのプロバイダー、マネージャーが二重に計画を検証し、有効性を確認します。
   容量チャンカー/レーン、保留ラ・トランシュ、およびレンヴォワ・アン `ReplicationPlan` 容量保持機能
   オーケストラの演奏を最大限に楽しんでください。 Les ordres pour d'autres プロバイダー
   `ignored` はワークフローのマルチオペレーションを促進します。【crates/iroha_torii/src/routing.rs:4845】
 - Desフック・デ・コンプリート（摂取後の成功の解除）控訴人
-  `POST /v1/sorafs/capacity/complete` は、`CapacityManager::complete_order` 経由で予約を自由に送信してください。
+  `POST /v2/sorafs/capacity/complete` は、`CapacityManager::complete_order` 経由で予約を自由に送信してください。
   スナップショット `ReplicationRelease` (残りのレストラン、残りのチャンカー/レーン) を含む応答
   投票なしで指揮を執るオーケストラの指揮を執ります。将来は苦労しないでください
   パイプラインのチャンクストアの摂取量のセラプレテ。【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】

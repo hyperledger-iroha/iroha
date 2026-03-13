@@ -18,11 +18,11 @@ title: Torii API-интерфейс API
 Имя: Torii Platform, руководитель программы SDK.  
 Приложение: TORII-APP-1 — `app_api` برابری آڈٹ
 
-یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی کاسی کرتا ہے تاکہ مونو-ریپو Если вы хотите использовать `/v1/*`, вы можете использовать `/v1/*`. اور دستاویزی ہیں۔ Если вы хотите использовать `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` и `add_connect_routes`, выберите нужный вариант. ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
+یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی کاسی کرتا ہے تاکہ مونو-ریپو Если вы хотите использовать `/v2/*`, вы можете использовать `/v2/*`. اور دستاویزی ہیں۔ Если вы хотите использовать `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` и `add_connect_routes`, выберите нужный вариант. ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
 
 ## دائرہ کار اور طریقہ
 
-`crates/iroha_torii/src/lib.rs:256-522` может помочь вам с функцией стробирования функций, которая может быть отключена. ہے۔ Если у вас есть `/v1/*`, вы можете использовать следующую информацию:
+`crates/iroha_torii/src/lib.rs:256-522` может помочь вам с функцией стробирования функций, которая может быть отключена. ہے۔ Если у вас есть `/v2/*`, вы можете использовать следующую информацию:
 
 - `crates/iroha_torii/src/routing.rs` — обработчик для работы с DTO
 - `app_api` یا `connect` может быть использовано в качестве защитного средства.
@@ -40,25 +40,25 @@ title: Torii API-интерфейс API
 - Сообщение:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## اینڈپوائنٹ فہرست
 
-### اکاؤنٹ اجازتیں (`/v1/accounts/{id}/permissions`) — کورڈ
+### اکاؤنٹ اجازتیں (`/v2/accounts/{id}/permissions`) — کورڈ
 - Обработчик: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Привязка роутера: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Владелец: Платформа Torii.
 - Примечания: Norito JSON body и `items`/`total`, а также помощники разбиения на страницы SDK. رکھتا ہے۔
 
-### Псевдоним OPRF تشخیص (`POST /v1/aliases/voprf/evaluate`) — کورڈ
+### Псевдоним OPRF تشخیص (`POST /v2/aliases/voprf/evaluate`) — کورڈ
 - Обработчик: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`.
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -74,7 +74,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Тесты: обработчик и встроенные тесты (`crates/iroha_torii/src/lib.rs:9945-9986`) и SDK.
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - Владелец: Платформа Torii.
-- Примечания: например, детерминированные шестнадцатеричные идентификаторы серверной части и другие. Использование SDK и DTO### Доказательство SSE ایونٹس (`GET /v1/events/sse`) — کورڈ
+- Примечания: например, детерминированные шестнадцатеричные идентификаторы серверной части и другие. Использование SDK и DTO### Доказательство SSE ایونٹس (`GET /v2/events/sse`) — کورڈ
 - Обработчик: `handle_v1_events_sse` в случае необходимости (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) для проводки защитного фильтра.
 - Привязка роутера: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Владелец: Torii Платформа (среда выполнения), WG Integration Tests (фиксации).
 - Примечания: фильтр проверки сквозной توثیق شدہ ہیں؛ دستاویزات `docs/source/zk_app_api.md` میں ہیں۔
 
-### کنٹریکٹ لائف سائیکل (`/v1/contracts/*`) — کورڈ
+### کنٹریکٹ لائف سائیکل (`/v2/contracts/*`) — کورڈ
 - Обработчики: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   И18НИ00000089Х (И18НИ00000090Х),
   И18НИ00000091Х (И18НИ00000092Х),
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Владелец: Smart Contract WG Платформа Torii.
 - Примечания: اینڈپوائنٹس سائن شدہ ٹرانزیکشنز کو قطار میں ڈالते ہیں اور مشترکہ ٹیلیمیٹری میٹرکس (`handle_transaction_with_metrics`) для получения дополнительной информации
 
-### ویریفائنگ کی لائف سائیکل (`/v1/zk/vk/*`) — کورڈ
+### ویریفائنگ کی لائف سائیکل (`/v2/zk/vk/*`) — کورڈ
 - Обработчики: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) или `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`.
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Владелец: Рабочая группа ZK کے ساتھ Torii Платформа سپورٹ۔
 - Примечания: Схемы DTO Norito и другие SDK могут быть использованы. Ограничение скорости `limits.rs` کے ذریعے نافذ ہے۔
 
-### Nexus Connect (`/v1/connect/*`) — کورڈ (функция `connect`)
+### Nexus Connect (`/v2/connect/*`) — کورڈ (функция `connect`)
 - Обработчики: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   И18НИ00000134Х (И18НИ00000135Х).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

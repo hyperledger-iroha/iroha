@@ -133,7 +133,7 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ### جرب وحدة التحكم Norito الحمولة الصافية
 
 1. `fixtures/norito_rpc/transfer_asset.norito` لاعبا اساسيا جيسا منتخب كريژ. هناك مغلفات خام Norito؛ لا يوجد ** ترميز base64 **.
-2. يمكن لـ Swagger أو RapidDoc استخدام نقطة نهاية NRPC (مثل `POST /v1/pipeline/submit`) ومحدد **Content-Type** الذي هو `application/x-norito`.
+2. يمكن لـ Swagger أو RapidDoc استخدام نقطة نهاية NRPC (مثل `POST /v2/pipeline/submit`) ومحدد **Content-Type** الذي هو `application/x-norito`.
 3. طلب ​​محرر نص **ثنائي** للملف الأول (Swagger هو "ملف" أو RapiDoc هو محدد "Binary/File") و`.norito` متاح للتنزيل. بايتات القطعة للوكيل ذریعے بغداد تبدیلی کے دفق كرتا ہے.
 4. طلب ​​مساعدة. إذا كنت Torii `X-Iroha-Error-Code: schema_mismatch`، قم بالتحقق من نقطة النهاية الخاصة بك وقبول الحمولات الثنائية وتسجيل `fixtures/norito_rpc/schema_hashes.json` تم إنشاء تجزئة المخطط في Torii.
 
@@ -146,10 +146,10 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-يتوفر `transaction_fixtures.manifest.json` كإدخال ثابت بدلاً من أو `cargo xtask norito-rpc-fixtures` مع تشفير الحمولة النافعة. يمكنك استخدام Torii في وضع الكناري `curl` وtry-it proxy (`https://docs.sora.example/proxy/v1/pipeline/submit`) للتنقل واختبار البنية التحتية واستخدام أدوات البوابة ہیں۔
+يتوفر `transaction_fixtures.manifest.json` كإدخال ثابت بدلاً من أو `cargo xtask norito-rpc-fixtures` مع تشفير الحمولة النافعة. يمكنك استخدام Torii في وضع الكناري `curl` وtry-it proxy (`https://docs.sora.example/proxy/v2/pipeline/submit`) للتنقل واختبار البنية التحتية واستخدام أدوات البوابة ہیں۔
 
 ## إمكانية الملاحظة والعملياتقم بطلب طريقة شريط، والمسار، والأصل، وحالة المنبع، ومصدر المصادقة (`override`، `default`، أو `client`) وقم بتسجيل الدخول. لم يتم تخزين الرموز المميزة - الرؤوس الحاملة وقيم `X-TryIt-Auth` التي تم تسجيلها بعد تنقيح البوابة، مما يسمح بإعادة توجيه المجمّع المركزي إلى الأمام من خلال تسرب أسرار الببغاء ے خدشے ے۔
 
@@ -159,7 +159,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 مقابض البيئة:

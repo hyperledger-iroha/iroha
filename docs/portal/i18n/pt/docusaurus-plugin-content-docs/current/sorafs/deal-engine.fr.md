@@ -57,12 +57,12 @@ a transferência de crédito com os resultados do regulamento.
 ## Integração Torii
 
 Torii expõe os endpoints dedicados para que os fornecedores sinalizem o uso e o piloto
-o ciclo de vida dos acordos sem fiação específica:- `POST /v1/sorafs/deal/usage` aceita a televisão `DealUsageReport` e o envio
+o ciclo de vida dos acordos sem fiação específica:- `POST /v2/sorafs/deal/usage` aceita a televisão `DealUsageReport` e o envio
   resultados de comptabilidade determinada (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finaliza a janela atual, transmitindo
+- `POST /v2/sorafs/deal/settle` finaliza a janela atual, transmitindo
   `DealSettlementRecord` resultante com um `DealSettlementV1` codificado em base64
   pronto para publicação no DAG de governo.
-- Le feed `/v1/events/sse` de Torii difuso désormais des registros
+- Le feed `/v2/events/sse` de Torii difuso désormais des registros
   `SorafsGatewayEvent::DealUsage` resumo de cada uso de uso (época, GiB-heures mesurés,
   compteurs de tickets, charge déterministes), des enregistrements
   `SorafsGatewayEvent::DealSettlement` que inclui o instantâneo canônico do livro-razão

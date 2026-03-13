@@ -44,7 +44,7 @@ Sidebar_label: Runbook de Operacoes не делает
   ```
 
 - Гарантия, что процесс Torii является доступом/записью на `data_dir`.
-- Подтвердите, что не было объявлено о возможности выполнения, через `GET /v1/sorafs/capacity/state`, когда было объявлено о регистрации.
+- Подтвердите, что не было объявлено о возможности выполнения, через `GET /v2/sorafs/capacity/state`, когда было объявлено о регистрации.
 - Когда или сглаживание становится привычным, приборные панели подвергаются жестоким работам в час/час и проверяются, чтобы исчезнуть тенденция к дрожанию или мгновенным значениям.
 
 ### Пробный запуск CLI (необязательно)
@@ -83,8 +83,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 После того, как Torii был активен, можно восстановить данные об артефактах через HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Конечные точки всех серверов работают с работающим хранилищем, портируют дымовые тесты CLI и постоянно синхронизируемые сигналы шлюза.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -95,7 +95,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Зависть от манифеста с кодировкой base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -104,7 +104,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Устранение неполадок:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -118,7 +118,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. Fixe pelo menos um Manifest como acima.
 2. Имя процесса Torii (или нет внутреннего).
 3. Повторно принесите запрос. Полезная нагрузка должна продолжать распределяться, а переваривание реторнадо должно совпадать с предшествующей доблестью и досрочным завершением.
-4. Проверьте `GET /v1/sorafs/storage/state`, чтобы подтвердить, что `bytes_used` отображает системные манифесты, сохраняющиеся после перезагрузки.
+4. Проверьте `GET /v2/sorafs/storage/state`, чтобы подтвердить, что `bytes_used` отображает системные манифесты, сохраняющиеся после перезагрузки.
 
 ## 4. Проверка соблюдения квоты
 
@@ -133,7 +133,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Попросите uma amostra PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -156,7 +156,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Панели мониторинга разрабатываются совместно:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` и `torii_sorafs_storage_fetch_inflight`
-  - contadores de sucesso/falha PoR expostos через `/v1/sorafs/capacity/state`
+  - contadores de sucesso/falha PoR expostos через `/v2/sorafs/capacity/state`
   - предварительные публикации об урегулировании через `sorafs_node_deal_publish_total{result=success|failure}`
 
 Вы должны гарантировать, что работник хранилища будет введен в эксплуатацию, сохранится в исходном состоянии, сохранит заданные квоты и убедитесь, что PoR детерминирован перед тем, как не будет объявлено о возможности использования большего количества ресурсов.

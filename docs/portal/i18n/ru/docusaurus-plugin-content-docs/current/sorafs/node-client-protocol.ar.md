@@ -66,13 +66,13 @@ translation_last_reviewed: 2026-02-07
 
 Вы можете подключиться к HTTP-серверу с помощью веб-сайта.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| المتطلب | تفاصيل |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| المتطلب | تفاصيل |
 |---------|----------|
 | **Заголовки** | `Range` (отправлено в центральный офис), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` используется и `X-SoraFS-Stream-Token` base64. |
 | **Ответы** | `206` и `Content-Type: application/vnd.ipld.car`, а также `Content-Range` в случае необходимости в `X-Sora-Chunk-Range`. Используется для создания чанка/токена. |
 | **Режимы отказа** | `416` Защитный экран `401` `429` вызывает поток/байт. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Он прокомментировал ситуацию с Дайджестом новостей. مفيد لإعادة
 Он был отправлен в автосалон по автомобилю CAR.
@@ -120,11 +120,11 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` и `alias list` и `replication list` для REST
   Закрепите контакты Norito JSON для проверки подлинности.
-- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` манифестирует
+- `iroha app sorafs storage pin` и `torii /v2/sorafs/pin/register` манифестирует
   Создайте Norito в формате JSON для доказательства псевдонима и преемника; تؤدي доказательства
   Найдите `400`, проверьте доказательства `503` и `Warning: 110`, нажмите на него.
   доказательства المنتهية تمامًا `412`.
-- Нет REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- Нет REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   تتضمن هياكل аттестация حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   Он сказал, что это не так.## المراجع
 

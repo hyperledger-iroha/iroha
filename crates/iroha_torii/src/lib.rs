@@ -2607,7 +2607,7 @@ async fn handler_proof_tags(
     )))
 }
 
-/// Forward `/v1/zk/verify-batch` requests to the routing handler.
+/// Forward `/v2/zk/verify-batch` requests to the routing handler.
 ///
 /// # Errors
 /// Propagates routing errors when the batch verification fails.
@@ -2619,7 +2619,7 @@ pub async fn handle_v1_zk_verify_batch(
     crate::routing::handle_v1_zk_verify_batch(headers, body).await
 }
 
-/// Fallback `/v1/zk/verify-batch` handler when `zk-verify-batch` feature is disabled.
+/// Fallback `/v2/zk/verify-batch` handler when `zk-verify-batch` feature is disabled.
 ///
 /// # Errors
 /// Never errors; always returns a `501 Not Implemented` response.
@@ -4073,25 +4073,25 @@ struct ExplorerInstructionsQuery {
 }
 
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_DOMAINS_OWNED_BY: &str = "/v1/explorer/domains?owned_by";
+const CONTEXT_EXPLORER_DOMAINS_OWNED_BY: &str = "/v2/explorer/domains?owned_by";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY: &str = "/v1/explorer/asset-definitions?owned_by";
+const CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY: &str = "/v2/explorer/asset-definitions?owned_by";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ASSETS_OWNED_BY: &str = "/v1/explorer/assets?owned_by";
+const CONTEXT_EXPLORER_ASSETS_OWNED_BY: &str = "/v2/explorer/assets?owned_by";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v1/explorer/nfts?owned_by";
+const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v2/explorer/nfts?owned_by";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v1/explorer/transactions?authority";
+const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v2/explorer/transactions?authority";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY: &str = "/v1/explorer/instructions?authority";
+const CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY: &str = "/v2/explorer/instructions?authority";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT: &str = "/v1/explorer/instructions?account";
+const CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT: &str = "/v2/explorer/instructions?account";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ACCOUNT_DETAIL: &str = "/v1/explorer/accounts/{account_id}";
+const CONTEXT_EXPLORER_ACCOUNT_DETAIL: &str = "/v2/explorer/accounts/{account_id}";
 #[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ACCOUNT_QR: &str = "/v1/explorer/accounts/{account_id}/qr";
+const CONTEXT_EXPLORER_ACCOUNT_QR: &str = "/v2/explorer/accounts/{account_id}/qr";
 #[cfg(feature = "app_api")]
-const CONTEXT_KAIGI_RELAY_EVENTS_QUERY: &str = "/v1/kaigi/relays/events?relay";
+const CONTEXT_KAIGI_RELAY_EVENTS_QUERY: &str = "/v2/kaigi/relays/events?relay";
 
 #[cfg(feature = "app_api")]
 fn parse_account_id_for_endpoint(
@@ -5755,7 +5755,7 @@ async fn handler_gov_council_derive_vrf(
 
 // -------------- Runtime (AppState-based) --------------
 
-/// GET /v1/runtime/abi/active — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/runtime/abi/active — wrapper that enforces Torii access policy, then delegates.
 async fn handler_runtime_abi_active(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5770,7 +5770,7 @@ async fn handler_runtime_abi_active(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/runtime/abi/hash — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/runtime/abi/hash — wrapper that enforces Torii access policy, then delegates.
 async fn handler_runtime_abi_hash(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5787,7 +5787,7 @@ async fn handler_runtime_abi_hash(
 
 // -------------- Core info (AppState-based) --------------
 
-/// GET /v1/configuration — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/configuration — wrapper that enforces Torii access policy, then delegates.
 async fn handler_get_configuration(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5796,7 +5796,7 @@ async fn handler_get_configuration(
     routing::handle_get_configuration(app.kiso.clone()).await
 }
 
-/// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
+/// POST /v2/configuration — wrapper that enforces Torii access policy, then delegates.
 async fn handler_post_configuration(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5806,7 +5806,7 @@ async fn handler_post_configuration(
     routing::handle_post_configuration(app.kiso.clone(), dto).await
 }
 
-/// POST /v1/nexus/lifecycle — apply a lane lifecycle plan and reconfigure routing.
+/// POST /v2/nexus/lifecycle — apply a lane lifecycle plan and reconfigure routing.
 async fn handler_post_nexus_lane_lifecycle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5816,7 +5816,7 @@ async fn handler_post_nexus_lane_lifecycle(
     routing::handle_post_nexus_lane_lifecycle(app.state.clone(), app.queue.clone(), plan).await
 }
 
-/// GET /v1/peers — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/peers — wrapper that enforces Torii access policy, then delegates.
 async fn handler_peers(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5830,7 +5830,7 @@ async fn handler_peers(
     Ok(routing::handle_peers(&app.online_peers, format))
 }
 
-/// GET /v1/health — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/health — wrapper that enforces Torii access policy, then delegates.
 async fn handler_health(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5848,7 +5848,7 @@ async fn handler_api_versions(State(app): State<SharedAppState>) -> impl IntoRes
     routing::handle_api_versions(&app.api_versions)
 }
 
-/// GET /v1/time/now — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/time/now — wrapper that enforces Torii access policy, then delegates.
 async fn handler_time_now(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5857,7 +5857,7 @@ async fn handler_time_now(
     Ok(routing::handle_time_now().await.into_response())
 }
 
-/// GET /v1/time/status — wrapper that enforces Torii access policy, then delegates.
+/// GET /v2/time/status — wrapper that enforces Torii access policy, then delegates.
 async fn handler_time_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5926,7 +5926,7 @@ async fn handler_profile(
     routing::profiling::handle_profile(params, lock).await
 }
 
-/// GET /v1/runtime/metrics — wrapper enforcing access policy.
+/// GET /v2/runtime/metrics — wrapper enforcing access policy.
 async fn handler_runtime_metrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5941,7 +5941,7 @@ async fn handler_runtime_metrics(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/node/capabilities — wrapper enforcing access policy.
+/// GET /v2/node/capabilities — wrapper enforcing access policy.
 async fn handler_node_capabilities(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -6081,7 +6081,7 @@ async fn handler_zk_submit_proof(
     PartialEq,
     Eq,
 )]
-/// Request body for `POST /v1/zk/ivm/derive`.
+/// Request body for `POST /v2/zk/ivm/derive`.
 pub struct ZkIvmDeriveRequestDto {
     /// Verifying key reference used to select circuit parameters (gas schedule id, version).
     pub vk_ref: iroha_data_model::proof::VerifyingKeyId,
@@ -6104,7 +6104,7 @@ pub struct ZkIvmDeriveRequestDto {
     PartialEq,
     Eq,
 )]
-/// Response body returned by `POST /v1/zk/ivm/derive`.
+/// Response body returned by `POST /v2/zk/ivm/derive`.
 ///
 /// Note: this API does not expose plaintext gas usage; it returns commitments only.
 pub struct ZkIvmDeriveResponseDto {
@@ -6122,7 +6122,7 @@ pub struct ZkIvmDeriveResponseDto {
     PartialEq,
     Eq,
 )]
-/// Request body for `POST /v1/zk/ivm/prove`.
+/// Request body for `POST /v2/zk/ivm/prove`.
 pub struct ZkIvmProveRequestDto {
     /// Verifying key reference to use when producing the proof attachment.
     pub vk_ref: iroha_data_model::proof::VerifyingKeyId,
@@ -6152,7 +6152,7 @@ pub struct ZkIvmProveRequestDto {
     PartialEq,
     Eq,
 )]
-/// Response body returned by `POST /v1/zk/ivm/prove` and `DELETE /v1/zk/ivm/prove/{job_id}`.
+/// Response body returned by `POST /v2/zk/ivm/prove` and `DELETE /v2/zk/ivm/prove/{job_id}`.
 pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
@@ -6168,7 +6168,7 @@ pub struct ZkIvmProveJobCreatedDto {
     PartialEq,
     Eq,
 )]
-/// Response body returned by `GET /v1/zk/ivm/prove/{job_id}`.
+/// Response body returned by `GET /v2/zk/ivm/prove/{job_id}`.
 ///
 /// Note: this API does not expose plaintext gas usage; it returns commitments only.
 pub struct ZkIvmProveJobDto {
@@ -6928,7 +6928,7 @@ async fn handler_zk_ivm_prove_get(
     let Some(entry) = app.zk_ivm_prove_jobs.get(&job_id) else {
         return Ok((
             StatusCode::NOT_FOUND,
-            "prove job not found; submit a new job via POST /v1/zk/ivm/prove",
+            "prove job not found; submit a new job via POST /v2/zk/ivm/prove",
         )
             .into_response());
     };
@@ -7248,7 +7248,7 @@ async fn handler_soracloud_status(
 
     if !app.telemetry.allows_metrics() {
         return Ok(telemetry_unavailable_response(
-            "/v1/soracloud/status",
+            "/v2/soracloud/status",
             &app.telemetry,
         ));
     }
@@ -7547,7 +7547,7 @@ async fn handler_new_view_sse(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new_view/sse",
+            "/v2/sumeragi/new_view/sse",
             &app.telemetry,
         ));
     }
@@ -7586,7 +7586,7 @@ async fn handler_new_view_json(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/new_view/json",
+            "/v2/sumeragi/new_view/json",
             &app.telemetry,
         ));
     }
@@ -8242,7 +8242,7 @@ async fn handler_sumeragi_params(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/params",
+            "/v2/sumeragi/params",
             &app.telemetry,
         ));
     }
@@ -8282,7 +8282,7 @@ async fn handler_sumeragi_bls_keys(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/bls_keys",
+            "/v2/sumeragi/bls_keys",
             &app.telemetry,
         ));
     }
@@ -8613,7 +8613,7 @@ async fn handler_rbc_status(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc",
+            "/v2/sumeragi/rbc",
             &app.telemetry,
         ));
     }
@@ -8654,7 +8654,7 @@ async fn handler_debug_axt_cache(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/debug/axt/cache",
+            "/v2/debug/axt/cache",
             &app.telemetry,
         ));
     }
@@ -8762,7 +8762,7 @@ async fn handler_debug_witness(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/debug/witness",
+            "/v2/debug/witness",
             &app.telemetry,
         ));
     }
@@ -8814,7 +8814,7 @@ async fn handler_sumeragi_evidence(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/evidence",
+            "/v2/sumeragi/evidence",
             &app.telemetry,
         ));
     }
@@ -8908,7 +8908,7 @@ async fn handler_sumeragi_status(
     }
     if !app.telemetry.allows_metrics() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/status",
+            "/v2/sumeragi/status",
             &app.telemetry,
         ));
     }
@@ -8949,12 +8949,12 @@ async fn handler_sumeragi_status_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    // This stream emits the same JSON payload as `/v1/sumeragi/status` but continuously.
+    // This stream emits the same JSON payload as `/v2/sumeragi/status` but continuously.
     // Gate it as an expensive telemetry output (allowed in `extended`/`full`) rather than
     // a developer-only sink.
     if !(app.telemetry.allows_expensive_metrics() || app.telemetry.allows_developer_outputs()) {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/status/sse",
+            "/v2/sumeragi/status/sse",
             &app.telemetry,
         ));
     }
@@ -8994,7 +8994,7 @@ async fn handler_sumeragi_telemetry(
     }
     if !app.telemetry.allows_metrics() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/telemetry",
+            "/v2/sumeragi/telemetry",
             &app.telemetry,
         ));
     }
@@ -9035,7 +9035,7 @@ async fn handler_sumeragi_vrf_penalties(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/vrf/penalties",
+            "/v2/sumeragi/vrf/penalties",
             &app.telemetry,
         ));
     }
@@ -9076,7 +9076,7 @@ async fn handler_sumeragi_vrf_epoch(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/vrf/epoch",
+            "/v2/sumeragi/vrf/epoch",
             &app.telemetry,
         ));
     }
@@ -9137,7 +9137,7 @@ async fn handler_rbc_delivered_height_view(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc/delivered",
+            "/v2/sumeragi/rbc/delivered",
             &app.telemetry,
         ));
     }
@@ -9179,7 +9179,7 @@ async fn handler_pacemaker_status(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/pacemaker",
+            "/v2/sumeragi/pacemaker",
             &app.telemetry,
         ));
     }
@@ -9219,7 +9219,7 @@ async fn handler_sumeragi_phases(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/phases",
+            "/v2/sumeragi/phases",
             &app.telemetry,
         ));
     }
@@ -9259,7 +9259,7 @@ async fn handler_sumeragi_leader(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/leader",
+            "/v2/sumeragi/leader",
             &app.telemetry,
         ));
     }
@@ -9294,7 +9294,7 @@ async fn handler_sumeragi_qc(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/qc",
+            "/v2/sumeragi/qc",
             &app.telemetry,
         ));
     }
@@ -9336,7 +9336,7 @@ async fn handler_sumeragi_checkpoints(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/checkpoints",
+            "/v2/sumeragi/checkpoints",
             &app.telemetry,
         ));
     }
@@ -9369,7 +9369,7 @@ async fn handler_sumeragi_commit_qcs(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/sumeragi/commit-certificates",
+        "/v2/sumeragi/commit-certificates",
         app.api_token_enforced(),
     );
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
@@ -9409,7 +9409,7 @@ async fn handler_bridge_finality_proof(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/bridge/finality/{height}",
+        "/v2/bridge/finality/{height}",
         app.api_token_enforced(),
     );
     rate_limit_requests(&app, &key).await?;
@@ -9447,7 +9447,7 @@ async fn handler_bridge_finality_bundle(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/bridge/finality/bundle/{height}",
+        "/v2/bridge/finality/bundle/{height}",
         app.api_token_enforced(),
     );
     rate_limit_requests(&app, &key).await?;
@@ -9570,7 +9570,7 @@ async fn handler_sumeragi_consensus_keys(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/sumeragi/consensus-keys",
+        "/v2/sumeragi/consensus-keys",
         app.api_token_enforced(),
     );
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
@@ -9609,7 +9609,7 @@ async fn handler_sumeragi_key_lifecycle(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/sumeragi/key-lifecycle",
+        "/v2/sumeragi/key-lifecycle",
         app.api_token_enforced(),
     );
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
@@ -11812,7 +11812,7 @@ async fn handler_proof_record_get(
     headers: axum::http::HeaderMap,
     AxPath(id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
-    ensure_proof_api_version(&app, negotiated, "/v1/proofs/{id}")?;
+    ensure_proof_api_version(&app, negotiated, "/v2/proofs/{id}")?;
     let enforce = !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     let start = std::time::Instant::now();
     check_proof_access(
@@ -11820,7 +11820,7 @@ async fn handler_proof_record_get(
         negotiated,
         &headers,
         None,
-        "/v1/proofs/{id}",
+        "/v2/proofs/{id}",
         1,
         enforce,
     )
@@ -11841,9 +11841,9 @@ async fn handler_proof_record_get(
             .trim_matches('"');
         if token.eq_ignore_ascii_case(etag_value.trim_matches('"')) {
             app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_proof_cache_hit("/v1/proofs/{id}");
+                tel.inc_torii_proof_cache_hit("/v2/proofs/{id}");
                 tel.observe_torii_proof_request(
-                    "/v1/proofs/{id}",
+                    "/v2/proofs/{id}",
                     "not_modified",
                     0,
                     start.elapsed(),
@@ -11874,7 +11874,7 @@ async fn handler_proof_record_get(
         ))
     })?;
     let body_len = bytes.len() as u64;
-    enforce_proof_egress(&app, &headers, None, "/v1/proofs/{id}", body_len, enforce).await?;
+    enforce_proof_egress(&app, &headers, None, "/v2/proofs/{id}", body_len, enforce).await?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -11888,7 +11888,7 @@ async fn handler_proof_record_get(
         resp.headers_mut().insert(axum::http::header::ETAG, etag);
     }
     app.telemetry.with_metrics(|tel| {
-        tel.observe_torii_proof_request("/v1/proofs/{id}", "ok", body_len, start.elapsed())
+        tel.observe_torii_proof_request("/v2/proofs/{id}", "ok", body_len, start.elapsed())
     });
     Ok(resp)
 }
@@ -12933,7 +12933,7 @@ async fn handler_rbc_sessions(
     }
     if !app.telemetry.allows_developer_outputs() {
         return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/rbc/sessions",
+            "/v2/sumeragi/rbc/sessions",
             &app.telemetry,
         ));
     }
@@ -13662,27 +13662,27 @@ impl Torii {
             let operator_router = Router::new()
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
                 .route(
-                    "/v1/sumeragi/rbc",
+                    "/v2/sumeragi/rbc",
                     get(handler_rbc_status).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/rbc/delivered/{height}/{view}",
+                    "/v2/sumeragi/rbc/delivered/{height}/{view}",
                     get(handler_rbc_delivered_height_view).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/pacemaker",
+                    "/v2/sumeragi/pacemaker",
                     get(handler_pacemaker_status).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/phases",
+                    "/v2/sumeragi/phases",
                     get(handler_sumeragi_phases).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/debug/axt/cache",
+                    "/v2/debug/axt/cache",
                     get(handler_debug_axt_cache).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/debug/witness",
+                    "/v2/debug/witness",
                     get(handler_debug_witness).layer(operator_layer.clone()),
                 );
 
@@ -13696,11 +13696,11 @@ impl Torii {
                     axum::routing::post(handler_post_soranet_privacy_share),
                 )
                 .route(
-                    "/v1/assets/{definition_id}/holders",
+                    "/v2/assets/{definition_id}/holders",
                     get(handler_asset_holders),
                 )
                 .route(
-                    "/v1/assets/{definition_id}/holders/query",
+                    "/v2/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
                 )
                 // `/status` and `/metrics` are used by localnet/perf harnesses and typical
@@ -13710,7 +13710,7 @@ impl Torii {
                     &format!("{}/{{*tail}}", uri::STATUS),
                     get(handler_status_tail),
                 )
-                .route("/v1/soracloud/status", get(handler_soracloud_status))
+                .route("/v2/soracloud/status", get(handler_soracloud_status))
                 .route(uri::METRICS, get(handler_metrics));
 
             router.merge(operator_router).merge(public_router)
@@ -13729,20 +13729,20 @@ impl Torii {
                     get(routing::telemetry_not_implemented),
                 )
                 .route(
-                    "/v1/debug/axt/cache",
+                    "/v2/debug/axt/cache",
                     get(routing::telemetry_not_implemented),
                 )
-                .route("/v1/debug/witness", get(routing::telemetry_not_implemented))
+                .route("/v2/debug/witness", get(routing::telemetry_not_implemented))
                 .route(
-                    "/v1/assets/{definition_id}/holders",
+                    "/v2/assets/{definition_id}/holders",
                     get(handler_asset_holders),
                 )
                 .route(
-                    "/v1/assets/{definition_id}/holders/query",
+                    "/v2/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
                 )
                 .route(
-                    "/v1/soracloud/status",
+                    "/v2/soracloud/status",
                     get(routing::telemetry_not_implemented),
                 )
                 .route(uri::METRICS, get(routing::telemetry_not_implemented))
@@ -13882,34 +13882,34 @@ impl Torii {
             );
             let sumeragi = Router::new()
                 .route(
-                    "/v1/sumeragi/evidence/count",
+                    "/v2/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
                 )
-                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence));
+                .route("/v2/sumeragi/evidence", get(handler_sumeragi_evidence));
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
-                .route("/v1/sumeragi/new_view/sse", get(handler_new_view_sse))
-                .route("/v1/sumeragi/new_view/json", get(handler_new_view_json))
-                .route("/v1/sumeragi/status", get(handler_sumeragi_status))
-                .route("/v1/sumeragi/status/sse", get(handler_sumeragi_status_sse))
-                .route("/v1/sumeragi/leader", get(handler_sumeragi_leader))
-                .route("/v1/sumeragi/bls_keys", get(handler_sumeragi_bls_keys))
-                .route("/v1/sumeragi/qc", get(handler_sumeragi_qc))
+                .route("/v2/sumeragi/new_view/sse", get(handler_new_view_sse))
+                .route("/v2/sumeragi/new_view/json", get(handler_new_view_json))
+                .route("/v2/sumeragi/status", get(handler_sumeragi_status))
+                .route("/v2/sumeragi/status/sse", get(handler_sumeragi_status_sse))
+                .route("/v2/sumeragi/leader", get(handler_sumeragi_leader))
+                .route("/v2/sumeragi/bls_keys", get(handler_sumeragi_bls_keys))
+                .route("/v2/sumeragi/qc", get(handler_sumeragi_qc))
                 .route(
-                    "/v1/sumeragi/checkpoints",
+                    "/v2/sumeragi/checkpoints",
                     get(handler_sumeragi_checkpoints),
                 )
                 .route(
-                    "/v1/sumeragi/commit-certificates",
+                    "/v2/sumeragi/commit-certificates",
                     get(handler_sumeragi_commit_qcs),
                 )
                 .route(
-                    "/v1/bridge/finality/{height}",
+                    "/v2/bridge/finality/{height}",
                     get(handler_bridge_finality_proof),
                 )
                 .route(
-                    "/v1/bridge/finality/bundle/{height}",
+                    "/v2/bridge/finality/bundle/{height}",
                     get(handler_bridge_finality_bundle),
                 )
                 .route(
@@ -13921,44 +13921,44 @@ impl Torii {
                     get(handler_sumeragi_validator_set_by_height),
                 )
                 .route(
-                    "/v1/sumeragi/consensus-keys",
+                    "/v2/sumeragi/consensus-keys",
                     get(handler_sumeragi_consensus_keys),
                 )
                 .route(
-                    "/v1/sumeragi/key-lifecycle",
+                    "/v2/sumeragi/key-lifecycle",
                     get(handler_sumeragi_key_lifecycle),
                 )
-                .route("/v1/sumeragi/telemetry", get(handler_sumeragi_telemetry))
-                .route("/v1/sumeragi/params", get(handler_sumeragi_params))
-                .route("/v1/sumeragi/rbc/sessions", get(handler_rbc_sessions))
-                .route("/v1/sumeragi/commit_qc/{hash}", get(handler_commit_qc))
-                .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors));
+                .route("/v2/sumeragi/telemetry", get(handler_sumeragi_telemetry))
+                .route("/v2/sumeragi/params", get(handler_sumeragi_params))
+                .route("/v2/sumeragi/rbc/sessions", get(handler_rbc_sessions))
+                .route("/v2/sumeragi/commit_qc/{hash}", get(handler_commit_qc))
+                .route("/v2/sumeragi/collectors", get(handler_sumeragi_collectors));
 
             let sumeragi = sumeragi
                 .route(
-                    "/v1/sumeragi/vrf/penalties/{epoch}",
+                    "/v2/sumeragi/vrf/penalties/{epoch}",
                     get(handler_sumeragi_vrf_penalties),
                 )
                 .route(
-                    "/v1/sumeragi/vrf/epoch/{epoch}",
+                    "/v2/sumeragi/vrf/epoch/{epoch}",
                     get(handler_sumeragi_vrf_epoch),
                 );
 
             let operator_sumeragi = Router::new()
                 .route(
-                    "/v1/sumeragi/evidence",
+                    "/v2/sumeragi/evidence",
                     post(handler_sumeragi_evidence_submit).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/vrf/commit",
+                    "/v2/sumeragi/vrf/commit",
                     post(handler_sumeragi_vrf_commit).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/vrf/reveal",
+                    "/v2/sumeragi/vrf/reveal",
                     post(handler_sumeragi_vrf_reveal).layer(operator_layer.clone()),
                 )
                 .route(
-                    "/v1/sumeragi/rbc/sample",
+                    "/v2/sumeragi/rbc/sample",
                     post(handler_rbc_sample).layer(operator_layer.clone()),
                 );
 
@@ -14002,16 +14002,16 @@ impl Torii {
         builder.apply(|router| {
             router
                 .route(
-                    "/v1/aliases/voprf/evaluate",
+                    "/v2/aliases/voprf/evaluate",
                     post(handler_alias_voprf_evaluate),
                 )
-                .route("/v1/aliases/resolve", post(handler_alias_resolve))
+                .route("/v2/aliases/resolve", post(handler_alias_resolve))
                 .route(
-                    "/v1/aliases/resolve_index",
+                    "/v2/aliases/resolve_index",
                     post(handler_alias_resolve_index),
                 )
                 .route(
-                    "/v1/assets/aliases/resolve",
+                    "/v2/assets/aliases/resolve",
                     post(handler_asset_alias_resolve),
                 )
         });
@@ -14021,8 +14021,8 @@ impl Torii {
         let _ = self;
         builder.apply(|router| {
             router
-                .route("/v1/time/now", get(handler_time_now))
-                .route("/v1/time/status", get(handler_time_status))
+                .route("/v2/time/now", get(handler_time_now))
+                .route("/v2/time/status", get(handler_time_status))
         });
     }
 
@@ -14053,19 +14053,19 @@ impl Torii {
         builder.apply(|router| {
             router
                 .route(
-                    "/v1/operator/auth/registration/options",
+                    "/v2/operator/auth/registration/options",
                     post(operator_auth::handle_operator_register_options),
                 )
                 .route(
-                    "/v1/operator/auth/registration/verify",
+                    "/v2/operator/auth/registration/verify",
                     post(operator_auth::handle_operator_register_verify),
                 )
                 .route(
-                    "/v1/operator/auth/login/options",
+                    "/v2/operator/auth/login/options",
                     post(operator_auth::handle_operator_login_options),
                 )
                 .route(
-                    "/v1/operator/auth/login/verify",
+                    "/v2/operator/auth/login/verify",
                     post(operator_auth::handle_operator_login_verify),
                 )
         });
@@ -14097,7 +14097,7 @@ impl Torii {
         let _ = self;
         builder.apply(|router| {
             router.route(
-                "/v1/gov/council/derive-vrf",
+                "/v2/gov/council/derive-vrf",
                 post(handler_gov_council_derive_vrf),
             )
         });
@@ -14116,9 +14116,9 @@ impl Torii {
                 ));
 
             router
-                .route("/v1/iso20022/pacs008", post(handler_iso_pacs008))
-                .route("/v1/iso20022/pacs009", post(handler_iso_pacs009))
-                .route("/v1/iso20022/status/{msg_id}", get(handler_iso_status))
+                .route("/v2/iso20022/pacs008", post(handler_iso_pacs008))
+                .route("/v2/iso20022/pacs009", post(handler_iso_pacs009))
+                .route("/v2/iso20022/status/{msg_id}", get(handler_iso_status))
         });
     }
 
@@ -14127,41 +14127,41 @@ impl Torii {
     fn add_da_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             router
-                .route("/v1/da/ingest", post(da::handler_post_da_ingest))
+                .route("/v2/da/ingest", post(da::handler_post_da_ingest))
                 .route(
-                    "/v1/da/manifests/{ticket}",
+                    "/v2/da/manifests/{ticket}",
                     get(da::handler_get_da_manifest),
                 )
                 .route(
-                    "/v1/da/proof_policies",
+                    "/v2/da/proof_policies",
                     get(da::commitments::handler_list_proof_policies),
                 )
                 .route(
-                    "/v1/da/proof_policy_snapshot",
+                    "/v2/da/proof_policy_snapshot",
                     get(da::commitments::handler_proof_policy_bundle),
                 )
                 .route(
-                    "/v1/da/commitments",
+                    "/v2/da/commitments",
                     post(da::commitments::handler_list_commitments),
                 )
                 .route(
-                    "/v1/da/commitments/prove",
+                    "/v2/da/commitments/prove",
                     post(da::commitments::handler_prove_commitment),
                 )
                 .route(
-                    "/v1/da/commitments/verify",
+                    "/v2/da/commitments/verify",
                     post(da::commitments::handler_verify_commitment),
                 )
                 .route(
-                    "/v1/da/pin_intents",
+                    "/v2/da/pin_intents",
                     post(da::pin_intents::handler_list_pin_intents),
                 )
                 .route(
-                    "/v1/da/pin_intents/prove",
+                    "/v2/da/pin_intents/prove",
                     post(da::pin_intents::handler_prove_pin_intent),
                 )
                 .route(
-                    "/v1/da/pin_intents/verify",
+                    "/v2/da/pin_intents/verify",
                     post(da::pin_intents::handler_verify_pin_intent),
                 )
         });
@@ -14173,119 +14173,119 @@ impl Torii {
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
             let group = Router::new()
-                .route("/v1/contracts/code", post(handler_post_contract_code))
+                .route("/v2/contracts/code", post(handler_post_contract_code))
                 .route(
-                    "/v1/contracts/code-bytes/{code_hash}",
+                    "/v2/contracts/code-bytes/{code_hash}",
                     get(handler_get_contract_code_bytes),
                 )
-                .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
+                .route("/v2/contracts/deploy", post(handler_post_contract_deploy))
                 .route(
-                    "/v1/contracts/instance",
+                    "/v2/contracts/instance",
                     post(handler_post_contract_instance),
                 )
                 .route(
-                    "/v1/contracts/instance/activate",
+                    "/v2/contracts/instance/activate",
                     post(handler_post_contract_instance_activate),
                 );
 
             #[cfg(feature = "app_api")]
             let group = group
-                .route("/v1/contracts/call", post(handler_post_contract_call))
-                .route("/v1/contracts/state", get(handler_get_contract_state));
+                .route("/v2/contracts/call", post(handler_post_contract_call))
+                .route("/v2/contracts/state", get(handler_get_contract_state));
             #[cfg(not(feature = "app_api"))]
             let group = group;
 
             let group = group
                 .route(
-                    "/v1/sorafs/pin/register",
+                    "/v2/sorafs/pin/register",
                     post(handler_post_sorafs_register_manifest),
                 )
                 .route(
-                    "/v1/sorafs/capacity/declare",
+                    "/v2/sorafs/capacity/declare",
                     post(handler_post_sorafs_capacity_declare),
                 )
                 .route(
-                    "/v1/sorafs/capacity/telemetry",
+                    "/v2/sorafs/capacity/telemetry",
                     post(handler_post_sorafs_capacity_telemetry),
                 )
                 .route(
-                    "/v1/sorafs/capacity/dispute",
+                    "/v2/sorafs/capacity/dispute",
                     post(handler_post_sorafs_capacity_dispute),
                 )
                 .route(
-                    "/v1/sorafs/capacity/schedule",
+                    "/v2/sorafs/capacity/schedule",
                     post(handler_post_sorafs_capacity_schedule),
                 )
                 .route(
-                    "/v1/sorafs/capacity/complete",
+                    "/v2/sorafs/capacity/complete",
                     post(handler_post_sorafs_capacity_complete),
                 )
                 .route(
-                    "/v1/sorafs/capacity/uptime",
+                    "/v2/sorafs/capacity/uptime",
                     post(handler_post_sorafs_capacity_uptime),
                 )
                 .route(
-                    "/v1/sorafs/capacity/por-challenge",
+                    "/v2/sorafs/capacity/por-challenge",
                     post(handler_post_sorafs_capacity_por_challenge),
                 )
                 .route(
-                    "/v1/sorafs/capacity/por-proof",
+                    "/v2/sorafs/capacity/por-proof",
                     post(handler_post_sorafs_capacity_por_proof),
                 )
                 .route(
-                    "/v1/sorafs/capacity/por-verdict",
+                    "/v2/sorafs/capacity/por-verdict",
                     post(handler_post_sorafs_capacity_por_verdict),
                 )
-                .route("/v1/sorafs/por/status", get(handler_get_sorafs_por_status))
-                .route("/v1/sorafs/por/export", get(handler_get_sorafs_por_export))
+                .route("/v2/sorafs/por/status", get(handler_get_sorafs_por_status))
+                .route("/v2/sorafs/por/export", get(handler_get_sorafs_por_export))
                 .route(
-                    "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
+                    "/v2/sorafs/por/ingestion/{manifest_digest_hex}",
                     get(sorafs::api::handle_get_sorafs_por_ingestion),
                 )
                 .route(
-                    "/v1/sorafs/por/report/{iso_week}",
+                    "/v2/sorafs/por/report/{iso_week}",
                     get(handler_get_sorafs_por_report),
                 )
                 .route(
-                    "/v1/sorafs/capacity/por",
+                    "/v2/sorafs/capacity/por",
                     post(handler_post_sorafs_capacity_por),
                 )
                 .route(
-                    "/v1/sorafs/capacity/failure",
+                    "/v2/sorafs/capacity/failure",
                     post(handler_post_sorafs_capacity_failure),
                 );
             #[cfg(feature = "app_api")]
             let group = group
                 .route(
-                    "/v1/sorafs/audit/repair/report",
+                    "/v2/sorafs/audit/repair/report",
                     post(handler_post_sorafs_repair_report),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/slash",
+                    "/v2/sorafs/audit/repair/slash",
                     post(handler_post_sorafs_repair_slash),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/claim",
+                    "/v2/sorafs/audit/repair/claim",
                     post(handler_post_sorafs_repair_claim),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/heartbeat",
+                    "/v2/sorafs/audit/repair/heartbeat",
                     post(handler_post_sorafs_repair_heartbeat),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/complete",
+                    "/v2/sorafs/audit/repair/complete",
                     post(handler_post_sorafs_repair_complete),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/fail",
+                    "/v2/sorafs/audit/repair/fail",
                     post(handler_post_sorafs_repair_fail),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/status",
+                    "/v2/sorafs/audit/repair/status",
                     get(handler_get_sorafs_repair_status_all),
                 )
                 .route(
-                    "/v1/sorafs/audit/repair/status/{manifest_hex}",
+                    "/v2/sorafs/audit/repair/status/{manifest_hex}",
                     get(handler_get_sorafs_repair_status),
                 );
             #[cfg(not(feature = "app_api"))]
@@ -14293,25 +14293,25 @@ impl Torii {
 
             let group = group
                 // VK registry lifecycle (app API convenience): register, update
-                .route("/v1/zk/vk/register", post(handler_post_vk_register))
-                .route("/v1/zk/vk/update", post(handler_post_vk_update))
+                .route("/v2/zk/vk/register", post(handler_post_vk_register))
+                .route("/v2/zk/vk/update", post(handler_post_vk_update))
                 .route(
-                    "/v1/zk/vk/{backend}/{name}",
+                    "/v2/zk/vk/{backend}/{name}",
                     get(handler_get_vk_by_backend_name),
                 )
-                .route("/v1/zk/vk", get(handler_list_vk))
-                .route("/v1/zk/proofs", get(handler_list_proofs))
-                .route("/v1/zk/proofs/count", get(handler_count_proofs))
+                .route("/v2/zk/vk", get(handler_list_vk))
+                .route("/v2/zk/proofs", get(handler_list_proofs))
+                .route("/v2/zk/proofs/count", get(handler_count_proofs))
                 .route(
-                    "/v1/zk/proof/{backend}/{hash}",
+                    "/v2/zk/proof/{backend}/{hash}",
                     get(handler_get_proof_by_backend_hash),
                 )
                 .route(
-                    "/v1/confidential/derive-keyset",
+                    "/v2/confidential/derive-keyset",
                     post(handler_confidential_derive_keyset_route),
                 )
                 .route(
-                    "/v1/contracts/code/{code_hash}",
+                    "/v2/contracts/code/{code_hash}",
                     get(handler_get_contract_code),
                 );
             router.merge(group)
@@ -14338,7 +14338,7 @@ impl Torii {
                 #[cfg(feature = "app_api")]
                 {
                     Router::new()
-                        .route("/v1/events/sse", get(handler_events_sse))
+                        .route("/v2/events/sse", get(handler_events_sse))
                         .route(uri::SUBSCRIPTION, get(handler_subscription_ws))
                         .route(uri::BLOCKS_STREAM, get(handler_blocks_stream_ws))
                 }
@@ -14358,14 +14358,14 @@ impl Torii {
         builder.apply(|router| {
             router
                 .route(
-                    "/v1/pipeline/transactions/status",
+                    "/v2/pipeline/transactions/status",
                     get(handler_pipeline_transaction_status),
                 )
                 .route(
-                    "/v1/pipeline/recovery/{height}",
+                    "/v2/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
                 )
-                .route("/v1/policy", get(handler_policy))
+                .route("/v2/policy", get(handler_policy))
         });
     }
 
@@ -14383,7 +14383,7 @@ impl Torii {
         let _ = self;
         builder.apply(|router| {
             router
-                .route("/v1/proofs/{id}", get(handler_proof_record_get))
+                .route("/v2/proofs/{id}", get(handler_proof_record_get))
                 .route(
                     iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
                     get(handler_proof_retention_status),
@@ -14399,7 +14399,7 @@ impl Torii {
             }
 
             let mcp_router = Router::new().route(
-                "/v1/mcp",
+                "/v2/mcp",
                 get(handler_mcp_capabilities).post(handler_mcp_jsonrpc),
             );
             router.merge(mcp_router)
@@ -14414,13 +14414,13 @@ impl Torii {
                 return router;
             }
             let connect_router = Router::new()
-                .route("/v1/connect/session", post(handler_connect_session))
+                .route("/v2/connect/session", post(handler_connect_session))
                 .route(
-                    "/v1/connect/session/{sid}",
+                    "/v2/connect/session/{sid}",
                     axum::routing::delete(handler_connect_session_delete),
                 )
-                .route("/v1/connect/ws", get(handler_connect_ws))
-                .route("/v1/connect/status", get(handler_connect_status));
+                .route("/v2/connect/ws", get(handler_connect_ws))
+                .route("/v2/connect/status", get(handler_connect_status));
             router.merge(connect_router)
         });
     }
@@ -14440,438 +14440,438 @@ impl Torii {
             // App-facing endpoints
             let aa_group = Router::new()
                 .route(
-                    "/v1/accounts/{account_id}/transactions/query",
+                    "/v2/accounts/{account_id}/transactions/query",
                     post(handler_account_transactions_query),
                 )
                 .route(
-                    "/v1/accounts/{account_id}/assets",
+                    "/v2/accounts/{account_id}/assets",
                     get(handler_account_assets),
                 )
                 .route(
-                    "/v1/accounts/{account_id}/assets/query",
+                    "/v2/accounts/{account_id}/assets/query",
                     post(handler_account_assets_query),
                 )
                 .route(
-                    "/v1/accounts/{account_id}/permissions",
+                    "/v2/accounts/{account_id}/permissions",
                     get(handler_account_permissions),
                 )
                 .route(
-                    "/v1/accounts/{account_id}/transactions",
+                    "/v2/accounts/{account_id}/transactions",
                     get(handler_account_transactions_get),
                 );
             let router = router
                 .merge(aa_group)
-                .route("/v1/proofs/query", post(handler_proofs_query))
+                .route("/v2/proofs/query", post(handler_proofs_query))
                 // Debug: fetch ZK1 tags for a proof id (feature-gated)
                 .route(
-                    "/v1/zk/proof-tags/{backend}/{hash}",
+                    "/v2/zk/proof-tags/{backend}/{hash}",
                     get(handler_proof_tags),
                 )
                 // App-facing: verify a batch of KZG proofs (BN254) carried in ZK1 envelopes
                 // under `app_api` feature. Useful for integration checks.
                 // Domains listing (GET) and JSON-DSL (POST)
-                .route("/v1/domains", get(handler_domains_list))
-                .route("/v1/domains/query", post(handler_domains_query))
+                .route("/v2/domains", get(handler_domains_list))
+                .route("/v2/domains/query", post(handler_domains_query))
                 // Accounts listing
-                .route("/v1/accounts", get(handler_accounts_list))
-                .route("/v1/accounts/query", post(handler_accounts_query))
-                .route("/v1/accounts/onboard", post(handler_accounts_onboard))
+                .route("/v2/accounts", get(handler_accounts_list))
+                .route("/v2/accounts/query", post(handler_accounts_query))
+                .route("/v2/accounts/onboard", post(handler_accounts_onboard))
                 .route(
-                    "/v1/accounts/{uaid}/portfolio",
+                    "/v2/accounts/{uaid}/portfolio",
                     get(handler_accounts_portfolio),
                 )
                 .route(
-                    "/v1/nexus/public_lanes/{lane_id}/validators",
+                    "/v2/nexus/public_lanes/{lane_id}/validators",
                     get(handler_nexus_public_lane_validators),
                 )
                 .route(
-                    "/v1/nexus/public_lanes/{lane_id}/stake",
+                    "/v2/nexus/public_lanes/{lane_id}/stake",
                     get(handler_nexus_public_lane_stake),
                 )
                 .route(
-                    "/v1/nexus/public_lanes/{lane_id}/rewards/pending",
+                    "/v2/nexus/public_lanes/{lane_id}/rewards/pending",
                     get(handler_nexus_public_lane_rewards),
                 )
                 .route(
-                    "/v1/nexus/dataspaces/accounts/{literal}/summary",
+                    "/v2/nexus/dataspaces/accounts/{literal}/summary",
                     get(handler_nexus_dataspaces_account_summary),
                 )
                 .route(
-                    "/v1/space-directory/uaids/{uaid}",
+                    "/v2/space-directory/uaids/{uaid}",
                     get(handler_space_directory_bindings),
                 )
                 .route(
-                    "/v1/space-directory/uaids/{uaid}/manifests",
+                    "/v2/space-directory/uaids/{uaid}/manifests",
                     get(handler_space_directory_manifests),
                 )
                 .route(
-                    "/v1/space-directory/manifests",
+                    "/v2/space-directory/manifests",
                     post(handler_space_directory_manifest_publish),
                 )
                 .route(
-                    "/v1/space-directory/manifests/revoke",
+                    "/v2/space-directory/manifests/revoke",
                     post(handler_space_directory_manifest_revoke),
                 )
                 // Repo agreements listing
-                .route("/v1/repo/agreements", get(handler_repo_agreements))
+                .route("/v2/repo/agreements", get(handler_repo_agreements))
                 .route(
-                    "/v1/repo/agreements/query",
+                    "/v2/repo/agreements/query",
                     post(handler_repo_agreements_query),
                 )
                 .route(
-                    "/v1/offline/allowances",
+                    "/v2/offline/allowances",
                     get(handler_offline_allowances_list).post(handler_offline_allowances_issue),
                 )
                 .route(
-                    "/v1/offline/allowances/{certificate_id_hex}",
+                    "/v2/offline/allowances/{certificate_id_hex}",
                     get(handler_offline_allowance_get),
                 )
                 .route(
-                    "/v1/offline/allowances/{certificate_id_hex}/renew",
+                    "/v2/offline/allowances/{certificate_id_hex}/renew",
                     post(handler_offline_allowances_renew),
                 )
                 .route(
-                    "/v1/offline/certificates",
+                    "/v2/offline/certificates",
                     get(handler_offline_allowances_list).post(handler_offline_allowances_issue),
                 )
                 .route(
-                    "/v1/offline/certificates/issue",
+                    "/v2/offline/certificates/issue",
                     post(handler_offline_certificates_issue),
                 )
                 .route(
-                    "/v1/offline/build-claims/issue",
+                    "/v2/offline/build-claims/issue",
                     post(handler_offline_build_claims_issue),
                 )
                 .route(
-                    "/v1/offline/certificates/{certificate_id_hex}",
+                    "/v2/offline/certificates/{certificate_id_hex}",
                     get(handler_offline_allowance_get),
                 )
                 .route(
-                    "/v1/offline/certificates/{certificate_id_hex}/renew",
+                    "/v2/offline/certificates/{certificate_id_hex}/renew",
                     post(handler_offline_allowances_renew),
                 )
                 .route(
-                    "/v1/offline/certificates/{certificate_id_hex}/renew/issue",
+                    "/v2/offline/certificates/{certificate_id_hex}/renew/issue",
                     post(handler_offline_certificates_renew_issue),
                 )
                 .route(
-                    "/v1/offline/certificates/revoke",
+                    "/v2/offline/certificates/revoke",
                     post(handler_offline_certificates_revoke),
                 )
-                .route("/v1/offline/receipts", get(handler_offline_receipts_list))
+                .route("/v2/offline/receipts", get(handler_offline_receipts_list))
                 .route(
-                    "/v1/offline/receipts/query",
+                    "/v2/offline/receipts/query",
                     post(handler_offline_receipts_query),
                 )
                 .route(
-                    "/v1/offline/allowances/query",
+                    "/v2/offline/allowances/query",
                     post(handler_offline_allowances_query),
                 )
                 .route(
-                    "/v1/offline/certificates/query",
+                    "/v2/offline/certificates/query",
                     post(handler_offline_certificates_query),
                 )
                 .route(
-                    "/v1/offline/revocations",
+                    "/v2/offline/revocations",
                     get(handler_offline_revocations_list),
                 )
                 .route(
-                    "/v1/offline/revocations/query",
+                    "/v2/offline/revocations/query",
                     post(handler_offline_revocations_query),
                 )
-                .route("/v1/offline/summaries", get(handler_offline_summaries_list))
+                .route("/v2/offline/summaries", get(handler_offline_summaries_list))
                 .route(
-                    "/v1/offline/summaries/query",
+                    "/v2/offline/summaries/query",
                     post(handler_offline_summaries_query),
                 )
-                .route("/v1/offline/transfers", get(handler_offline_transfers_list))
+                .route("/v2/offline/transfers", get(handler_offline_transfers_list))
                 .route(
-                    "/v1/offline/transfers/{bundle_id_hex}",
+                    "/v2/offline/transfers/{bundle_id_hex}",
                     get(handler_offline_transfer_get),
                 )
                 .route(
-                    "/v1/offline/transfers/query",
+                    "/v2/offline/transfers/query",
                     post(handler_offline_transfers_query),
                 )
                 .route(
-                    "/v1/offline/settlements",
+                    "/v2/offline/settlements",
                     get(handler_offline_transfers_list).post(handler_offline_settlements_submit),
                 )
                 .route(
-                    "/v1/offline/settlements/{bundle_id_hex}",
+                    "/v2/offline/settlements/{bundle_id_hex}",
                     get(handler_offline_transfer_get),
                 )
                 .route(
-                    "/v1/offline/settlements/query",
+                    "/v2/offline/settlements/query",
                     post(handler_offline_transfers_query),
                 )
                 .route(
-                    "/v1/offline/spend-receipts",
+                    "/v2/offline/spend-receipts",
                     post(handler_offline_spend_receipts_submit),
                 )
-                .route("/v1/offline/state", get(handler_offline_state))
+                .route("/v2/offline/state", get(handler_offline_state))
                 .route(
-                    "/v1/offline/transfers/proof",
+                    "/v2/offline/transfers/proof",
                     post(handler_offline_transfer_proof),
                 )
                 .route(
-                    "/v1/offline/bundle/proof_status",
+                    "/v2/offline/bundle/proof_status",
                     get(handler_offline_bundle_proof_status),
                 );
             #[cfg(feature = "push")]
-            let router = router.route("/v1/notify/devices", post(handler_push_register_device));
+            let router = router.route("/v2/notify/devices", post(handler_push_register_device));
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
-            let router = router.route("/v1/offline/rejections", get(handler_offline_rejections));
+            let router = router.route("/v2/offline/rejections", get(handler_offline_rejections));
             #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
             let router = router;
             let router = router
                 // SNS registrar scaffolding
-                .route("/v1/sns/registrations", post(sns::handle_register))
+                .route("/v2/sns/registrations", post(sns::handle_register))
                 .route(
-                    "/v1/sns/registrations/{selector}",
+                    "/v2/sns/registrations/{selector}",
                     get(sns::handle_get_registration),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/renew",
+                    "/v2/sns/registrations/{selector}/renew",
                     post(sns::handle_renew_registration),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/transfer",
+                    "/v2/sns/registrations/{selector}/transfer",
                     post(sns::handle_transfer_registration),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/controllers",
+                    "/v2/sns/registrations/{selector}/controllers",
                     post(sns::handle_update_controllers),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/freeze",
+                    "/v2/sns/registrations/{selector}/freeze",
                     post(sns::handle_freeze_registration),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/freeze",
+                    "/v2/sns/registrations/{selector}/freeze",
                     delete(sns::handle_unfreeze_registration),
                 )
-                .route("/v1/sns/policies/{suffix_id}", get(sns::handle_get_policy))
-                .route("/v1/sns/governance/cases", post(sns::handle_post_case))
-                .route("/v1/sns/governance/cases", get(sns::handle_get_cases))
-                .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
-                .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
-                .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
-                .route("/v1/soracloud/rollout", post(soracloud::handle_rollout))
+                .route("/v2/sns/policies/{suffix_id}", get(sns::handle_get_policy))
+                .route("/v2/sns/governance/cases", post(sns::handle_post_case))
+                .route("/v2/sns/governance/cases", get(sns::handle_get_cases))
+                .route("/v2/soracloud/deploy", post(soracloud::handle_deploy))
+                .route("/v2/soracloud/upgrade", post(soracloud::handle_upgrade))
+                .route("/v2/soracloud/rollback", post(soracloud::handle_rollback))
+                .route("/v2/soracloud/rollout", post(soracloud::handle_rollout))
                 .route(
-                    "/v1/soracloud/state/mutate",
+                    "/v2/soracloud/state/mutate",
                     post(soracloud::handle_state_mutation),
                 )
                 .route(
-                    "/v1/soracloud/fhe/job/run",
+                    "/v2/soracloud/fhe/job/run",
                     post(soracloud::handle_fhe_job_run),
                 )
                 .route(
-                    "/v1/soracloud/decrypt/request",
+                    "/v2/soracloud/decrypt/request",
                     post(soracloud::handle_decryption_request),
                 )
                 .route(
-                    "/v1/soracloud/health/access/request",
+                    "/v2/soracloud/health/access/request",
                     post(soracloud::handle_health_access_request),
                 )
                 .route(
-                    "/v1/soracloud/health/compliance/report",
+                    "/v2/soracloud/health/compliance/report",
                     get(soracloud::handle_health_compliance_report),
                 )
                 .route(
-                    "/v1/soracloud/ciphertext/query",
+                    "/v2/soracloud/ciphertext/query",
                     post(soracloud::handle_ciphertext_query),
                 )
                 .route(
-                    "/v1/soracloud/training/job/start",
+                    "/v2/soracloud/training/job/start",
                     post(soracloud::handle_training_job_start),
                 )
                 .route(
-                    "/v1/soracloud/training/job/checkpoint",
+                    "/v2/soracloud/training/job/checkpoint",
                     post(soracloud::handle_training_job_checkpoint),
                 )
                 .route(
-                    "/v1/soracloud/training/job/retry",
+                    "/v2/soracloud/training/job/retry",
                     post(soracloud::handle_training_job_retry),
                 )
                 .route(
-                    "/v1/soracloud/training/job/status",
+                    "/v2/soracloud/training/job/status",
                     get(soracloud::handle_training_job_status),
                 )
                 .route(
-                    "/v1/soracloud/model/weight/register",
+                    "/v2/soracloud/model/weight/register",
                     post(soracloud::handle_model_weight_register),
                 )
                 .route(
-                    "/v1/soracloud/model/weight/promote",
+                    "/v2/soracloud/model/weight/promote",
                     post(soracloud::handle_model_weight_promote),
                 )
                 .route(
-                    "/v1/soracloud/model/weight/rollback",
+                    "/v2/soracloud/model/weight/rollback",
                     post(soracloud::handle_model_weight_rollback),
                 )
                 .route(
-                    "/v1/soracloud/model/weight/status",
+                    "/v2/soracloud/model/weight/status",
                     get(soracloud::handle_model_weight_status),
                 )
                 .route(
-                    "/v1/soracloud/model/artifact/register",
+                    "/v2/soracloud/model/artifact/register",
                     post(soracloud::handle_model_artifact_register),
                 )
                 .route(
-                    "/v1/soracloud/model/artifact/status",
+                    "/v2/soracloud/model/artifact/status",
                     get(soracloud::handle_model_artifact_status),
                 )
                 .route(
-                    "/v1/soracloud/registry",
+                    "/v2/soracloud/registry",
                     get(soracloud::handle_registry_status),
                 )
                 .route(
-                    "/v1/soracloud/agent/deploy",
+                    "/v2/soracloud/agent/deploy",
                     post(soracloud::handle_agent_deploy),
                 )
                 .route(
-                    "/v1/soracloud/agent/lease/renew",
+                    "/v2/soracloud/agent/lease/renew",
                     post(soracloud::handle_agent_lease_renew),
                 )
                 .route(
-                    "/v1/soracloud/agent/restart",
+                    "/v2/soracloud/agent/restart",
                     post(soracloud::handle_agent_restart),
                 )
                 .route(
-                    "/v1/soracloud/agent/status",
+                    "/v2/soracloud/agent/status",
                     get(soracloud::handle_agent_status),
                 )
                 .route(
-                    "/v1/soracloud/agent/wallet/spend",
+                    "/v2/soracloud/agent/wallet/spend",
                     post(soracloud::handle_agent_wallet_spend),
                 )
                 .route(
-                    "/v1/soracloud/agent/wallet/approve",
+                    "/v2/soracloud/agent/wallet/approve",
                     post(soracloud::handle_agent_wallet_approve),
                 )
                 .route(
-                    "/v1/soracloud/agent/policy/revoke",
+                    "/v2/soracloud/agent/policy/revoke",
                     post(soracloud::handle_agent_policy_revoke),
                 )
                 .route(
-                    "/v1/soracloud/agent/message/send",
+                    "/v2/soracloud/agent/message/send",
                     post(soracloud::handle_agent_message_send),
                 )
                 .route(
-                    "/v1/soracloud/agent/message/ack",
+                    "/v2/soracloud/agent/message/ack",
                     post(soracloud::handle_agent_message_ack),
                 )
                 .route(
-                    "/v1/soracloud/agent/mailbox/status",
+                    "/v2/soracloud/agent/mailbox/status",
                     get(soracloud::handle_agent_mailbox_status),
                 )
                 .route(
-                    "/v1/soracloud/agent/autonomy/allow",
+                    "/v2/soracloud/agent/autonomy/allow",
                     post(soracloud::handle_agent_autonomy_allow),
                 )
                 .route(
-                    "/v1/soracloud/agent/autonomy/run",
+                    "/v2/soracloud/agent/autonomy/run",
                     post(soracloud::handle_agent_autonomy_run),
                 )
                 .route(
-                    "/v1/soracloud/agent/autonomy/status",
+                    "/v2/soracloud/agent/autonomy/status",
                     get(soracloud::handle_agent_autonomy_status),
                 )
                 // Asset Definitions listing
                 .route(
-                    "/v1/assets/definitions",
+                    "/v2/assets/definitions",
                     get(handler_assets_definitions_list),
                 )
                 .route(
-                    "/v1/assets/definitions/query",
+                    "/v2/assets/definitions/query",
                     post(handler_assets_definitions_query),
                 )
                 .route(
-                    "/v1/confidential/assets/{definition_id}/transitions",
+                    "/v2/confidential/assets/{definition_id}/transitions",
                     get(handler_confidential_asset_transitions),
                 )
                 // NFTs listing
-                .route("/v1/nfts", get(handler_nfts_list))
-                .route("/v1/nfts/query", post(handler_nfts_query))
+                .route("/v2/nfts", get(handler_nfts_list))
+                .route("/v2/nfts/query", post(handler_nfts_query))
                 // Subscriptions
                 .route(
-                    "/v1/subscriptions/plans",
+                    "/v2/subscriptions/plans",
                     get(handler_subscription_plans_list).post(handler_subscription_plans_create),
                 )
                 .route(
-                    "/v1/subscriptions",
+                    "/v2/subscriptions",
                     get(handler_subscriptions_list).post(handler_subscriptions_create),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}",
+                    "/v2/subscriptions/{subscription_id}",
                     get(handler_subscription_get),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/pause",
+                    "/v2/subscriptions/{subscription_id}/pause",
                     post(handler_subscription_pause),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/resume",
+                    "/v2/subscriptions/{subscription_id}/resume",
                     post(handler_subscription_resume),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/cancel",
+                    "/v2/subscriptions/{subscription_id}/cancel",
                     post(handler_subscription_cancel),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/keep",
+                    "/v2/subscriptions/{subscription_id}/keep",
                     post(handler_subscription_keep),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/usage",
+                    "/v2/subscriptions/{subscription_id}/usage",
                     post(handler_subscription_usage),
                 )
                 .route(
-                    "/v1/subscriptions/{subscription_id}/charge-now",
+                    "/v2/subscriptions/{subscription_id}/charge-now",
                     post(handler_subscription_charge_now),
                 )
-                .route("/v1/parameters", get(handler_parameters))
+                .route("/v2/parameters", get(handler_parameters))
                 // Explorer endpoints
-                .route("/v1/explorer/accounts", get(handler_explorer_accounts_list))
-                .route("/v1/explorer/domains", get(handler_explorer_domains_list))
+                .route("/v2/explorer/accounts", get(handler_explorer_accounts_list))
+                .route("/v2/explorer/domains", get(handler_explorer_domains_list))
                 .route(
-                    "/v1/explorer/asset-definitions",
+                    "/v2/explorer/asset-definitions",
                     get(handler_explorer_asset_definitions_list),
                 )
-                .route("/v1/explorer/assets", get(handler_explorer_assets_list))
-                .route("/v1/explorer/nfts", get(handler_explorer_nfts_list))
-                .route("/v1/explorer/blocks", get(handler_explorer_blocks_list))
-                .route("/v1/explorer/health", get(handler_explorer_health))
+                .route("/v2/explorer/assets", get(handler_explorer_assets_list))
+                .route("/v2/explorer/nfts", get(handler_explorer_nfts_list))
+                .route("/v2/explorer/blocks", get(handler_explorer_blocks_list))
+                .route("/v2/explorer/health", get(handler_explorer_health))
                 .route(
-                    "/v1/explorer/blocks/stream",
+                    "/v2/explorer/blocks/stream",
                     get(handler_explorer_blocks_stream),
                 )
                 .route(
-                    "/v1/explorer/transactions",
+                    "/v2/explorer/transactions",
                     get(handler_explorer_transactions_list),
                 )
                 .route(
-                    "/v1/explorer/transactions/latest",
+                    "/v2/explorer/transactions/latest",
                     get(handler_explorer_transactions_latest),
                 )
                 .route(
-                    "/v1/explorer/transactions/stream",
+                    "/v2/explorer/transactions/stream",
                     get(handler_explorer_transactions_stream),
                 )
                 .route(
-                    "/v1/explorer/instructions",
+                    "/v2/explorer/instructions",
                     get(handler_explorer_instructions_list),
                 )
                 .route(
-                    "/v1/explorer/instructions/latest",
+                    "/v2/explorer/instructions/latest",
                     get(handler_explorer_instructions_latest),
                 )
                 .merge({
                     #[cfg(all(feature = "app_api", feature = "telemetry"))]
                     {
                         axum::Router::new().route(
-                            "/v1/explorer/metrics",
+                            "/v2/explorer/metrics",
                             axum::routing::get(handler_explorer_metrics),
                         )
                     }
@@ -14881,79 +14881,79 @@ impl Torii {
                     }
                 })
                 .route(
-                    "/v1/explorer/instructions/stream",
+                    "/v2/explorer/instructions/stream",
                     get(handler_explorer_instructions_stream),
                 );
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             let router = {
                 router
                     .route(
-                        "/v1/telemetry/peers-info",
+                        "/v2/telemetry/peers-info",
                         get(handler_telemetry_peers_info),
                     )
                     .route(
-                        "/v1/telemetry/propagation",
+                        "/v2/telemetry/propagation",
                         get(handler_telemetry_propagation),
                     )
-                    .route("/v1/telemetry/live", get(handler_telemetry_live))
+                    .route("/v2/telemetry/live", get(handler_telemetry_live))
             };
             #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
             let router = router;
             let router = router
                 .route(
-                    "/v1/explorer/accounts/{account_id}",
+                    "/v2/explorer/accounts/{account_id}",
                     get(handler_explorer_account_detail),
                 )
                 .route(
-                    "/v1/explorer/accounts/{account_id}/qr",
+                    "/v2/explorer/accounts/{account_id}/qr",
                     get(handler_explorer_account_qr),
                 )
                 .route(
-                    "/v1/explorer/domains/{domain_id}",
+                    "/v2/explorer/domains/{domain_id}",
                     get(handler_explorer_domain_detail),
                 )
                 .route(
-                    "/v1/explorer/asset-definitions/{definition_id}",
+                    "/v2/explorer/asset-definitions/{definition_id}",
                     get(handler_explorer_asset_definition_detail),
                 )
                 .route(
-                    "/v1/explorer/asset-definitions/{definition_id}/econometrics",
+                    "/v2/explorer/asset-definitions/{definition_id}/econometrics",
                     get(handler_explorer_asset_definition_econometrics),
                 )
                 .route(
-                    "/v1/explorer/asset-definitions/{definition_id}/snapshot",
+                    "/v2/explorer/asset-definitions/{definition_id}/snapshot",
                     get(handler_explorer_asset_definition_snapshot),
                 )
                 .route(
-                    "/v1/explorer/assets/{asset_id}",
+                    "/v2/explorer/assets/{asset_id}",
                     get(handler_explorer_asset_detail),
                 )
                 .route(
-                    "/v1/explorer/nfts/{nft_id}",
+                    "/v2/explorer/nfts/{nft_id}",
                     get(handler_explorer_nft_detail),
                 )
                 .route(
-                    "/v1/explorer/blocks/{identifier}",
+                    "/v2/explorer/blocks/{identifier}",
                     get(handler_explorer_block_detail),
                 )
                 .route(
-                    "/v1/explorer/transactions/{hash}",
+                    "/v2/explorer/transactions/{hash}",
                     get(handler_explorer_transaction_detail),
                 )
                 .route(
-                    "/v1/explorer/instructions/{hash}/{index}",
+                    "/v2/explorer/instructions/{hash}/{index}",
                     get(handler_explorer_instruction_detail),
                 );
 
             #[cfg(feature = "telemetry")]
             let router = router
-                .route("/v1/kaigi/relays", get(handler_kaigi_relays))
+                .route("/v2/kaigi/relays", get(handler_kaigi_relays))
                 .route(
-                    "/v1/kaigi/relays/{relay_id}",
+                    "/v2/kaigi/relays/{relay_id}",
                     get(handler_kaigi_relay_detail),
                 )
-                .route("/v1/kaigi/relays/health", get(handler_kaigi_relays_health))
-                .route("/v1/kaigi/relays/events", get(handler_kaigi_relays_sse));
+                .route("/v2/kaigi/relays/health", get(handler_kaigi_relays_health))
+                .route("/v2/kaigi/relays/events", get(handler_kaigi_relays_sse));
 
             #[cfg(not(feature = "telemetry"))]
             let router = router;
@@ -14963,10 +14963,10 @@ impl Torii {
                 .merge({
                     Router::new()
                         .route(
-                            "/v1/webhooks",
+                            "/v2/webhooks",
                             post(handler_webhooks_create).get(handler_webhooks_list),
                         )
-                        .route("/v1/webhooks/{id}", delete(handler_webhooks_delete))
+                        .route("/v2/webhooks/{id}", delete(handler_webhooks_delete))
                 })
         });
     }
@@ -14984,11 +14984,11 @@ impl Torii {
             builder.apply(|router| {
                 router
                     .route(
-                        "/v1/sorafs/providers",
+                        "/v2/sorafs/providers",
                         axum::routing::get(sorafs::api::handle_get_sorafs_providers),
                     )
                     .route(
-                        "/v1/sorafs/providers/advert",
+                        "/v2/sorafs/providers/advert",
                         axum::routing::post(sorafs::api::handle_post_sorafs_provider_advert),
                     )
             });
@@ -14998,83 +14998,83 @@ impl Torii {
             builder.apply(|router| {
                 router
                     .route(
-                        "/v1/sorafs/capacity/state",
+                        "/v2/sorafs/capacity/state",
                         axum::routing::get(sorafs::api::handle_get_sorafs_capacity_state),
                     )
                     .route(
-                        "/v1/sorafs/pin",
+                        "/v2/sorafs/pin",
                         axum::routing::get(sorafs::api::handle_get_sorafs_pin_registry),
                     )
                     .route(
-                        "/v1/sorafs/pin/{digest_hex}",
+                        "/v2/sorafs/pin/{digest_hex}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_pin_manifest),
                     )
                     .route(
-                        "/v1/sorafs/aliases",
+                        "/v2/sorafs/aliases",
                         axum::routing::get(sorafs::api::handle_get_sorafs_aliases),
                     )
                     .route(
-                        "/v1/sorafs/replication",
+                        "/v2/sorafs/replication",
                         axum::routing::get(sorafs::api::handle_get_sorafs_replication_orders),
                     )
                     .route(
-                        "/v1/sorafs/storage/state",
+                        "/v2/sorafs/storage/state",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_state),
                     )
                     .route(
-                        "/v1/sorafs/storage/manifest/{manifest_id}",
+                        "/v2/sorafs/storage/manifest/{manifest_id}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_manifest),
                     )
                     .route(
-                        "/v1/sorafs/storage/plan/{manifest_id}",
+                        "/v2/sorafs/storage/plan/{manifest_id}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_plan),
                     )
                     .route(
-                        "/v1/sorafs/storage/pin",
+                        "/v2/sorafs/storage/pin",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_pin),
                     )
                     .route(
-                        "/v1/sorafs/storage/fetch",
+                        "/v2/sorafs/storage/fetch",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_fetch),
                     )
                     .route(
-                        "/v1/sorafs/storage/token",
+                        "/v2/sorafs/storage/token",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_token),
                     )
                     .route(
-                        "/v1/sorafs/storage/car/{manifest_id}",
+                        "/v2/sorafs/storage/car/{manifest_id}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_car_range),
                     )
                     .route(
-                        "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
+                        "/v2/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_chunk),
                     )
                     .route(
-                        "/v1/sorafs/storage/por-sample",
+                        "/v2/sorafs/storage/por-sample",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_sample),
                     )
                     .route(
-                        "/v1/sorafs/proof/stream",
+                        "/v2/sorafs/proof/stream",
                         axum::routing::post(sorafs::api::handle_post_sorafs_proof_stream),
                     )
                     .route(
-                        "/v1/sorafs/storage/por-challenge",
+                        "/v2/sorafs/storage/por-challenge",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_challenge),
                     )
                     .route(
-                        "/v1/sorafs/storage/por-proof",
+                        "/v2/sorafs/storage/por-proof",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_proof),
                     )
                     .route(
-                        "/v1/sorafs/storage/por-verdict",
+                        "/v2/sorafs/storage/por-verdict",
                         axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_verdict),
                     )
                     .route(
-                        "/v1/sorafs/deal/usage",
+                        "/v2/sorafs/deal/usage",
                         axum::routing::post(handler_post_sorafs_deal_usage),
                     )
                     .route(
-                        "/v1/sorafs/deal/settle",
+                        "/v2/sorafs/deal/settle",
                         axum::routing::post(handler_post_sorafs_deal_settle),
                     )
             });
@@ -15085,7 +15085,7 @@ impl Torii {
     fn add_content_routes(builder: &mut RouterBuilder) {
         builder.apply(|router| {
             router.route(
-                "/v1/content/{bundle}/{path..}",
+                "/v2/content/{bundle}/{path..}",
                 axum::routing::get(content::handle_get_content),
             )
         });
@@ -15096,11 +15096,11 @@ impl Torii {
         builder.apply(|router| {
             router
                 .route(
-                    "/v1/soradns/directory/latest",
+                    "/v2/soradns/directory/latest",
                     axum::routing::get(handler_soradns_directory_latest),
                 )
                 .route(
-                    "/v1/soradns/directory/events",
+                    "/v2/soradns/directory/events",
                     axum::routing::get(handler_soradns_directory_events),
                 )
         });
@@ -15119,26 +15119,26 @@ impl Torii {
             };
 
             let mut zk_router = Router::new()
-                .route("/v1/zk/roots", post(handler_zk_roots))
-                .route("/v1/zk/verify", post(handler_zk_verify))
-                .route("/v1/zk/submit-proof", post(handler_zk_submit_proof))
-                .route("/v1/zk/ivm/derive", post(handler_zk_ivm_derive))
-                .route("/v1/zk/ivm/prove", post(handler_zk_ivm_prove))
+                .route("/v2/zk/roots", post(handler_zk_roots))
+                .route("/v2/zk/verify", post(handler_zk_verify))
+                .route("/v2/zk/submit-proof", post(handler_zk_submit_proof))
+                .route("/v2/zk/ivm/derive", post(handler_zk_ivm_derive))
+                .route("/v2/zk/ivm/prove", post(handler_zk_ivm_prove))
                 .route(
-                    "/v1/zk/ivm/prove/{job_id}",
+                    "/v2/zk/ivm/prove/{job_id}",
                     get(handler_zk_ivm_prove_get).delete(handler_zk_ivm_prove_delete),
                 )
-                .route("/v1/zk/attachments", attachments_methods)
+                .route("/v2/zk/attachments", attachments_methods)
                 .route(
-                    "/v1/zk/attachments/{id}",
+                    "/v2/zk/attachments/{id}",
                     get(handler_zk_attachment_get).delete(handler_zk_attachment_delete),
                 )
-                .route("/v1/zk/vote/tally", post(handler_zk_vote_tally));
+                .route("/v2/zk/vote/tally", post(handler_zk_vote_tally));
 
             #[cfg(feature = "app_api")]
             {
                 zk_router = zk_router.route(
-                    "/v1/zk/attachments/count",
+                    "/v2/zk/attachments/count",
                     get(handler_zk_attachments_count),
                 );
             }
@@ -15146,7 +15146,7 @@ impl Torii {
             let mut router = router
                 // Contracts: instances listing by namespace
                 .route(
-                    "/v1/contracts/instances/{ns}",
+                    "/v2/contracts/instances/{ns}",
                     get(handler_contracts_instances_by_ns),
                 )
                 // Runtime ABI/upgrade endpoints
@@ -15213,9 +15213,9 @@ impl Torii {
                     iroha_torii_shared::uri::GOV_BALLOT_ZK,
                     post(handler_gov_ballot_zk),
                 )
-                .route("/v1/gov/ballots/zk-v1", post(handler_gov_ballot_zk_v1))
+                .route("/v2/gov/ballots/zk-v1", post(handler_gov_ballot_zk_v1))
                 .route(
-                    "/v1/gov/ballots/zk-v1/ballot-proof",
+                    "/v2/gov/ballots/zk-v1/ballot-proof",
                     post(handler_gov_ballot_zk_v1_ballot_proof),
                 )
                 .route(
@@ -15234,8 +15234,8 @@ impl Torii {
                     iroha_torii_shared::uri::GOV_PROTECTED_SET,
                     get(handler_gov_protected_get),
                 )
-                .route("/v1/gov/stream", get(handler_gov_stream))
-                .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
+                .route("/v2/gov/stream", get(handler_gov_stream))
+                .route("/v2/gov/unlocks/stats", get(handler_gov_unlock_stats))
                 .route(
                     iroha_torii_shared::uri::GOV_INSTANCES_BY_NS,
                     get(handler_gov_instances_ns),
@@ -16486,7 +16486,7 @@ async fn handler_openapi(
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
 }
 
-/// GET /v1/mcp — expose MCP capabilities and tool-count metadata.
+/// GET /v2/mcp — expose MCP capabilities and tool-count metadata.
 async fn handler_mcp_capabilities(
     State(app): State<SharedAppState>,
 ) -> (StatusCode, JsonBody<norito::json::Value>) {
@@ -16496,7 +16496,7 @@ async fn handler_mcp_capabilities(
     )
 }
 
-/// POST /v1/mcp — execute native MCP JSON-RPC requests.
+/// POST /v2/mcp — execute native MCP JSON-RPC requests.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -19619,7 +19619,7 @@ pub(crate) mod tests_runtime_handlers {
             .with_state(app.clone());
 
         let request = Request::builder()
-            .uri("/v1/ledger/state-proof/1")
+            .uri("/v2/ledger/state-proof/1")
             .body(Body::empty())
             .expect("request");
         let response = router.clone().oneshot(request).await.expect("response");
@@ -19644,7 +19644,7 @@ pub(crate) mod tests_runtime_handlers {
         );
 
         let request = Request::builder()
-            .uri("/v1/ledger/state-proof/1")
+            .uri("/v2/ledger/state-proof/1")
             .header(axum::http::header::ACCEPT, crate::utils::NORITO_MIME_TYPE)
             .body(Body::empty())
             .expect("request");

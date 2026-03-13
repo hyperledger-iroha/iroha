@@ -30,7 +30,7 @@ RTT サンプルが無い場合、RTT フロアは 0 とみなします。
 
 公開テレメトリ（詳細は telemetry.md）:
 - ランタイム: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=…}`
-- REST スナップショット: `/v1/sumeragi/phases` は各フェーズの最新レイテンシとともに `ema_ms` を含み、Prometheus を直接スクレイプしなくてもトレンドを可視化可能。
+- REST スナップショット: `/v2/sumeragi/phases` は各フェーズの最新レイテンシとともに `ema_ms` を含み、Prometheus を直接スクレイプしなくてもトレンドを可視化可能。
 - 設定: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## ジッタ方針

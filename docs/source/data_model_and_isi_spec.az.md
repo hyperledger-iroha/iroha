@@ -200,7 +200,7 @@ Növ: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
 - Ləqəb + hesab komponentləri ilə nanə:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Kanonik yardım üçün ləqəb həll edin:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` ilə `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }` ilə `POST /v2/assets/aliases/resolve`
 
 Miqrasiya qeydi:
 - `name#domain` mətn aktivi tərifi identifikatorları ilk buraxılışda qəsdən dəstəklənmir.

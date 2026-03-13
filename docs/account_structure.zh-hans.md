@@ -673,8 +673,8 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
 
 ### Torii 响应格式
 
-- `GET /v1/accounts` 接受可选的 `canonical I105 rendering` 查询参数并且
-  `POST /v1/accounts/query` 接受 JSON 信封内的相同字段。
+- `GET /v2/accounts` 接受可选的 `canonical I105 rendering` 查询参数并且
+  `POST /v2/accounts/query` 接受 JSON 信封内的相同字段。
   支持的值为：
   - `i105`（默认）——响应发出规范的 I105 Base58 有效负载（例如，
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`）。
@@ -683,7 +683,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
 - 无效值返回 `400` (`QueryExecutionFail::Conversion`)。这允许
   钱包和浏览器请求压缩字符串以获得仅限 Sora 的 UX，同时
   将 I105 保留为可互操作的默认值。
-- 资产持有者列表 (`GET /v1/assets/{definition_id}/holders`) 及其 JSON
+- 资产持有者列表 (`GET /v2/assets/{definition_id}/holders`) 及其 JSON
   对应的信封 (`POST …/holders/query`) 也兑现 `canonical I105 rendering`。
   每当 `items[*].account_id` 字段发出压缩文字
   参数/信封字段设置为 `i105_default`，镜像帐户

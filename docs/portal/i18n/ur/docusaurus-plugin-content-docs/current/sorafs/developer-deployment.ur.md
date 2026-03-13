@@ -30,7 +30,7 @@ SoraFS packaging workflow determinism مضبوط کرتا ہے، اس لئے CI 
 
 ## Environment configuration
 
-- Gateways کو proof streaming endpoint (`POST /v1/sorafs/proof/stream`) enable کرنا ہوگا تاکہ CLI telemetry summaries emit کر سکے۔
+- Gateways کو proof streaming endpoint (`POST /v2/sorafs/proof/stream`) enable کرنا ہوگا تاکہ CLI telemetry summaries emit کر سکے۔
 - `sorafs_alias_cache` policy کو `iroha_config` defaults یا CLI helper (`sorafs_cli manifest submit --alias-*`) کے ذریعے configure کریں۔
 - Stream tokens (یا Torii credentials) کو ایک محفوظ secret manager سے فراہم کریں۔
 - Telemetry exporters (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) enable کریں اور انہیں اپنے Prometheus/OTel stack میں ship کریں۔

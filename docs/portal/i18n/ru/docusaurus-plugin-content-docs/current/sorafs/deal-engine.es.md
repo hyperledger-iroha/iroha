@@ -59,12 +59,12 @@ Las Liquidaciones Ahora Emiten Payloads de Gobernanza `DealSettlementV1`,
 ## Интеграция с Torii
 
 Torii экспонирует конечные точки, выделенные для того, чтобы проверяющие отчеты использовались и проводились в цикле
-персонализированная проводка для жизни без греха:- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращается
+персонализированная проводка для жизни без греха:- `POST /v2/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращается
   определённые результаты контроля (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает актуальную вентиляцию, передает эл.
+- `POST /v2/sorafs/deal/settle` завершает актуальную вентиляцию, передает эл.
   `DealSettlementRecord` — результат объединения с `DealSettlementV1` в base64
   список для публикации в DAG de gobernanza.
-- El подача `/v1/events/sse` от Torii сейчас передает регистры `SorafsGatewayEvent::DealUsage`
+- El подача `/v2/events/sse` от Torii сейчас передает регистры `SorafsGatewayEvent::DealUsage`
   que возобновлено каждый раз, когда мы отправляемся (эпоха, GiB-hora medidos, contadores de Tickets,
   грузы детерминированные), регистры `SorafsGatewayEvent::DealSettlement`
   который включает в себя снимок канонической книги учета ликвидации в виде дайджеста/tamaño/base64

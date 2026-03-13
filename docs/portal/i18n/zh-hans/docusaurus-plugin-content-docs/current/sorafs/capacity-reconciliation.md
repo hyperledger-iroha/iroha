@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 路线图项目 **SF-2c** 要求财务部门证明容量费用分类账
 匹配每晚执行的 XOR 传输。使用
 `scripts/telemetry/capacity_reconcile.py` 帮助程序比较
-`/v1/sorafs/capacity/state` 针对执行的传输批次的快照以及
+`/v2/sorafs/capacity/state` 针对执行的传输批次的快照以及
 为 Alertmanager 发出 Prometheus 文本文件指标。
 
 ## 先决条件

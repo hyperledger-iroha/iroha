@@ -4504,8 +4504,7 @@ impl NetworkBuilder {
 
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
-        let genesis_account_literal =
-            AccountId::new(genesis_key_pair.public_key().clone()).to_string();
+        let genesis_account_literal = ALICE_ID.to_string();
         let has_fee_sink_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "fees", "fee_sink_account_id"]).is_some()
         });

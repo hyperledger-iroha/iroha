@@ -44,7 +44,7 @@ Ce runbook guide les opérateurs pour la validation d'un fichier `sorafs-node` i
   ```
 
 - Assurez-vous que le processus Torii donne accès à la lecture/écriture à `data_dir`.
-- Confirmez que le nœud annonce la capacité attendue via `GET /v1/sorafs/capacity/state` une fois que vous avez enregistré une déclaration.
+- Confirmez que le nœud annonce la capacité attendue via `GET /v2/sorafs/capacity/state` une fois que vous avez enregistré une déclaration.
 - Lorsque le suivi est autorisé, les tableaux de bord exposent tant les contadores GiB·hour/PoR en brut que les suivis pour rétablir les tendances sans gigue en même temps que les valeurs instantanées.
 
 ### Exécution en seconde partie de CLI (facultatif)
@@ -81,8 +81,8 @@ La commande émet un résumé JSON (résumé du manifeste, identifiant du fourni
 Une fois que Torii est activé, vous pouvez récupérer tous vos artefacts via HTTP :
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi que les tests de fumée de CLI et les sondes de la passerelle synchronisées en permanence.## 2. Recorrido Pin → Récupérer
@@ -91,7 +91,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 2. Envoyez le manifeste avec la codification base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 3. Récupérer les données enregistrées :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 1. Fija al menos un manifesteto como arriba.
 2. Réinitialisez le processus Torii (ou le nœud complet).
 3. Envoyez la demande de récupération. La charge utile doit être récupérable et le résumé doit coïncider avec la valeur précédente au reinicio.
-4. Inspecciona `GET /v1/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants pendant le règne.
+4. Inspecciona `GET /v2/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants pendant le règne.
 
 ## 4. Prueba de rechazo por cuota
 
@@ -129,7 +129,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 
 1. Fija un manifeste.
 2. Solliciter un événement PoR :```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 - Les tableaux de bord doivent suivre :
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - Contadores de exito/fallo de PoR expuestos via `/v1/sorafs/capacity/state`
+  - Contadores de exito/fallo de PoR expuestos via `/v2/sorafs/capacity/state`
   - intentions de publication de règlement via `sorafs_node_deal_publish_total{result=success|failure}`
 
 Assurez-vous que ces travaux garantissent que le travailleur de l'exploitation intégré peut ingérer des données, faire revivre les reins, respecter les paramètres configurés et générer des tests pour déterminer la capacité avant que le nœud annonce la capacité du rouge le plus étendu.

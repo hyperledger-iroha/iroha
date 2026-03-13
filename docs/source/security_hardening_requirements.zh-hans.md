@@ -26,9 +26,9 @@ This note captures concrete requirements for closing the open residual risks cal
 **Observability**
 - Prometheus metric `sumeragi_membership_mismatch_total{peer,height,view}` (counter).
 - Optional gauge `sumeragi_membership_mismatch_active` indicating current peers flagged.
-- Include mismatch state, drop counters, Highest/Locked QC hashes, and pacemaker backpressure deferrals in `/v1/sumeragi/status` JSON (`gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`, commit certificate `subject_block_hash`).
+- Include mismatch state, drop counters, Highest/Locked QC hashes, and pacemaker backpressure deferrals in `/v2/sumeragi/status` JSON (`gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`, commit certificate `subject_block_hash`).
 
-**Status:** Implemented via the gauges `sumeragi_membership_view_hash`, `sumeragi_membership_height`, `sumeragi_membership_view`, `sumeragi_membership_epoch`, and the new `/v1/sumeragi/status.membership` JSON object. These surfaces complement the mismatch counters by exposing the deterministic roster hash and its (height, view, epoch) context per peer.
+**Status:** Implemented via the gauges `sumeragi_membership_view_hash`, `sumeragi_membership_height`, `sumeragi_membership_view`, `sumeragi_membership_epoch`, and the new `/v2/sumeragi/status.membership` JSON object. These surfaces complement the mismatch counters by exposing the deterministic roster hash and its (height, view, epoch) context per peer.
 
 **Deployment considerations**
 - Metric registration must not break existing telemetry exporters.

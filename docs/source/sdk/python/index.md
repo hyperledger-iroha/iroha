@@ -20,7 +20,7 @@ support_playbook
 
 ## Explorer helpers
 
-The Torii client now exposes the `/v1/explorer/accounts/{account_id}/qr` route
+The Torii client now exposes the `/v2/explorer/accounts/{account_id}/qr` route
 so wallets and explorers can render canonical account QR codes without re‑implementing
 the encoder. Call
 `ToriiClient.get_explorer_account_qr_typed(account_id)`

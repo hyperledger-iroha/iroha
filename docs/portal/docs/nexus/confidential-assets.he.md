@@ -47,7 +47,7 @@ SPDX-License-Identifier: Apache-2.0
 
 מעטפות memo חסויות מסופקות כעת עם fixture קנוני ב-`fixtures/confidential/encrypted_payload_v1.json`. מערך הנתונים כולל מעטפת v1 חיובית ודוגמאות שליליות פגומות כדי ש-SDKs יאמתו שוויון פרסינג. בדיקות data-model של Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) וסוויטת Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) טוענות את ה-fixture ישירות, ומבטיחות ש-Norito encoding, משטחי שגיאה וכיסוי רגרסיה נשארים מיושרים כשהקודק מתפתח.
 
-Swift SDKs יכולים כעת להנפיק הוראות shield בלי glue JSON ייעודי: בנו `ShieldRequest` עם note commitment של 32 בתים, payload מוצפן ו-debit metadata, ואז קראו ל-`IrohaSDK.submit(shield:keypair:)` (או `submitAndWait`) כדי לחתום ולהעביר את הטרנזקציה דרך `/v1/pipeline/transactions`. העוזר מאמת אורכי commitments, מזרים `ConfidentialEncryptedPayload` לתוך Norito encoder, ומשקף את ה-`zk::Shield` layout המתואר להלן כדי שה-wallets יישארו מסונכרנים עם Rust.
+Swift SDKs יכולים כעת להנפיק הוראות shield בלי glue JSON ייעודי: בנו `ShieldRequest` עם note commitment של 32 בתים, payload מוצפן ו-debit metadata, ואז קראו ל-`IrohaSDK.submit(shield:keypair:)` (או `submitAndWait`) כדי לחתום ולהעביר את הטרנזקציה דרך `/v2/pipeline/transactions`. העוזר מאמת אורכי commitments, מזרים `ConfidentialEncryptedPayload` לתוך Norito encoder, ומשקף את ה-`zk::Shield` layout המתואר להלן כדי שה-wallets יישארו מסונכרנים עם Rust.
 
 ## Commitments של קונצנזוס ו-gating יכולות
 - כותרות בלוקים חושפות `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; ה-digest משתתף ב-hash הקונצנזוס וחייב להתאים לתצוגת הרגיסטרי המקומית לקבלת הבלוק.
@@ -78,7 +78,7 @@ Swift SDKs יכולים כעת להנפיק הוראות shield בלי glue JSON
 
 #### ניטור מעברים דרך Torii
 
-Wallets ואודיטורים בודקים `GET /v1/confidential/assets/{definition_id}/transitions` כדי לבחון את `AssetConfidentialPolicy` הפעילה. ה-payload של JSON כולל תמיד asset id קנוני, גובה בלוק אחרון שנצפה, `current_mode` של המדיניות, המצב האפקטיבי בגובה זה (חלונות המרה מדווחים זמנית `Convertible`), ואת מזהי הפרמטרים הצפויים `vk_set_hash`/Poseidon/Pedersen. כאשר מעבר governance ממתין, התגובה כוללת גם:
+Wallets ואודיטורים בודקים `GET /v2/confidential/assets/{definition_id}/transitions` כדי לבחון את `AssetConfidentialPolicy` הפעילה. ה-payload של JSON כולל תמיד asset id קנוני, גובה בלוק אחרון שנצפה, `current_mode` של המדיניות, המצב האפקטיבי בגובה זה (חלונות המרה מדווחים זמנית `Convertible`), ואת מזהי הפרמטרים הצפויים `vk_set_hash`/Poseidon/Pedersen. כאשר מעבר governance ממתין, התגובה כוללת גם:
 
 - `transition_id` - audit handle שמוחזר מ-`ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -126,7 +126,7 @@ Wallets ואודיטורים בודקים `GET /v1/confidential/assets/{definiti
 
 1. **Prepare registries:** הפעילו את כל רשומות ה-verifier והפרמטרים המוזכרות במדיניות היעד. צמתים מפרסמים את `conf_features` שנוצרו כדי ש-peers יאמתו תאימות.
 2. **Stage the transition:** הגישו `ScheduleConfidentialPolicyTransition` עם `effective_height` שמכבד `policy_transition_delay_blocks`. במעבר ל-`ShieldedOnly` ציינו חלון המרה (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** רשמו את `transition_id` שהוחזר והפיצו runbook של on/off-ramp. Wallets ואודיטורים נרשמים ל-`/v1/confidential/assets/{id}/transitions` כדי לדעת את גובה פתיחת החלון.
+3. **Publish operator guidance:** רשמו את `transition_id` שהוחזר והפיצו runbook של on/off-ramp. Wallets ואודיטורים נרשמים ל-`/v2/confidential/assets/{id}/transitions` כדי לדעת את גובה פתיחת החלון.
 4. **Window enforcement:** בעת פתיחת החלון ה-runtime משנה את המדיניות ל-`Convertible`, מפיץ `PolicyTransitionWindowOpened { transition_id }`, ומתחיל לדחות בקשות governance סותרות.
 5. **Finalize or abort:** ב-`effective_height` ה-runtime בודק תנאים מוקדמים (supply שקוף אפס, ללא משיכות חירום וכו'). הצלחה מחליפה את המדיניות למצב המבוקש; כשל מוציא `PolicyTransitionPrerequisiteFailed`, מנקה את המעבר הממתין ומשאיר את המדיניות ללא שינוי.
 6. **Schema upgrades:** לאחר מעבר מוצלח, governance מעלה גרסת סכימת נכס (למשל `asset_definition.v2`) וכלי CLI דורשים `confidential_policy` בעת סדרת manifests. מסמכי שדרוג genesis מנחים את האופרטורים להוסיף הגדרות מדיניות וטביעות registry לפני אתחול מחדש של הוולידטורים.
@@ -234,7 +234,7 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
 - היררכיית derivation לכל חשבון:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - payloads מוצפנים של notes משתמשים ב-AEAD עם מפתחות שיתוף נגזרים ב-ECDH; אפשר לצרף auditor view keys לאופציות outputs בהתאם למדיניות הנכס.
-- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha app zk envelope` ליצירה/בדיקה של מעטפות Norito offline. Torii חושף את אותו זרם derivation דרך `POST /v1/confidential/derive-keyset`, ומחזיר hex ו-base64 כדי שה-wallets יוכלו למשוך היררכיות מפתחות בצורה פרוגרמטית.
+- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha app zk envelope` ליצירה/בדיקה של מעטפות Norito offline. Torii חושף את אותו זרם derivation דרך `POST /v2/confidential/derive-keyset`, ומחזיר hex ו-base64 כדי שה-wallets יוכלו למשוך היררכיות מפתחות בצורה פרוגרמטית.
 
 ## Gas, מגבלות ובקרות DoS
 - לוח גז דטרמיניסטי:

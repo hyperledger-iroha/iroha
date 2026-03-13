@@ -28,7 +28,7 @@ fichiers individuels directement à partir de Torii.
   `sponsor:<uaid>`), espace réservé à la stratégie de rétention et remplacements MIME.
 - **Déduplication** : les charges utiles tar sont fragmentées (64 Ko par défaut) et stockées une fois par
   hachage avec décompte de références ; retirer un paquet décrémente et élague des morceaux.
-- **Servir** : Torii expose `GET /v1/content/{bundle}/{path}`. Flux de réponses
+- **Servir** : Torii expose `GET /v2/content/{bundle}/{path}`. Flux de réponses
   directement depuis le magasin de morceaux avec `ETag` = hachage de fichier, `Accept-Ranges: bytes`,
   Prise en charge de la plage et Cache-Control dérivé du manifeste. Les lectures honorent le
   mode d'authentification manifeste : les réponses dépendantes du rôle et du sponsor nécessitent des réponses canoniques

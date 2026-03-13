@@ -125,7 +125,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -145,10 +145,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- დამხმარე გასცემს ერთ `POST /v1/sns/registrations` მოთხოვნას და წყვეტს
+- დამხმარე გასცემს ერთ `POST /v2/sns/registrations` მოთხოვნას და წყვეტს
   პირველი HTTP შეცდომა. პასუხები დართულია ჟურნალის ბილიკზე, როგორც NDJSON
   ჩანაწერები.
-- `--poll-status` ხელახლა სვამს შეკითხვას `/v1/sns/registrations/{selector}` ყოველი შემდეგ
+- `--poll-status` ხელახლა სვამს შეკითხვას `/v2/sns/registrations/{selector}` ყოველი შემდეგ
   წარდგენა (`--poll-attempts`-მდე, ნაგულისხმევი 5) დასადასტურებლად, რომ ჩანაწერი არის
   ხილული. მიუთითეთ `--suffix-map` (JSON of `suffix_id` to `"suffix"` მნიშვნელობები) ასე
   ხელსაწყოს შეუძლია გამოიტანოს `{label}.{suffix}` ლიტერალები გამოკითხვისთვის.

@@ -72,7 +72,7 @@ boshqaruvni tekshirishga tayyor:
    qaysi marshrutlash manifest (TRM) va nasl oynasi faol edi. Yordamchi
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    spool fayllarni nusxalaydi, xeshlarni chiqaradi va ixtiyoriy ravishda xulosaga imzo chekadi.
-2. Filtrlangan `/v1/status` chiqishini yozib oling
+2. Filtrlangan `/v2/status` chiqishini yozib oling
    `.telemetry.taikai_alias_rotations[]` va uni spool fayllari yonida saqlang.
    Sharhlovchilar xabar qilingan `manifest_digest_hex` va oyna chegaralarini solishtiradilar
    nusxalangan spool holati.

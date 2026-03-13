@@ -21,8 +21,8 @@ translation_last_reviewed: 2026-01-01
 - ✅ Norito `Proposal`/`Vote`/`Qc` ٹائپس کو `BlockMessage` میں نمایاں کیا اور encode/decode round-trips چلائے (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ پرانے `BlockSigned/BlockCommitted` frames کو gate کیا؛ migration toggle کو ریٹائرمنٹ سے پہلے `false` پر رکھا گیا۔
 - ✅ پرانے block messages ٹوگل کرنے والا migration knob ہٹا دیا؛ اب Vote/commit certificate موڈ ہی واحد wire راستہ ہے۔
-- ✅ Torii routers، CLI کمانڈز، اور telemetria consumers کو اپ ڈیٹ کیا تاکہ `/v1/sumeragi/*` JSON snapshots کو پرانے block frames پر ترجیح دیں۔
-- ✅ Integration coverage نے `/v1/sumeragi/*` endpoints کو صرف Vote/commit certificate pipeline کے ذریعے exercise کیا (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ Torii routers، CLI کمانڈز، اور telemetria consumers کو اپ ڈیٹ کیا تاکہ `/v2/sumeragi/*` JSON snapshots کو پرانے block frames پر ترجیح دیں۔
+- ✅ Integration coverage نے `/v2/sumeragi/*` endpoints کو صرف Vote/commit certificate pipeline کے ذریعے exercise کیا (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ فیچر parity اور interop tests مکمل ہونے پر پرانے frames ہٹا دیے گئے۔
 
 ### Frame removal پلان
@@ -63,7 +63,7 @@ translation_last_reviewed: 2026-01-01
 ### فوری اگلے اقدامات
 1. ✅ Bounded-jitter harness pacemaker jitter metrics کو exercise کرتا ہے (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. ✅ `npos_queue_backpressure_triggers_metrics` میں RBC deferral assertions کو مضبوط کریں، deterministic RBC store pressure کو prime کر کے (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ `/v1/sumeragi/telemetry` soak کو طویل epochs اور adversarial collectors تک بڑھائیں، snapshots کو Prometheus counters کے ساتھ متعدد heights پر compare کر کے۔ یہ `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors` سے cover ہے۔
+3. ✅ `/v2/sumeragi/telemetry` soak کو طویل epochs اور adversarial collectors تک بڑھائیں، snapshots کو Prometheus counters کے ساتھ متعدد heights پر compare کر کے۔ یہ `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors` سے cover ہے۔
 
 اس فہرست کو یہاں ٹریک کرنا `roadmap.md` کو milestones پر فوکس رکھتا ہے جبکہ ٹیم کو ایک live checklist دیتا ہے۔ اپ ڈیٹس آتے ہی اندراجات اپ ڈیٹ کریں (اور تکمیل نشان زد کریں)۔
 

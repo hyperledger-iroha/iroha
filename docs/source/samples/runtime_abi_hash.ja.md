@@ -11,7 +11,7 @@ translator: manual
 # ランタイム ABI — 正規ハッシュ（Torii）
 
 エンドポイント
-- `GET /v1/runtime/abi/hash`
+- `GET /v2/runtime/abi/hash`
 
 レスポンス（初回リリース・単一ポリシー V1）
 ```json

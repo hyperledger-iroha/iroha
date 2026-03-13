@@ -23,7 +23,7 @@ puedan reconciliar los debitos de gas con el modelo de tarifas de Nexus.
   `dislocated`). Estas banderas alimentan el settlement router para que la cotizacion XOR resultante
   coincida con el TWAP canonico y el tier de haircut de la lane.
 - Las transacciones IVM deben incluir el metadato `gas_limit` (`u64`, > 0) para limitar la exposicion a tarifas.
-  El endpoint `/v1/contracts/call` exige `gas_limit` explicitamente y se rechazan los valores invalidos.
+  El endpoint `/v2/contracts/call` exige `gas_limit` explicitamente y se rechazan los valores invalidos.
 - Cuando una transaccion establece el metadato `fee_sponsor`, el sponsor debe otorgar
   `CanUseFeeSponsor { sponsor }` al llamante. Los intentos de sponsorship no autorizados se rechazan y
   se registran.
@@ -32,7 +32,7 @@ puedan reconciliar los debitos de gas con el modelo de tarifas de Nexus.
   inmediatamente, el XOR esperado despues del haircut, el margen de seguridad realizado
   (`xor_variance_micro`), y el timestamp del bloque en milisegundos.
 - La ejecucion del bloque agrega recibos por lane/dataspace y los publica via `lane_settlement_commitments`
-  en `/v1/sumeragi/status`. Los totales exponen `total_local_micro`, `total_xor_due_micro`, y
+  en `/v2/sumeragi/status`. Los totales exponen `total_local_micro`, `total_xor_due_micro`, y
   `total_xor_after_haircut_micro` sumados sobre el bloque para exportes nocturnos de conciliacion.
 - Un nuevo contador `total_xor_variance_micro` rastrea cuanto margen de seguridad se consumio
   (diferencia entre el XOR debido y la expectativa post-haircut), y `swap_metadata` documenta los

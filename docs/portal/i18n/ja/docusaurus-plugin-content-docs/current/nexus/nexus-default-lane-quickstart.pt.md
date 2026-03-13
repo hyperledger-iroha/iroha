@@ -164,7 +164,7 @@ TEU のスナップショットを確認し、マニフェスト アリナムの
 
 ## 6. クライアントを実行します。- **Rust/CLI.** `iroha_cli` クライアントを Rust から削除する `lane_id` は、すぐに実行できます `--lane-id` / `LaneSelector`。おおルータ・デ・フィラス、ポルタント、カイ・エム・`default_lane`。 `--lane-id`/`--dataspace-id` アペナス アオ ミララム レーン ナオ パドラオとして明示的にフラグを使用します。
 - **JS/Swift/Android。** SDK トラタム `laneId`/`lane_id` の最終リリースとして、`/status` の有効性と安全性を考慮したフォールバックが可能です。政治は非常に重要な役割を果たし、非常に正確な再構成を行うための準備と生産を開始します。
-- **パイプライン/SSE テスト。** トランザクション監視イベントのフィルター `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`)。 Assine `/v1/pipeline/events/transactions` は、フォールバックを回避するために、安全性を確認するためのフィルターを作成します。
+- **パイプライン/SSE テスト。** トランザクション監視イベントのフィルター `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`)。 Assine `/v2/pipeline/events/transactions` は、フォールバックを回避するために、安全性を確認するためのフィルターを作成します。
 
 ## 7. 統治の監視
 

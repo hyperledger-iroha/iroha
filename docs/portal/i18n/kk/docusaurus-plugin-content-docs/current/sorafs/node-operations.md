@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
   ```
 
 - Torii процесінің `data_dir` оқу/жазу рұқсаты бар екеніне көз жеткізіңіз.
-- Декларация жазылғаннан кейін түйіннің күтілетін сыйымдылықты `GET /v1/sorafs/capacity/state` арқылы жарнамалайтынын растаңыз.
+- Декларация жазылғаннан кейін түйіннің күтілетін сыйымдылықты `GET /v2/sorafs/capacity/state` арқылы жарнамалайтынын растаңыз.
 - Тегістеу қосулы кезде, бақылау тақталары нүкте мәндерімен қатар дірілсіз трендтерді бөлектеу үшін шикі және тегістелген GiB·сағ/PoR есептегіштерін көрсетеді.
 
 ### CLI Dry Run (қосымша)
@@ -80,8 +80,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 Torii қосылғаннан кейін HTTP арқылы бірдей артефактілерді алуға болады:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Екі соңғы нүктеге ендірілген сақтау қызметкері қызмет көрсетеді, сондықтан CLI түтін сынақтары мен шлюз зондтары синхрондалады.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#1】L
@@ -92,7 +92,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестті base64 кодтауымен жіберіңіз:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -101,7 +101,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Бекітілген деректерді алыңыз:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -117,7 +117,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. Жоғарыдағыдай кем дегенде бір манифестті бекітіңіз.
 2. Torii процесін (немесе бүкіл түйінді) қайта іске қосыңыз.
 3. Алу сұрауын қайта жіберіңіз. Пайдалы жүктеме әлі де алынуы керек және қайтарылған дайджест қайта іске қосу алдындағы мәнге сәйкес келуі керек.
-4. `bytes_used` қайта жүктеуден кейінгі тұрақты манифесттерді көрсететінін растау үшін `GET /v1/sorafs/storage/state` тексеріңіз.
+4. `bytes_used` қайта жүктеуден кейінгі тұрақты манифесттерді көрсететінін растау үшін `GET /v2/sorafs/storage/state` тексеріңіз.
 
 ## 4. Квотадан бас тарту сынағы
 
@@ -150,7 +150,7 @@ GC CLI әдейі тек оқуға арналған. Оны сақтау мер
 2. PoR үлгісін сұрау:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -173,7 +173,7 @@ GC CLI әдейі тек оқуға арналған. Оны сақтау мер
 - Бақылау тақталары мыналарды қадағалауы керек:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` және `torii_sorafs_storage_fetch_inflight`
-  - PoR сәтті/сәтсіздік есептегіштері `/v1/sorafs/capacity/state` арқылы пайда болды
+  - PoR сәтті/сәтсіздік есептегіштері `/v2/sorafs/capacity/state` арқылы пайда болды
   - `sorafs_node_deal_publish_total{result=success|failure}` арқылы есеп айырысуларды жариялау әрекеттері
 
 Осы жаттығуларды орындау ендірілген жад қызметкерінің деректерді қабылдауына, қайта іске қосудан аман қалуына, конфигурацияланған квоталарды құрметтеуге және түйін кеңірек желіге сыйымдылықты жарияламас бұрын детерминирленген PoR дәлелдерін жасауға мүмкіндік береді.

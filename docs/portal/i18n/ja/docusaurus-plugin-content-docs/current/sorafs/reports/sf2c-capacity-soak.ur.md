@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 Torii プロバイダーのクレジット スナップショット、料金台帳、ダッシュボード、残高、ペナルティ ストライク、ゲート、および料金台帳:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` エントリ واپس کرتا ہے جو 浸漬テスト میں verify ہونے والے
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` エントリ واپس کرتا ہے جو 浸漬テスト میں verify ہونے والے
   元帳フィールド کی عکاسی کرتے ہیں۔ और देखें
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana インポート: `dashboards/grafana/sorafs_capacity_penalties.json` エクスポートされたストライク カウンター、ペナルティの合計

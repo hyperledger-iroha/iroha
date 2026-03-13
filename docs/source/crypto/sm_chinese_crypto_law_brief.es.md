@@ -68,7 +68,7 @@ Los operadores deben:1. **Registre el sistema blockchain** en la Oficina de Segu
 1. **Documentación**
    - Agregar un apéndice de cumplimiento a `docs/source/crypto/sm_program.md` que indique el estado de la criptografía comercial estatal, las expectativas de presentación y los puntos de contacto.
    - Publicar un campo de manifiesto Norito (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) que los operadores puedan utilizar al preparar presentaciones.
-   - Asegúrese de que el anuncio Torii `/v1/node/capabilities` (y el alias CLI `iroha runtime capabilities`) se envíe con cada versión para que los operadores puedan capturar la instantánea del manifiesto `crypto.sm` para evidencia MLPS/密评.
+   - Asegúrese de que el anuncio Torii `/v2/node/capabilities` (y el alias CLI `iroha runtime capabilities`) se envíe con cada versión para que los operadores puedan capturar la instantánea del manifiesto `crypto.sm` para evidencia MLPS/密评.
    - Proporcionar un inicio rápido de cumplimiento bilingüe (EN/ZH) que resuma las obligaciones.
 2. **Artefactos de lanzamiento**
    - Envíe archivos SBOM/CycloneDX para compilaciones habilitadas para SM.

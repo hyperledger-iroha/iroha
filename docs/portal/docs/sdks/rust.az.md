@@ -158,7 +158,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot`, `/v1/explorer/accounts/{id}/qr` JSON-u əks etdirir
+`ExplorerAccountQrSnapshot`, `/v2/explorer/accounts/{id}/qr` JSON-u əks etdirir
 səth: ona kanonik hesab identifikatoru, hərfi ilə göstərilən hərf daxildir
 kanonik I105 literal, şəbəkə prefiksi/səhvlərin düzəldilməsi metadatası, QR ölçüləri və
 cüzdanların/kəşfiyyatçıların birbaşa yerləşdirə biləcəyi daxili SVG yükü.

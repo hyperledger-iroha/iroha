@@ -227,7 +227,7 @@ Struct FreshnessProofV1 {
   the suffix steward.
 
 Proof bundles are pinned separately in SoraFS and referenced from the registry
-record. Clients fetch them over Torii REST (`/v1/soradns/proof/{namehash}`) or
+record. Clients fetch them over Torii REST (`/v2/soradns/proof/{namehash}`) or
 via SoraFS gateway.
 
 ## 7. Resolver Discovery
@@ -253,7 +253,7 @@ Struct ResolverAdvertV1 {
 
 Clients obtain RAD data via:
 
-1. Torii REST: `/v1/soradns/resolvers` returns paginated adverts.
+1. Torii REST: `/v2/soradns/resolvers` returns paginated adverts.
 2. SoraFS pinned snapshot: `soradns/resolvers/latest.car`.
 3. Gossip feed (RAD topic) using SoraNet circuits for low-latency updates.
 

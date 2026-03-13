@@ -44,7 +44,7 @@ use iroha::{
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+use iroha_crypto::PrivateKey;
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_data_model::query::{
     CommittedTxFilters,
@@ -75,7 +75,6 @@ const DS2_LANE_INDEX: u32 = 2;
 const TOTAL_PEERS: usize = 12;
 const VALIDATORS_PER_LANE: usize = 4;
 const VALIDATOR_STAKE: u64 = 2_000;
-const STAKE_ASSET_ID: &str = "xor#nexus";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -101,6 +100,17 @@ const SOAK_ITERATION_ATTEMPTS: usize = 3;
 const SOAK_ITERATIONS: usize = 10;
 const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
 
+fn stake_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "nexus".parse().expect("nexus domain"),
+        "xor".parse().expect("stake asset name"),
+    )
+}
+
+fn stake_asset_id_literal() -> String {
+    stake_asset_definition_id().to_string()
+}
+
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -115,15 +125,14 @@ fn soak_iterations() -> usize {
 }
 
 fn cross_dataspace_gas_account_id() -> AccountId {
-    let gas_keypair = KeyPair::from_seed(
-        b"integration_tests::nexus::cross_dataspace_localnet::gas_account".to_vec(),
-        Algorithm::Ed25519,
-    );
-    AccountId::new(gas_keypair.public_key().clone())
+    // Use an existing single-domain subject to keep staking literals unambiguous.
+    ALICE_ID.clone()
 }
 
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = cross_dataspace_gas_account_id().to_string();
+    let gas_account_str = cross_dataspace_gas_account_id()
+        .canonical_i105()
+        .expect("canonical i105 escrow account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -255,7 +264,10 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
                     gas_account_str.clone(),
@@ -325,17 +337,13 @@ fn npos_multilane_genesis_post_topology_transactions(
         topology.len()
     );
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = cross_dataspace_gas_account_id();
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-
+    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
+    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let stake_asset_id = stake_asset_definition_id();
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain.clone())).into(),
-        Register::account(Account::new(
-            gas_account_id.to_account_id(ivm_domain.clone()),
-        ))
-        .into(),
+        Register::domain(Domain::new(ds1_domain)).into(),
+        Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())

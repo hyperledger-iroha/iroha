@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- အကူအညီပေးသူက တောင်းဆိုချက်တစ်ခုလျှင် `POST /v1/sns/registrations` ကိုထုတ်ပေးပြီး ဖျက်ပစ်လိုက်သည်။
+- အကူအညီပေးသူက တောင်းဆိုချက်တစ်ခုလျှင် `POST /v2/sns/registrations` ကိုထုတ်ပေးပြီး ဖျက်ပစ်လိုက်သည်။
   ပထမဆုံး HTTP အမှား။ တုံ့ပြန်မှုများကို NDJSON အဖြစ် မှတ်တမ်းလမ်းကြောင်းတွင် ထည့်သွင်းထားသည်။
   မှတ်တမ်းများ
-- `--poll-status` တစ်ခုစီပြီးနောက် `/v1/sns/registrations/{selector}` ပြန်မေးသည်
+- `--poll-status` တစ်ခုစီပြီးနောက် `/v2/sns/registrations/{selector}` ပြန်မေးသည်
   မှတ်တမ်းကို အတည်ပြုရန် တင်ပြချက် (`--poll-attempts` အထိ၊ မူရင်း 5)၊
   မြင်နိုင်သည်။ `--suffix-map` (`suffix_id` ၏ JSON မှ `"suffix"` တန်ဖိုးများ) သို့ ပေးပါ။
   ကိရိယာသည် မဲရုံအတွက် `{label}.{suffix}` စာလုံးများကို ထုတ်ယူနိုင်သည်။

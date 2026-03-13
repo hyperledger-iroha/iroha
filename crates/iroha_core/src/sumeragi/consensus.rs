@@ -90,7 +90,7 @@ pub fn consensus_domain(
 ) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha2-consensus/v1");
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha2-consensus/v2");
     iroha_crypto::blake2::digest::Update::update(
         &mut hasher,
         chain_id.clone().into_inner().as_bytes(),

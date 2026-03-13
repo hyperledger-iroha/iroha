@@ -34,12 +34,12 @@ This specification completes **SFM-6 — Reserve-plus-Rent & lifecycle policies*
 ## APIs & Services
 - Reserve service (`reserve_rentd`) computes rent/reserve, manages credit lines, emits events.
 - REST endpoints:
-  - `GET /v1/reserve/summary?provider=` – returns `ReserveSummaryV1` (balance, requirement, stage, credit line status).
-  - `POST /v1/reserve/top-up` – apply reserve top-up.
-  - `POST /v1/reserve/withdraw` – withdraw excess reserve (must maintain requirement).
-  - `POST /v1/reserve/appeal` – file appeal, optionally attach documentation.
-  - `GET /v1/reserve/lifecycle` – list stage thresholds and overrides.
-  - `GET /v1/reserve/events?provider=` – pagination of `ReserveLifecycleEventV1`.
+  - `GET /v2/reserve/summary?provider=` – returns `ReserveSummaryV1` (balance, requirement, stage, credit line status).
+  - `POST /v2/reserve/top-up` – apply reserve top-up.
+  - `POST /v2/reserve/withdraw` – withdraw excess reserve (must maintain requirement).
+  - `POST /v2/reserve/appeal` – file appeal, optionally attach documentation.
+  - `GET /v2/reserve/lifecycle` – list stage thresholds and overrides.
+  - `GET /v2/reserve/events?provider=` – pagination of `ReserveLifecycleEventV1`.
 - CLI commands:
   - `sorafs reserve status --provider <id>`
   - `sorafs reserve top-up --provider <id> --amount 500`

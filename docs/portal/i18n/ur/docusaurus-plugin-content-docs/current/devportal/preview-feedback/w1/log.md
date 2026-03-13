@@ -20,7 +20,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ مکمل 2025-04-26 | sorafs-op-01; orchestrator docs parity evidence پر فوکس۔ |
 | partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ مکمل 2025-04-26 | sorafs-op-02; Norito/telemetry cross-links کی توثیق۔ |
 | partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ مکمل 2025-04-26 | sorafs-op-03; multi-source failover drills چلائے۔ |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مکمل 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review۔ |
+| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مکمل 2025-04-26 | torii-int-01; Torii `/v2/pipeline` + Try it cookbook review۔ |
 | partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ مکمل 2025-04-26 | torii-int-02; Try it screenshot update میں ساتھ دیا (docs-preview/w1 #2). |
 | partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ مکمل 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks۔ |
 | partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ مکمل 2025-04-26 | sdk-partner-02; compliance 2025-04-11 کو clear، Connect/telemetry notes پر فوکس۔ |

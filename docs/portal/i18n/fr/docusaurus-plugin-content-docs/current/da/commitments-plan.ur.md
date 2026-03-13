@@ -30,7 +30,7 @@ Code codé en Norito SCALE et JSON ad hoc
   état de disponibilité دوبارہ بنا سکیں۔
 - les preuves d'adhésion déterministes pour les clients légers vérifient les clients légers
   Le hachage manifeste est terminé et finalisé
-- Requêtes Torii (`/v1/da/commitments/*`) et preuves pour les relais
+- Requêtes Torii (`/v2/da/commitments/*`) et preuves pour les relais
   SDK pour l'automatisation de la gouvernance et la relecture ainsi que la disponibilité et la disponibilité
   audit کر سکیں۔
 - Enveloppe `SignedBlockWire` et structures canoniques et structures Norito
@@ -43,7 +43,7 @@ Code codé en Norito SCALE et JSON ad hoc
 3. **Persistance/index** Les requêtes d'engagements WSV et la gestion des requêtes
    (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** liste/requête/prouver les points de terminaison
-   `/v1/da/commitments` est en cours
+   `/v2/da/commitments` est en cours
 5. **Tests d'intégration + montages** et disposition des fils et flux de preuve et validation
    `integration_tests/tests/da/commitments.rs` میں۔
 
@@ -131,9 +131,9 @@ attaques سے بچا جا سکے۔
 
 Torii contient les points de terminaison suivants :| Itinéraire | Méthode | Charge utile | Remarques |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de voie/époque/plage de séquence, pagination) | `DaCommitmentPage` indique le nombre total d'engagements et le hachage de bloc |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste یا Tuple `(epoch, sequence)`)۔ | `DaCommitmentProof` واپس کرتا ہے (enregistrement + chemin Merkle + hachage de bloc)۔ |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Assistant apatride et calcul de hachage de bloc pour la validation de l'inclusion et la validation Les SDK sont basés sur `iroha_crypto` et le lien ci-dessous est disponible. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de voie/époque/plage de séquence, pagination) | `DaCommitmentPage` indique le nombre total d'engagements et le hachage de bloc |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste یا Tuple `(epoch, sequence)`)۔ | `DaCommitmentProof` واپس کرتا ہے (enregistrement + chemin Merkle + hachage de bloc)۔ |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Assistant apatride et calcul de hachage de bloc pour la validation de l'inclusion et la validation Les SDK sont basés sur `iroha_crypto` et le lien ci-dessous est disponible. |
 
 Charges utiles `iroha_data_model::da::commitment` pour les charges utiles Routeurs Torii
 gestionnaires pour les points de terminaison d'ingestion DA et pour le montage de points de terminaison pour le jeton/mTLS

@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - Бодлогын мета өгөгдөл болон хүлээгдэж буй шилжилтийг дамжуулан авах боломжтой
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), Swift SDK-ээр тусгагдсан
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) болон баримтжуулсан
   нууц хөрөнгийн дизайн болон SDK гарын авлага хоёулаа

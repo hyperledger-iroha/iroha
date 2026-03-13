@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 የመንገድ ካርታ ማጣቀሻ፡ TORII-APP-1 — `app_api` እኩልነት ኦዲት
 
 ይህ ገጽ የውስጥ I18NI0000028X ኦዲት (`docs/source/torii/app_api_parity_audit.md`) ያንጸባርቃል
-ስለዚህ ከሞኖ-ሪፖ ውጭ ያሉ አንባቢዎች የትኞቹ የ `/v1/*` ንጣፎች በሽቦ እንደተፈተኑ ማየት ይችላሉ ፣
+ስለዚህ ከሞኖ-ሪፖ ውጭ ያሉ አንባቢዎች የትኞቹ የ `/v2/*` ንጣፎች በሽቦ እንደተፈተኑ ማየት ይችላሉ ፣
 እና በሰነድ. ኦዲቱ በ `Torii::add_app_api_routes` በኩል በድጋሚ ወደ ውጭ የተላኩ መንገዶችን ይከታተላል፣
 `add_contracts_and_vk_routes`፣ እና `add_connect_routes`።
 
 ## ወሰን እና ዘዴ
 
 ኦዲቱ በ`crates/iroha_torii/src/lib.rs:256-522` እና በ
-ባህሪ-የተዘጋ የመንገድ ገንቢዎች. በመንገድ ካርታው ውስጥ ላለው እያንዳንዱ የ`/v1/*` ወለል አረጋግጠናል፡-
+ባህሪ-የተዘጋ የመንገድ ገንቢዎች. በመንገድ ካርታው ውስጥ ላለው እያንዳንዱ የ`/v2/*` ወለል አረጋግጠናል፡-
 
 - ተቆጣጣሪ አተገባበር እና የ DTO ትርጓሜዎች በ `crates/iroha_torii/src/routing.rs`.
 - የራውተር ምዝገባ በ I18NI0000037X ወይም `connect` ባህሪ ቡድኖች።
@@ -42,25 +42,25 @@ translation_last_reviewed: 2026-02-07
 - ምሳሌ ቅንጥቦች:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## የመጨረሻ ነጥብ ክምችት
 
-### የመለያ ፈቃዶች (`/v1/accounts/{id}/permissions`) - የተሸፈነ
+### የመለያ ፈቃዶች (`/v2/accounts/{id}/permissions`) - የተሸፈነ
 - ተቆጣጣሪ፡ `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)።
 - DTOs፡ I18NI0000052X + I18NI0000053X (`crates/iroha_torii/src/routing.rs:16867`)።
 - የራውተር ማሰሪያ፡ I18NI0000055X (`crates/iroha_torii/src/lib.rs:6678-6797`)።
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ባለቤት: I18NT0000012X መድረክ.
 - ማስታወሻዎች፡ ምላሹ ከኤስዲኬ ፔጃኒሽን ረዳቶች ጋር የሚዛመድ የNorito JSON አካል ከ `items`/`total` ጋር ነው።
 
-### ተለዋጭ ስም OPRF ይገምግሙ (`POST /v1/aliases/voprf/evaluate`) - የተሸፈነ
+### ተለዋጭ ስም OPRF ይገምግሙ (`POST /v2/aliases/voprf/evaluate`) - የተሸፈነ
 - ተቆጣጣሪ፡ `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)።
 - DTOs፡ I18NI0000064X፣ `AliasVoprfEvaluateResponseDto`፣ `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`)።
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ባለቤት: I18NT0000014X መድረክ.
 - ማስታወሻዎች፡ የምላሽ ወለል ወሳኙን ሄክስ እና የኋላን መለያዎችን ያስፈጽማል። ኤስዲኬዎች DTO ይበላሉ።
 
-### የማረጋገጫ ክስተቶች SSE (`GET /v1/events/sse`) - የተሸፈነ
+### የማረጋገጫ ክስተቶች SSE (`GET /v2/events/sse`) - የተሸፈነ
 - ተቆጣጣሪ: I18NI0000073X በማጣሪያ ድጋፍ (`crates/iroha_torii/src/routing.rs:14008-14133`)።
 - DTOs: I18NI0000075X (I18NI0000076X) እና የማረጋገጫ ማጣሪያ ሽቦ።
 - ራውተር ማሰሪያ፡ I18NI0000077X (`crates/iroha_torii/src/lib.rs:6678-6797`)።
@@ -88,7 +88,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ባለቤት፡ I18NT0000016X Platform (የአሂድ ጊዜ)፣ የውህደት ሙከራዎች WG (ቋሚዎች)።
 - ማስታወሻዎች፡ ከጫፍ እስከ ጫፍ የተረጋገጡ የማጣሪያ መንገዶች ማረጋገጫ; ሰነዶች በ `docs/source/zk_app_api.md` ስር ይኖራሉ።
 
-### የኮንትራት የህይወት ዑደት (`/v1/contracts/*`) - የተሸፈነ
+### የኮንትራት የህይወት ዑደት (`/v2/contracts/*`) - የተሸፈነ
 - ተቆጣጣሪዎች፡- `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)፣
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)፣
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)፣
@@ -103,7 +103,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ባለቤት: ስማርት ኮንትራት WG ከ I18NT0000018X መድረክ ጋር።
 - ማስታወሻዎች፡ የመጨረሻ ነጥቦች የተፈረሙ ግብይቶችን ወረፋ እና የጋራ የቴሌሜትሪ መለኪያዎችን (`handle_transaction_with_metrics`) እንደገና ይጠቀሙ።
 
-### ቁልፍ የህይወት ኡደትን ማረጋገጥ (`/v1/zk/vk/*`) - የተሸፈነ
+### ቁልፍ የህይወት ኡደትን ማረጋገጥ (`/v2/zk/vk/*`) - የተሸፈነ
 - ተቆጣጣሪዎች፡ I18NI0000110X፣ `handle_post_vk_update`፣ `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) እና `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)።
 - DTOs፡ `ZkVkRegisterDto`፣ `ZkVkUpdateDto`፣ `ZkVkDeprecateDto`፣ `VkListQuery`፣ `ProofFindByIdQueryDto`
@@ -115,7 +115,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ባለቤት፡ ZK Working Group with Torii Platform ድጋፍ።
 - ማስታወሻዎች: DTOs በኤስዲኬዎች ከተጣቀሱ Norito እቅዶች ጋር ይጣጣማሉ; በ `limits.rs` በኩል የዋጋ ገደብ ተፈጻሚ ነው።
 
-### Nexus አገናኝ (`/v1/connect/*`) - የተሸፈነ (ባህሪ `connect`)
+### Nexus አገናኝ (`/v2/connect/*`) - የተሸፈነ (ባህሪ `connect`)
 - ተቆጣጣሪዎች፡ I18NI0000130X፣ `handler_connect_session_delete`፣ `handle_connect_ws`፣
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)።
 - DTOs፡ I18NI0000135X፣ `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)፣

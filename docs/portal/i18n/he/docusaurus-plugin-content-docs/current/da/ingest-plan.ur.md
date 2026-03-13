@@ -38,7 +38,7 @@ Norito codecs استعمال کرنا لازمی ہے؛ serde/JSON fallback.
 ## משטח API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -203,14 +203,14 @@ optional manifests verify کرنے سے پہلے bytes کو decompress کرتا 
   اور SDK parity work unblock ہوتا ہے۔
 - `iroha app da get` כינוי ממוקד DA.
   `iroha app sorafs fetch` ‏ מניפסט מפעילים + חפצי אמנות בתוכנית נתח (`--manifest`, `--plan`, `--manifest-id`)
-  **یا** Torii storage ticket via `--storage-ticket` دے سکتے ہیں۔ Ticket path پر CLI `/v1/da/manifests/<ticket>` سے
+  **یا** Torii storage ticket via `--storage-ticket` دے سکتے ہیں۔ Ticket path پر CLI `/v2/da/manifests/<ticket>` سے
   manifest download کرتی ہے، bundle کو `artifacts/da/fetch_<timestamp>/` میں محفوظ کرتی ہے (override via
   `--manifest-cache-dir`)، `--manifest-id` کیلئے blob hash derive کرتی ہے، اور فراہم کردہ `--gateway-provider` list
   کے ساتھ orchestrator run کرتی ہے۔ SoraFS מחזיר כפתורים מתקדמים
   תוויות לקוח, מטמוני שמירה, עקיפת העברה אנונימית, ייצוא לוח תוצאות, או נתיבים `--output`) או
   `--manifest-endpoint` کے ذریعے manifest endpoint override کیا جا سکتا ہے، لہذا end-to-end availability checks
   مکمل طور پر `da` namespace میں رہتے ہیں بغیر orchestrator logic duplicate کئے۔
-- `iroha app da get-blob` Torii سے `GET /v1/da/manifests/{storage_ticket}` کے ذریعے canonical manifests کھینچتا ہے۔
+- `iroha app da get-blob` Torii سے `GET /v2/da/manifests/{storage_ticket}` کے ذریعے canonical manifests کھینچتا ہے۔
   کمانڈ `manifest_{ticket}.norito`, `manifest_{ticket}.json`, اور `chunk_plan_{ticket}.json` کو
   `artifacts/da/fetch_<timestamp>/` میں لکھتی ہے (یا user-supplied `--output-dir`) اور عین `iroha app da get`
   invocation (بشمول `--manifest-id`) echo کرتی ہے جو follow-up orchestrator fetch کیلئے درکار ہے۔ اس سے operators

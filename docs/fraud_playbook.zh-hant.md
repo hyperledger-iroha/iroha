@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 網關現在公開具體的 JSON 信封，這些信封一對一地映射到
 `crates/iroha_data_model::fraud` 中實現的 Norito 類型：
 
-- **風險攝入** – `POST /v1/fraud/query` 接受 `RiskQuery` 架構：
+- **風險攝入** – `POST /v2/fraud/query` 接受 `RiskQuery` 架構：
   - `query_id`（`[u8; 32]`，十六進制編碼）
   - `subject`（`AccountId`，規範 I105 文字；可選 `@<domain>` 提示或別名）
   - `operation`（標記枚舉匹配 `RiskOperation`；JSON `type`
@@ -94,14 +94,14 @@ translator: machine-google-reviewed
   - `issued_at_ms` (`u64`)
   - `context`（`RiskContext`；攜帶`tenant_id`，可選`session_id`，
     可選 `reason`)
-- **風險決策** – `POST /v1/fraud/assessment` 消耗
+- **風險決策** – `POST /v2/fraud/assessment` 消耗
   `FraudAssessment` 有效負載（也反映在治理導出中）：
   - `query_id`、`engine_id`、`risk_score_bps`、`confidence_bps`、
     `decision`（`AssessmentDecision` 枚舉）、`rule_outcomes`
     （`{ rule_id, score_delta_bps, rationale? }` 數組）
   - `generated_at_ms`
   - `signature`（可選的 base64 包裝 Norito 編碼的評估）
-- **治理導出** – `GET /v1/fraud/governance/export` 返回
+- **治理導出** – `GET /v2/fraud/governance/export` 返回
   當 `governance` 功能啟用時，`GovernanceExport` 結構，捆綁
   活動參數、最新頒布、模型版本、政策摘要和
   `DecisionAggregate` 直方圖。

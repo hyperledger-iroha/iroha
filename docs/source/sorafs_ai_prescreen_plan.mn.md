@@ -56,7 +56,7 @@ This specification completes **SFM-4a — AI pre-screening & quarantine service*
   - Accepts `AiScreeningRequestV1 { manifest_id, content_uri, content_hash, content_type }`.
   - Executes models sequentially or in deterministic order; seeds derived from content hash.
   - Outputs `ModelScoreV1 { model_name, score, confidence, threshold }`.
-  - Runner exposes `/v1/health` and `/v1/metrics`.
+  - Runner exposes `/v2/health` and `/v2/metrics`.
 - **Committee composition**:
   - Determined by `AiCommitteeManifestV1`.
   - Supports weightings per model and dynamic threshold adjustments.

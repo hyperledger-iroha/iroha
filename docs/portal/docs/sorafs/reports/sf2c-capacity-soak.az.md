@@ -48,7 +48,7 @@ xarici qurğular.
 Torii indi ödəniş kitabçaları ilə yanaşı provayderin kredit şəkillərini də nümayiş etdirir, beləliklə tablosuna
 aşağı balanslara və cərimə zərbələrinə qapıla bilər:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` qeydlərini qaytarır
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` qeydlərini qaytarır
   islatma testində təsdiqlənmiş kitab sahələrini əks etdirin. Bax
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana idxal: `dashboards/grafana/sorafs_capacity_penalties.json`

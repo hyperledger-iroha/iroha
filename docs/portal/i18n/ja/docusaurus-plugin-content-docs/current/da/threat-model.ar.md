@@ -215,7 +215,7 @@ PDP/PoTR を参照してください。
 
 ** 回答者:**- DA-2 のリプレイ キャッシュ。 और देखें
   `crates/iroha_core/src/da/replay_cache.rs` (キャッシュ) Torii في
-  `crates/iroha_torii/src/da/ingest.rs` は、指紋 `/v1/da/ingest` をチェックします。
+  `crates/iroha_torii/src/da/ingest.rs` は、指紋 `/v2/da/ingest` をチェックします。
 - PDP/PoTR ストリーミング ハーネス プルーフ ストリーム
   `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
   重要な問題は、次のとおりです。

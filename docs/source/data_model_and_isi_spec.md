@@ -221,7 +221,7 @@ CLI / Torii `aid` + alias examples:
 - Mint by alias + account components:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Resolve alias to canonical aid:
-  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v2/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl@sbp" }`
 
 Migration note:
 - `name#domain` textual asset-definition IDs are intentionally unsupported in first release.

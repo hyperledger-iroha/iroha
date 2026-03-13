@@ -80,7 +80,7 @@ status.
 
 1. Carregar o snapshot JSON e fazer hash/assinar antes de distribuir aos operadores.
 2. Tooling do registrar deve expor `suffix_id`, limites de termo e precos do
-   catalogo quando uma requisicao atingir `/v1/sns/*`.
+   catalogo quando uma requisicao atingir `/v2/sns/*`.
 3. Helpers DNS/Gateway leem os metadados de labels reservados ao gerar templates
    GAR para que respostas DNS continuem alinhadas aos controles de governanca.
 4. Jobs de anexos KPI marcam exports de dashboards com metadados de sufixo para que

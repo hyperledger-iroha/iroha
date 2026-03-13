@@ -129,13 +129,13 @@ const HEADER_SORA_PERCEPTUAL_HASH: &str = "x-sorafs-perceptual-hash";
 const HEADER_SORA_PERCEPTUAL_EMBEDDING: &str = "x-sorafs-perceptual-embedding";
 const MIME_CAR: &str = "application/vnd.ipld.car";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
-const TELEMETRY_ENDPOINT_CAR_RANGE: &str = "/v1/sorafs/storage/car/range";
-const TELEMETRY_ENDPOINT_CHUNK: &str = "/v1/sorafs/storage/chunk";
-const TELEMETRY_ENDPOINT_PROVIDER_ADVERT: &str = "/v1/sorafs/provider/advert";
-const TELEMETRY_ENDPOINT_MANIFEST: &str = "/v1/sorafs/storage/manifest";
-const TELEMETRY_ENDPOINT_PLAN: &str = "/v1/sorafs/storage/plan";
-const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por/sample";
-const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v1/sorafs/proof/stream";
+const TELEMETRY_ENDPOINT_CAR_RANGE: &str = "/v2/sorafs/storage/car/range";
+const TELEMETRY_ENDPOINT_CHUNK: &str = "/v2/sorafs/storage/chunk";
+const TELEMETRY_ENDPOINT_PROVIDER_ADVERT: &str = "/v2/sorafs/provider/advert";
+const TELEMETRY_ENDPOINT_MANIFEST: &str = "/v2/sorafs/storage/manifest";
+const TELEMETRY_ENDPOINT_PLAN: &str = "/v2/sorafs/storage/plan";
+const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v2/sorafs/storage/por/sample";
+const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v2/sorafs/proof/stream";
 const RANGE_THROTTLE_REASON_QUOTA: &str = "quota";
 const RANGE_THROTTLE_REASON_CONCURRENCY: &str = "concurrency";
 const RANGE_THROTTLE_REASON_BYTE_RATE: &str = "byte_rate";
@@ -1374,7 +1374,7 @@ impl ByteRange {
 #[derive(
     Default, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize,
 )]
-/// JSON payload accepted by the `/v1/sorafs/storage/pin` endpoint.
+/// JSON payload accepted by the `/v2/sorafs/storage/pin` endpoint.
 pub struct StoragePinRequestDto {
     /// Base64-encoded Norito manifest bytes.
     pub manifest_b64: String,
@@ -1412,7 +1412,7 @@ pub struct StoragePinResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by the `/v1/sorafs/storage/fetch` endpoint.
+/// JSON payload accepted by the `/v2/sorafs/storage/fetch` endpoint.
 pub struct StorageFetchRequestDto {
     /// Hex-encoded manifest identifier to read from.
     pub manifest_id_hex: String,
@@ -1440,7 +1440,7 @@ pub struct StorageFetchResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/token`.
+/// JSON payload accepted by `/v2/sorafs/storage/token`.
 pub struct StreamTokenRequestDto {
     /// Hex-encoded manifest identifier.
     pub manifest_id_hex: String,
@@ -1458,7 +1458,7 @@ pub struct StreamTokenRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by the `/v1/sorafs/storage/por-sample` endpoint.
+/// JSON payload accepted by the `/v2/sorafs/storage/por-sample` endpoint.
 pub struct StoragePorSampleRequestDto {
     /// Hex-encoded manifest identifier to sample against.
     pub manifest_id_hex: String,
@@ -1470,7 +1470,7 @@ pub struct StoragePorSampleRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by the `/v1/sorafs/proof/stream` endpoint.
+/// JSON payload accepted by the `/v2/sorafs/proof/stream` endpoint.
 pub struct ProofStreamRequestDto {
     /// Hex-encoded manifest digest (32 bytes).
     pub manifest_digest_hex: String,
@@ -1494,7 +1494,7 @@ pub struct ProofStreamRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-challenge`.
+/// JSON payload accepted by `/v2/sorafs/storage/por-challenge`.
 pub struct StoragePorChallengeDto {
     /// Base64-encoded Norito PoR challenge payload.
     pub challenge_b64: String,
@@ -1502,7 +1502,7 @@ pub struct StoragePorChallengeDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-proof`.
+/// JSON payload accepted by `/v2/sorafs/storage/por-proof`.
 pub struct StoragePorProofDto {
     /// Base64-encoded Norito PoR proof payload.
     pub proof_b64: String,
@@ -1510,7 +1510,7 @@ pub struct StoragePorProofDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by `/v1/sorafs/storage/por-verdict`.
+/// JSON payload accepted by `/v2/sorafs/storage/por-verdict`.
 pub struct StoragePorVerdictDto {
     /// Base64-encoded Norito PoR verdict payload.
     pub verdict_b64: String,
@@ -1518,7 +1518,7 @@ pub struct StoragePorVerdictDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload returned by `/v1/sorafs/storage/state`.
+/// JSON payload returned by `/v2/sorafs/storage/state`.
 pub struct StorageStateResponseDto {
     /// Total bytes currently stored on disk.
     pub bytes_used: u64,
@@ -1546,7 +1546,7 @@ pub struct StorageStateResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize)]
-/// Provider-level payload returned by `/v1/sorafs/por/ingestion/{manifest}`.
+/// Provider-level payload returned by `/v2/sorafs/por/ingestion/{manifest}`.
 pub struct PorIngestionProviderStatusDto {
     /// Hex-encoded provider identifier.
     pub provider_id_hex: String,
@@ -1568,7 +1568,7 @@ pub struct PorIngestionProviderStatusDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize)]
-/// JSON payload returned by `/v1/sorafs/por/ingestion/{manifest}`.
+/// JSON payload returned by `/v2/sorafs/por/ingestion/{manifest}`.
 pub struct PorIngestionStatusResponseDto {
     /// Hex-encoded manifest digest.
     pub manifest_digest_hex: String,
@@ -1578,7 +1578,7 @@ pub struct PorIngestionStatusResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload returned by `/v1/sorafs/storage/manifest/{manifest_id_hex}`.
+/// JSON payload returned by `/v2/sorafs/storage/manifest/{manifest_id_hex}`.
 pub struct StorageManifestResponseDto {
     /// Hex-encoded manifest identifier.
     pub manifest_id_hex: String,

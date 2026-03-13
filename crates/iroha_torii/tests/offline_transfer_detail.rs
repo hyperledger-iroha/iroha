@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/transfers/{bundle_id_hex}` endpoint.
+//! Integration tests for the `/v2/offline/transfers/{bundle_id_hex}` endpoint.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -69,7 +69,7 @@ struct Fixtures {
 #[tokio::test]
 async fn offline_transfer_detail_returns_bundle() {
     let harness = build_harness();
-    let uri = format!("/v1/offline/transfers/{}", harness.fixtures.bundle_hex);
+    let uri = format!("/v2/offline/transfers/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -108,7 +108,7 @@ async fn offline_transfer_detail_returns_bundle() {
 #[tokio::test]
 async fn offline_settlement_detail_alias_returns_bundle() {
     let harness = build_harness();
-    let uri = format!("/v1/offline/settlements/{}", harness.fixtures.bundle_hex);
+    let uri = format!("/v2/offline/settlements/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -135,7 +135,7 @@ async fn offline_settlement_detail_alias_returns_bundle() {
 async fn offline_transfer_detail_returns_404_for_missing_bundle() {
     let harness = build_harness();
     let missing_hex = hex::encode(Hash::new(b"missing").as_ref());
-    let uri = format!("/v1/offline/transfers/{missing_hex}");
+    let uri = format!("/v2/offline/transfers/{missing_hex}");
 
     let resp = harness
         .app
@@ -170,7 +170,7 @@ async fn offline_settlement_detail_alias_includes_rejected_reason() {
     tx.apply();
     block.commit().expect("commit rejected settlement");
 
-    let uri = format!("/v1/offline/settlements/{rejected_bundle_hex}");
+    let uri = format!("/v2/offline/settlements/{rejected_bundle_hex}");
     let resp = harness
         .app
         .clone()

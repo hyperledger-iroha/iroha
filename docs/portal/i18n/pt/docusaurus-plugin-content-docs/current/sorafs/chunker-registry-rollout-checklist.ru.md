@@ -75,7 +75,7 @@ Passo a passo de Подробный см. в [manual de manifesto de preparaçã
    usado em `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifique quais provedores de anúncios usam a API de descoberta:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Programar manifesto/plano de endpoints com cabeçalhos de governança:
    ```bash

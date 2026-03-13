@@ -56,15 +56,15 @@ Sidebar_label: Дополнительная информация
 - Код `ReplicationOrderV1` демонстрирует отсутствие изменений в протоколе SLA. Выполнение задания. Валидаторы обрабатывают чанкеры, установленные в Дании, крайний срок, установленный в Torii в конце года. بابتلاع الأمر.【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` для моментальных снимков (GiB время безотказной работы/PoR) Он сказал, что в фильме "Улыбается" и "Нет" 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - توفر helpers المشتركة (`CapacityMetadataEntry` و`PricingScheduleV1` ومدققات полоса/назначение/SLA) Используйте CI для последующих инструментов и создайте файл.【crates/sorafs_manifest/src/capacity.rs:230】
-- Снимок `PinProviderRegistry`, полученный при помощи `/v1/sorafs/capacity/state`, в режиме реального времени. Регистр комиссий Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- Снимок `PinProviderRegistry`, полученный при помощи `/v2/sorafs/capacity/state`, в режиме реального времени. Регистр комиссий Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Дэниел Уинстон Хэндс обрабатывает Энтони, Кэтрин Стэйд Лейн, Дэниэла Трэйна В 2007 году он был избран президентом США в 1999 году. CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Указано: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`. Технические характеристики указаны в разделе полезных данных Norito, в формате base64 blobs. وملخصات JSON حتى يتمكن المشغلون من تجهيز светильники لـ `/v1/sorafs/capacity/declare` и `/v1/sorafs/capacity/telemetry` وأوامر 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Справочные приспособления для `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Был установлен `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Указано: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`. Технические характеристики указаны в разделе полезных данных Norito, в формате base64 blobs. وملخصات JSON حتى يتمكن المشغلون من تجهيز светильники لـ `/v2/sorafs/capacity/declare` и `/v2/sorafs/capacity/telemetry` وأوامر 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Справочные приспособления для `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Был установлен `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم
 
 | المهمة | Владелец(и) | ملاحظات |
 |------|----------|-------|
-| Загрузите Torii в `/v1/sorafs/capacity/declare` и `/v1/sorafs/capacity/telemetry` и `/v1/sorafs/capacity/orders` в Norito JSON. | Torii Команда | محاكاة منطق التحقق؛ Добавьте помощники JSON Norito. |
+| Загрузите Torii в `/v2/sorafs/capacity/declare` и `/v2/sorafs/capacity/telemetry` и `/v2/sorafs/capacity/orders` в Norito JSON. | Torii Команда | محاكاة منطق التحقق؛ Добавьте помощники JSON Norito. |
 | Получите снимки экрана `CapacityDeclarationV1` и метаданные, а также оркестратор и шлюз. | Рабочая группа по инструментам/команда оркестраторов | تمديد `provider_metadata` بمراجع السعة حتى يحترم, забив гол на переулке. |
 | Обеспечивает работу оркестратора/шлюза с назначением и аварийным переключением. | Команда Networking TL/Gateway | Создатель табло создан для создания табло. |
 | Используйте CLI: выберите `sorafs_cli`, `capacity declare` и `capacity telemetry` и `capacity orders import`. | Инструментальная рабочая группа | Сохранить JSON-табло + табло. |
@@ -85,7 +85,7 @@ Sidebar_label: Дополнительная информация
 | В случае с игроками: Платные игры + Бонусные выплаты по XOR, Создан бухгалтерский учетный журнал, созданный в 2007 году. | Команда казначейства/хранилища | التوصيل إلى Deal Engine / Экспорт казначейских обязательств. |
 | Создание информационных панелей/оповещений لصحة الميترينغ (прием невыполненной работы, обработка невыполненных задач). | Наблюдаемость | Используется Grafana для SF-6/SF-7. |
 
-- Введите Torii для `/v1/sorafs/capacity/telemetry` и `/v1/sorafs/capacity/state` (JSON + Norito) для создания файла. Снимки фотографий, сделанные в Лос-Анджелесе, в журнале "Lلمراجعين استرجاع" 【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Введите Torii для `/v2/sorafs/capacity/telemetry` и `/v2/sorafs/capacity/state` (JSON + Norito) для создания файла. Снимки фотографий, сделанные в Лос-Анджелесе, в журнале "Lلمراجعين استرجاع" 【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - Включите `PinProviderRegistry`, чтобы установить конечную точку конечной точки. Запуск CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) для проверки/выключения хеширования Псевдоним Тэтчера.
 - Снимки снимков экрана для `CapacityTelemetrySnapshot` Снимок снимка `metering`, экспорт Prometheus Установите флажок Grafana для `docs/source/grafana_sorafs_metering.json`. Запись GiB-hour и nano-SORA для проверки SLA в режиме реального времени. الحقيقي.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - Для сглаживания замера экспозиции, моментального снимка `smoothed_gib_hours` и `smoothed_por_success_bps`, который можно увидеть в разделе «Сглаживание экспозамера». Напишите письмо EMA, чтобы узнать больше о том, как это сделать. выплаты.【crates/sorafs_node/src/metering.rs:401】
@@ -153,7 +153,7 @@ Sidebar_label: Дополнительная информация
 
 ### Регистрация поставщика и дымовые тесты на выходе
 - Отображение артефактов в режиме `sorafs_manifest_stub capacity ...` и вызове CLI. Зарегистрируйтесь (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Установите Torii (`/v1/sorafs/capacity/declare`) для `/v1/sorafs/capacity/state` и установите Grafana. Это приложение создано для `docs/source/sorafs/capacity_onboarding_runbook.md`.
+- Установите Torii (`/v2/sorafs/capacity/declare`) для `/v2/sorafs/capacity/state` и установите Grafana. Это приложение создано для `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف артефакты الموقعة ومخرجات согласования داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 
 ## الاعتماديات والتسلسل1. إكمال SF-2b (правила приема) — торговая площадка в Нью-Йорке.

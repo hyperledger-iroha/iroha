@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    `torii.sorafs.discovery.admission.envelopes_dir` 引用的目錄。
 3. 驗證提供商廣告是否通過發現 API 傳播：
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. 使用治理標頭練習清單/計劃端點：
    ```bash

@@ -36,7 +36,7 @@ DA 摄取管道现在强制执行确定性保留目标
 | _默认（所有其他类）_ | 6 小时 | 30 天 | 3 | `warm` | `da.default` |
 
 这些值嵌入在 `torii.da_ingest.replication_policy` 中并应用于
-所有 `/v1/da/ingest` 提交内容。 Torii 使用强制重写清单
+所有 `/v2/da/ingest` 提交内容。 Torii 使用强制重写清单
 保留配置文件并在调用者提供不匹配的值时发出警告，以便
 运营商可以检测过时的 SDK。
 
@@ -158,6 +158,6 @@ SoraFS 可以自动重新复制不合规的 blob。
    和 PDP 证据。
 
 回归覆盖范围位于 `integration_tests/tests/da/replication_policy.rs` 中；
-该套件向 `/v1/da/ingest` 提交不匹配的保留策略并验证
+该套件向 `/v2/da/ingest` 提交不匹配的保留策略并验证
 获取的清单公开强制配置文件而不是调用者
 意图。

@@ -83,7 +83,7 @@ POR/POTR درخواست۔
 | `sorafs_node_por_failure_total` | کاؤنٹر | `provider_id` | ناکام پور نمونوں کے لئے سنگل کاؤنٹر۔ |
 | `torii_sorafs_storage_bytes_*` ، `torii_sorafs_storage_por_*` | گیج | `provider` | استعمال شدہ بائٹس ، قطار کی گہرائی ، اور چلانے والے پور کاؤنٹرز کے لئے Prometheus موجودہ میٹرکس۔ |
 | `torii_sorafs_capacity_*` ، `torii_sorafs_uptime_bps` ، `torii_sorafs_por_bps` | گیج | `provider` | فراہم کنندہ صلاحیت کی کامیابی/تیاری کا ڈیٹا صلاحیت کے پینل میں ظاہر ہوتا ہے۔ |
-| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | جب "پور اسٹالز" پینل/الرٹ فیڈ کے لئے `/v1/sorafs/por/ingestion/{manifest}` سے استفسار کیا جاتا ہے تو بیک بلاگ کی گہرائی کے علاوہ مجموعی ناکامی کاؤنٹرز برآمد ہوتے ہیں۔ |
+| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | جب "پور اسٹالز" پینل/الرٹ فیڈ کے لئے `/v2/sorafs/por/ingestion/{manifest}` سے استفسار کیا جاتا ہے تو بیک بلاگ کی گہرائی کے علاوہ مجموعی ناکامی کاؤنٹرز برآمد ہوتے ہیں۔ |
 
 ### بروقت بازیافت (POTR) اور SLA طبقات کا ثبوت
 

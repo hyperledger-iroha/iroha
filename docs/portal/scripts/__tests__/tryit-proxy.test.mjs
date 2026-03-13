@@ -138,7 +138,7 @@ test('proxy preserves Norito binary payloads and Content-Type', async () => {
 
   const req = createMockRequest({
     method: 'POST',
-    url: '/proxy/v1/pipeline/submit',
+    url: '/proxy/v2/pipeline/submit',
     headers: {
       origin: 'http://localhost:3000',
       'content-type': 'application/x-norito',
@@ -153,7 +153,7 @@ test('proxy preserves Norito binary payloads and Content-Type', async () => {
   assert.equal(res.statusCode, 202);
   assert.equal(res.getHeader('x-request-id'), 'nrpc-1');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://torii.example/v1/pipeline/submit');
+  assert.equal(calls[0].url, 'https://torii.example/v2/pipeline/submit');
   assert.equal(calls[0].options.headers.get('content-type'), 'application/x-norito');
   assert(Buffer.isBuffer(calls[0].options.body), 'body must be forwarded as Buffer');
   assert.deepEqual(calls[0].options.body, payload);
@@ -282,7 +282,7 @@ test('proxy enforces max body size and records telemetry', async () => {
 
   const req = createMockRequest({
     method: 'POST',
-    url: '/proxy/v1/pipeline/submit',
+    url: '/proxy/v2/pipeline/submit',
     headers: {
       origin: 'http://localhost:3000',
       'content-type': 'application/json',

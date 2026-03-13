@@ -24,7 +24,7 @@ conditions before enabling SM signing for production validators.
 - [ ] Latest deterministic test outputs captured:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
       Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] Torii `/v2/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
 
 # Engagement Execution
 

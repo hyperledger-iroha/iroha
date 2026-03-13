@@ -37,7 +37,7 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/proof_stream_evidence
 ```
 
-- The command POSTs to `--torii-url/v1/sorafs/proof/stream` with a Norito payload
+- The command POSTs to `--torii-url/v2/sorafs/proof/stream` with a Norito payload
   matching the `ProofStreamRequestV1` schema (digest, proof kind, nonce,
   and either `sample_count` or `deadline_ms` depending on the proof kind).
 - The request body supplies `manifest_digest_hex` (BLAKE3-256 of the canonical
@@ -62,8 +62,8 @@ sorafs_cli proof stream \
 
 ### PoTR HTTP headers
 
-- Clients issue ranged fetches (`GET /v1/sorafs/storage/car/{manifest}` or
-  `GET /v1/sorafs/storage/chunk/{manifest}/{digest}`) with
+- Clients issue ranged fetches (`GET /v2/sorafs/storage/car/{manifest}` or
+  `GET /v2/sorafs/storage/chunk/{manifest}/{digest}`) with
   `Sora-PoTR-Request: deadline=<value>;tier=<hot|warm|archive>` alongside the
   existing gateway headers. Optional `request-id=<hex>` and `trace-id=<hex>`
   parameters allow orchestrators to correlate retries deterministically.

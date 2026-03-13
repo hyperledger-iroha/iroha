@@ -103,7 +103,7 @@ nécessite une négociation explicite côté client (`Accept-Chunker` + `Accept-
 Déploiement de la télémétrie :
 
 - **Télémétrie de fetch de chunks** — le CLI Iroha `sorafs toolkit pack` émet des digests de chunks, des métadonnées CAR et des racines PoR pour ingestion dans les dashboards.
-- **Provider adverts** — les payloads d'adverts incluent des métadonnées de capacités et d'alias ; validez la couverture via `/v1/sorafs/providers` (ex., présence de la capacité `range`).
+- **Provider adverts** — les payloads d'adverts incluent des métadonnées de capacités et d'alias ; validez la couverture via `/v2/sorafs/providers` (ex., présence de la capacité `range`).
 - **Surveillance gateway** — les opérateurs doivent rapporter les couplages `Content-Chunker`/`Content-Digest` pour détecter les downgrades inattendus ; l'usage du bridge est censé tendre vers zéro avant la dépréciation.
 
 Politique de dépréciation : une fois qu'un profil successeur est ratifié, planifiez une fenêtre de double publication

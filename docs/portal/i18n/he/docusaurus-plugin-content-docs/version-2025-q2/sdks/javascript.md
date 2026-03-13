@@ -140,8 +140,8 @@ JS4/JS7.
 
 ## Iterable lists & pagination
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
+Pagination helpers mirror the Python SDK ergonomics for `/v2/accounts`,
+`/v2/domains`, `/v2/assets/definitions`, NFTs, balances, asset holders, and the
 account transaction history.
 
 ```ts
@@ -191,7 +191,7 @@ countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
 → certificate) so UI badges can warn operators whenever an allowance has
 <24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
+mirrors the REST filters exposed by `/v2/offline/allowances`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
 `requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
@@ -274,8 +274,8 @@ WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
 
 ## Explorer snapshots & QR payloads
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
+Explorer telemetry provides typed helpers for the `/v2/explorer/metrics` and
+`/v2/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
 `getExplorerAccountQr()` whenever you need I105 literals plus inline
@@ -383,7 +383,7 @@ from the fleet’s current limits.
 ### Connect WebSocket dialling
 
 `ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
+`/v2/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
 `http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
 implementation you supply. Browsers automatically reuse the global
 `WebSocket`. Node.js callers should pass a constructor such as `ws`:
@@ -465,7 +465,7 @@ standard `connect.queue_depth`, `connect.queue_overflow_total`, and
 
 ## Streaming watchers & event cursors
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
+`ToriiClient.streamEvents()` exposes `/v2/events/sse` as an async iterator with automatic
 retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
 Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
 resume a stream without skipping events when a process restarts.
@@ -504,7 +504,7 @@ for await (const event of torii.streamEvents({
   signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
   for a smoke test.
 - `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
+  `/v2/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
   iterator honours `Last-Event-ID` the same way.
 - See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
   env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
@@ -613,14 +613,14 @@ The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so opera
 prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
 Use the built-in helpers instead of building payloads by hand:
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
+1. `getSumeragiRbcSessions()` mirrors `/v2/sumeragi/rbc/sessions`, and
    `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
    (the integration suite falls back to it whenever
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
    plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
    reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
+3. `sampleRbcChunks()` POSTs the request to `/v2/sumeragi/rbc/sample`, returning chunk proofs
    and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
    the rest of your adoption evidence.
 4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors

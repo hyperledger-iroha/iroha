@@ -56,12 +56,12 @@ hisob-kitob natijalari bilan.
 Torii provayderlar foydalanish haqida xabar berishlari va boshqaruvni boshqarishlari uchun maxsus so'nggi nuqtalarni ochib beradi.
 buyurtma qilingan simlarsiz ishlash muddati:
 
-- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetriyasini qabul qiladi va qaytaradi
+- `POST /v2/sorafs/deal/usage` `DealUsageReport` telemetriyasini qabul qiladi va qaytaradi
   deterministik buxgalteriya natijalari (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` oqimli joriy oynani yakunlaydi
+- `POST /v2/sorafs/deal/settle` oqimli joriy oynani yakunlaydi
   natijada `DealSettlementRecord` base64 kodli `DealSettlementV1` bilan birga
   boshqaruv DAG nashri uchun tayyor.
-- Torii ning `/v1/events/sse` tasmasi endi `SorafsGatewayEvent::DealUsage`ni efirga uzatadi
+- Torii ning `/v2/events/sse` tasmasi endi `SorafsGatewayEvent::DealUsage`ni efirga uzatadi
   har bir foydalanish topshirig'ini jamlovchi yozuvlar (davr, o'lchangan GiB-soatlar, chipta
   hisoblagichlar, deterministik to'lovlar), `SorafsGatewayEvent::DealSettlement`
   kanonik hisob-kitob kitobi snapshotini o'z ichiga olgan yozuvlar va

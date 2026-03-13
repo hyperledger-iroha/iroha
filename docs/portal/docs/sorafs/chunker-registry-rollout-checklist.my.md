@@ -74,7 +74,7 @@ translator: machine-google-reviewed
    `torii.sorafs.discovery.admission.envelopes_dir` မှကိုးကားထားသောလမ်းညွှန်။
 3. ရှာဖွေတွေ့ရှိမှု API မှတစ်ဆင့် ပံ့ပိုးပေးသော ကြော်ငြာများ ပျံ့နှံ့နေကြောင်း အတည်ပြုပါ-
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. အုပ်ချုပ်မှုဆိုင်ရာ ခေါင်းစီးများဖြင့် ဖော်ပြခြင်း/အစီအစဥ် အဆုံးအချက်များကို လေ့ကျင့်ပါ-
    ```bash

@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 Уг гарц нь одоо нэгээс нэгийг нь харуулдаг бетонон JSON дугтуйг ил гаргаж байна
 `crates/iroha_data_model::fraud`-д хэрэгжсэн Norito төрлүүд:
 
-- **Эрсдэлийн хэмжээ** – `POST /v1/fraud/query` нь `RiskQuery` схемийг хүлээн зөвшөөрдөг:
+- **Эрсдэлийн хэмжээ** – `POST /v2/fraud/query` нь `RiskQuery` схемийг хүлээн зөвшөөрдөг:
   - `query_id` (`[u8; 32]`, зургаан өнцөгт кодлогдсон)
   - `subject` (`AccountId`, каноник I105 үсэг; нэмэлт `@<domain>` зөвлөмж эсвэл бусад нэр)
   - `operation` (`RiskOperation`-д тохирох тоон шошготой; JSON `type`
@@ -94,14 +94,14 @@ translator: machine-google-reviewed
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; `tenant_id`, нэмэлт `session_id`,
     нэмэлт `reason`)
-- **Эрсдэлийн шийдвэр** – `POST /v1/fraud/assessment` нь
+- **Эрсдэлийн шийдвэр** – `POST /v2/fraud/assessment` нь
   `FraudAssessment` ачаалал (засаглалын экспортод мөн тусгагдсан):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` дугаар), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }` массив)
   - `generated_at_ms`
   - `signature` (заавал биш base64 Norito кодлогдсон үнэлгээг боох)
-- **Засаглалын экспорт** – `GET /v1/fraud/governance/export` нь буцаана
+- **Засаглалын экспорт** – `GET /v2/fraud/governance/export` нь буцаана
   `governance` функц идэвхжсэн үед `GovernanceExport` бүтэц, багц
   идэвхтэй параметрүүд, хамгийн сүүлийн үеийн хууль тогтоомж, загвар хувилбар, бодлогын тойм, болон
   `DecisionAggregate` гистограм.

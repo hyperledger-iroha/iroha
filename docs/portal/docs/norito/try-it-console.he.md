@@ -78,10 +78,10 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 1. צרו מטען `.norito` עם ה-CLI או באמצעות הקטעים המתוארים ב-[quickstart של Norito](./quickstart.md). הפרוקסי מעביר גופי `application/x-norito` ללא שינוי, כך שתוכלו להשתמש באותו ארטיפקט שהייתם שולחים עם `curl`.
 2. פתחו `/reference/torii-rapidoc` (מועדף למטענים בינאריים) או `/reference/torii-swagger`.
 3. בחרו את ה-snapshot הרצוי של Torii מהרשימה הנפתחת. ה-snapshots חתומים; הפאנל מציג את הדיג'סט של המניפסט שנרשם ב-`static/openapi/manifest.json`.
-4. בחרו את סוג התוכן `application/x-norito` במגירת "Try it", לחצו **Choose File**, ובחרו את המטען שלכם. הפרוקסי משכתב את הבקשה ל-`/proxy/v1/pipeline/submit` ומסמן אותה עם `X-TryIt-Client=docs-portal-rapidoc`.
+4. בחרו את סוג התוכן `application/x-norito` במגירת "Try it", לחצו **Choose File**, ובחרו את המטען שלכם. הפרוקסי משכתב את הבקשה ל-`/proxy/v2/pipeline/submit` ומסמן אותה עם `X-TryIt-Client=docs-portal-rapidoc`.
 5. כדי להוריד תגובות Norito הגדירו `Accept: application/x-norito`. Swagger/RapiDoc מציגים את בורר הכותרות באותה מגירה ומזרימים את הבינארי בחזרה דרך הפרוקסי.
 
-לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v1/accounts/i105.../assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
+לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v2/accounts/i105.../assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
 
 ## פתרון תקלות
 

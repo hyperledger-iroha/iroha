@@ -74,13 +74,13 @@ Este é um exemplo de configuração do chunker de perfil, parâmetro de roteame
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Faça a descoberta de endpoint e instale-o, este anúncio será gerado com aliases canônicos:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Verifique se o `profile_aliases` substitui o `"sorafs.sf1@1.0.0"` pelo elemento principal.

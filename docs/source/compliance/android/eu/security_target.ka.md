@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | გაყალბებული კონფიგურაცია ვლინდება | `ClientConfig` ამოწმებს მანიფესტებს (ჰეში + სქემა) გამოყენებამდე და აღრიცხავს უარყოფილ გადატვირთვებს `android.telemetry.config.reload`-ის საშუალებით. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | ხელმოწერის გასაღებების კომპრომისი | StrongBox-ისთვის მოთხოვნილი პოლიტიკა, ატესტაციის აღკაზმულობა და მოწყობილობის მატრიცის აუდიტი განსაზღვრავს დრიფტს; თითო ინციდენტზე დოკუმენტირებული უგულებელყოფა. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | PII გაჟონვა ტელემეტრიაში | Blake2b-ის ჰეშირებულ ავტორიტეტებს, თაიგულებში მოთავსებული მოწყობილობების პროფილები, ოპერატორის გამოტოვება, უგულებელყოფა ჟურნალი. | `docs/source/sdk/android/telemetry_redaction.md`; Playbook §8-ის მხარდაჭერა. |
-| გაიმეორეთ ან დააქვეითეთ Torii RPC | `/v1/pipeline` მოთხოვნის შემქმნელი ახორციელებს TLS დამაგრებას, ხმაურის არხის პოლიტიკას და ხელახლა ცდის ბიუჯეტებს ჰეშირებული ავტორიტეტის კონტექსტში. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (დაგეგმილი). |
+| გაიმეორეთ ან დააქვეითეთ Torii RPC | `/v2/pipeline` მოთხოვნის შემქმნელი ახორციელებს TLS დამაგრებას, ხმაურის არხის პოლიტიკას და ხელახლა ცდის ბიუჯეტებს ჰეშირებული ავტორიტეტის კონტექსტში. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (დაგეგმილი). |
 | ხელმოუწერელი ან არარეპროდუცირებადი რელიზები | CycloneDX SBOM + Sigstore ატესტაციები შემოსაზღვრულია AND6 სიით; გამოშვების RFC-ები მოითხოვს მტკიცებულებებს `docs/source/release/provenance/android/`-ში. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | ინციდენტის არასრული დამუშავება | Runbook + playbook განსაზღვრავს გადაფარვას, ქაოსის წვრთნებს და ესკალაციის ხეს; ტელემეტრიის უგულებელყოფა მოითხოვს ხელმოწერილი Norito მოთხოვნებს. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 წვდომის კონტროლი | StrongBox-ის წესები + უგულებელყოფს სამუშაო პროცესს, რომელიც მოითხოვს ხელმოწერილი Norito არტეფაქტებს. |
 | 7.5 კრიპტოგრაფიული კონტროლი | გასაღების გენერირების, შენახვისა და ატესტაციის მოთხოვნები AND2-დან (გასაღების მართვის სახელმძღვანელო). |
 | 7.6 საოპერაციო უსაფრთხოება | ტელემეტრიის ჰეშირება, ქაოსის რეპეტიციები, ინციდენტზე რეაგირება და მტკიცებულებების გამოშვება. |
-| 7.7 საკომუნიკაციო უსაფრთხოება | `/v1/pipeline` TLS პოლიტიკა + ჰეშირებული ავტორიტეტები (ტელემეტრიის რედაქციის დოკუმენტი). |
+| 7.7 საკომუნიკაციო უსაფრთხოება | `/v2/pipeline` TLS პოლიტიკა + ჰეშირებული ავტორიტეტები (ტელემეტრიის რედაქციის დოკუმენტი). |
 | 7.8 სისტემის შეძენა / განვითარება | რეპროდუცირებადი Gradle-ის კონსტრუქციები, SBOM-ები და წარმოშობის კარიბჭეები AND5/AND6 გეგმებში. |
 | 7.9 მიმწოდებელთან ურთიერთობა | Buildkite + Sigstore ატესტაციები ჩაწერილი მესამე მხარის დამოკიდებულების SBOM-ებთან ერთად. |
 | 7.10 ინციდენტების მართვა | Runbook/Playbook-ის ესკალაცია, აღრიცხვის უგულებელყოფა, ტელემეტრიის წარუმატებლობის მრიცხველები. |

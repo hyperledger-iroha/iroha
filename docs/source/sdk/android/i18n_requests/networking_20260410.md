@@ -7,12 +7,12 @@
 **Source doc:** `docs/source/sdk/android/networking.md`  
 **Locales required:** Japanese (`networking.ja.md`), Hebrew (`networking.he.md`)  
 **Owner:** Android Networking TL (Elena Morita) + Docs/DevRel Manager  
-**Due dates:** JP by 2026-04-16 (post-NRPC diff digest); HE review window opens 2026-04-26 once Torii `/v1/pipeline` parity is signed off.  
-**Roadmap linkage:** AND5 & AND4 (shared `/v1/pipeline` guidance + NRPC readiness)
+**Due dates:** JP by 2026-04-16 (post-NRPC diff digest); HE review window opens 2026-04-26 once Torii `/v2/pipeline` parity is signed off.  
+**Roadmap linkage:** AND5 & AND4 (shared `/v2/pipeline` guidance + NRPC readiness)
 
 ## Scope Summary
 
-- Translate the updated networking guide sections covering `/v1/pipeline`
+- Translate the updated networking guide sections covering `/v2/pipeline`
   retries, Norito RPC parity, telemetry toggles, and the mock Torii harness.
 - Include the new “Telemetry + Chaos Hooks” appendix and ensure the Norito RPC
   glossary stays aligned with `docs/source/torii/nrpc_spec.md`.
@@ -49,7 +49,7 @@
 
 ## Notes
 
-- HE translation should wait for the `/v1/pipeline` parity “green” signal from
+- HE translation should wait for the `/v2/pipeline` parity “green” signal from
   Torii (tracked in the AND4 council notes).
 - If networking snippets change after translation starts, regenerate the
   screenshot bundle and rerun the commands above so artefacts stay consistent.

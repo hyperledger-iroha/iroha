@@ -31,7 +31,7 @@ Appuyez sur le fait que le pilha d'orquestration entre SF-6 est déjà implanté
 > **Voir aussi :** Le [Runbook des opérations de l'explorateur](./orchestrator-ops.md) approfondit les procédures d'exécution (capture du tableau de bord, bascules de déploiement dans les phases, restauration). Utilisez des ambas comme références dans le cadre des situations vécues.
 
 ## 1. Validation préalable1. **Confirmer les assurances de gouvernance.**
-   - Tous les candidats candidats ont développé des enveloppes publiques `ProviderAdvertV1` avec des charges utiles de capacité d'intervalle et d'ornements de flux. Validez via `/v1/sorafs/providers` et comparez avec les champs de capacité des espérés.
+   - Tous les candidats candidats ont développé des enveloppes publiques `ProviderAdvertV1` avec des charges utiles de capacité d'intervalle et d'ornements de flux. Validez via `/v2/sorafs/providers` et comparez avec les champs de capacité des espérés.
    - Des instantanés de télémétrie qui fournissent des taxes de latence/falha durent moins de 15 minutes avant chaque exécution canária.
 2. **Préparer une configuration.**
    - Conserver la configuration JSON de l'explorateur pour l'enregistrer dans les champs `iroha_config` :

@@ -129,7 +129,7 @@ Norito-RPC запрашивает прокси-сервер и канал OAuth,
 ### Try It console سے Norito payload بھیجیں
 
 1. `fixtures/norito_rpc/transfer_asset.norito` Крепежное приспособление для установки. یہ فائلیں raw Norito конверты ہیں؛ Кодирование **base64 или кодирование**۔
-2. Swagger в RapiDoc и в конечной точке NRPC (например, `POST /v1/pipeline/submit`) или селектор **Content-Type** в `application/x-norito`. کریں۔
+2. Swagger в RapiDoc и в конечной точке NRPC (например, `POST /v2/pipeline/submit`) или селектор **Content-Type** в `application/x-norito`. کریں۔
 3. Редактор тела запроса может быть **двоичным** или селектором (Swagger — «Файл» или RapiDoc — селектор «Двоичный/Файл») — `.norito`, например, `.norito`. کریں۔ Виджет байтов и прокси-сервера для потоковой передачи
 4. запросить بھیجیں۔ Если Torii `X-Iroha-Error-Code: schema_mismatch` не используется, вы можете выбрать конечную точку, которая будет использоваться. Для двоичных полезных данных используется `fixtures/norito_rpc/schema_hashes.json`, используется хеш-схема, встроенная сборка Torii. کرتا ہے۔
 
@@ -142,8 +142,8 @@ Norito-RPC запрашивает прокси-сервер и канал OAuth,
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
-````transaction_fixtures.manifest.json` - это входная информация о приспособлении, используемая `cargo xtask norito-rpc-fixtures`, возможность кодирования полезной нагрузки. Torii canary mode можно использовать для `curl`, попробуйте прокси-сервер (`https://docs.sora.example/proxy/v1/pipeline/submit`) и установите его. Тестирование инфраструктуры и виджеты портала
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+````transaction_fixtures.manifest.json` - это входная информация о приспособлении, используемая `cargo xtask norito-rpc-fixtures`, возможность кодирования полезной нагрузки. Torii canary mode можно использовать для `curl`, попробуйте прокси-сервер (`https://docs.sora.example/proxy/v2/pipeline/submit`) и установите его. Тестирование инфраструктуры и виджеты портала
 
 ## Операции наблюдения
 
@@ -155,7 +155,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Ручки окружения:

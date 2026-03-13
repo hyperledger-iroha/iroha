@@ -70,7 +70,7 @@ idarəetmənin nəzərdən keçirilməsinə hazırdır:
    hansı marşrutlaşdırma manifest (TRM) və nəsil pəncərəsi aktiv idi. Köməkçi
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    spool fayllarını kopyalayacaq, heşlər yayacaq və istəyə görə xülasəni imzalayacaq.
-2. Süzülən `/v1/status` çıxışını qeyd edin
+2. Süzülən `/v2/status` çıxışını qeyd edin
    `.telemetry.taikai_alias_rotations[]` və onu makara fayllarının yanında saxlayın.
    Rəyçilər bildirilən `manifest_digest_hex` və pəncərə sərhədlərini müqayisə edirlər
    kopyalanan makara vəziyyəti.

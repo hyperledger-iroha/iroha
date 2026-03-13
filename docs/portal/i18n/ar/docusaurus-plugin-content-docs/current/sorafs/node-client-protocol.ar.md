@@ -62,13 +62,13 @@ translation_last_reviewed: 2026-02-07
 
 تقبل البوابات طلبات HTTP حتمية احترام بيانات الإعلانات.
 
-###`GET /v1/sorafs/storage/car/{manifest_id}`
+###`GET /v2/sorafs/storage/car/{manifest_id}`
 
 | المتطلب | التفاصيل |
 |---------|---------|
 | **العناوين** | `Range` (نافذة واحدة مصطفة مع إزاحات القادة)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، و`X-SoraFS-Stream-Token` base64. |
 | **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، جاهز لإعادة إرسال الرموز/الرمز المميز. |
-| **أوضاع الفشل** | `416` للنطاقات غير المصطفة، `401` للرموز الناطق/غير الصالحة، `429` عند تجاوز ميزانيات الدفق/البايت. |###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+| **أوضاع الفشل** | `416` للنطاقات غير المصطفة، `401` للرموز الناطق/غير الصالحة، `429` عند تجاوز ميزانيات الدفق/البايت. |###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلبة شريحة واحدة بنفس الرؤوس بالإضافة إلى هضم حتمي للشريحة. مفيد مرة أخرى
 المحاولة أو تنزيل الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
@@ -114,11 +114,11 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` تطبع نقاط REST
   الخاصة بسجل الدبابيس وتطبع Norito JSON Raw مع شهادة الكتل لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان البيانات
+- `iroha app sorafs storage pin` و`torii /v2/sorafs/pin/register` يقبلان البيانات
   بنمط Norito أو JSON مع إثباتات اختيارية للـ alias والـ Successor؛ لها البراهين
   المشوهة إلى `400`، وتظهر البراهين القديمة `503` مع `Warning: 110`، بينما
   البراهين كاملة تمامًا `412`.
-- نقاط REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
+- نقاط REST (`/v2/sorafs/pin`، `/v2/sorafs/aliases`، `/v2/sorafs/replication`)
   تتضمن الهياكل التصديق حتى يبدأ العملاء في التحقق من البيانات مقابل الأحدث
   رؤوس الكتل قبل التنفيذ.
 

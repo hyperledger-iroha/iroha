@@ -22,7 +22,7 @@ description: Мониторинг и triage Pin Registry SoraFS и метрик 
 
 ## Обзор
 
-Этот runbook описывает, как мониторить и выполнять triage Pin Registry SoraFS и его соглашения об уровне сервиса (SLA) для репликации. Метрики поступают из `iroha_torii` и экспортируются через Prometheus под namespace `torii_sorafs_*`. Torii опрашивает состояние registry каждые 30 секунд в фоне, поэтому dashboards остаются актуальными даже когда никто из операторов не запрашивает endpoints `/v1/sorafs/pin/*`. Импортируйте подготовленный dashboard (`docs/source/grafana_sorafs_pin_registry.json`) для готового layout Grafana, который напрямую соответствует разделам ниже.
+Этот runbook описывает, как мониторить и выполнять triage Pin Registry SoraFS и его соглашения об уровне сервиса (SLA) для репликации. Метрики поступают из `iroha_torii` и экспортируются через Prometheus под namespace `torii_sorafs_*`. Torii опрашивает состояние registry каждые 30 секунд в фоне, поэтому dashboards остаются актуальными даже когда никто из операторов не запрашивает endpoints `/v2/sorafs/pin/*`. Импортируйте подготовленный dashboard (`docs/source/grafana_sorafs_pin_registry.json`) для готового layout Grafana, который напрямую соответствует разделам ниже.
 
 ## Справочник метрик
 
@@ -123,7 +123,7 @@ groups:
 
 1. **Определить причину**
    - Если пропуски SLA растут, а backlog остается низким, сосредоточьтесь на производительности providers (сбои PoR, поздние завершения).
-   - Если backlog растет при стабильных пропусках, проверьте admission (`/v1/sorafs/pin/*`), чтобы подтвердить manifests, ожидающие утверждения совета.
+   - Если backlog растет при стабильных пропусках, проверьте admission (`/v2/sorafs/pin/*`), чтобы подтвердить manifests, ожидающие утверждения совета.
 2. **Проверить статус providers**
    - Запустите `iroha app sorafs providers list` и убедитесь, что заявленные возможности соответствуют требованиям репликации.
    - Проверьте gauges `torii_sorafs_capacity_*`, чтобы подтвердить provisioned GiB и успех PoR.
@@ -144,7 +144,7 @@ groups:
 2. **Dry-run в staging**
    - Разверните изменение конфигурации в staging-кластере, который отражает топологию продакшена.
    - Запустите `cargo xtask sorafs-pin-fixtures`, чтобы убедиться, что канонические alias fixtures по-прежнему декодируются и проходят round-trip; любое несовпадение означает upstream drift, который нужно устранить первым.
-   - Прогоните endpoints `/v1/sorafs/pin/{digest}` и `/v1/sorafs/aliases` с синтетическими proof, покрывающими случаи fresh, refresh-window, expired и hard-expired. Проверьте HTTP коды, headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) и поля JSON тела относительно этого runbook.
+   - Прогоните endpoints `/v2/sorafs/pin/{digest}` и `/v2/sorafs/aliases` с синтетическими proof, покрывающими случаи fresh, refresh-window, expired и hard-expired. Проверьте HTTP коды, headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) и поля JSON тела относительно этого runbook.
 3. **Включить в продакшене**
    - Разверните новую конфигурацию в стандартное окно изменений. Сначала примените к Torii, затем перезапустите gateways/SDK сервисы после подтверждения новой политики в логах узла.
    - Импортируйте `docs/source/grafana_sorafs_pin_registry.json` в Grafana (или обновите существующие dashboards) и закрепите панели refresh alias cache в рабочем пространстве NOC.

@@ -1,6 +1,6 @@
 //! Minimal Iroha Connect app-side example.
 //!
-//! - Creates a session via Torii POST /v1/connect/session
+//! - Creates a session via Torii POST /v2/connect/session
 //! - Connects to WS with Authorization bearer token as app role
 //! - Uses `connect_sdk` to seal a `SignRequestTx` payload and send as a frame
 //! - Optional: send encrypted Close/Reject instead via --action close|reject
@@ -83,7 +83,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     println!("sid={sid} token_app={token_app} token_wallet={token_wallet}");
 
     let ws_url = format!(
-        "{}/v1/connect/ws?sid={sid}&role={role}",
+        "{}/v2/connect/ws?sid={sid}&role={role}",
         node.replace("http", "ws")
     );
     let mut request = ws_url.into_client_request()?;
@@ -131,7 +131,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
 
 #[cfg(feature = "connect")]
 async fn request_session(client: &Client, node: &str) -> anyhow::Result<SessionResp> {
-    let url = format!("{node}/v1/connect/session");
+    let url = format!("{node}/v2/connect/session");
     let body = client
         .post(url)
         .header("content-type", "application/json")

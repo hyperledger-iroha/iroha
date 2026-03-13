@@ -115,7 +115,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -135,9 +135,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- O helper emite um `POST /v1/sns/registrations` por request e aborta no primeiro
+- O helper emite um `POST /v2/sns/registrations` por request e aborta no primeiro
   erro HTTP. As respostas sao anexadas ao log como registros NDJSON.
-- `--poll-status` reconsulta `/v1/sns/registrations/{selector}` apos cada envio
+- `--poll-status` reconsulta `/v2/sns/registrations/{selector}` apos cada envio
   (ate `--poll-attempts`, default 5) para confirmar que o registro esta visivel.
   Forneca `--suffix-map` (JSON de `suffix_id` para valores "suffix") para que a
   ferramenta derive literais `{label}.{suffix}` para o polling.

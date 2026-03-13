@@ -53,7 +53,7 @@ SoraFS/SoraNet SN13-C чиглүүлэлтийн манифест (TRM) занг
 | `taikai_ingest_segment_latency_ms` | Кластер/стрим бүрт CMAF залгих хоцрогдлын гистограмм (зорилтот: p95<750ms, p99<900ms). |
 | `taikai_ingest_live_edge_drift_ms` | Кодлогч болон зангууны ажилчдын хоорондох шууд ирмэгийн шилжилт (хуудас p99>1.5 секундын 10 минутын турш). |
 | `taikai_ingest_segment_errors_total{reason}` | Шалтгаанаар алдаа тоологч (`decode`, `manifest_mismatch`, `lineage_replay`, …). Аливаа өсөлт нь `TaikaiIngestFailure`-ийг өдөөдөг. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v1/da/ingest` өөр нэрийн шинэ TRM-г хүлээн авах бүрд нэмэгддэг; Эргэлтийн хэмнэлийг баталгаажуулахын тулд `rate()` ашиглана уу. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v2/da/ingest` өөр нэрийн шинэ TRM-г хүлээн авах бүрд нэмэгддэг; Эргэлтийн хэмнэлийг баталгаажуулахын тулд `rate()` ашиглана уу. |
 | `/status → telemetry.taikai_alias_rotations[]` | `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, нотлох баримтын багцын цаг тэмдэг бүхий JSON агшин зураг. |
 | `taikai_viewer_*` (буфер, CEK-ийн эргэлтийн нас, PQ эрүүл мэнд, анхааруулга) | CEK эргэлт + PQ хэлхээг зангуу үед эрүүл хэвээр байлгахын тулд үзэгчдийн талын KPI-ууд. |
 

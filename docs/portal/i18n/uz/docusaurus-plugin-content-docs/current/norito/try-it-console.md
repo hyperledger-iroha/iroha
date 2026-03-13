@@ -74,10 +74,10 @@ OAuth o'zgaruvchilari mavjud bo'lganda, sinov maydoni sozlangan Auth serveri bo'
 1. [Norito tezkor boshlash](./quickstart.md) da tasvirlangan CLI yoki parchalar bilan `.norito` foydali yukini yarating. Proksi-server `application/x-norito` jismlarini o'zgarishsiz yo'naltiradi, shuning uchun siz `curl` bilan joylashtirgan bir xil artefaktni qayta ishlatishingiz mumkin.
 2. `/reference/torii-rapidoc` (ikkilik foydali yuklar uchun afzal) yoki `/reference/torii-swagger` ni oching.
 3. Ochiladigan menyudan kerakli Torii suratini tanlang. Suratlar imzolanadi; panel `static/openapi/manifest.json` da yozilgan manifest dayjestini ko'rsatadi.
-4. “Sinab ko‘ring” tortmasida `application/x-norito` kontent turini tanlang, **Faylni tanlang**-ni bosing va foydali yukingizni tanlang. Proksi-server so'rovni `/proxy/v1/pipeline/submit` ga qayta yozadi va uni `X-TryIt-Client=docs-portal-rapidoc` bilan teglaydi.
+4. “Sinab ko‘ring” tortmasida `application/x-norito` kontent turini tanlang, **Faylni tanlang**-ni bosing va foydali yukingizni tanlang. Proksi-server so'rovni `/proxy/v2/pipeline/submit` ga qayta yozadi va uni `X-TryIt-Client=docs-portal-rapidoc` bilan teglaydi.
 5. Norito javoblarini yuklab olish uchun `Accept: application/x-norito` ni o'rnating. Swagger/RapiDoc bir xil tortmada sarlavha selektorini ochib beradi va ikkilik faylni proksi-server orqali qaytaradi.
 
-Faqat JSON marshrutlari uchun oʻrnatilgan “Try it” sinov maydoni koʻpincha tezroq boʻladi: yoʻlni kiriting (masalan, `/v1/accounts/i105.../assets`), HTTP usulini tanlang, kerak boʻlganda JSON korpusini joylashtiring va sarlavhalar, davomiylik va foydali yuklarni satrda tekshirish uchun **Soʻrov yuborish** tugmasini bosing.
+Faqat JSON marshrutlari uchun oʻrnatilgan “Try it” sinov maydoni koʻpincha tezroq boʻladi: yoʻlni kiriting (masalan, `/v2/accounts/i105.../assets`), HTTP usulini tanlang, kerak boʻlganda JSON korpusini joylashtiring va sarlavhalar, davomiylik va foydali yuklarni satrda tekshirish uchun **Soʻrov yuborish** tugmasini bosing.
 
 ## Nosozliklarni bartaraf etish
 

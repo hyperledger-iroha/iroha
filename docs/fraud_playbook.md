@@ -71,7 +71,7 @@ upcoming implementations can plug into the ledger safely.
 The gateway now exposes concrete JSON envelopes that map one-to-one to the
 Norito types implemented in `crates/iroha_data_model::fraud`:
 
-- **Risk intake** – `POST /v1/fraud/query` accepts the `RiskQuery` schema:
+- **Risk intake** – `POST /v2/fraud/query` accepts the `RiskQuery` schema:
   - `query_id` (`[u8; 32]`, hex encoded)
   - `subject` (`AccountId`, domainless encoded literal; canonical I105 only (i105-default `sora...` rejected))
   - `operation` (tagged enum matching `RiskOperation`; the JSON `type`
@@ -82,14 +82,14 @@ Norito types implemented in `crates/iroha_data_model::fraud`:
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; carries `tenant_id`, optional `session_id`,
     optional `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` consumes the
+- **Risk decision** – `POST /v2/fraud/assessment` consumes the
   `FraudAssessment` payload (also mirrored in the governance exports):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` enum), `rule_outcomes`
     (array of `{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
   - `signature` (optional base64 wrapping the Norito-encoded assessment)
-- **Governance export** – `GET /v1/fraud/governance/export` returns the
+- **Governance export** – `GET /v2/fraud/governance/export` returns the
   `GovernanceExport` structure when the `governance` feature is enabled, bundling
   active parameters, the latest enactment, model version, policy digest, and the
   `DecisionAggregate` histogram.

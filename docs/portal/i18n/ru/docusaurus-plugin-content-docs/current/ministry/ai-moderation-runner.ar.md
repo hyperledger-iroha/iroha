@@ -176,7 +176,7 @@ struct AdversarialPerceptualVariantV1 {
   - مجلد `models/` بأوزان ONNX ممهورة بالهاش.
   - نقطة دخول `run_moderation.py` (أو مكافئ Rust) تُعرّف API HTTP/gRPC.
 - نشر الآثار إلى `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- يُشحن ثنائي runner كجزء من crate `sorafs_ai_runner`. يضمن خط البناء تضمين hash للmanifest داخل الثنائي (مكشوف عبر `/v1/info`).
+- يُشحن ثنائي runner كجزء من crate `sorafs_ai_runner`. يضمن خط البناء تضمين hash للmanifest داخل الثنائي (مكشوف عبر `/v2/info`).
 
 ## 8. القياس عن بُعد والملاحظة
 - مقاييس Prometheus:

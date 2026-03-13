@@ -1,6 +1,8 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
 
+use std::{collections::BinaryHeap, num::NonZeroU64};
+
 use eyre::Result;
 use iroha_config::parameters::{
     actual::{Pipeline as PipelineActual, Torii as ToriiActual},
@@ -13,8 +15,8 @@ use iroha_data_model::{
     },
     prelude::*,
     query::{
-        CommittedTransaction, QueryBox, QueryOutputBatchBox, QueryRequest, QueryResponse,
-        SingularQueryBox, SingularQueryOutputBox,
+        CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryRequest,
+        QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         dsl::{EvaluateSelector, HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
@@ -23,7 +25,11 @@ use iroha_data_model::{
 
 use crate::{
     prelude::ValidSingularQuery,
-    query::{cursor::ErasedQueryIterator, pagination::Paginate as _, store::LiveQueryStoreHandle},
+    query::{
+        cursor::ErasedQueryIterator,
+        pagination::Paginate as _,
+        store::{DeferredQueryContinuation, LiveQueryStoreHandle, PreparedQueryStart},
+    },
     smartcontracts::ValidQuery,
     state::{StateReadOnly, WorldReadOnly},
 };
@@ -59,15 +65,23 @@ fn ensure_query_registry_initialized() {
 
 /// Allows to generalize retrieving the metadata key for all the query output types
 pub trait SortableQueryOutput {
+    /// Type used for deterministic tie-breaking when metadata sort keys are equal.
+    type TiebreakKey: Ord + Send + Sync;
+
     /// Get the sorting key for the output, from metadata
     ///
     /// If the type doesn't have metadata or metadata key doesn't exist - return None
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json>;
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json>;
     /// Deterministic tie-breaker key for stable ordering across equal metadata keys.
     ///
-    /// Implementations should return canonical bytes that uniquely and stably
-    /// identify the item so that sorting remains stable across nodes.
-    fn tiebreak_key(&self) -> Vec<u8>;
+    /// Implementations should return a deterministic key that uniquely and
+    /// stably identifies the item so that sorting remains stable across nodes.
+    fn tiebreak_key(&self) -> Self::TiebreakKey;
+
+    /// Compare two items by their deterministic tie-break order.
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.tiebreak_key().cmp(&other.tiebreak_key())
+    }
 }
 
 /// Query execution limits derived from configuration snapshots.
@@ -111,164 +125,268 @@ impl Default for QueryLimits {
 }
 
 impl SortableQueryOutput for Account {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.metadata().get(key).cloned()
+    type TiebreakKey = AccountId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.metadata().get(key)
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        use iroha_data_model::state::CanonicalStateKey;
-        CanonicalStateKey::Account(self.id().clone()).to_canonical_bytes()
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for Domain {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.metadata().get(key).cloned()
+    type TiebreakKey = DomainId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.metadata().get(key)
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        use iroha_data_model::state::CanonicalStateKey;
-        CanonicalStateKey::Domain(self.id().clone()).to_canonical_bytes()
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for AssetDefinition {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.metadata().get(key).cloned()
+    type TiebreakKey = AssetDefinitionId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.metadata().get(key)
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        use iroha_data_model::state::CanonicalStateKey;
-        CanonicalStateKey::AssetDefinition(self.id().clone()).to_canonical_bytes()
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for Asset {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = AssetId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        use iroha_data_model::state::CanonicalStateKey;
-        CanonicalStateKey::Asset(self.id().clone()).to_canonical_bytes()
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for Nft {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.content().get(key).cloned()
+    type TiebreakKey = iroha_data_model::nft::NftId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.content().get(key)
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        use iroha_data_model::state::CanonicalStateKey;
-        CanonicalStateKey::Nft(self.id().clone()).to_canonical_bytes()
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for Role {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = iroha_data_model::role::RoleId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id.cmp(&other.id)
     }
 }
 
 impl SortableQueryOutput for RoleId {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Self;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
     }
 }
 impl SortableQueryOutput for CommittedTransaction {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
 }
 
 impl SortableQueryOutput for PeerId {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
 }
 
 impl SortableQueryOutput for Permission {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
 }
 
 impl SortableQueryOutput for OfflineAllowanceRecord {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.certificate.metadata.get(key).cloned()
+    type TiebreakKey = iroha_crypto::Hash;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.certificate.metadata.get(key)
     }
 
-    fn tiebreak_key(&self) -> Vec<u8> {
-        self.certificate_id().as_ref().to_vec()
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.certificate_id()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.certificate_id().cmp(&other.certificate_id())
     }
 }
 
 impl SortableQueryOutput for OfflineTransferRecord {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = iroha_crypto::Hash;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
 
-    fn tiebreak_key(&self) -> Vec<u8> {
-        self.transfer.bundle_id.as_ref().to_vec()
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.transfer.bundle_id
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.transfer.bundle_id.cmp(&other.transfer.bundle_id)
     }
 }
 
 impl SortableQueryOutput for OfflineCounterSummary {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = (iroha_crypto::Hash, AccountId);
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
 
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        (self.certificate_id, self.controller.clone())
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.certificate_id
+            .cmp(&other.certificate_id)
+            .then_with(|| self.controller.cmp(&other.controller))
     }
 }
 
 impl SortableQueryOutput for OfflineVerdictRevocation {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.metadata.get(key).cloned()
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.metadata.get(key)
     }
 
-    fn tiebreak_key(&self) -> Vec<u8> {
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.verdict_id
+            .cmp(&other.verdict_id)
+            .then_with(|| self.issuer.cmp(&other.issuer))
+            .then_with(|| self.revoked_at_ms.cmp(&other.revoked_at_ms))
+            .then_with(|| self.reason.cmp(&other.reason))
+            .then_with(|| self.note.cmp(&other.note))
     }
 }
 
 impl SortableQueryOutput for Trigger {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = TriggerId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
 impl SortableQueryOutput for TriggerId {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Self;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
     }
 }
 
 impl SortableQueryOutput for RepoAgreement {
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.collateral_leg().metadata().get(key).cloned()
+    type TiebreakKey = iroha_data_model::repo::RepoAgreementId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.collateral_leg().metadata().get(key)
     }
 
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self.id())
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
     }
 }
 
@@ -451,29 +569,42 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
 }
 
 impl SortableQueryOutput for iroha_data_model::block::SignedBlock {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
 }
 
 impl SortableQueryOutput for iroha_data_model::block::BlockHeader {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = Vec<u8>;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
     }
 }
 
 impl SortableQueryOutput for iroha_data_model::proof::ProofRecord {
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+    type TiebreakKey = iroha_data_model::proof::ProofId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
         None
     }
-    fn tiebreak_key(&self) -> Vec<u8> {
-        norito::codec::Encode::encode(self)
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id.cmp(&other.id)
     }
 }
 
@@ -497,6 +628,554 @@ where
     let (output, _processed_items) =
         apply_query_postprocessing_with_budget(iter, selector, params, limits, None)?;
     Ok(output)
+}
+
+fn compare_sorted_query_values<T: SortableQueryOutput>(
+    left_value: &T,
+    left_key: Option<&Json>,
+    right_value: &T,
+    right_key: Option<&Json>,
+    order: SortOrder,
+) -> core::cmp::Ordering {
+    use core::cmp::Ordering::*;
+
+    match (left_key, right_key) {
+        (None, None) => left_value.tiebreak_cmp(right_value),
+        (None, Some(_)) => Greater,
+        (Some(_), None) => Less,
+        (Some(left_key), Some(right_key)) => {
+            let primary = match order {
+                SortOrder::Asc => left_key.cmp(right_key),
+                SortOrder::Desc => right_key.cmp(left_key),
+            };
+            if primary == Equal {
+                left_value.tiebreak_cmp(right_value)
+            } else {
+                primary
+            }
+        }
+    }
+}
+
+fn compare_sorted_query_indices<T: SortableQueryOutput>(
+    left_index: usize,
+    right_index: usize,
+    values: &[Option<T>],
+    sort_keys: &[Option<Json>],
+    order: SortOrder,
+) -> core::cmp::Ordering {
+    compare_sorted_query_values(
+        values[left_index]
+            .as_ref()
+            .expect("sorted query item should be present"),
+        sort_keys[left_index].as_ref(),
+        values[right_index]
+            .as_ref()
+            .expect("sorted query item should be present"),
+        sort_keys[right_index].as_ref(),
+        order,
+    )
+}
+
+struct EphemeralSortedEntry<T> {
+    value: T,
+    sort_key: Option<Json>,
+    order: SortOrder,
+}
+
+impl<T: SortableQueryOutput> PartialEq for EphemeralSortedEntry<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == core::cmp::Ordering::Equal
+    }
+}
+
+impl<T: SortableQueryOutput> Eq for EphemeralSortedEntry<T> {}
+
+impl<T: SortableQueryOutput> PartialOrd for EphemeralSortedEntry<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: SortableQueryOutput> Ord for EphemeralSortedEntry<T> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        compare_sorted_query_values(
+            &self.value,
+            self.sort_key.as_ref(),
+            &other.value,
+            other.sort_key.as_ref(),
+            self.order,
+        )
+    }
+}
+
+const STREAMING_SORTED_PREFIX_LIMIT: usize = 4096;
+
+fn collect_ephemeral_sorted_prefix<I>(
+    iter: I,
+    key: &Name,
+    order: SortOrder,
+    keep: usize,
+    budget_items: Option<u64>,
+) -> Result<(Vec<I::Item>, u64), Error>
+where
+    I: Iterator,
+    I::Item: SortableQueryOutput,
+{
+    let mut count = 0_u64;
+    if keep == 0 {
+        for _ in iter {
+            count = count.saturating_add(1);
+            if budget_items.is_some_and(|limit| count > limit) {
+                return Err(Error::GasBudgetExceeded);
+            }
+        }
+        return Ok((Vec::new(), count));
+    }
+
+    let mut heap = BinaryHeap::with_capacity(keep);
+    for value in iter {
+        count = count.saturating_add(1);
+        if budget_items.is_some_and(|limit| count > limit) {
+            return Err(Error::GasBudgetExceeded);
+        }
+
+        let entry = EphemeralSortedEntry {
+            sort_key: value.get_metadata_sorting_key(key).cloned(),
+            value,
+            order,
+        };
+
+        if heap.len() < keep {
+            heap.push(entry);
+            continue;
+        }
+
+        let should_replace = heap
+            .peek()
+            .is_some_and(|worst| entry.cmp(worst) == core::cmp::Ordering::Less);
+        if should_replace {
+            let _ = heap.pop();
+            heap.push(entry);
+        }
+    }
+
+    let mut entries = heap.into_vec();
+    entries.sort_unstable();
+    Ok((
+        entries.into_iter().map(|entry| entry.value).collect(),
+        count,
+    ))
+}
+
+#[derive(Debug, Clone)]
+struct StoredSortedFastStartParams {
+    key: Name,
+    order: SortOrder,
+    fetch_size: NonZeroU64,
+    offset: usize,
+    offset_u64: u64,
+    limit: usize,
+    keep: usize,
+}
+
+fn stored_sorted_fast_start_params(
+    params: &QueryParams,
+    limits: QueryLimits,
+) -> Result<Option<StoredSortedFastStartParams>, Error> {
+    let fetch_size = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE);
+    if fetch_size.get() > limits.max_fetch_size {
+        return Err(Error::FetchSizeTooBig);
+    }
+
+    let Some(key) = params.sorting.sort_by_metadata_key.clone() else {
+        return Ok(None);
+    };
+    let offset_u64 = params.pagination.offset_value();
+    let offset = usize::try_from(offset_u64).unwrap_or(usize::MAX);
+    let limit = params.pagination.limit_value().map_or(usize::MAX, |limit| {
+        usize::try_from(limit.get()).unwrap_or(usize::MAX)
+    });
+    let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+    let keep = offset.saturating_add(limit.min(fetch_size_usize));
+    if keep > STREAMING_SORTED_PREFIX_LIMIT {
+        return Ok(None);
+    }
+
+    Ok(Some(StoredSortedFastStartParams {
+        key,
+        order: params.sorting.order.unwrap_or(SortOrder::Asc),
+        fetch_size,
+        offset,
+        offset_u64,
+        limit,
+        keep,
+    }))
+}
+
+fn prepare_stored_sorted_start<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    fast: StoredSortedFastStartParams,
+    budget_items: Option<u64>,
+) -> Result<PreparedQueryStart, Error>
+where
+    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    let StoredSortedFastStartParams {
+        key,
+        order,
+        fetch_size,
+        offset,
+        offset_u64,
+        limit,
+        keep,
+    } = fast;
+
+    let mut count = 0_u64;
+    let mut overflow_values = Vec::new();
+    let mut heap = BinaryHeap::with_capacity(keep);
+
+    for value in iter {
+        count = count.saturating_add(1);
+        if budget_items.is_some_and(|limit| count > limit) {
+            return Err(Error::GasBudgetExceeded);
+        }
+
+        if keep == 0 {
+            overflow_values.push(value);
+            continue;
+        }
+
+        let entry = EphemeralSortedEntry {
+            sort_key: value.get_metadata_sorting_key(&key).cloned(),
+            value,
+            order,
+        };
+
+        if heap.len() < keep {
+            heap.push(entry);
+            continue;
+        }
+
+        let should_replace = heap
+            .peek()
+            .is_some_and(|worst| entry.cmp(worst) == core::cmp::Ordering::Less);
+        if should_replace {
+            let dropped = heap
+                .pop()
+                .expect("heap contains an item when replacement is requested");
+            overflow_values.push(dropped.value);
+            heap.push(entry);
+        } else {
+            overflow_values.push(entry.value);
+        }
+    }
+
+    let total_after_pagination = usize::try_from(count)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(offset)
+        .min(limit);
+    let batch_len =
+        total_after_pagination.min(usize::try_from(fetch_size.get()).unwrap_or(usize::MAX));
+
+    let mut prefix_entries = heap.into_vec();
+    prefix_entries.sort_unstable();
+
+    let mut first_batch_values = Vec::with_capacity(batch_len);
+    let mut deferred_raw_values = Vec::with_capacity(overflow_values.len().saturating_add(offset));
+    for (index, entry) in prefix_entries.into_iter().enumerate() {
+        if index < offset {
+            deferred_raw_values.push(entry.value);
+        } else if first_batch_values.len() < batch_len {
+            first_batch_values.push(entry.value);
+        } else {
+            deferred_raw_values.push(entry.value);
+        }
+    }
+    deferred_raw_values.append(&mut overflow_values);
+
+    let selector_for_deferred = selector.clone();
+    let mut batch_iter =
+        ErasedQueryIterator::new(first_batch_values.into_iter(), selector, fetch_size);
+    let (first_batch, _next) = batch_iter.next_batch(0)?;
+
+    let remaining_items =
+        u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
+    if remaining_items == 0 {
+        return Ok(PreparedQueryStart {
+            first_batch,
+            remaining_items,
+            deferred_continuation: None,
+        });
+    }
+
+    let first_cursor = NonZeroU64::new(u64::try_from(batch_len).unwrap_or(u64::MAX))
+        .expect("non-empty first batch is required for continuation");
+    let continuation_limit =
+        NonZeroU64::new(remaining_items).expect("continuation limit must be non-zero");
+    let deferred_continuation =
+        DeferredQueryContinuation::new(first_cursor, remaining_items, move || {
+            let mut values = Vec::with_capacity(deferred_raw_values.len());
+            let mut sort_keys = Vec::with_capacity(deferred_raw_values.len());
+            for value in deferred_raw_values {
+                sort_keys.push(value.get_metadata_sorting_key(&key).cloned());
+                values.push(Some(value));
+            }
+
+            let pagination = iroha_data_model::query::parameters::Pagination {
+                offset: offset_u64,
+                limit: Some(continuation_limit),
+            };
+            ErasedQueryIterator::new_with_cursor(
+                IncrementalSortedValues::new(values, sort_keys, pagination, fetch_size, order),
+                selector_for_deferred,
+                fetch_size,
+                first_cursor.get(),
+            )
+        });
+
+    Ok(PreparedQueryStart {
+        first_batch,
+        remaining_items,
+        deferred_continuation: Some(deferred_continuation),
+    })
+}
+
+fn handle_iter_start_stored<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    gas_budget: Option<u64>,
+) -> Result<QueryOutput, Error>
+where
+    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    if let Some(fast) = stored_sorted_fast_start_params(params, limits)? {
+        let prepared = prepare_stored_sorted_start(iter, selector, fast, None)?;
+        return live_query_store.handle_iter_start_prepared(prepared, authority, gas_budget);
+    }
+
+    let batched = apply_query_postprocessing(iter, selector, params, limits)?;
+    live_query_store.handle_iter_start(batched, authority, gas_budget)
+}
+
+struct IncrementalSortedValues<T> {
+    values: Vec<Option<T>>,
+    sort_keys: Vec<Option<Json>>,
+    order_indices: Vec<usize>,
+    prepared: usize,
+    next: usize,
+    end: usize,
+    chunk_size: usize,
+    order: SortOrder,
+}
+
+impl<T: SortableQueryOutput> IncrementalSortedValues<T> {
+    fn new(
+        values: Vec<Option<T>>,
+        sort_keys: Vec<Option<Json>>,
+        pagination: iroha_data_model::query::parameters::Pagination,
+        chunk_size: NonZeroU64,
+        order: SortOrder,
+    ) -> Self {
+        let order_indices: Vec<_> = (0..values.len()).collect();
+        let next = usize::try_from(pagination.offset_value())
+            .unwrap_or(usize::MAX)
+            .min(order_indices.len());
+        let len = pagination
+            .limit_value()
+            .map_or(order_indices.len() - next, |limit| {
+                usize::try_from(limit.get())
+                    .unwrap_or(usize::MAX)
+                    .min(order_indices.len() - next)
+            });
+        let end = next.saturating_add(len);
+
+        Self {
+            values,
+            sort_keys,
+            order_indices,
+            prepared: 0,
+            next,
+            end,
+            chunk_size: usize::try_from(chunk_size.get())
+                .unwrap_or(usize::MAX)
+                .max(1),
+            order,
+        }
+    }
+
+    fn ensure_prepared(&mut self, required: usize) {
+        let required = required.min(self.end).min(self.order_indices.len());
+        if required <= self.prepared {
+            return;
+        }
+
+        let values = &self.values;
+        let sort_keys = &self.sort_keys;
+        let order = self.order;
+        let additional = required - self.prepared;
+        let tail = &mut self.order_indices[self.prepared..];
+        if additional < tail.len() {
+            tail.select_nth_unstable_by(additional - 1, |left, right| {
+                compare_sorted_query_indices(*left, *right, values, sort_keys, order)
+            });
+        }
+        tail[..additional].sort_by(|left, right| {
+            compare_sorted_query_indices(*left, *right, values, sort_keys, order)
+        });
+        self.prepared = required;
+    }
+}
+
+impl<T: SortableQueryOutput> Iterator for IncrementalSortedValues<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next >= self.end {
+            return None;
+        }
+
+        if self.next >= self.prepared {
+            self.ensure_prepared(self.next.saturating_add(self.chunk_size));
+        }
+
+        let value_index = self.order_indices[self.next];
+        self.next += 1;
+        Some(
+            self.values[value_index]
+                .take()
+                .expect("sorted query item should be present"),
+        )
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.end.saturating_sub(self.next);
+        (remaining, Some(remaining))
+    }
+}
+
+impl<T: SortableQueryOutput> ExactSizeIterator for IncrementalSortedValues<T> {
+    fn len(&self) -> usize {
+        self.end.saturating_sub(self.next)
+    }
+}
+
+fn apply_query_postprocessing_ephemeral_with_budget<I>(
+    iter: I,
+    selector: SelectorTuple<I::Item>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    budget_items: Option<u64>,
+) -> Result<(QueryOutput, u64), Error>
+where
+    I: Iterator<Item: SortableQueryOutput + Send + Sync + 'static>,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
+    QueryOutputBatchBox: From<Vec<I::Item>>,
+{
+    let batch_size = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE);
+    let max_fetch = limits.max_fetch_size;
+    if batch_size.get() > max_fetch {
+        return Err(Error::FetchSizeTooBig);
+    }
+
+    if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
+        let offset = usize::try_from(params.pagination.offset_value()).unwrap_or(usize::MAX);
+        let limit = params.pagination.limit_value().map_or(usize::MAX, |limit| {
+            usize::try_from(limit.get()).unwrap_or(usize::MAX)
+        });
+        let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
+        let order = params.sorting.order.unwrap_or(SortOrder::Asc);
+        let keep = offset.saturating_add(limit.min(fetch_size));
+
+        if keep <= STREAMING_SORTED_PREFIX_LIMIT {
+            let (values, count) =
+                collect_ephemeral_sorted_prefix(iter, key, order, keep, budget_items)?;
+            let total_after_pagination = usize::try_from(count)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(offset)
+                .min(limit);
+            let batch_len = total_after_pagination.min(fetch_size);
+            let batch_values: Vec<_> = values.into_iter().skip(offset).take(batch_len).collect();
+            let mut batch_iter =
+                ErasedQueryIterator::new(batch_values.into_iter(), selector, batch_size);
+            let (batch, _next) = batch_iter.next_batch(0)?;
+            let remaining_items =
+                u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
+            return Ok((QueryOutput::new(batch, remaining_items, None), count));
+        }
+
+        let mut count = 0_u64;
+        let mut values = Vec::new();
+        let mut sort_keys = Vec::new();
+        for value in iter {
+            count = count.saturating_add(1);
+            if budget_items.is_some_and(|limit| count > limit) {
+                return Err(Error::GasBudgetExceeded);
+            }
+            sort_keys.push(value.get_metadata_sorting_key(key).cloned());
+            values.push(Some(value));
+        }
+
+        let total_after_pagination = values.len().saturating_sub(offset).min(limit);
+        let batch_len = total_after_pagination.min(fetch_size);
+        let mut order_indices: Vec<_> = (0..values.len()).collect();
+
+        if batch_len > 0 {
+            let keep = offset.saturating_add(batch_len);
+            if keep < order_indices.len() {
+                order_indices.select_nth_unstable_by(keep - 1, |left, right| {
+                    compare_sorted_query_indices(*left, *right, &values, &sort_keys, order)
+                });
+                order_indices.truncate(keep);
+            }
+            order_indices.sort_by(|left, right| {
+                compare_sorted_query_indices(*left, *right, &values, &sort_keys, order)
+            });
+        }
+
+        let batch_values: Vec<_> = order_indices
+            .into_iter()
+            .skip(offset)
+            .take(batch_len)
+            .map(|index| {
+                values[index]
+                    .take()
+                    .expect("sorted query item should be present")
+            })
+            .collect();
+        let mut batch_iter =
+            ErasedQueryIterator::new(batch_values.into_iter(), selector, batch_size);
+        let (batch, _next) = batch_iter.next_batch(0)?;
+        let remaining_items =
+            u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
+        return Ok((QueryOutput::new(batch, remaining_items, None), count));
+    }
+
+    let (mut batched, processed_items) =
+        apply_query_postprocessing_with_budget(iter, selector, params, limits, budget_items)?;
+    let (batch, _next) = batched.next_batch(0)?;
+    Ok((
+        QueryOutput::new(batch, batched.remaining(), None),
+        processed_items,
+    ))
 }
 
 fn apply_query_postprocessing_with_budget<I>(
@@ -527,47 +1206,30 @@ where
     {
         // if sorting was requested, we need to retrieve all the results first
         let mut count = 0_u64;
-        let mut pairs: Vec<(Option<Json>, Vec<u8>, I::Item)> = Vec::new();
+        let mut values = Vec::new();
+        let mut sort_keys = Vec::new();
         for value in iter {
             count = count.saturating_add(1);
             if budget_items.is_some_and(|limit| count > limit) {
                 return Err(Error::GasBudgetExceeded);
             }
-            let key = value.get_metadata_sorting_key(key);
-            let tb = value.tiebreak_key();
-            pairs.push((key, tb, value));
+            sort_keys.push(value.get_metadata_sorting_key(key).cloned());
+            values.push(Some(value));
         }
-        // Stable sort by metadata value; missing keys always sort last.
         let order = params.sorting.order.unwrap_or(SortOrder::Asc);
-        pairs.sort_by(|(a_key, a_tb, _), (b_key, b_tb, _)| {
-            use core::cmp::Ordering::*;
-            match (a_key.as_ref(), b_key.as_ref()) {
-                (None, None) => a_tb.cmp(b_tb),
-                (None, Some(_)) => Greater, // `a` missing -> after `b`
-                (Some(_), None) => Less,    // `b` missing -> `a` first
-                (Some(a), Some(b)) => {
-                    let primary = match order {
-                        SortOrder::Asc => a.cmp(b),
-                        SortOrder::Desc => b.cmp(a),
-                    };
-                    if primary == Equal {
-                        // Ties: resolve by canonical tie-break key ascending
-                        a_tb.cmp(b_tb)
-                    } else {
-                        primary
-                    }
-                }
-            }
-        });
-
-        let output: Vec<_> = pairs
-            .into_iter()
-            .map(|(_, _, val)| val)
-            .paginate(params.pagination)
-            .collect();
 
         (
-            ErasedQueryIterator::new(output.into_iter(), selector, fetch_size),
+            ErasedQueryIterator::new(
+                IncrementalSortedValues::new(
+                    values,
+                    sort_keys,
+                    params.pagination,
+                    fetch_size,
+                    order,
+                ),
+                selector,
+                fetch_size,
+            ),
             count,
         )
     } else {
@@ -1023,15 +1685,16 @@ impl ValidQueryRequest {
                         // Execute the concrete ValidQuery with provided predicate
                         let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
 
-                        // Postprocess: sort/paginate/project and register a live iterator
-                        let batched = apply_query_postprocessing(
+                        // Postprocess and register a live iterator (or prepared fast-start).
+                        let output = handle_iter_start_stored(
                             iter,
                             erased.selector_cloned(),
                             params,
                             limits,
+                            live_query_store,
+                            authority,
+                            gas_budget,
                         )?;
-                        let output =
-                            live_query_store.handle_iter_start(batched, authority, gas_budget)?;
                         return Ok(Some(QueryResponse::Iterable(output)));
                     }
                     Ok(None)
@@ -1066,10 +1729,12 @@ impl ValidQueryRequest {
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let batched =
-                                    apply_query_postprocessing(iter, sel, params, limits)?;
-                                let output = live_query_store.handle_iter_start(
-                                    batched,
+                                let output = handle_iter_start_stored(
+                                    iter,
+                                    sel,
+                                    params,
+                                    limits,
+                                    live_query_store,
                                     authority,
                                     stored_cursor_budget,
                                 )?;
@@ -1093,10 +1758,12 @@ impl ValidQueryRequest {
                                         Error::Conversion("failed to decode query payload".into())
                                     })?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let batched =
-                                    apply_query_postprocessing(iter, sel, params, limits)?;
-                                let output = live_query_store.handle_iter_start(
-                                    batched,
+                                let output = handle_iter_start_stored(
+                                    iter,
+                                    sel,
+                                    params,
+                                    limits,
+                                    live_query_store,
                                     authority,
                                     stored_cursor_budget,
                                 )?;
@@ -1110,10 +1777,12 @@ impl ValidQueryRequest {
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let batched =
-                                    apply_query_postprocessing(iter, sel, params, limits)?;
-                                let output = live_query_store.handle_iter_start(
-                                    batched,
+                                let output = handle_iter_start_stored(
+                                    iter,
+                                    sel,
+                                    params,
+                                    limits,
+                                    live_query_store,
                                     authority,
                                     stored_cursor_budget,
                                 )?;
@@ -1255,9 +1924,12 @@ impl ValidQueryRequest {
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
                             let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                            let batched = apply_query_postprocessing(iter, sel, params, limits)?;
-                            let output = live_query_store.handle_iter_start(
-                                batched,
+                            let output = handle_iter_start_stored(
+                                iter,
+                                sel,
+                                params,
+                                limits,
+                                live_query_store,
                                 authority,
                                 stored_cursor_budget,
                             )?;
@@ -1363,8 +2035,10 @@ impl ValidQueryRequest {
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
                             let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                            let batched = apply_query_postprocessing(iter, sel, params, limits)?;
-                            let output = live_query_store.handle_iter_start_ephemeral(batched)?;
+                            let (output, _processed_items) =
+                                apply_query_postprocessing_ephemeral_with_budget(
+                                    iter, sel, params, limits, None,
+                                )?;
                             return Ok(QueryResponse::Iterable(output));
                         }};
                     }
@@ -1468,9 +2142,12 @@ impl ValidQueryRequest {
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
                             let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                            let batched = apply_query_postprocessing(iter, sel, params, limits)?;
-                            let output = live_query_store.handle_iter_start(
-                                batched,
+                            let output = handle_iter_start_stored(
+                                iter,
+                                sel,
+                                params,
+                                limits,
+                                live_query_store,
                                 authority,
                                 stored_cursor_budget,
                             )?;
@@ -2341,7 +3018,7 @@ impl ValidQueryRequest {
                     limits: QueryLimits,
                     budget_items: Option<u64>,
                     state: &impl StateReadOnly,
-                    live_query_store: &LiveQueryStoreHandle,
+                    _live_query_store: &LiveQueryStoreHandle,
                     _authority: &AccountId,
                     __stored_cursor_budget: Option<u64>,
                     decode: F,
@@ -2369,14 +3046,14 @@ impl ValidQueryRequest {
                         let iter = ValidQuery::execute(concrete, erased.predicate_cloned(), state)?;
 
                         // Postprocess: sort/paginate/project and return only the first batch (no cursor)
-                        let (batched, processed_items) = apply_query_postprocessing_with_budget(
-                            iter,
-                            erased.selector_cloned(),
-                            params,
-                            limits,
-                            budget_items,
-                        )?;
-                        let output = live_query_store.handle_iter_start_ephemeral(batched)?;
+                        let (output, processed_items) =
+                            apply_query_postprocessing_ephemeral_with_budget(
+                                iter,
+                                erased.selector_cloned(),
+                                params,
+                                limits,
+                                budget_items,
+                            )?;
                         return Ok(Some((QueryResponse::Iterable(output), processed_items)));
                     }
                     Ok(None)
@@ -2407,16 +3084,14 @@ impl ValidQueryRequest {
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
-                                let (batched, processed_items) =
-                                    apply_query_postprocessing_with_budget(
+                                let (output, processed_items) =
+                                    apply_query_postprocessing_ephemeral_with_budget(
                                         iter,
                                         sel,
                                         params,
                                         limits,
                                         budget_items,
                                     )?;
-                                let output =
-                                    live_query_store.handle_iter_start_ephemeral(batched)?;
                                 return Ok((QueryResponse::Iterable(output), processed_items));
                             }};
                             // For queries that always require a payload (e.g., FindPermissionsByAccountId)
@@ -2433,16 +3108,14 @@ impl ValidQueryRequest {
                                     Error::Conversion("missing or malformed query payload".into())
                                 })?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
-                                let (batched, processed_items) =
-                                    apply_query_postprocessing_with_budget(
+                                let (output, processed_items) =
+                                    apply_query_postprocessing_ephemeral_with_budget(
                                         iter,
                                         sel,
                                         params,
                                         limits,
                                         budget_items,
                                     )?;
-                                let output =
-                                    live_query_store.handle_iter_start_ephemeral(batched)?;
                                 return Ok((QueryResponse::Iterable(output), processed_items));
                             }};
                         }
@@ -3093,6 +3766,205 @@ mod tests {
         assert_eq!(v2.len(), 1);
         assert_eq!(v2[0].id, d3.id);
         assert!(next2.is_none());
+    }
+
+    #[tokio::test]
+    async fn ephemeral_sorted_query_respects_offset_and_limit() {
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let mut d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
+        let mut d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
+        let mut d3 = Domain::new("d3".parse().unwrap()).build(&ALICE_ID);
+        let d4 = Domain::new("d4".parse().unwrap()).build(&ALICE_ID);
+        d1.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+        d2.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
+        d3.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(3)));
+
+        let params = QueryParams {
+            pagination: Pagination {
+                offset: 1,
+                limit: Some(nonzero!(2_u64)),
+            },
+            sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(2_u64)),
+            },
+        };
+
+        let selector = SelectorTuple::<Domain>::default();
+        let (output, _processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+            vec![d4, d3.clone(), d1, d2.clone()].into_iter(),
+            selector,
+            &params,
+            QueryLimits::default(),
+            None,
+        )
+        .expect("postprocess");
+
+        let (batch, remaining, cursor) = output.into_parts();
+        assert!(cursor.is_none());
+        assert_eq!(remaining, 0);
+        let mut tuple_iter = batch.into_iter();
+        let v = match tuple_iter.next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].id, d2.id);
+        assert_eq!(v[1].id, d3.id);
+    }
+
+    fn domain_ids_from_batch(
+        batch: iroha_data_model::query::QueryOutputBatchBoxTuple,
+    ) -> Vec<DomainId> {
+        let mut tuple_iter = batch.into_iter();
+        match tuple_iter.next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::Domain(v) => {
+                v.into_iter().map(|domain| domain.id).collect()
+            }
+            other => panic!("unexpected batch variant: {other:?}"),
+        }
+    }
+
+    fn sample_sorted_domains() -> Vec<Domain> {
+        let mut d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
+        let mut d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
+        let mut d3 = Domain::new("d3".parse().unwrap()).build(&ALICE_ID);
+        let mut d4 = Domain::new("d4".parse().unwrap()).build(&ALICE_ID);
+        let mut d5 = Domain::new("d5".parse().unwrap()).build(&ALICE_ID);
+        let d6 = Domain::new("d6".parse().unwrap()).build(&ALICE_ID);
+
+        d1.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
+        d2.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+        d3.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+        d4.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(3)));
+        d5.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
+
+        vec![d6, d5, d4, d3, d2, d1]
+    }
+
+    #[tokio::test]
+    async fn stored_sorted_fast_start_matches_legacy_first_batch_variants() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
+        use std::num::NonZeroU64;
+
+        let cases = [
+            (0_u64, None, 1_u64),
+            (0_u64, None, 2_u64),
+            (1_u64, None, 2_u64),
+            (1_u64, Some(3_u64), 2_u64),
+            (2_u64, Some(3_u64), 1_u64),
+            (3_u64, Some(2_u64), 2_u64),
+        ];
+
+        for (offset, limit, fetch_size) in cases {
+            let params = QueryParams {
+                pagination: Pagination {
+                    offset,
+                    limit: limit.and_then(NonZeroU64::new),
+                },
+                sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
+                fetch_size: FetchSize::new(Some(
+                    NonZeroU64::new(fetch_size).expect("non-zero fetch size"),
+                )),
+            };
+            let selector = SelectorTuple::<Domain>::default();
+
+            let mut legacy = apply_query_postprocessing(
+                sample_sorted_domains().into_iter(),
+                selector.clone(),
+                &params,
+                QueryLimits::default(),
+            )
+            .expect("legacy path");
+            let (legacy_first_batch, legacy_next) = legacy.next_batch(0).expect("legacy first");
+            let legacy_remaining = legacy.remaining();
+
+            let fast = stored_sorted_fast_start_params(&params, QueryLimits::default())
+                .expect("fast path selection")
+                .expect("fast path should be available for this test");
+            let prepared = prepare_stored_sorted_start(
+                sample_sorted_domains().into_iter(),
+                selector,
+                fast,
+                None,
+            )
+            .expect("prepared start");
+
+            assert_eq!(
+                domain_ids_from_batch(prepared.first_batch),
+                domain_ids_from_batch(legacy_first_batch),
+                "offset={offset} limit={limit:?} fetch={fetch_size}"
+            );
+            assert_eq!(
+                prepared.remaining_items, legacy_remaining,
+                "offset={offset} limit={limit:?} fetch={fetch_size}"
+            );
+            assert_eq!(
+                prepared.deferred_continuation.is_some(),
+                legacy_next.is_some(),
+                "offset={offset} limit={limit:?} fetch={fetch_size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_stored_start_first_continue_preserves_global_order() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
+        use nonzero_ext::nonzero;
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+        let selector = SelectorTuple::<Domain>::default();
+
+        let mut legacy = apply_query_postprocessing(
+            sample_sorted_domains().into_iter(),
+            selector.clone(),
+            &params,
+            QueryLimits::default(),
+        )
+        .expect("legacy path");
+        let (_legacy_first, legacy_cursor) = legacy.next_batch(0).expect("legacy first");
+        let expected_cursor = legacy_cursor.expect("legacy continuation");
+        let (legacy_second, _legacy_next) = legacy
+            .next_batch(expected_cursor.get())
+            .expect("legacy second");
+        let expected_second_ids = domain_ids_from_batch(legacy_second);
+
+        let fast = stored_sorted_fast_start_params(&params, QueryLimits::default())
+            .expect("fast path selection")
+            .expect("fast path should be available");
+        let prepared =
+            prepare_stored_sorted_start(sample_sorted_domains().into_iter(), selector, fast, None)
+                .expect("prepared start");
+
+        let handle = LiveQueryStore::start_test();
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start_prepared(prepared, &ALICE_ID, None)
+            .expect("store prepared")
+            .into_parts();
+        let cursor = cursor.expect("cursor");
+        let next = handle
+            .handle_iter_continue(cursor)
+            .expect("first continuation")
+            .into_parts();
+
+        assert_eq!(domain_ids_from_batch(next.0), expected_second_ids);
     }
 
     #[test]
@@ -4551,6 +5423,61 @@ mod tests {
         };
         assert_eq!(v.len(), 3);
         let mut ids = [a_id.clone(), b_id.clone(), c_id.clone()];
+        ids.sort();
+        assert_eq!(v[0].id(), &ids[0]);
+        assert_eq!(v[1].id(), &ids[1]);
+        assert_eq!(v[2].id(), &ids[2]);
+    }
+
+    #[tokio::test]
+    async fn iter_dispatch_asset_definitions_sort_ties_stable_by_id() {
+        use iroha_data_model::query::parameters::{
+            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
+        };
+        use iroha_primitives::json::Json;
+
+        let make = |name: &str| {
+            AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+                "w".parse().unwrap(),
+                name.parse().unwrap(),
+            ))
+            .with_metadata({
+                let mut metadata = Metadata::default();
+                metadata.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+                metadata
+            })
+            .build(&ALICE_ID)
+        };
+
+        let ad_a = make("rose");
+        let ad_b = make("tulip");
+        let ad_c = make("peony");
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting {
+                sort_by_metadata_key: Some("rank".parse().unwrap()),
+                order: Some(SortOrder::Asc),
+            },
+            fetch_size: FetchSize::default(),
+        };
+
+        let selector = SelectorTuple::<AssetDefinition>::default();
+        let mut it = apply_query_postprocessing(
+            vec![ad_a.clone(), ad_b.clone(), ad_c.clone()].into_iter(),
+            selector,
+            &params,
+            QueryLimits::default(),
+        )
+        .expect("postprocess");
+        let (batch, next) = it.next_batch(0).expect("first batch");
+        assert!(next.is_none());
+        let v = match batch.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+        assert_eq!(v.len(), 3);
+        let mut ids = [ad_a.id().clone(), ad_b.id().clone(), ad_c.id().clone()];
         ids.sort();
         assert_eq!(v[0].id(), &ids[0]);
         assert_eq!(v[1].id(), &ids[1]);

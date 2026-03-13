@@ -78,7 +78,7 @@ Sidebar_label: إمكانية المراقبة وSLOs
 | `sorafs_node_por_failure_total` | عداد | `provider_id` | Contador monotono de amostras PoR com falha. |
 | `torii_sorafs_storage_bytes_*`، `torii_sorafs_storage_por_*` | مقياس | `provider` | توجد مقاييس Prometheus للبايتات المستخدمة وعمق الملف وعدوى PoR في Voo. |
 | `torii_sorafs_capacity_*`، `torii_sorafs_uptime_bps`، `torii_sorafs_por_bps` | مقياس | `provider` | توفر بيانات السعة/وقت التشغيل نجاحًا كبيرًا في لوحة معلومات السعة. |
-| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | عمق تراكم المزيد من الحاويات المصدرة باستمرار إلى `/v1/sorafs/por/ingestion/{manifest}` واستشارة أو توصيل أو طلاء/تنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | عمق تراكم المزيد من الحاويات المصدرة باستمرار إلى `/v2/sorafs/por/ingestion/{manifest}` واستشارة أو توصيل أو طلاء/تنبيه "PoR Stalls". |
 
 ### إثبات الاسترجاع في الوقت المناسب (PoTR) وSLA للقطع| متريكا | تيبو | التسميات | منتج | نوتاس |
 |---------|------|--------|----------|-------|

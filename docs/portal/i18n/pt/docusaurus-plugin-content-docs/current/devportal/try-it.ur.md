@@ -131,7 +131,7 @@ Solicitações Norito-RPC de proxy e encanamento OAuth کو شیئر کرتی ہ
 ### Try It console سے Norito carga útil بھیجیں
 
 1. `fixtures/norito_rpc/transfer_asset.norito` Dispositivo elétrico de fixação منتخب کریں۔ یہ فائلیں envelopes Norito brutos ہیں؛ انہیں **codificação base64 نہ کریں**۔
-2. Swagger é o RapiDoc com o endpoint NRPC definido para (`POST /v1/pipeline/submit`) e o seletor **Content-Type** e `application/x-norito` é o seletor de **Content-Type**.
+2. Swagger é o RapiDoc com o endpoint NRPC definido para (`POST /v2/pipeline/submit`) e o seletor **Content-Type** e `application/x-norito` é o seletor de **Content-Type**.
 3. editor de corpo de solicitação کو **binário** پر ٹوگل کریں (Swagger کا "Arquivo" موڈ یا RapiDoc کا seletor "Binário/Arquivo") اور `.norito` فائل اپ لوڈ کریں۔ widget bytes کو proxy کے ذریعے بغیر تبدیلی کے stream کرتا ہے۔
 4. solicitação de solicitação اگر Torii `X-Iroha-Error-Code: schema_mismatch` واپس کرے تو تصدیق کریں کہ آپ ایسا endpoint کال کر رہے ہیں جو cargas úteis binárias قبول کرتا ہے اور `fixtures/norito_rpc/schema_hashes.json` میں ریکارڈ شدہ esquema hash آپ کے Torii build سے میچ کرتا ہے۔
 
@@ -144,10 +144,10 @@ Você pode usar tokens de autorização para hosts Torii Carga útil útil `scri
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-`transaction_fixtures.manifest.json` میں موجود کسی بھی entrada کے ساتھ fixture بدلیں یا `cargo xtask norito-rpc-fixtures` سے اپنا codificação de carga útil کریں۔ جب Torii modo canário میں ہو تو آپ `curl` کو proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`) پر پوائنٹ کر سکتے ہیں Teste de infraestrutura e teste de infraestrutura e widgets de portal
+`transaction_fixtures.manifest.json` میں موجود کسی بھی entrada کے ساتھ fixture بدلیں یا `cargo xtask norito-rpc-fixtures` سے اپنا codificação de carga útil کریں۔ جب Torii modo canário میں ہو تو آپ `curl` کو proxy try-it (`https://docs.sora.example/proxy/v2/pipeline/submit`) پر پوائنٹ کر سکتے ہیں Teste de infraestrutura e teste de infraestrutura e widgets de portal
 
 ## Observabilidade e operaçõesہر solicitação ایک بار método, caminho, origem, status upstream, e fonte de autenticação (`override`, `default`, یا `client`) کے ساتھ log ہوتی ہے۔ tokens کبھی armazenar نہیں ہوتے - cabeçalhos de portador اور `X-TryIt-Auth` registro de valores سے پہلے redigir ہو جاتی ہیں, اس لئے آپ stdout کو coletor central میں encaminhar کر سکتے ہیں بغیر vazamento de segredos ہونے کے خدشے کے۔
 
@@ -157,7 +157,7 @@ implantações کے دوران یا agendamento e sondagem agrupada چلائیں
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Botões de ambiente:

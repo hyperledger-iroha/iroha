@@ -67,13 +67,13 @@ Outillage complémentaire :
 
 Les passerelles permettent de détecter les connexions HTTP et d'obtenir des métadonnées.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Trebovanie | Détails |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Trebovanie | Détails |
 |------------|--------|
 | **En-têtes** | `Range` (intervalle, disponible pour les décalages de blocs), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` et base64 disponibles `X-SoraFS-Stream-Token`. |
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range`, nous vous proposons une description de l'intervalle, des métadonnées `X-Sora-Chunk-Range` et de ce chunker/token d'en-têtes. |
 | **Modes de défaillance** | `416` pour les diapasons jamais utilisés, `401` pour les serviettes jetables/non valides, `429` pour превышении budget flux/octet. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Récupère le morceau de fragments correspondant aux en-têtes ainsi que le morceau de résumé digest.
 Plutôt pour les récupérations ou les téléchargements médico-légaux, il n'y a pas de tranches CAR.
@@ -120,12 +120,12 @@ Logiciels compatibles, opérateurs/SDK disponibles :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` fonctionnent
   points de terminaison REST pin-registry et certification Norito JSON avec blocs
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` pour Norito
+- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` pour Norito
   ou JSON manifeste plus de preuves d'alias et de successeurs ; épreuves mal formées
   возвращают `400`, épreuves périmées de `503` à `Warning: 110`, épreuves périmées
   возвращают `412`.
--Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) pour l'attestation de structure, pour tous les clients
+-Points de terminaison REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) pour l'attestation de structure, pour tous les clients
   проверить данные относительно последних bloc-têtes avant la conception.
 
 ## Ссылки- Spécifications canoniques :

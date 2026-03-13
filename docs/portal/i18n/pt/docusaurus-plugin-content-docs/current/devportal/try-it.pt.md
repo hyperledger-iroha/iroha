@@ -162,7 +162,7 @@ portal, proprietários de SDK e revisores podem reproduzir os bytes exatos que o
 1. Escolha um acessório como `fixtures/norito_rpc/transfer_asset.norito`. Esses
    arquivos são envelopes Norito brutos; **nao** faca base64.
 2. Em Swagger ou RapiDoc, localize o endpoint NRPC (por exemplo
-   `POST /v1/pipeline/submit`) e altere o seletor **Content-Type** para
+   `POST /v2/pipeline/submit`) e altere o seletor **Content-Type** para
    `application/x-norito`.
 3. Troque o editor de corpo para **binary** (modo "File" do Swagger ou
    seletor "Binary/File" do RapiDoc) e envie o arquivo `.norito`. Ó widget
@@ -186,11 +186,11 @@ quando você valida o proxy ou depura respostas do gateway:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```Troque o fixture por qualquer entrada listada em `transaction_fixtures.manifest.json`
 ou codifique seu próprio payload com `cargo xtask norito-rpc-fixtures`. Quando Torii está
 em modo canário você pode indicar o `curl` para o proxy try-it
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) para treinar a mesma
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) para treinar a mesma
 infraestrutura usada pelos widgets do portal.
 
 ## Observabilidade e operações
@@ -206,7 +206,7 @@ Rodou a sonda incluída durante implantações ou em um cronograma:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Botões de ambiente:

@@ -59,15 +59,15 @@ description: خطة SF-2c لسوق السعة، أوامر النسخ المتم
 - يربط `ReplicationOrderV1` manifests بتعيينات صادرة عن الحوكمة مع أهداف التكرار، عتبات SLA، وضمانات لكل assignment؛ تفرض validators handles chunker القياسية، مزودين فريدين، وقيود deadline قبل أن يقوم Torii أو السجل بابتلاع الأمر.【crates/sorafs_manifest/src/capacity.rs:301】
 - يعبر `CapacityTelemetryV1` عن snapshots الحقبة (GiB المعلنة مقابل المستخدمة، عدادات النسخ، نسب uptime/PoR) التي تغذي توزيع الرسوم. تحقق الحدود يبقي الاستخدام ضمن الإعلانات والنسب ضمن 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - توفر helpers المشتركة (`CapacityMetadataEntry` و`PricingScheduleV1` ومدققات lane/assignment/SLA) تحقق مفاتيح حتمي وتقارير أخطاء يمكن لـ CI والـ downstream tooling إعادة استخدامها.【crates/sorafs_manifest/src/capacity.rs:230】
-- يعرض `PinProviderRegistry` الآن snapshot على السلسلة عبر `/v1/sorafs/capacity/state`، جامعاً إعلانات المزودين وإدخالات fee ledger خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- يعرض `PinProviderRegistry` الآن snapshot على السلسلة عبر `/v2/sorafs/capacity/state`، جامعاً إعلانات المزودين وإدخالات fee ledger خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - تغطي اختبارات التحقق فرض handles القياسية، كشف التكرار، حدود lane، حمايات تعيين النسخ المتماثل، وفحوص نطاق التليمترية حتى تظهر الانحدارات فوراً في CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- أدوات المشغل: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` تحول specs المقروءة من البشر إلى Norito payloads قياسية، base64 blobs وملخصات JSON حتى يتمكن المشغلون من تجهيز fixtures لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 توجد Reference fixtures في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- أدوات المشغل: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` تحول specs المقروءة من البشر إلى Norito payloads قياسية، base64 blobs وملخصات JSON حتى يتمكن المشغلون من تجهيز fixtures لـ `/v2/sorafs/capacity/declare` و`/v2/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 توجد Reference fixtures في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم
 
 | المهمة | Owner(s) | ملاحظات |
 |------|----------|-------|
-| إضافة معالجات Torii لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` و`/v1/sorafs/capacity/orders` بحمولات Norito JSON. | Torii Team | محاكاة منطق التحقق؛ إعادة استخدام Norito JSON helpers. |
+| إضافة معالجات Torii لـ `/v2/sorafs/capacity/declare` و`/v2/sorafs/capacity/telemetry` و`/v2/sorafs/capacity/orders` بحمولات Norito JSON. | Torii Team | محاكاة منطق التحقق؛ إعادة استخدام Norito JSON helpers. |
 | تمرير snapshots الخاصة بـ `CapacityDeclarationV1` إلى metadata لوحة نقاط orchestrator وخطط الجلب في gateway. | Tooling WG / Orchestrator team | تمديد `provider_metadata` بمراجع السعة حتى يحترم scoring متعدد المصادر حدود lane. |
 | تغذية أوامر النسخ المتماثل إلى عملاء orchestrator/gateway لقيادة assignments وتلميحات failover. | Networking TL / Gateway team | يستهلك Scoreboard builder أوامر النسخ الموقعة من الحوكمة. |
 | أدوات CLI: توسيع `sorafs_cli` بـ `capacity declare` و`capacity telemetry` و`capacity orders import`. | Tooling WG | توفير JSON حتمي + مخرجات scoreboard. |
@@ -90,7 +90,7 @@ description: خطة SF-2c لسوق السعة، أوامر النسخ المتم
 | خط أنابيب التسوية: تحويل التليمترية + بيانات النسخ إلى payouts مقومة بـ XOR، وإنتاج ملخصات جاهزة للحوكمة، وتسجيل حالة ledger. | Treasury / Storage Team | التوصيل إلى Deal Engine / Treasury exports. |
 | تصدير dashboards/alerts لصحة الميترينغ (backlog ingestion، تليمترية قديمة). | Observability | توسيع حزمة Grafana المشار إليها في SF-6/SF-7. |
 
-- يعرض Torii الآن `/v1/sorafs/capacity/telemetry` و`/v1/sorafs/capacity/state` (JSON + Norito) بحيث يمكن للمشغلين إرسال snapshots تليمترية لكل حقبة ويمكن للمراجعين استرجاع ledger الحتمي للتدقيق أو تغليف الأدلة.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- يعرض Torii الآن `/v2/sorafs/capacity/telemetry` و`/v2/sorafs/capacity/state` (JSON + Norito) بحيث يمكن للمشغلين إرسال snapshots تليمترية لكل حقبة ويمكن للمراجعين استرجاع ledger الحتمي للتدقيق أو تغليف الأدلة.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - يضمن تكامل `PinProviderRegistry` إمكانية الوصول إلى أوامر النسخ المتماثل عبر نفس endpoint؛ تساعد أدوات CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) في التحقق/النشر لتليمترية تشغيلات الأتمتة مع hashing حتمي وحل alias.
 - تنتج snapshots الميترينغ إدخالات `CapacityTelemetrySnapshot` المثبتة على snapshot `metering`، وتغذي Prometheus exports لوحة Grafana الجاهزة للاستيراد في `docs/source/grafana_sorafs_metering.json` حتى تتمكن فرق الفوترة من مراقبة تراكم GiB-hour والرسوم nano-SORA المتوقعة والامتثال لـ SLA في الوقت الحقيقي.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - عند تفعيل metering smoothing، يتضمن snapshot الحقول `smoothed_gib_hours` و`smoothed_por_success_bps` حتى يتمكن المشغلون من مقارنة قيم EMA الملساء بالعدادات الخام التي تعتمد عليها الحوكمة في payouts.【crates/sorafs_node/src/metering.rs:401】
@@ -160,7 +160,7 @@ description: خطة SF-2c لسوق السعة، أوامر النسخ المتم
 
 ### Provider onboarding & exit smoke tests
 - أعد توليد artefacts للإعلان/التليمترية باستخدام `sorafs_manifest_stub capacity ...` وأعد تشغيل اختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- أرسل عبر Torii (`/v1/sorafs/capacity/declare`) ثم التقط `/v1/sorafs/capacity/state` مع لقطات Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
+- أرسل عبر Torii (`/v2/sorafs/capacity/declare`) ثم التقط `/v2/sorafs/capacity/state` مع لقطات Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف artefacts الموقعة ومخرجات reconciliation داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 
 ## الاعتماديات والتسلسل

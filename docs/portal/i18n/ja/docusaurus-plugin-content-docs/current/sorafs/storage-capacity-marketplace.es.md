@@ -63,15 +63,15 @@ title: アルマセナミエント市場 SoraFS
 - `ReplicationOrderV1` は、冗長オブジェクト、SLA および割り当ての保証内容を含む、指定された内容を示します。 los validadores imponen は canonicos、プロバイダーの unicos と期限前制限 Torii を処理し、レジストリを管理します。【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` の epoca の高速スナップショット (GiB 宣言対米国、レプリカのコンタドール、稼働時間/PoR) の料金配布。 Las validaciones mantienen el uso dentro de la declaracion y los porcentajes dentro de 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - ヘルパー コンパルティド (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/割り当て/SLA の検証) は、キーの検証、エラーの報告、CI の報告、ツールのダウンストリームの再利用を証明します。【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` `/v1/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開、プロバイダーと料金台帳の組み合わせ宣言 Norito JSON determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` `/v2/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開、プロバイダーと料金台帳の組み合わせ宣言 Norito JSON determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 正規の処理、重複の検出、レーンの制限、レプリカの割り当ての保護、テレメトリアのランゴ チェック、ラス レグレシオネス アパレスカンと CI のメディアのチェックを処理するための強制的な検証。【crates/sorafs_manifest/src/capacity.rs:792】
-- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの読み取り可能な特定のアクションを表示 Norito canonicos、BLOB Base64 y resúmenes JSON para que los operadores preparen fixtures de `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` y ordenes deローカルの複製と検証。【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) は、`cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照されます。
+- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの読み取り可能な特定のアクションを表示 Norito canonicos、BLOB Base64 y resúmenes JSON para que los operadores preparen fixtures de `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry` y ordenes deローカルの複製と検証。【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) は、`cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照されます。
 
 ### 2. 計画的な制御の統合
 
 |タレア |責任者 |メモ |
 |------|--|------|
-| Agregar ハンドラー Torii `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、`/v1/sorafs/capacity/orders` とペイロード Norito JSON。 | Torii チーム | Reflejar la logica del validador; reutilizar ヘルパー Norito JSON。 |
+| Agregar ハンドラー Torii `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry`、`/v2/sorafs/capacity/orders` とペイロード Norito JSON。 | Torii チーム | Reflejar la logica del validador; reutilizar ヘルパー Norito JSON。 |
 | `CapacityDeclarationV1` のスナップショット、スコアボード、フェッチ、ゲートウェイのプレーンのメタデータをプロパガーします。 |ツーリングWG / オーケストレーター設備 |エクステンダー `provider_metadata` は、マルチソースのスコアリングに関するパラメータの参照により、レーンの制限を制限します。 |
 |フェールオーバーのヒントの割り当てやゲートウェイのクライアントに対するレプリケーションの指示が行われます。 |ネットワーキング TL / ゲートウェイ チーム |エルビルダーデルスコアボードは、ゴベルナンザによってオルデネスファームダスを消費します。 |
 |ツール CLI: エクステンダー `sorafs_cli` コン `capacity declare`、`capacity telemetry`、`capacity orders import`。 |ツーリングWG | Proveer JSON 決定者 + スコアボードのサリダ。 |
@@ -92,7 +92,7 @@ title: アルマセナミエント市場 SoraFS
 |決済パイプライン: テレメトリ変換と XOR での複製データの変換、管理者と登録者の台帳のリストの作成。 |財務/保管チーム |取引エンジン/財務省のエクスポートに関するコネクタ。 |
 |計測に関するエクスポート ダッシュボード/アラート (取り込みのバックログ、テレメトリが古い)。 |可観測性 | SF-6/SF-7 の Grafana 参照エクステンダー パック。 |
 
-- Torii アホラ expone `/v1/sorafs/capacity/telemetry` y `/v1/sorafs/capacity/state` (JSON + Norito) パラ ケ オペラドールの環境スナップショット デ テレメトリア ポー エポカとロスの検査を回復し、元帳のカノニコ パラ オーディトリアス エンパケタドを確認します。証拠.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii アホラ expone `/v2/sorafs/capacity/telemetry` y `/v2/sorafs/capacity/state` (JSON + Norito) パラ ケ オペラドールの環境スナップショット デ テレメトリア ポー エポカとロスの検査を回復し、元帳のカノニコ パラ オーディトリアス エンパケタドを確認します。証拠.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - 統合 `PinProviderRegistry` は、ミスモ エンドポイントのショーン アクセス可能な複製の順序を確認します。 CLI のヘルパー (`sorafs_cli capacity telemetry --from-file telemetry.json`) は、ハッシュ決定とエイリアス解決の自動化を目的とした公開テレメトリアの検証を行います。
 - 測定生成されたスナップショット `CapacityTelemetrySnapshot` フィジャーダス アル スナップショット `metering`、ロス エクスポート Prometheus 食品テーブルロ Grafana インポート リスト `docs/source/grafana_sorafs_metering.json` エクイポス パラメータ実際の監視の GiB 時間の累積、料金 nano-SORA の実際の SLA の合計。【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - `smoothed_gib_hours` と `smoothed_por_success_bps` を含むスムージングとメーターの測定、スナップショットを含めて、EMA フレンテと米国のクルーズ船の価値を比較します。 pagos.【crates/sorafs_node/src/metering.rs:401】
@@ -167,7 +167,7 @@ title: アルマセナミエント市場 SoraFS
 ### プロバイダーのオンボーディングとスモーク テストの終了
 - 宣言/テレメトリア コン `sorafs_manifest_stub capacity ...` y の再作成
   送信前に CLI をテストする必要があります (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
-- Envialos via Torii (`/v1/sorafs/capacity/declare`) y luego captura `/v1/sorafs/capacity/state` mas
+- Envialos via Torii (`/v2/sorafs/capacity/declare`) y luego captura `/v2/sorafs/capacity/state` mas
   Grafana のスクリーンショット。シグ エル フルホ デ サリダ en `docs/source/sorafs/capacity_onboarding_runbook.md`。
 - 調停に関する企業成果物のアーカイブ
   `docs/examples/sorafs_capacity_marketplace_validation/`。

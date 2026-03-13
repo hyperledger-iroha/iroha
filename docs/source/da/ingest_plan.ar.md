@@ -34,7 +34,7 @@ _ تمت الصياغة: 20-02-2026 - المالك: مجموعة عمل البر
 ## واجهة برمجة التطبيقات (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 خطأ داخلي | فشل غير متوقع (تسجيل + تنبيه). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 لا تحتاج إلى رحلة ذهاب وإياب إضافية لربط الدليل بمجموعة السياسات النشطة.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ pub struct DaIngestReceipt {
 - يضيف `iroha app da get` اسمًا مستعارًا يركز على DA للمنسق متعدد المصادر الذي يعمل بالفعل
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه إلى عناصر البيان + المخطط التفصيلي (`--manifest`،
   `--plan`, `--manifest-id`) **أو** ما عليك سوى تمرير تذكرة تخزين Torii عبر `--storage-ticket`. عندما
-  يتم استخدام مسار التذكرة، حيث تسحب واجهة سطر الأوامر البيان من `/v1/da/manifests/<ticket>`، وتستمر في الحزمة
+  يتم استخدام مسار التذكرة، حيث تسحب واجهة سطر الأوامر البيان من `/v2/da/manifests/<ticket>`، وتستمر في الحزمة
   تحت `artifacts/da/fetch_<timestamp>/` (التجاوز بـ `--manifest-cache-dir`)، يشتق البيان **
   hash** لـ `--manifest-id`، ثم يقوم بتشغيل المنسق باستخدام `--gateway-provider` المصاحب
   قائمة. لا يزال التحقق من الحمولة يعتمد على ملخص CAR/`blob_hash` المضمن بينما يكون معرف البوابة
@@ -248,7 +248,7 @@ pub struct DaIngestReceipt {
   التجاوزات، وتصدير لوحة النتائج، ومسارات `--output`)، ويمكن تجاوز نقطة النهاية الواضحة عبر
   `--manifest-endpoint` لمضيفي Torii المخصصين، لذلك يتم إجراء عمليات التحقق من التوفر الشامل بالكامل ضمن
   مساحة الاسم `da` دون تكرار منطق المنسق.
-- يقوم `iroha app da get-blob` بسحب البيانات الأساسية مباشرة من Torii عبر `GET /v1/da/manifests/{storage_ticket}`.
+- يقوم `iroha app da get-blob` بسحب البيانات الأساسية مباشرة من Torii عبر `GET /v2/da/manifests/{storage_ticket}`.
   يقوم الأمر الآن بتسمية المصنوعات اليدوية باستخدام علامة التجزئة الواضحة (معرف النقطة) والكتابة
   `manifest_{manifest_hash}.norito`، و`manifest_{manifest_hash}.json`، و`chunk_plan_{manifest_hash}.json`
   ضمن `artifacts/da/fetch_<timestamp>/` (أو `--output-dir` الذي يوفره المستخدم) أثناء تكرار صدى الصوت الدقيق
@@ -259,7 +259,7 @@ pub struct DaIngestReceipt {
   `ToriiClient.getDaManifestBundle(...)`. يقوم كلاهما بإرجاع بايتات Norito التي تم فك تشفيرها، وJSON الواضح، وتجزئة البيان،وخطة القطع حتى يتمكن المتصلون بـ SDK من ترطيب جلسات المنسق دون إرسالها إلى CLI وSwift
   يمكن للعملاء أيضًا الاتصال بـ `fetchDaPayloadViaGateway(...)` لتوجيه هذه الحزم عبر الشبكة الأصلية
   غلاف الأوركسترا SoraFS.[IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240]
-- تظهر استجابات `/v1/da/manifests` الآن على `manifest_hash`، وكلا مساعدي CLI + SDK (`iroha app da get`،
+- تظهر استجابات `/v2/da/manifests` الآن على `manifest_hash`، وكلا مساعدي CLI + SDK (`iroha app da get`،
   `ToriiClient.fetchDaPayloadViaGateway`، ومغلفات بوابة Swift/JS) يتعاملون مع هذا الملخص باعتباره
   معرف البيان الأساسي مع الاستمرار في التحقق من الحمولات مقابل تجزئة CAR/blob المضمنة.
 - `iroha app da rent-quote` يحسب الإيجار الحتمي وتفاصيل الحوافز لحجم التخزين المتوفر
@@ -277,7 +277,7 @@ pub struct DaIngestReceipt {
 - يمتد تكافؤ التسجيل Pin الآن إلى SDKs: `ToriiClient.registerSorafsPinManifest(...)` في
   تقوم JavaScript SDK بإنشاء الحمولة الدقيقة المستخدمة بواسطة `iroha app sorafs pin register`، مما يفرض القواعد الأساسية
   البيانات التعريفية للمقطع، وسياسات الدبوس، وإثباتات الأسماء المستعارة، والملخصات اللاحقة قبل النشر إلى
-  `/v1/sorafs/pin/register`. يؤدي هذا إلى منع روبوتات CI والأتمتة من الوصول إلى واجهة سطر الأوامر (CLI) عندما
+  `/v2/sorafs/pin/register`. يؤدي هذا إلى منع روبوتات CI والأتمتة من الوصول إلى واجهة سطر الأوامر (CLI) عندما
   تسجيل تسجيلات البيان، ويأتي المساعد مزودًا بتغطية TypeScript/README لذا فإن DA-8
   يتم تحقيق تكافؤ الأدوات "إرسال/حصول/إثبات" بشكل كامل على JS جنبًا إلى جنب مع Rust/Swift.
 - يقوم `iroha app da prove-availability` بربط كل ما سبق: فهو يأخذ تذكرة تخزين، ويقوم بتنزيل
@@ -334,7 +334,7 @@ pub struct DaIngestReceipt {
   إصدارات غير معروفة، مما يضمن ترقيات حتمية عند شحن تخطيطات البيان الجديدة.
 - **خطافات PDP/PoTR** — التزامات PDP مستمدة مباشرة من مخزن القطع وتستمر
   بجانب البيانات حتى يتمكن منظمو جدولة DA-5 من إطلاق تحديات أخذ العينات من البيانات الأساسية؛ ال
-  يتم الآن شحن رأس `Sora-PDP-Commitment` مع كل من `/v1/da/ingest` و`/v1/da/manifests/{ticket}`
+  يتم الآن شحن رأس `Sora-PDP-Commitment` مع كل من `/v2/da/ingest` و`/v2/da/manifests/{ticket}`
   الردود حتى تتعلم أدوات تطوير البرامج (SDK) على الفور الالتزام الموقع الذي ستشير إليه التحقيقات المستقبلية.
 - **مجلة مؤشر Shard** — قد تحدد بيانات تعريف المسار `da_shard_id` (القيمة الافتراضية هي `lane_id`)، و
   Sumeragi يحتفظ الآن بأعلى `(epoch, sequence)` لكل `(shard_id, lane_id)` في
@@ -357,7 +357,7 @@ pub struct DaIngestReceipt {
   تعريض بايتات الحمولة. يتم إيصال الهيدرات من كورا أثناء إعادة التشغيل حتى يستعيد المدققون نفس الشيء
   البيانات التعريفية السرية بعد إعادة التشغيل.
 
-## ملاحظات التنفيذ- تعمل نقطة النهاية `/v1/da/ingest` الخاصة بـ Torii الآن على تطبيع ضغط الحمولة النافعة، وفرض ذاكرة التخزين المؤقت لإعادة التشغيل،
+## ملاحظات التنفيذ- تعمل نقطة النهاية `/v2/da/ingest` الخاصة بـ Torii الآن على تطبيع ضغط الحمولة النافعة، وفرض ذاكرة التخزين المؤقت لإعادة التشغيل،
   قطع وحدات البايت الأساسية بشكل حتمي، وإعادة بناء `DaManifestV1`، وإسقاط الحمولة النافعة المشفرة
   في `config.da_ingest.manifest_store_dir` لتنسيق SoraFS قبل إصدار الإيصال؛ ال
   يقوم المعالج أيضًا بإرفاق رأس `Sora-PDP-Commitment` حتى يتمكن العملاء من التقاط الالتزام المشفر
@@ -370,7 +370,7 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` غطاء الصدأ، بايثون `ToriiClient`
   يقوم الآن بتصدير `decode_pdp_commitment_header`، كما يقوم `IrohaSwift` بشحن المساعدين المطابقين المتنقلين للغاية
   يمكن للعملاء تخزين جدول أخذ العينات المشفر على الفور. 【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- يعرض Torii أيضًا `GET /v1/da/manifests/{storage_ticket}` حتى تتمكن مجموعات SDK والمشغلون من جلب البيانات
+- يعرض Torii أيضًا `GET /v2/da/manifests/{storage_ticket}` حتى تتمكن مجموعات SDK والمشغلون من جلب البيانات
   وخطط القطع دون لمس دليل التخزين المؤقت للعقدة. تقوم الاستجابة بإرجاع البايتات Norito
   (base64)، تم تقديم بيان JSON، `chunk_plan` JSON blob جاهز لـ `sorafs fetch`، بالإضافة إلى العناصر ذات الصلة
   الملخصات السداسية (`storage_ticket`، `client_blob_id`، `blob_hash`، `chunk_root`) بحيث يمكن للأدوات النهائية
@@ -388,7 +388,7 @@ pub struct DaIngestReceipt {
   `--block-hash` override.[crates/iroha_torii_shared/src/da/sampling.rs:1]】[crates/iroha_cli/src/commands/da.rs:523] 【javascript/iroha_js/src/toriiClient.js:15903】[IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170]
 
 ### تدفق تدفق الحمولة الكبيرةالعملاء الذين يحتاجون إلى استيعاب أصول أكبر من حد الطلب الفردي الذي تم تكوينه، يبدأون أ
-جلسة البث عن طريق الاتصال بـ `POST /v1/da/ingest/chunk/start`. يستجيب Torii بـ
+جلسة البث عن طريق الاتصال بـ `POST /v2/da/ingest/chunk/start`. يستجيب Torii بـ
 `ChunkSessionId` (BLAKE3-مشتق من بيانات تعريف blob المطلوبة) وحجم القطعة التي تم التفاوض عليها.
 يحمل كل طلب `DaIngestChunk` لاحقاً ما يلي:
 
@@ -403,7 +403,7 @@ Torii يستمر في التحقق من صحة الشرائح ضمن `config.da_
 يسجل التقدم داخل ذاكرة التخزين المؤقت لإعادة التشغيل لتكريم العجز. عندما تصل الشريحة الأخيرة، Torii
 يعيد تجميع الحمولة على القرص (التدفق عبر دليل القطعة لتجنب ارتفاع الذاكرة)،
 يحسب البيان/الإيصال الأساسي تمامًا كما هو الحال مع التحميلات الفردية، ويستجيب أخيرًا
-`POST /v1/da/ingest` عن طريق استهلاك القطعة الأثرية المرحلية. يمكن إحباط الجلسات الفاشلة بشكل صريح أو
+`POST /v2/da/ingest` عن طريق استهلاك القطعة الأثرية المرحلية. يمكن إحباط الجلسات الفاشلة بشكل صريح أو
 يتم تجميع البيانات المهملة بعد `config.da_ingest.replay_cache_ttl`. يحافظ هذا التصميم على تنسيق الشبكة
 متوافق مع Norito، ويتجنب البروتوكولات القابلة للاستئناف الخاصة بالعميل، ويعيد استخدام مسار البيان الحالي
 دون تغيير.

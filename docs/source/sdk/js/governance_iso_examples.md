@@ -80,7 +80,7 @@ bridge. Configure the helper with the following environment variables:
 Use the `contentType` option whenever your payload uses a more specific MIME
 type. The SDK enforces that overrides are non-empty strings, so mistakes are
 caught locally before Torii sees a malformed header. Call the `AndWait`
-convenience wrapper when you want the helper to poll `/v1/iso20022/status`
+convenience wrapper when you want the helper to poll `/v2/iso20022/status`
 before returning:
 
 ```js

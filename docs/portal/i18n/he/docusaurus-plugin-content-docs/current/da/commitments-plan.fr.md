@@ -31,7 +31,7 @@ SCALE ב-JSON אד-הוק.
   l'etat d'availability sans consulter le Stockage Hors Ledger.
 - Fournir des preuves de membership deterministes afin que les clients legers
   אימות qu'un manifest hash a ete finalize dans un bloc donne.
-- Exposer des requetes Torii (`/v1/da/commitments/*`) et des preuves permettant
+- Exposer des requetes Torii (`/v2/da/commitments/*`) et des preuves permettant
   ממסרי עזר, ערכות SDK ואוטומציות של ניהול הביקורת לזמינות
   sans rejouer chaque blok.
 - Conserver l'enveloppe `SignedBlockWire` canonique en transmettant les nouvelles
@@ -46,7 +46,7 @@ SCALE ב-JSON אד-הוק.
 3. **התמדה/מדדים** afin que le WSV reponde rapidement aux requetes de
    התחייבויות (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** pour les endpoints de list/הרצאה/הוכחה
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **בדיקות אינטגרציה + מתקנים** תקף פריסת תיל ו-le flux de proof
    dans `integration_tests/tests/da/commitments.rs`.
 
@@ -140,9 +140,9 @@ Torii חושפים את נקודות הקצה של הטרואס:
 
 | מסלול | מתודה | מטען | הערות |
 |-------|--------|--------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח נתיב/תקופה/רצף, עימוד) | Renvoie `DaCommitmentPage` עם סך הכל, התחייבויות ו-hash de bloc. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (מסלול + מניפסט hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (תקליט + chemin Merkle + hash de bloc). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר אזרחות qui rejoue le calcul du hash de bloc et valide l'inclusion; השתמש ב-SDKs qui ne peuvent pas lier direction `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח נתיב/תקופה/רצף, עימוד) | Renvoie `DaCommitmentPage` עם סך הכל, התחייבויות ו-hash de bloc. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (מסלול + מניפסט hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (תקליט + chemin Merkle + hash de bloc). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר אזרחות qui rejoue le calcul du hash de bloc et valide l'inclusion; השתמש ב-SDKs qui ne peuvent pas lier direction `iroha_crypto`. |
 
 Tous les payloads vivent sous `iroha_data_model::da::commitment`. Les routers
 Torii montent les handlers a cote des endpoints d'ingest DA existants pour

@@ -15,7 +15,7 @@ Norito bridge/Connect stack into Xcode projects, see `docs/connect_swift_integra
    values to match your environment. The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).
    - `CONNECT_SESSION_ID` — 32-byte session identifier (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v1/connect/session`.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v2/connect/session`.
    - `CONNECT_CHAIN_ID` — chain identifier announced during the control handshake.
    - `CONNECT_ROLE` — default role pre-selected in the UI (`app` or `wallet`).
    - Optional helpers for manual testing: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -62,7 +62,7 @@ Each entry in `SampleAccounts.json` supports the following fields:
 2. Open the `NoritoDemoXcode` project in Xcode.
 3. Select the `NoritoDemo` scheme and target an iOS simulator or device.
 4. Ensure the `.env` file is referenced through the scheme's environment variables.
-   Populate the `CONNECT_*` values exported by `/v1/connect/session` so the UI is
+   Populate the `CONNECT_*` values exported by `/v2/connect/session` so the UI is
    pre-filled when the app launches.
 5. Verify hardware acceleration defaults: `App.swift` calls
    `DemoAccelerationConfig.load().apply()` so the demo picks up either the

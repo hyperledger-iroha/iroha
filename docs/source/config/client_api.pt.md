@@ -46,6 +46,6 @@ Semântica de palco:
 - **ga** — Norito-RPC está disponível para todos os chamadores autenticados (sujeito ao
   taxa normal e limites de pré-autorização).
 
-Os operadores podem atualizar esses valores dinamicamente por meio de `/v1/config`. Cada mudança
+Os operadores podem atualizar esses valores dinamicamente por meio de `/v2/config`. Cada mudança
 é refletido imediatamente em `/rpc/capabilities`, permitindo SDKs e observabilidade
 painéis para mostrar a postura de transporte ao vivo.

@@ -75,7 +75,7 @@ aplicación de la ley بڑھنے پر فوری contexto ملے۔
 | `sorafs_node_por_failure_total` | Mostrador | `provider_id` | muestras de PoR fallidas کا contador monótono ۔ |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Calibre | `provider` | bytes utilizados, profundidad de la cola y recuentos de PoR en vuelo, así como medidores Prometheus. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Calibre | `provider` | datos de éxito de capacidad/tiempo de actividad del proveedor, panel de capacidad میں دکھایا جاتا ہے۔ |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | profundidad del trabajo pendiente اور contadores de fallas acumulativas جو ہر `/v1/sorafs/por/ingestion/{manifest}` encuesta پر export ہوتے ہیں، "PoR Stalls" panel/alerta کو feed کرتے ہیں۔ |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | profundidad del trabajo pendiente اور contadores de fallas acumulativas جو ہر `/v2/sorafs/por/ingestion/{manifest}` encuesta پر export ہوتے ہیں، "PoR Stalls" panel/alerta کو feed کرتے ہیں۔ |
 
 ### Prueba de recuperación oportuna (PoTR) y SLA de fragmentos| Métrica | Tipo | Etiquetas | Productor | Notas |
 |--------|------|--------|----------|-------|

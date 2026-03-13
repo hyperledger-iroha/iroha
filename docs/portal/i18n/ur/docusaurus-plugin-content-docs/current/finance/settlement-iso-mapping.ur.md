@@ -75,7 +75,7 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   - Customer-facing statements (`camt.054`): include **IBAN** when present and validate it
     (length, country rules, mod-97 checksum).[^swift_iban]
 - **Currency** → **ISO 4217** 3-letter code, respect minor-unit rounding.[^iso_4217]
-- **Torii ingestion** → Submit PvP funding legs via `POST /v1/iso20022/pacs009`; the bridge
+- **Torii ingestion** → Submit PvP funding legs via `POST /v2/iso20022/pacs009`; the bridge
   requires `Purp=SECU` and now enforces BIC crosswalks when reference data is configured.
 
 #### Validation rules (apply before emission)

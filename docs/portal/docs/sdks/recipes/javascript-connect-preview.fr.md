@@ -11,13 +11,13 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: Recette de prévisualisation Connect en JavaScript
-description: Préparez des sessions de prévisualisation Connect, émettez la télémétrie de file et ouvrez le socket `/v1/connect/ws` avec `@iroha/iroha-js`.
+description: Préparez des sessions de prévisualisation Connect, émettez la télémétrie de file et ouvrez le socket `/v2/connect/ws` avec `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-Cette recette montre comment combiner `bootstrapConnectPreviewSession` avec le dialer WebSocket exposé par `ToriiClient.openConnectWebSocket()`. Le script reflète la section Connect de la roadmap du SDK JS : il génère des URI de prévisualisation déterministes, enregistre la télémétrie de profondeur de file et ouvre l’endpoint canonique `/v1/connect/ws` via le paquet `ws` pour que les apps Node.js suivent le même flux que les navigateurs.
+Cette recette montre comment combiner `bootstrapConnectPreviewSession` avec le dialer WebSocket exposé par `ToriiClient.openConnectWebSocket()`. Le script reflète la section Connect de la roadmap du SDK JS : il génère des URI de prévisualisation déterministes, enregistre la télémétrie de profondeur de file et ouvre l’endpoint canonique `/v2/connect/ws` via le paquet `ws` pour que les apps Node.js suivent le même flux que les navigateurs.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

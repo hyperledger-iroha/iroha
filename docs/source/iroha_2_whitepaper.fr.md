@@ -68,7 +68,7 @@ langages et plateformes.
 Un nœud Iroha exécute plusieurs services coopérants :
 
 - **Torii (`iroha_torii`)** expose les API HTTP/WebSocket pour les transactions, les requêtes, les événements de streaming et
-  télémétrie (points de terminaison `/v1/...`).
+  télémétrie (points de terminaison `/v2/...`).
 - **Core (`iroha_core`)** coordonne la validation, le consensus, l'exécution, la gouvernance et la gestion de l'état.
 - **Sumeragi (`iroha_core::sumeragi`)** implémente le pipeline de consensus prêt pour NPoS avec les modifications de vue,
   disponibilité fiable des données de diffusion et certificats de validation. Voir le

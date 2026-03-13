@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Profile gate test for `/v1/sumeragi/status/sse`.
+//! Profile gate test for `/v2/sumeragi/status/sse`.
 #![cfg(feature = "telemetry")]
 
 use std::sync::Arc;
@@ -64,7 +64,7 @@ async fn status_sse_allowed_under_extended_profile() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status/sse")
+                .uri("/v2/sumeragi/status/sse")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -88,7 +88,7 @@ async fn status_sse_restricted_under_operator_profile() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sumeragi/status/sse")
+                .uri("/v2/sumeragi/status/sse")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

@@ -593,7 +593,7 @@ MODE_TAG_TIMEOUT_SECS=10
 for ((i = 1; i <= MODE_TAG_TIMEOUT_SECS; i++)); do
   MODE_TAG="$(
     { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-        "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \
+        "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v2/sumeragi/status" 2>/dev/null || true; } \
       | sed -n 's/.*"mode_tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
       | head -n1
   )"

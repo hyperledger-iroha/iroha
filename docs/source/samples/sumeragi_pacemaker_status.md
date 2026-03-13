@@ -1,7 +1,7 @@
 # Sumeragi — Pacemaker Status (Torii)
 
 Endpoint
-- `GET /v1/sumeragi/pacemaker`
+- `GET /v2/sumeragi/pacemaker`
 
 Response (example)
 ```json

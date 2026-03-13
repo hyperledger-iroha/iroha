@@ -88,7 +88,7 @@ reflète toujours le mandat qui a conduit à l’intégration du pont :
 - Partagé : cryptage de documents (échange de clés X25519, AEAD) avec dérivation de clé cohérente
   selon la spécification Norito et fournissez des exemples de tests d'intégration à l'aide du pont Rust.
 
-## Contrat de transport- Transport primaire : WebSocket (`/v1/connect/ws?sid=<session_id>`).
+## Contrat de transport- Transport primaire : WebSocket (`/v2/connect/ws?sid=<session_id>`).
 - Futur facultatif : WebRTC (à déterminer) – hors de portée pour l'homme de paille initial.
 - Stratégie de reconnexion : recul exponentiel avec gigue totale (base 5 s, max 60 s) ; constantes partagées sur Swift, Android et JS afin que les tentatives restent prévisibles.
 - Cadence ping/pong : battement de coeur de 30 s avec tolérance de trois pongs manqués avant reconnexion ; JS limite l'intervalle minimum à 15 secondes pour satisfaire aux règles de limitation du navigateur.
@@ -107,7 +107,7 @@ reflète toujours le mandat qui a conduit à l’intégration du pont :
 ### Identifiants de session et sels
 
 - `sid` est un identifiant de 32 octets dérivé de `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  Les DApps le calculent avant d'appeler `/v1/connect/session` ; les portefeuilles le font écho dans les trames `approve` afin que les deux parties puissent saisir les journaux et la télémétrie de manière cohérente.
+  Les DApps le calculent avant d'appeler `/v2/connect/session` ; les portefeuilles le font écho dans les trames `approve` afin que les deux parties puissent saisir les journaux et la télémétrie de manière cohérente.
 - Le même sel alimente chaque étape de dérivation de clé afin que les SDK ne dépendent jamais de l'entropie récoltée à partir de la plate-forme hôte.
 
 ### Gestion des clés éphémères

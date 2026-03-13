@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```## 3. Автоматизированные отправки
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Хелпер делает один `POST /v1/sns/registrations` על ספרוס או שירותים
+- Хелпер делает один `POST /v2/sns/registrations` על ספרוס או שירותים
   первой HTTP ошибке. Ответы добавляются в лог как NDJSON записи.
-- `--poll-status` פריט זמין עבור `/v1/sns/registrations/{selector}`
+- `--poll-status` פריט זמין עבור `/v2/sns/registrations/{selector}`
   каждой отправки (עד `--poll-attempts`, по умолчанию 5), чтобы подтвердить
   видимость записи. Укажите `--suffix-map` (JSON маппинг `suffix_id` в значения
   "סיומת"), чтобы инструмент мог вывести `{label}.{suffix}` לסקר.

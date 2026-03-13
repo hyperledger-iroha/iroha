@@ -91,7 +91,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 |----------|----------|----------|
 | `sorafs_manifest_chunk_store` | ✅ サポート | `--json-out=-` を介して canonico + エイリアスを処理し、`--json-out=-` を介して関連ストリームを処理し、`ensure_charter_compliance()` を介して登録を行うアプリケーションを検証します。 |
 | `sorafs_manifest_stub` | ⚠️レティラード |サポート用のマニフェストのビルダー。 CAR/マニフェストの `iroha app sorafs toolkit pack` パラメータを使用して、確定的な `--plan=-` パラメータを確認してください。 |
-| `sorafs_provider_advert_stub` | ⚠️レティラード |オフラインでの検証のヘルパー。プロバイダーは、`/v1/sorafs/providers` 経由で開発者製品のパイプラインと公開有効性を広告します。 |
+| `sorafs_provider_advert_stub` | ⚠️レティラード |オフラインでの検証のヘルパー。プロバイダーは、`/v2/sorafs/providers` 経由で開発者製品のパイプラインと公開有効性を広告します。 |
 | `sorafs_fetch` (開発者オーケストレーター) | ✅ サポート | Le `chunk_fetch_specs`、容量 `range` のペイロードは CARv2 に準拠しています。 |
 | SDK のフィクスチャ (Rust/Go/TS) | ✅ サポート | `export_vectors` 経由の Regeneradas; o canonico aparece primeiro em cada lista de aliases e e assinado por envelops do conselho を処理します。 |
 |ゲートウェイなしのネゴシアカオ デ パーフィル Torii | ✅ サポート |ヘッダー `Content-Chunker` を含む、`Accept-Chunker` の完全な文法を実装して、CARv1 ブリッジの公開要求を明示的にダウングレードします。 |
@@ -99,7 +99,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 テレメトリのロールアウト:
 
 - **チャンクの取得テレメトリア** - CLI Iroha `sorafs toolkit pack` はチャンクのダイジェストを出力し、メタデータ CAR はダッシュボードから PoR を取得します。
-- **プロバイダー広告** - 広告の OS ペイロードには、容量性のメタデータやエイリアスが含まれます。 `/v1/sorafs/providers` 経由の valide cobertura (例、presenca da capacidade `range`)。
+- **プロバイダー広告** - 広告の OS ペイロードには、容量性のメタデータやエイリアスが含まれます。 `/v2/sorafs/providers` 経由の valide cobertura (例、presenca da capacidade `range`)。
 - **ゲートウェイの監視** - オペランドの開発レポート OS パラメータ `Content-Chunker`/`Content-Digest` パラ検出器が inesperados をダウングレードします。エスペラーゼ・ケ・オ・ウソ・ド・ブリッジ・テンダ・ゼロ・アンテス・ダ・デプレカカオ。
 
 非推奨の政治: 後継者に対する政府の決定、公共政策の議題

@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii-ն այժմ բացահայտում է մատակարարի վարկային նկարները վճարների մատյանների և վահանակների հետ միասին
 կարող է դարպասը գրավել ցածր հավասարակշռության և 11 մետրանոց հարվածների դեպքում.
 
-- ՀԱՆԳՍՏՈՒՄ. `GET /v1/sorafs/capacity/state`-ը վերադարձնում է `credit_ledger[*]` գրառումները, որոնք
+- ՀԱՆԳՍՏՈՒՄ. `GET /v2/sorafs/capacity/state`-ը վերադարձնում է `credit_ledger[*]` գրառումները, որոնք
   արտացոլել մատյանների դաշտերը, որոնք հաստատվել են ներծծման թեստում: Տես
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana ներմուծում. `dashboards/grafana/sorafs_capacity_penalties.json` պատկերում է

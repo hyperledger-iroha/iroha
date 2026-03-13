@@ -38,7 +38,7 @@ Pressupõe que a pilha de orquestração entregue sob SF-6 já está implantada 
 ## 1. Validação pré-voo
 
 1. **Confirmar insumos de governança.**
-   - Todos os provedores candidatos devem publicar envelopes `ProviderAdvertV1` com payloads de capacidade de intervalo e orçamentos de stream. Valide via `/v1/sorafs/providers` e compare com os campos de capacidade esperados.
+   - Todos os provedores candidatos devem publicar envelopes `ProviderAdvertV1` com payloads de capacidade de intervalo e orçamentos de stream. Valide via `/v2/sorafs/providers` e compare com os campos de capacidade esperados.
    - Snapshots de telemetria que fornecem taxas de latência/falha devem ter menos de 15 minutos antes de cada execução canária.
 2. **Preparar a configuração.**
    - Persista a configuração JSON do orquestrador na árvore em camadas `iroha_config`:

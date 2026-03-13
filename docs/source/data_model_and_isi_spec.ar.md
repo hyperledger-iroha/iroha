@@ -200,7 +200,7 @@ translator: machine-google-reviewed
 - النعناع بالاسم المستعار + مكونات الحساب:
   -`iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - حل الاسم المستعار للمساعدة الأساسية:
-  - `POST /v1/assets/aliases/resolve` مع JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v2/assets/aliases/resolve` مع JSON `{ "alias": "pkr#ubl@sbp" }`
 
 مذكرة الهجرة:
 - معرفات تعريف الأصول النصية `name#domain` غير مدعومة عمدًا في الإصدار الأول.

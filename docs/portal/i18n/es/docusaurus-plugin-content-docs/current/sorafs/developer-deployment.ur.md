@@ -30,7 +30,7 @@ SoraFS Determinismo del flujo de trabajo de empaquetado مضبوط کرتا ہے
 
 ## Configuración del entorno
 
-- El punto final de transmisión a prueba de puertas de enlace (`POST /v1/sorafs/proof/stream`) habilita la emisión de resúmenes de telemetría CLI de کر سکے۔
+- El punto final de transmisión a prueba de puertas de enlace (`POST /v2/sorafs/proof/stream`) habilita la emisión de resúmenes de telemetría CLI de کر سکے۔
 - Política `sorafs_alias_cache` y valores predeterminados de `iroha_config` y ayudante de CLI (`sorafs_cli manifest submit --alias-*`) y configuración de configuración
 - Tokens de transmisión (credenciales Torii) کو ایک محفوظ administrador secreto سے فراہم کریں۔
 - Los exportadores de telemetría (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) habilitan کریں اور انہیں اپنے Prometheus/OTel stack میں ship کریں۔

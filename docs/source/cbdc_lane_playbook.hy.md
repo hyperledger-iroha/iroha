@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **Գոտի մանիֆեստներ՝** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Ժամանակացույցի քվոտաները՝** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Ձեռքով ծուխ.** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` մանիֆեստի գրացուցակով, որը ցույց է տալիս CBDC ֆայլերը, այնուհետև սեղմեք `/v1/sumeragi/status` և ստուգեք `lane_governance.manifest_ready=true`-ը CBDC գծի համար:
+3. **Ձեռքով ծուխ.** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` մանիֆեստի գրացուցակով, որը ցույց է տալիս CBDC ֆայլերը, այնուհետև սեղմեք `/v2/sumeragi/status` և ստուգեք `lane_governance.manifest_ready=true`-ը CBDC գծի համար:
 4. **Սպիտակ ցուցակի հետևողականության թեստ.** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` վարժություններ `integration_tests/tests/nexus/cbdc_whitelist.rs`, վերլուծելով `fixtures/space_directory/profile/cbdc_lane_profile.json`-ը և մատնանշված կարողությունը դրսևորվում է՝ ապահովելու համար սպիտակ ցուցակի յուրաքանչյուր մուտքի UAID-ը, տվյալների տարածությունը, ակտիվացման դարաշրջանը և թույլտվությունների ցանկը I180X0001-ի ներքո: `fixtures/space_directory/capability/`. Կցեք թեստի գրանցամատյանը NX-6 ապացույցների փաթեթին, երբ սպիտակ ցուցակը կամ մանիֆեստները փոխվում են:
 
 ### 2.2 CLI հատվածներ
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - Հրապարակեք HTTP-ի միջոցով, եթե օպերացիոն սեղանն աշխատում է հեռակառավարման ավտոմատացման միջոցով.
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - Արտակարգ իրավիճակի չեղարկումը կարող է տրվել հեռակա կարգով՝ POST ուղարկելով Torii հասցեին՝
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

@@ -30,7 +30,7 @@ Le panneau de commande SoraFS utilise des mesures de sécurité avant l'utilisat
 
 ## Configuration de la configuration
 
-- Les passerelles permettent de diffuser le streaming à l'épreuve des points de terminaison (`POST /v1/sorafs/proof/stream`), la CLI peut également utiliser les paramètres télémétriques.
+- Les passerelles permettent de diffuser le streaming à l'épreuve des points de terminaison (`POST /v2/sorafs/proof/stream`), la CLI peut également utiliser les paramètres télémétriques.
 - Enregistrez la politique `sorafs_alias_cache` en utilisant l'assistant `iroha_config` ou CLI (`sorafs_cli manifest submit --alias-*`).
 - Ajoutez des jetons de flux (ou des données privées Torii) à votre gestionnaire de secrets.
 - Fermez les exportateurs télémétriques (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et ouvrez-les sur votre site Prometheus/OTel.## Déploiement de la stratégie

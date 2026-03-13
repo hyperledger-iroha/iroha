@@ -59,12 +59,12 @@ SLO のアプリケーション。 Les travaux suivants ciblent l'automatization
 Torii エンドポイントを公開し、4 人乗りの信号を使用してパイロットを監視します
 特別な配線を必要としないサイクル・ド・ヴィー・デ・アコード:
 
-- `POST /v1/sorafs/deal/usage` テレメトリーを受け入れます `DealUsageReport` と renvoie
+- `POST /v2/sorafs/deal/usage` テレメトリーを受け入れます `DealUsageReport` と renvoie
   互換性決定結果の結果 (`UsageOutcome`)。
-- `POST /v1/sorafs/deal/settle` la fenêtre courante、en streamant le を終了します
+- `POST /v2/sorafs/deal/settle` la fenêtre courante、en streamant le を終了します
   `DealSettlementRecord` 結果の平均 `DealSettlementV1` エンコードと Base64
   prêt pour 出版物 dans le DAG de gouvernance。
-- `/v1/events/sse` と Torii の拡散被弾登録
+- `/v2/events/sse` と Torii の拡散被弾登録
   `SorafsGatewayEvent::DealUsage` 使用状況の履歴書 (エポック、GiB 時間測定、
   チケットの計算、料金決定)、登録
   `SorafsGatewayEvent::DealSettlement` スナップショットの基準を含む登録簿

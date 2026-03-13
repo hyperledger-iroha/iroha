@@ -82,7 +82,7 @@ npm run start
 المكونات التالية تقرا هذه القيم من `docusaurus.config.js`:
 
 - **Swagger UI** - يعرض في `/reference/torii-swagger`; يسبق تفويض مخطط bearer عند وجود token،
-- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v2/mcp` agent workflows.
   يوسم الطلبات بـ `X-TryIt-Client`، يحقن `X-TryIt-Auth`، ويعيد توجيه الاستدعاءات عبر
   الوكيل عندما يتم ضبط `TRYIT_PROXY_PUBLIC_URL`.
 - **RapiDoc** - يعرض في `/reference/torii-rapidoc`; يعكس حقل token،
@@ -159,7 +159,7 @@ device flow تقوم الاداة بما يلي:
 1. اختر fixture مثل `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
    اغلفة Norito خام؛ **لا** تقم بتحويلها الى base64.
 2. في Swagger او RapiDoc، حدد endpoint NRPC (مثلا
-   `POST /v1/pipeline/submit`) وغيّر محدد **Content-Type** الى
+   `POST /v2/pipeline/submit`) وغيّر محدد **Content-Type** الى
    `application/x-norito`.
 3. بدّل محرر جسم الطلب الى **binary** (وضع "File" في Swagger او محدد "Binary/File" في RapiDoc)
    وارفع ملف `.norito`. تقوم الاداة بتمرير البايتات عبر الوكيل بدون تعديل.
@@ -180,12 +180,12 @@ device flow تقوم الاداة بما يلي:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 بدل fixture باي ادخال مدرج في `transaction_fixtures.manifest.json` او قم بترميز payload خاص بك عبر
 `cargo xtask norito-rpc-fixtures`. عندما يكون Torii في وضع canary يمكنك توجيه `curl` الى
-proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`) لاختبار نفس البنية
+proxy try-it (`https://docs.sora.example/proxy/v2/pipeline/submit`) لاختبار نفس البنية
 التي تستخدمها عناصر البوابة.
 
 ## المراقبة والعمليات
@@ -200,7 +200,7 @@ proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`) لاختبا
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 مفاتيح البيئة:

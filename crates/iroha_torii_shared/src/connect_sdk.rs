@@ -236,7 +236,7 @@ mod tests {
             dir,
             seq,
             ConnectPayloadV1::SignRequestRaw {
-                domain_tag: "iroha-connect/v1/test".into(),
+                domain_tag: "iroha-connect/v2/test".into(),
                 bytes: vec![1, 2, 3],
             },
         );

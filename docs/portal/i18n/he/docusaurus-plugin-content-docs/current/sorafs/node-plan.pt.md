@@ -61,7 +61,7 @@ Notas de implementacao:
 - השתמש ב-o stack Axum de Torii com loads `norito::json`.
 - Adicone schemas Norito לתשובות (`PinResultV1`, `FetchErrorV1`, structs de telemetria).
 
-- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` agora expoe a profundidade do backlog mais a epoca/deadline mais antiga e os timestamps mais recentes de sucesso/falha por provedor, via `sorafs_node::NodeHandle::por_ingestion_status`, e Torii gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` עבור לוחות מחוונים. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src:/3metrics.0]
+- `/v2/sorafs/por/ingestion/{manifest_digest_hex}` agora expoe a profundidade do backlog mais a epoca/deadline mais antiga e os timestamps mais recentes de sucesso/falha por provedor, via `sorafs_node::NodeHandle::por_ingestion_status`, e Torii gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` עבור לוחות מחוונים. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src:/3metrics.0]
 
 ### ד. מתזמן e cumprimento de quotas
 

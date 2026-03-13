@@ -457,7 +457,7 @@ pub struct StatusArgs {
     #[arg(long, value_name = "NAME")]
     service_name: Option<String>,
     /// Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query
-    /// `/v1/soracloud/status` from a live control plane.
+    /// `/v2/soracloud/status` from a live control plane.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
     /// Optional API token sent as `x-api-token` when querying Torii.
@@ -5638,7 +5638,7 @@ fn fetch_torii_soracloud_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/status")
-        .wrap_err("failed to derive /v1/soracloud/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/status URL from --torii-url")?;
 
     if let Some(service_name) = service_name
         && !service_name.is_empty()
@@ -5670,7 +5670,7 @@ fn fetch_torii_soracloud_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/status returned {}: {}",
+            "Torii /v2/soracloud/status returned {}: {}",
             status,
             body_text
         ));
@@ -5690,7 +5690,7 @@ fn fetch_torii_soracloud_agent_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/status")
-        .wrap_err("failed to derive /v1/soracloud/agent/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/agent/status URL from --torii-url")?;
     if let Some(apartment_name) = apartment_name
         && !apartment_name.trim().is_empty()
     {
@@ -5721,7 +5721,7 @@ fn fetch_torii_soracloud_agent_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/agent/status returned {}: {}",
+            "Torii /v2/soracloud/agent/status returned {}: {}",
             status,
             body_text
         ));
@@ -5746,7 +5746,7 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/mailbox/status")
-        .wrap_err("failed to derive /v1/soracloud/agent/mailbox/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/agent/mailbox/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
@@ -5773,7 +5773,7 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/agent/mailbox/status returned {}: {}",
+            "Torii /v2/soracloud/agent/mailbox/status returned {}: {}",
             status,
             body_text
         ));
@@ -5798,7 +5798,7 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/autonomy/status")
-        .wrap_err("failed to derive /v1/soracloud/agent/autonomy/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/agent/autonomy/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
@@ -5825,7 +5825,7 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/agent/autonomy/status returned {}: {}",
+            "Torii /v2/soracloud/agent/autonomy/status returned {}: {}",
             status,
             body_text
         ));
@@ -5855,7 +5855,7 @@ fn fetch_torii_soracloud_training_job_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/training/job/status")
-        .wrap_err("failed to derive /v1/soracloud/training/job/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/training/job/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5883,7 +5883,7 @@ fn fetch_torii_soracloud_training_job_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/training/job/status returned {}: {}",
+            "Torii /v2/soracloud/training/job/status returned {}: {}",
             status,
             body_text
         ));
@@ -5913,7 +5913,7 @@ fn fetch_torii_soracloud_model_artifact_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/artifact/status")
-        .wrap_err("failed to derive /v1/soracloud/model/artifact/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/model/artifact/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5941,7 +5941,7 @@ fn fetch_torii_soracloud_model_artifact_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/model/artifact/status returned {}: {}",
+            "Torii /v2/soracloud/model/artifact/status returned {}: {}",
             status,
             body_text
         ));
@@ -5971,7 +5971,7 @@ fn fetch_torii_soracloud_model_weight_status(
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/weight/status")
-        .wrap_err("failed to derive /v1/soracloud/model/weight/status URL from --torii-url")?;
+        .wrap_err("failed to derive /v2/soracloud/model/weight/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5999,7 +5999,7 @@ fn fetch_torii_soracloud_model_weight_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/model/weight/status returned {}: {}",
+            "Torii /v2/soracloud/model/weight/status returned {}: {}",
             status,
             body_text
         ));
@@ -8668,7 +8668,7 @@ mod tests {
             }
         });
         let output = StatusOutput::from_network(
-            "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
+            "http://127.0.0.1:8080/v2/soracloud/status".to_owned(),
             payload.clone(),
         );
         assert_eq!(output.source, "torii_control_plane");
@@ -9037,7 +9037,7 @@ mod tests {
             "model-1",
             "job-1",
             Hash::new(b"weight-artifact"),
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
@@ -9063,7 +9063,7 @@ mod tests {
             "job-1",
             Some("0.9.0"),
             Hash::new(b"weight-artifact"),
-            "dataset://synthetic/v1",
+            "dataset://synthetic/v2",
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
@@ -9423,7 +9423,7 @@ mod tests {
             model_name: "model-1".to_owned(),
             training_job_id: "job-1".to_owned(),
             weight_artifact_hash: weight_artifact_hash.clone(),
-            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            dataset_ref: "dataset://synthetic/v2".to_owned(),
             training_config_hash: training_config_hash.clone(),
             reproducibility_hash: reproducibility_hash.clone(),
             provenance_attestation_hash: provenance_attestation_hash.clone(),
@@ -9457,7 +9457,7 @@ mod tests {
             training_job_id: "job-1".to_owned(),
             parent_version: Some("0.9.0".to_owned()),
             weight_artifact_hash: weight_artifact_hash.clone(),
-            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            dataset_ref: "dataset://synthetic/v2".to_owned(),
             training_config_hash: training_config_hash.clone(),
             reproducibility_hash: reproducibility_hash.clone(),
             provenance_attestation_hash: provenance_attestation_hash.clone(),

@@ -31,7 +31,7 @@ Supposons que la pile d'orchestration entre sous SF-6 est déchargée (`sorafs_o
 > **Voir aussi :** Le [Runbook des opérations de l'orchestre](./orchestrator-ops.md) approfondit les procédures d'exécution (capture du tableau de bord, bascules de déclenchement par étapes, restauration). Utilisez des références en conjonction lors de changements en vivo.
 
 ## 1. Validation préalable1. **Confirmer les entrées de gouvernement.**
-   - Tous les fournisseurs candidats doivent être publiés sur `ProviderAdvertV1` avec des charges utiles de capacité de portée et de présupposés de flux. Valable au milieu du `/v1/sorafs/providers` et comparé aux champs de capacité des espérés.
+   - Tous les fournisseurs candidats doivent être publiés sur `ProviderAdvertV1` avec des charges utiles de capacité de portée et de présupposés de flux. Valable au milieu du `/v2/sorafs/providers` et comparé aux champs de capacité des espérés.
    - Les instants de télémétrie qui apportent des tâches de latence/chute doivent avoir moins de 15 minutes avant chaque exécution canarie.
 2. **Préparer la configuration.**
    - Conserver la configuration JSON de l'explorateur dans l'arbre `iroha_config` par exemple :

@@ -148,9 +148,9 @@ payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tes
 > The Torii gateway now exposes read-only helpers backed by the same
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
 >   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
 >   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > These endpoints mirror the CLI output so pipelines can switch from local
@@ -195,19 +195,19 @@ payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tes
 
 ### Capacity Declaration & Scheduling Integration
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
+- Torii now relays `CapacityDeclarationRecord` updates from `/v2/sorafs/capacity/declare`
   to the embedded `CapacityManager`, so each node builds an in-memory view of its
   committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
+  for telemetry (`GET /v2/sorafs/capacity/state`) and enforces per-profile or per-lane
   reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
+- The `/v2/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
   payloads. When the order targets the local provider the manager checks for
   duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
   returns a `ReplicationPlan` describing remaining capacity so orchestration tools
   can proceed with ingestion. Orders for other providers are acknowledged with an
   `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
 - Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
+  `POST /v2/sorafs/capacity/complete` to release reservations via
   `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
   snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
   queue the next order without polling. Follow-up work will wire this into the chunk

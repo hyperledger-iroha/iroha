@@ -69,8 +69,8 @@ El límite `event_buffer_capacity` y el `/admin/privacy/events` garantizan que e
 
 ## Puntos principales Torii
 
-Torii el tipo de publicación de terminales HTTP, los relés y los recopiladores pueden permitir la conexión sin configuración transporte seguro:- `POST /v1/soranet/privacy/event` carga útil del modelo `RecordSoranetPrivacyEventDto`. Este equipo está equipado con `SoranetPrivacyEventV1` y no necesita el método `source`. Torii proporciona información sobre los perfiles de actividad de los televisores, la configuración de la conexión y la activación de HTTP `202 Accepted` вместе с Norito Convertidor JSON, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) y el relé.
-- `POST /v1/soranet/privacy/share` carga útil del modelo `RecordSoranetPrivacyShareDto`. Si no hay `SoranetPrivacyPrioShareV1` y no hay soportes `forwarded_by`, estos operadores pueden auditar a los coleccionistas de fotos. Las aplicaciones que utilizan HTTP `202 Accepted` con Norito son un convertidor JSON, un recopilador de resumen, un depósito de datos y una fuente de alimentación; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерминированную обработку ошибок между coleccionistas. El ciclo del orquestador se realiza mediante relés opuestos, sincronización sincronizada con el acumulador Prio Torii con cubos en el relé.
+Torii el tipo de publicación de terminales HTTP, los relés y los recopiladores pueden permitir la conexión sin configuración transporte seguro:- `POST /v2/soranet/privacy/event` carga útil del modelo `RecordSoranetPrivacyEventDto`. Este equipo está equipado con `SoranetPrivacyEventV1` y no necesita el método `source`. Torii proporciona información sobre los perfiles de actividad de los televisores, la configuración de la conexión y la activación de HTTP `202 Accepted` вместе с Norito Convertidor JSON, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) y el relé.
+- `POST /v2/soranet/privacy/share` carga útil del modelo `RecordSoranetPrivacyShareDto`. Si no hay `SoranetPrivacyPrioShareV1` y no hay soportes `forwarded_by`, estos operadores pueden auditar a los coleccionistas de fotos. Las aplicaciones que utilizan HTTP `202 Accepted` con Norito son un convertidor JSON, un recopilador de resumen, un depósito de datos y una fuente de alimentación; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерминированную обработку ошибок между coleccionistas. El ciclo del orquestador se realiza mediante relés opuestos, sincronización sincronizada con el acumulador Prio Torii con cubos en el relé.
 
 Оба эндпоинта учитывают профиль телеметрии: они возвращают `503 Service Unavailable`, когда метрики отключены. Los clientes pueden utilizar el formato binario Norito (`application/x.norito`) o Norito JSON (`application/x.norito+json`); Servidor automático de formato para extractores estándar Torii.
 
@@ -142,7 +142,7 @@ cargo xtask soranet-privacy-report \
 
 Los gobernantes pueden activar el sistema de supresión de mensajes automáticamente. El asistente de mantenimiento utiliza `--max-suppression-ratio <0-1>`, los CI y los operadores que pueden proteger los cubos suprimidos de forma segura. допустимое окно (по умолчанию 10%) или когда cubos еще отсутствуют. Fotos recomendadas:
 
-1. Exporte NDJSON con retransmisión de puntos finales de administrador y orquestador de archivos `/v1/soranet/privacy/event|share` en `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Exporte NDJSON con retransmisión de puntos finales de administrador y orquestador de archivos `/v2/soranet/privacy/event|share` en `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Запустить хелпер с бюджетом политики:
 
    ```bash

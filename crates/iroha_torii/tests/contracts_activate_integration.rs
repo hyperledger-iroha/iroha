@@ -43,7 +43,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
     // Wire routes
     let app = Router::new()
         .route(
-            "/v1/contracts/deploy",
+            "/v2/contracts/deploy",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -64,7 +64,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
             }),
         )
         .route(
-            "/v1/contracts/instance/activate",
+            "/v2/contracts/instance/activate",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -85,7 +85,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
             }),
         )
         .route(
-            "/v1/gov/instances/{ns}",
+            "/v2/gov/instances/{ns}",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(ns): axum::extract::Path<String>,
@@ -112,7 +112,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v1/contracts/deploy")
+        .uri("/v2/contracts/deploy")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -141,7 +141,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
     );
     let req2 = http::Request::builder()
         .method("POST")
-        .uri("/v1/contracts/instance/activate")
+        .uri("/v2/contracts/instance/activate")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body2))
         .unwrap();
@@ -156,7 +156,7 @@ async fn contracts_deploy_then_activate_and_list_instance() {
     // List instances by namespace and assert our instance is present
     let req3 = http::Request::builder()
         .method("GET")
-        .uri("/v1/gov/instances/apps")
+        .uri("/v2/gov/instances/apps")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp3 = app.clone().oneshot(req3).await.unwrap();
@@ -192,7 +192,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
 
     let app = Router::new()
         .route(
-            "/v1/contracts/instance",
+            "/v2/contracts/instance",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -213,7 +213,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
             }),
         )
         .route(
-            "/v1/contracts/code-bytes/{code_hash}",
+            "/v2/contracts/code-bytes/{code_hash}",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(ch): axum::extract::Path<String>| async move {
@@ -226,7 +226,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
             }),
         )
         .route(
-            "/v1/gov/instances/{ns}",
+            "/v2/gov/instances/{ns}",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(ns): axum::extract::Path<String>,
@@ -256,7 +256,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
     );
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v1/contracts/instance")
+        .uri("/v2/contracts/instance")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -277,7 +277,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
     let applied = iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert!(applied > 0);
 
-    let uri = format!("/v1/contracts/code-bytes/{code_hash_hex}");
+    let uri = format!("/v2/contracts/code-bytes/{code_hash_hex}");
     let req2 = http::Request::builder()
         .method("GET")
         .uri(uri)
@@ -295,7 +295,7 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
 
     let req3 = http::Request::builder()
         .method("GET")
-        .uri("/v1/gov/instances/apps")
+        .uri("/v2/gov/instances/apps")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp3 = app.oneshot(req3).await.unwrap();

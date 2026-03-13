@@ -159,9 +159,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > تعرض البوابة Torii اضطرابات المساعدين في محاضرة واحدة على نفس الصورة
 > `NodeHandle` :
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — راجع البيان
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — راجع البيان
 > Norito مخزون (base64) مع ملخص/métadonnées.[crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — أعد تشغيل المخطط
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — أعد تشغيل المخطط
 > تحديد JSON (`chunk_fetch_specs`) للأدوات في اتجاه مجرى النهر. 【صناديق/iroha_torii/src/sorafs/api.rs:1259】
 >
 > تعكس نقاط النهاية هذه نوع CLI حتى تتمكن خطوط الأنابيب من المرور
@@ -201,18 +201,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      تم تحديد نموذج للحوكمة مرة واحدة ; من أجل اللحظة، التصميم يفترض أن يكون
      حصص صارمة وعمليات إلغاء التثبيت التي بدأها المشغل.
 
-### إعلان القدرة وتكامل الجدولة- Torii يتابع الخلل في اليوم `CapacityDeclarationRecord` بعد `/v1/sorafs/capacity/declare`
+### إعلان القدرة وتكامل الجدولة- Torii يتابع الخلل في اليوم `CapacityDeclarationRecord` بعد `/v2/sorafs/capacity/declare`
   في مقابل `CapacityManager` مغلق، من النوع الذي لن يبني رؤية في ذاكرة جهازك
   التخصيصات مقسم/حارة engagées. يقوم المدير بعرض اللقطات للقراءة فقط من أجل القياس عن بعد
-  (`GET /v1/sorafs/capacity/state`) وتطبيق الحجوزات حسب الملف الشخصي أو حسب المسار قبل ذلك
+  (`GET /v2/sorafs/capacity/state`) وتطبيق الحجوزات حسب الملف الشخصي أو حسب المسار قبل ذلك
   الأوامر الجديدة غير مقبولة تمامًا.[crates/sorafs_node/src/capacity.rs:1] 【crates/sorafs_node/src/lib.rs:60】
-- تقبل نقطة النهاية `/v1/sorafs/capacity/schedule` الحمولات `ReplicationOrderV1` المنبعثة من الإدارة.
+- تقبل نقطة النهاية `/v2/sorafs/capacity/schedule` الحمولات `ReplicationOrderV1` المنبعثة من الإدارة.
   عند طلب رقم الهاتف من الموفر المحلي، يتحقق المدير من التخطيط المزدوج، ويتحقق من صحة
   مقسم/ممر السعة، واحتفظ بالشريحة، وأعد `ReplicationPlan` المشتق من السعة المتبقية
   حتى تتمكن أدوات التنظيم من استيعابها. الطلبات لمقدمي الخدمات الآخرين
   تمت الموافقة على الرد `ignored` لتسهيل سير العمل لمشغلين متعددين.
 - خطافات الإكمال (على سبيل المثال، تخفيضات بعد نجاح الابتلاع) المستأنفة
-  `POST /v1/sorafs/capacity/complete` لتحرير الحجوزات عبر `CapacityManager::complete_order`.
+  `POST /v2/sorafs/capacity/complete` لتحرير الحجوزات عبر `CapacityManager::complete_order`.
   يشتمل الرد على لقطة `ReplicationRelease` (إجمالي البقايا، وبقايا القطعة/الممر) لتتمكن من ذلك
   يمكن لأدوات التنظيم أن تضع الأمر التالي دون استطلاع. عمل مستقبلييتم تخزين هذا عبر خط أنابيب القطع عندما يتم عرض منطق الابتلاع.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - قد يكون من الممكن إيقاف تشغيل `TelemetryAccumulator` عبر `NodeHandle::update_telemetry`، مما يسمح بالمساعدة

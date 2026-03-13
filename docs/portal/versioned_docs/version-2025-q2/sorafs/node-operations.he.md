@@ -41,7 +41,7 @@ slug: /sorafs/node-operations-he
   ```
 
 - ודא שלתהליך Torii יש גישת קריאה/כתיבה ל-`data_dir`.
-- אשר שהצומת מפרסם את הקיבולת הצפויה דרך `GET /v1/sorafs/capacity/state` ברגע שהצהרה נרשמה.
+- אשר שהצומת מפרסם את הקיבולת הצפויה דרך `GET /v2/sorafs/capacity/state` ברגע שהצהרה נרשמה.
 - כאשר החלקה מופעלת, לוחות מחוונים חושפים גם את מונה ה-GiB·hour/PoR הגולמי וגם את מוני ה-GiB·hour/PoR המוחלקים כדי להדגיש מגמות נטולות ריצוד לצד ערכי ספוט.
 
 ### CLI Dry Run (אופציונלי)
@@ -66,8 +66,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 ברגע ש-Torii פעיל, אתה יכול לאחזר את אותם חפצים באמצעות HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 שתי נקודות הקצה מוגשות על ידי עובד האחסון המשובץ, כך שבדיקות עשן CLI ובדיקות שער נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.59】
@@ -78,7 +78,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. שלח את המניפסט עם קידוד base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -87,7 +87,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. אחזר את הנתונים המוצמדים:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -103,7 +103,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. הצמד לפחות מניפסט אחד כמו לעיל.
 2. הפעל מחדש את תהליך Torii (או את כל הצומת).
 3. שלח מחדש את בקשת האחזור. המטען עדיין חייב להיות ניתן לאחזור והתקציר המוחזר חייב להתאים לערך שלפני ההפעלה מחדש.
-4. בדוק את `GET /v1/sorafs/storage/state` כדי לוודא ש-`bytes_used` משקף את המניפסטים המתמשכים לאחר האתחול מחדש.
+4. בדוק את `GET /v2/sorafs/storage/state` כדי לוודא ש-`bytes_used` משקף את המניפסטים המתמשכים לאחר האתחול מחדש.
 
 ## 4. מבחן דחיית מכסות
 
@@ -118,7 +118,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. בקש מדגם PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -139,7 +139,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - לוחות מחוונים צריכים לעקוב אחר:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` ו-`torii_sorafs_storage_fetch_inflight`
-  - מדדי הצלחה/כשל של PoR הופיעו דרך `/v1/sorafs/capacity/state`
+  - מדדי הצלחה/כשל של PoR הופיעו דרך `/v2/sorafs/capacity/state`
   - ניסיונות פרסום בהסדר דרך `sorafs_node_deal_publish_total{result=success|failure}`
 
 מעקב אחר תרגילים אלה מבטיח שעובד האחסון המשובץ יכול להטמיע נתונים, לשרוד אתחול מחדש, לכבד מכסות מוגדרות וליצור הוכחות PoR דטרמיניסטיות לפני שהצומת מפרסם קיבולת לרשת הרחבה יותר.

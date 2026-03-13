@@ -19,11 +19,11 @@ translation_last_reviewed: 2026-02-07
 - SDK:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` يعيد `GovernanceProposalResult` (ステータス/種類) و`ToriiClient.get_governance_referendum_typed` يعيد `GovernanceReferendumResult`، و`ToriiClient.get_governance_tally_typed` يعيد `GovernanceTally`، و`ToriiClient.get_governance_locks_typed` يعيد `GovernanceLocksResult`، و`ToriiClient.get_governance_unlock_stats_typed` يعيد `GovernanceUnlockStats`، و`ToriiClient.list_governance_instances_typed` يعيد `GovernanceInstancesPage`، فارضا وصولا بنمط と入力した عبر سطح الحوكمة مع امثلة استخدام في README。
 - Python خفيف (`iroha_torii_client`): `ToriiClient.finalize_referendum` و`ToriiClient.enact_proposal` يعيدان حزم `GovernanceInstructionDraft` 型付き (تغلف هيكل `tx_instructions` من Torii)، لتجنب تحليل JSON اليدوي عند تركيب سكربتات 確定/制定。
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` يعرض ヘルパーは、次のように入力しました。 `listGovernanceInstances(namespace, options)` 評議会 (`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、`governancePersistCouncil`、`getGovernanceCouncilAudit`) は、Node.js を評価します。 `/v1/gov/instances/{ns}` が VRF をサポートします。
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` يعرض ヘルパーは、次のように入力しました。 `listGovernanceInstances(namespace, options)` 評議会 (`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、`governancePersistCouncil`、`getGovernanceCouncilAudit`) は、Node.js を評価します。 `/v2/gov/instances/{ns}` が VRF をサポートします。
 
 ナタリー
 
-- POST `/v1/gov/proposals/deploy-contract`
+- POST `/v2/gov/proposals/deploy-contract`
   - 説明 (JSON):
     {
       "名前空間": "アプリ",
@@ -40,30 +40,30 @@ translation_last_reviewed: 2026-02-07
   - 対応: `abi_hash` 対応 `abi_version` 対応。 ـ `abi_version = "v1"` القيمة المتوقعة هي `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`。
 
 API (デプロイ)
-- POST `/v1/contracts/deploy`
+- POST `/v2/contracts/deploy`
   - 説明: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 説明: `code_hash` セキュリティ IVM و`abi_hash` セキュリティ `abi_version` セキュリティ`RegisterSmartContractCode` (マニフェスト) و`RegisterSmartContractBytes` (`.to` كاملة) نيابة عن `authority`。
   - 説明: { "ok": true、"code_hash_hex": "..."、"abi_hash_hex": "..." }
   - 連絡先:
-    - GET `/v1/contracts/code/{code_hash}` -> マニフェストを取得します
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> يعيد `{ code_b64 }`
-- POST `/v1/contracts/instance`
+    - GET `/v2/contracts/code/{code_hash}` -> マニフェストを取得します
+    - GET `/v2/contracts/code-bytes/{code_hash}` -> يعيد `{ code_b64 }`
+- POST `/v2/contracts/instance`
   - 説明: { "authority": "i105..."、"private_key": "..."、"namespace": "apps"、"contract_id": "calc.v1"、"code_b64": "..." }
   - 表示: `(namespace, contract_id)` および `ActivateContractInstance` 。
   - 説明: { "ok": true、"namespace": "apps"、"contract_id": "calc.v1"、"code_hash_hex": "..."、"abi_hash_hex": "..." }
 
 認証済み
-- POST `/v1/aliases/voprf/evaluate`
+- POST `/v2/aliases/voprf/evaluate`
   - 説明: { "blinded_element_hex": "..." }
   - 説明: { "evaluated_element_hex": "...128hex", "バックエンド": "blake2b512-mock" }
     - `backend` يعكس تنفيذ المقيم。番号: `blake2b512-mock`。
   - ملاحظات: مقيم 模擬 حتمي يطبق Blake2b512 مع فصل مجال `iroha.alias.voprf.mock.v1`。ログインしてください。VOPRF は Iroha です。
   - HTTP `400` 16 進数。 Torii Norito `ValidationFail::QueryFailed::Conversion` デコーダ。
-- POST `/v1/aliases/resolve`
+- POST `/v2/aliases/resolve`
   - 名前: { "エイリアス": "GB82 WEST 1234 5698 7654 32" }
   - 名前: { "エイリアス": "GB82WEST12345698765432", "アカウント ID": "i105...", "インデックス": 0, "ソース": "iso_bridge" }
   - ISO ブリッジ (`[iso_bridge.account_aliases]` في `iroha_config`)。 يقوم Torii بتطبيع الاسماء عبر ازالة الفراغات وتحويلها الى احرف كبيرة قبل البحث。 يعيد 404 عندما يكون الاسم غير موجود و503 عندما يكون ランタイム الخاص بـ ISO ブリッジ معطلا。
-- POST `/v1/aliases/resolve_index`
+- POST `/v2/aliases/resolve_index`
   - 説明: { "インデックス": 0 }
   - 説明: { "インデックス": 0、"エイリアス": "GB82WEST12345698765432"、"アカウントID": "i105..."、"ソース": "iso_bridge" }
   - ملاحظات: مؤشرات الاسماء تعين بشكل حتمي حسب ترتيب التكوين (0 ベース)。オフラインで認証を行うことができます。حد حجم الكود
@@ -72,7 +72,7 @@ API (デプロイ)
   - バージョン: 16 MiB。 `RegisterSmartContractBytes` は不変です。
   - يمكن للمشغلين التعديل عبر `SetParameter(Custom)` مع `id = "max_contract_code_bytes"` وحمولة رقمية.
 
-- POST `/v1/gov/ballots/zk`
+- POST `/v2/gov/ballots/zk`
   - 説明: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 重要:
@@ -80,12 +80,12 @@ API (デプロイ)
     - 金額と有効期限を確認してください。`BallotRejected`。
     - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` قبل ادراج `SubmitBallot`;ラッチがかかっています。
 
-- POST `/v1/gov/ballots/plain`
+- POST `/v2/gov/ballots/plain`
   - 説明: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 重要: 投票数 - 投票数、有効期限、金額。 يجب ان يساوي `owner` سلطة المعاملة。 `conviction_step_blocks` です。
 
-- POST `/v1/gov/finalize`
+- POST `/v2/gov/finalize`
   - 説明: { "referendum_id": "r1"、"proposal_id": "...64hex"、"authority": "i105...?"、"private_key": "...?" }
   - 説明: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - バージョン (バージョン): تنفيذ اقتراحdeploy معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة 制定されました。マニフェスト `code_hash` `abi_hash` を確認してください。
@@ -94,24 +94,24 @@ API (デプロイ)
     - 承認/拒否 承認/拒否 平文ZK は閉店しました、`FinalizeReferendum`。
     - 投票率 承認+拒否 فقط؛投票率を棄権する。
 
-- POST `/v1/gov/enact`
+- POST `/v2/gov/enact`
   - 説明: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "i105...?"、 "private_key": "...?" }
   - 説明: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - メッセージ: يقدم Torii الموقعة عندما تتوفر `authority`/`private_key`; هيكلا لتوقيع العملاء وارساله。プリ画像 اختيارية وحاليا معلوماتية。
 
-- `/v1/gov/proposals/{id}` を取得
+- `/v2/gov/proposals/{id}` を取得
   - `{id}`: 16 進数 (64 文字)
   - 説明: { "見つかった": bool、"提案": { ... }? }
 
-- `/v1/gov/locks/{rid}` を取得
+- `/v2/gov/locks/{rid}` を取得
   - 文字列 `{rid}`: 文字列
   - 説明: { "found": bool、"referendum_id": "rid"、"locks": { ... }? }
 
-- `/v1/gov/council/current` を取得
+- `/v2/gov/council/current` を取得
   - 説明: { "エポック": N, "メンバー": [{ "アカウント ID": "..." }, ...] }
   - ملاحظات: يعيد Council المحفوظ اذا كان موجودا؛ والا يشتق بديلا حتميا باستخدام اصل stake المضبوط والعتبات (يعكس مواصفات VRF حتى تثبت ادلة VRF (英語)。
 
-- POST `/v1/gov/council/derive-vrf` (機能: gov_vrf)
+- POST `/v2/gov/council/derive-vrf` (機能: gov_vrf)
   - 説明: { "committee_size": 21、"epoch": 123? , "candidates": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - 説明: VRF の評価 - 評価 `chain_id` و`epoch`ハッシュ値バイト数 説明 説明ويعيد اعلى `committee_size` من الاعضاء。ああ、そうです。
   - 形式: { "エポック": N、"メンバー": [{ "アカウント ID": "..." } ...]、"合計候補数": M、"検証済み": K }
@@ -184,14 +184,14 @@ RBAC
 - メタデータ `gov_upgrade_id=<value>` (マニフェスト) メタデータ `gov_upgrade_id=<value>` (マニフェスト)マニフェストの定足数。
 
 エンドポイントの説明
-- POST `/v1/gov/protected-namespaces` - يطبق `gov_protected_namespaces` مباشرة على العقدة。
+- POST `/v2/gov/protected-namespaces` - يطبق `gov_protected_namespaces` مباشرة على العقدة。
   - 説明: { "名前空間": ["アプリ", "システム"] }
   - 結果: { "ok": true、"適用済み": 1 }
   - ملاحظات: مخصص للادارة/الاختبار؛ API トークンを使用します。 `SetParameter(Custom)` を参照してください。CLI の使用
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - 名前空間の名前空間:
     - Torii バイトコード `code_hash` ダイジェスト Blake2b-32 `code_hash`。
-    - マニフェスト `/v1/contracts/code/{code_hash}` يبلغ بقيم `code_hash` و`abi_hash` متطابقة。
+    - マニフェスト `/v2/contracts/code/{code_hash}` يبلغ بقيم `code_hash` و`abi_hash` متطابقة。
     - يوجد اقتراح حوكمة は、`(namespace, contract_id, code_hash, abi_hash)` مشتق بنفس ハッシュ提案 ID を制定しました。
   - يخرج تقرير JSON يحتوي `results[]` لكل عقد (issues ملخصات マニフェスト/コード/提案) بالاضافة الى ملخص سطر واحد الا ذا تم تعطيله (`--no-summary`)。
   - 名前空間を展開し、展開します。
@@ -208,7 +208,7 @@ RBAC
   - 指紋認証 `vote --mode zk` 指紋認証 投票用紙 (`owner`, `amount`、`duration_blocks`、`direction`) を参照してください。
 
 और देखें
-- GET `/v1/gov/instances/{ns}` - 名前空間を取得します。
+- GET `/v2/gov/instances/{ns}` - 名前空間を取得します。
   - クエリパラメータ:
     - `contains`: 部分文字列 `contract_id` (大文字と小文字が区別されます)
     - `hash_prefix`: 16 進数、`code_hash_hex` (小文字)
@@ -218,10 +218,10 @@ RBAC
   - ヘルパー SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) と `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)。
 
 مسح ロック解除 (المشغل/التدقيق)
-- `/v1/gov/unlocks/stats` を取得
+- `/v2/gov/unlocks/stats` を取得
   - 説明: { "height_current": H、"expired_locks_now": n、"referenda_with_expired": m、"last_sweet_height": S }
   - メッセージ: `last_sweep_height` يعكس اخر ارتفاع بلوك تم فيه مسح はロックを解除します。 `expired_locks_now` は、ロック `expiry_height <= height_current` をロックします。
-- POST `/v1/gov/ballots/zk-v1`
+- POST `/v2/gov/ballots/zk-v1`
   - バージョン (DTO バージョン v1):
     {
       "権限": "i105...",
@@ -234,7 +234,7 @@ RBAC
       "オーナー": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (機能: `zk-ballot`)
+  - 説明: { "ok": true、"accepted": true、"tx_instructions": [{...}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (機能: `zk-ballot`)
   - JSON `BallotProof` 、 `CastZkBallot` 。
   - 説明:
     {
@@ -304,7 +304,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 重要なポイント:
 
-- Torii: `GET /v1/sumeragi/evidence` و`GET /v1/sumeragi/evidence/count`。
+- Torii: `GET /v2/sumeragi/evidence` و`GET /v2/sumeragi/evidence/count`。
 - CLI: `iroha ops sumeragi evidence list`、`... count`、و`... submit --evidence-hex <payload>`。
 
 バイト数と証拠の数:
@@ -312,7 +312,7 @@ for (expected, kind) in offences.iter().enumerate() {
 1. **جمع الحمولة** قبل ان تتقادم.バイト Norito メタデータ 高さ/ビュー。
 2. **تجهيز العقوبة** عبر تضمين الحمولة في 国民投票 او تعليمة sudo (مثل `Unregister::peer`)。 تعيد عملية التنفيذ التحقق من الحمولة؛証拠が必要です。
 3. ** جدولة طوبولوجيا المتابعة** حتى لا يتمكن المدقق المخالف من العودة فورا. `SetParameter(Sumeragi::NextMode)` و`SetParameter(Sumeragi::ModeActivationHeight)` の名簿。
-4. **評価 `/v1/sumeragi/evidence` و`/v1/sumeragi/status` 証拠の証拠 تقدم وان الحوكمة طبقتああ。
+4. **評価 `/v2/sumeragi/evidence` و`/v2/sumeragi/status` 証拠の証拠 تقدم وان الحوكمة طبقتああ。
 
 ### 回答を表示します。
 
@@ -325,11 +325,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- ランタイム、CLI、ステージング、`/v1/sumeragi/params` و`iroha --output-format text ops sumeragi params` の実行時間。ありがとうございます。
+- ランタイム、CLI、ステージング、`/v2/sumeragi/params` و`iroha --output-format text ops sumeragi params` の実行時間。ありがとうございます。
 - ログイン:
   1. انهاء قرار الازالة (او الاستعادة) المدعوم بـ 証拠。
   2. جدولة اعادة تهيئة متابعة مع `mode_activation_height = h_current + activation_lag_blocks`.
-  3. مراقبة `/v1/sumeragi/status` حتى يتبدل `effective_consensus_mode` عند الارتفاع المتوقع.
+  3. مراقبة `/v2/sumeragi/status` حتى يتبدل `effective_consensus_mode` عند الارتفاع المتوقع.
 
 セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティ セキュリティあなたのことを忘れないでください。
 

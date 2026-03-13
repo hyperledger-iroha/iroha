@@ -91,7 +91,7 @@ que requer negociação explícita do cliente (`Accept-Chunker` + `Accept-Digest
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Suportado | Valida o identificador canônico + aliases, faz stream de relatos via `--json-out=-` e aplica o alvará de registro via `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ Retirado | Construtor de manifestos para fóruns de suporte; use `iroha app sorafs toolkit pack` para empacotamento CAR/manifest e manter `--plan=-` para revalidação determinística. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validação offline apenas; os anúncios de provedores devem ser produzidos pelo pipeline de publicação e validados via `/v1/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validação offline apenas; os anúncios de provedores devem ser produzidos pelo pipeline de publicação e validados via `/v2/sorafs/providers`. |
 | `sorafs_fetch` (desenvolvedor orquestrador) | ✅ Suportado | Le `chunk_fetch_specs`, significa cargas úteis de capacidade `range` e monta dita CARv2. |
 | Fixações do SDK (Rust/Go/TS) | ✅ Suportado | Regeneradas via `export_vectors`; o identificador canônico aparece primeiro em cada lista de aliases e é assinado por envelopes do conselho. |
 | Negociação de perfil no gateway Torii | ✅ Suportado | Implementa a gramática completa de `Accept-Chunker`, inclui cabeçalhos `Content-Chunker` e expõe a ponte CARv1 apenas em solicitações explícitas de downgrade. |
@@ -99,7 +99,7 @@ que requer negociação explícita do cliente (`Accept-Chunker` + `Accept-Digest
 Lançamento de telemetria:
 
 - **Telemetria de busca de chunks** - o CLI Iroha `sorafs toolkit pack` emite resumos de chunk, metadados CAR e raízes PoR para ingestão em dashboards.
-- **Anúncios de provedores** - os payloads de anúncios incluem metadados de capacidade e aliases; cobertura válida via `/v1/sorafs/providers` (ex., presença da capacidade `range`).
+- **Anúncios de provedores** - os payloads de anúncios incluem metadados de capacidade e aliases; cobertura válida via `/v2/sorafs/providers` (ex., presença da capacidade `range`).
 - **Monitoramento de gateway** - os operadores devem reportar os pareamentos `Content-Chunker`/`Content-Digest` para detectar downgrades inesperados; espera-se que o uso do bridge tenda a zero antes da depreciação.
 
 Política de depreciação: uma vez que um perfil sucessor seja ratificado, agende uma janela de publicação dupla

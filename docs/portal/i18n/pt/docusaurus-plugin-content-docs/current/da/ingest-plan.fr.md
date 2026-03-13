@@ -39,7 +39,7 @@ fallback serde/JSON não é permitido.
 ## API de superfície (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -227,7 +227,7 @@ o hashing, o chunking e a verificação das opções de manifestos.
   deixe `iroha app sorafs fetch`. Os operadores podem apontar o ponteiro para os artefatos
   manifesto + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou** quatro
   um tíquete de armazenamento Torii via `--storage-ticket`. Quando o bilhete chemin est
-  utilizar, a CLI recupera o manifesto de `/v1/da/manifests/<ticket>`,
+  utilizar, a CLI recupera o manifesto de `/v2/da/manifests/<ticket>`,
   persista o pacote sob `artifacts/da/fetch_<timestamp>/` (substitua com
   `--manifest-cache-dir`), deriva o hash do blob para `--manifest-id`, depois
   execute o orquestrador com a lista `--gateway-provider` fournie. Todos nós
@@ -238,7 +238,7 @@ o hashing, o chunking e a verificação das opções de manifestos.
   Disponibilidade de ponta a ponta vivente totalmente no namespace `da` sem
   duplicar a lógica do orquestrador.
 - `iroha app da get-blob` recupera os manifestos canônicos diretamente de Torii
-  através de `GET /v1/da/manifests/{storage_ticket}`. O comando escrito
+  através de `GET /v2/da/manifests/{storage_ticket}`. O comando escrito
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` e outros
   `chunk_plan_{ticket}.json` sob `artifacts/da/fetch_<timestamp>/` (ou um
   `--output-dir` fornecido pelo usuário) e mostra o comando exato

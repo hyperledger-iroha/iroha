@@ -245,7 +245,7 @@ noeuds d'obtenir les chunks מקצה לאתגרים אחרים PDP/PoTR.
 **אתה רואה חדר רחצה צמוד:**- Le replay cache et la persistence des curseurs ont atterri en DA-2. Voir
   היישום ב-`crates/iroha_core/src/da/replay_cache.rs` (לוגיקה דה
   cache) et l'integration Torii ב-`crates/iroha_torii/src/da/ingest.rs`, qui thread
-  les checks de טביעת אצבע דרך `/v1/da/ingest`.
+  les checks de טביעת אצבע דרך `/v2/da/ingest`.
 - סימולציות של הזרמת תרגילי PDP/PoTR באמצעות זרימת הוכחה לרתמה
   dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de requete
   PoR/PDP/PoTR ושאר תרחישי כישלון אנימות במודלים של איומים.

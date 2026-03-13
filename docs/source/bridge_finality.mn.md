@@ -60,7 +60,7 @@ chain id нь нотлох баримтыг нэг дэвтэрт холбодо
 MMR оргилуудыг зүүнээс баруун тийш эрэмбэлсэн. Оргилуудыг уутлах замаар `mmr_root`-г дахин тооцоол
 баруунаас зүүн тийш: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Баталгаажуулалт нь үндсэн нотолгоотой адил юм: `block_hash`-г дахин тооцоол.
 толгой, амлалт-гэрчилгээний гарын үсгийг шалгаж, амлалтаа шалгана уу
@@ -103,10 +103,10 @@ commit-certificate tuple, validates validator-set hash/version, checks
 
 ## API гадаргуу
 
-- `GET /v1/bridge/finality/{height}` – `BridgeFinalityProof`-г буцаана
+- `GET /v2/bridge/finality/{height}` – `BridgeFinalityProof`-г буцаана
   хүссэн блокны өндөр. `Accept`-ээр дамжуулан контентын хэлэлцээр нь Norito эсвэл дэмждэг
   JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle`-г буцаана
+- `GET /v2/bridge/finality/bundle/{height}` – `BridgeFinalityBundle`-г буцаана
   (амлалт + үндэслэл + толгой/сертификат) хүссэн өндрийн хувьд.
 
 ## Тэмдэглэл болон дагаж мөрдөх

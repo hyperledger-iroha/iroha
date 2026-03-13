@@ -6,12 +6,12 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 slug: /sdks/recipes/javascript-connect-preview
 title: Рецепт превью Connect на JavaScript
-description: Подготовьте сессии превью Connect, выдавайте телеметрию очереди и открывайте сокет `/v1/connect/ws` с `@iroha/iroha-js`.
+description: Подготовьте сессии превью Connect, выдавайте телеметрию очереди и открывайте сокет `/v2/connect/ws` с `@iroha/iroha-js`.
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-Этот рецепт показывает, как объединить `bootstrapConnectPreviewSession` с WebSocket-дайалером, доступным через `ToriiClient.openConnectWebSocket()`. Скрипт повторяет раздел Connect из roadmap JS SDK: он генерирует детерминированные URI превью, записывает телеметрию глубины очереди и открывает канонический endpoint `/v1/connect/ws` с пакетом `ws`, чтобы Node.js приложения выполняли тот же поток, что и браузеры.
+Этот рецепт показывает, как объединить `bootstrapConnectPreviewSession` с WebSocket-дайалером, доступным через `ToriiClient.openConnectWebSocket()`. Скрипт повторяет раздел Connect из roadmap JS SDK: он генерирует детерминированные URI превью, записывает телеметрию глубины очереди и открывает канонический endpoint `/v2/connect/ws` с пакетом `ws`, чтобы Node.js приложения выполняли тот же поток, что и браузеры.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

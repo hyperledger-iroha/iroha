@@ -54,12 +54,12 @@ Les crédits sont élevés avec les résultats.
 ## Intégration Torii
 
 Torii préserve vos points de terminaison, permettant aux fournisseurs d'exploiter l'utilisation et les fichiers.
-Il s'agit d'un modèle sans câblage spécial :- `POST /v1/sorafs/deal/usage` utilise le télémètre `DealUsageReport` et le produit.
+Il s'agit d'un modèle sans câblage spécial :- `POST /v2/sorafs/deal/usage` utilise le télémètre `DealUsageReport` et le produit.
   детерминированные результаты учета (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает текущий fenêtre, стримя
+- `POST /v2/sorafs/deal/settle` завершает текущий fenêtre, стримя
   Il s'agit de `DealSettlementRecord` avec le module base64 `DealSettlementV1`,
   готовым к публикации в gouvernance DAG.
-- Lenta Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
+- Lenta Torii `/v2/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
   суммирующие каждую отправку utilisation (époque, измеренные GiB-heures, счетчики билетов,
   детерминированные charges), записи `SorafsGatewayEvent::DealSettlement`,
   plus de captures d'instantanés canoniques et de registre BLAKE3 digest/size/base64

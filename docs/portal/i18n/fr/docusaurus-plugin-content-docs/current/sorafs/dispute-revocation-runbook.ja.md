@@ -30,7 +30,7 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
 ## 1. Évaluer l’incident
 
 - **Conditions de déclenchement :** détection d’une violation du SLA (disponibilité/échec PoR), déficit de réplication ou désaccord de facturation.
-- **Confirmer la télémétrie :** capturer les snapshots `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` pour le fournisseur.
+- **Confirmer la télémétrie :** capturer les snapshots `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` pour le fournisseur.
 - **Notifier les parties prenantes :** Storage Team (opérations du fournisseur), Governance Council (organe décisionnel), Observability (mises à jour des dashboards).
 
 ## 2. Préparer le bundle de preuves
@@ -78,7 +78,7 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
    ```
 
 3. Vérifiez `dispute_summary.json` (confirmez le type, le digest des preuves, les timestamps).
-4. Soumettez le JSON de requête à Torii `/v1/sorafs/capacity/dispute` via la file de transactions de gouvernance. Capturez la valeur de réponse `dispute_id_hex` ; elle ancre les actions de révocation suivantes et les rapports d’audit.
+4. Soumettez le JSON de requête à Torii `/v2/sorafs/capacity/dispute` via la file de transactions de gouvernance. Capturez la valeur de réponse `dispute_id_hex` ; elle ancre les actions de révocation suivantes et les rapports d’audit.
 
 ## 4. Évacuation et révocation
 

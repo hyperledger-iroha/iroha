@@ -27,7 +27,7 @@ Norito гүүр/Стекийг Xcode төслүүдэд холбох, `docs/conn
    таны орчинд тохирох үнэт зүйлс. Аппликешн эхлүүлэх үед эдгээр хувьсагчдыг уншина:
    - `TORII_NODE_URL` — үндсэн REST URL (WebSocket URL-ууд эндээс үүсэлтэй).
    - `CONNECT_SESSION_ID` — 32 байт сесс танигч (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v1/connect/session`-ээр буцаж ирсэн жетон.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v2/connect/session`-ээр буцаж ирсэн жетон.
    - `CONNECT_CHAIN_ID` — хяналтын гар барих үеэр зарласан хэлхээ танигч.
    - `CONNECT_ROLE` — UI-д өгөгдмөл дүрийг урьдчилан сонгосон (`app` эсвэл `wallet`).
    - Гар аргаар шалгах нэмэлт туслахууд: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -74,7 +74,7 @@ Norito гүүр/Стекийг Xcode төслүүдэд холбох, `docs/conn
 2. `NoritoDemoXcode` төслийг Xcode дээр нээнэ үү.
 3. `NoritoDemo` схемийг сонгоод iOS симулятор эсвэл төхөөрөмжийг онил.
 4. `.env` файлыг схемийн орчны хувьсагчдаас лавлаж байгаа эсэхийг шалгаарай.
-   `/v1/connect/session`-ийн экспортолсон `CONNECT_*` утгыг бөглөж, UI нь
+   `/v2/connect/session`-ийн экспортолсон `CONNECT_*` утгыг бөглөж, UI нь
    програмыг эхлүүлэх үед урьдчилан бөглөсөн.
 5. Техник хангамжийн хурдатгалын өгөгдмөл тохиргоог шалгах: `App.swift` дуудлага
    `DemoAccelerationConfig.load().apply()` тул демо нь аль нэгийг нь сонгоно

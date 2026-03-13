@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -133,9 +133,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Хелпер делает один `POST /v1/sns/registrations` на запрос и останавливается при
+- Хелпер делает один `POST /v2/sns/registrations` на запрос и останавливается при
   HTTP サービス。 Ответы добавляются в лог как NDJSON записи.
-- `--poll-status` は、`/v1/sns/registrations/{selector}` を表示します
+- `--poll-status` は、`/v2/sns/registrations/{selector}` を表示します
   каждой отправки (до `--poll-attempts`, по умолчанию 5), чтобы подтвердить
   ありがとうございます。 Укажите `--suffix-map` (JSON による `suffix_id` の説明)
   "suffix")、чтобы инструмент мог вывести `{label}.{suffix}` для ポーリング。

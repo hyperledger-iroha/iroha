@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-ka
   ```
 
 - დარწმუნდით, რომ Torii პროცესს აქვს წაკითხვის/ჩაწერის წვდომა `data_dir`-ზე.
-- დეკლარაციის ჩაწერის შემდეგ დაადასტურეთ, რომ კვანძი აცხადებს მოსალოდნელ სიმძლავრეს `GET /v1/sorafs/capacity/state`-ის საშუალებით.
+- დეკლარაციის ჩაწერის შემდეგ დაადასტურეთ, რომ კვანძი აცხადებს მოსალოდნელ სიმძლავრეს `GET /v2/sorafs/capacity/state`-ის საშუალებით.
 - როდესაც გამარტივება ჩართულია, საინფორმაციო დაფები ავლენს როგორც ნედლეულ, ისე გათლილ GiB·hour/PoR მრიცხველებს, რათა ხაზი გაუსვას უძრაო ტენდენციებს წერტილოვან მნიშვნელობებთან ერთად.
 
 ### CLI მშრალი გაშვება (სურვილისამებრ)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 მას შემდეგ, რაც Torii ცოცხალი იქნება, შეგიძლიათ იგივე არტეფაქტების მოძიება HTTP-ის საშუალებით:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 ორივე ბოლო წერტილს ემსახურება ჩაშენებული შენახვის მუშაკი, ამიტომ CLI კვამლის ტესტები და კარიბჭის ზონდები სინქრონიზებული რჩება.
@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. გაგზავნეთ manifest base64 კოდირებით:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. მიიღეთ ჩამაგრებული მონაცემები:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. დაამაგრეთ მინიმუმ ერთი მანიფესტი, როგორც ზემოთ.
 2. გადატვირთეთ Torii პროცესი (ან მთელი კვანძი).
 3. ხელახლა გაგზავნეთ მოთხოვნის მიღება. ტვირთამწეობა კვლავ უნდა იყოს აღდგენილი და დაბრუნებული დაიჯესტი უნდა ემთხვეოდეს წინასწარ გადატვირთვის მნიშვნელობას.
-4. შეამოწმეთ `GET /v1/sorafs/storage/state`, რათა დაადასტუროთ, რომ `bytes_used` ასახავს მუდმივ მანიფესტებს გადატვირთვის შემდეგ.
+4. შეამოწმეთ `GET /v2/sorafs/storage/state`, რათა დაადასტუროთ, რომ `bytes_used` ასახავს მუდმივ მანიფესტებს გადატვირთვის შემდეგ.
 
 ## 4. კვოტის უარყოფის ტესტი
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. მოითხოვეთ PoR ნიმუში:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - დაფები უნდა აკონტროლონ:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` და `torii_sorafs_storage_fetch_inflight`
-  - PoR წარმატების/მარცხის მრიცხველები გამოჩნდა `/v1/sorafs/capacity/state`-ის საშუალებით
+  - PoR წარმატების/მარცხის მრიცხველები გამოჩნდა `/v2/sorafs/capacity/state`-ის საშუალებით
   - დასახლების გამოქვეყნების მცდელობები `sorafs_node_deal_publish_total{result=success|failure}`-ის საშუალებით
 
 ამ წვრთნების შემდეგ, ჩაშენებული შენახვის მუშაკს შეუძლია მიიღოს მონაცემები, გადარჩეს გადატვირთვა, პატივი სცეს კონფიგურირებულ კვოტებს და გამოიმუშაოს დეტერმინისტული PoR მტკიცებულებები, სანამ კვანძი განაცხადებს სიმძლავრეს ფართო ქსელში.

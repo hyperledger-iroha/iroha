@@ -44,7 +44,7 @@ ID: نوڈ آپریشنز
   ```
 
 - اس بات کو یقینی بنائیں کہ عمل Torii نے `data_dir` تک پڑھنے/لکھنے تک رسائی حاصل کی ہے۔
-- اس بات کی تصدیق کریں کہ نوڈ نے اعلامیہ محفوظ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے متوقع صلاحیت کا اعلان کیا ہے۔
+- اس بات کی تصدیق کریں کہ نوڈ نے اعلامیہ محفوظ ہونے کے بعد `GET /v2/sorafs/capacity/state` کے ذریعے متوقع صلاحیت کا اعلان کیا ہے۔
 - جب ہموار کرنے کے قابل ہوجاتے ہیں تو ، ڈیش بورڈز فوری اقدار کے ساتھ ساتھ جٹر فری رجحانات کو اجاگر کرنے کے لئے کچے اور ہموار گیب · گھنٹہ/پور کاؤنٹرز کو بے نقاب کرتے ہیں۔
 
 ### سی ایل آئی کی خالی عملدرآمد (اختیاری)
@@ -83,8 +83,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 ایک بار Torii آن لائن ہونے کے بعد ، آپ HTTP کے ذریعے وہی نمونے بازیافت کرسکتے ہیں:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 دونوں اختتامی مقامات کو جہاز والے اسٹوریج ورکر کے ذریعہ پیش کیا جاتا ہے ، تاکہ سی ایل آئی کے دھواں کے ٹیسٹ اور گیٹ وے کی تحقیقات منسلک رہیں۔
@@ -95,14 +95,14 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بیس 64 مینی فیسٹ جمع کروائیں:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```درخواست JSON میں `manifest_b64` اور `payload_b64` پر مشتمل ہونا چاہئے۔ ایک کامیاب جواب `manifest_id_hex` اور پے لوڈ ڈائجسٹ کو لوٹاتا ہے۔
 3. پن شدہ ڈیٹا کی بازیافت:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -118,7 +118,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. کم از کم ایک ظاہر اوپر کی طرح پن کریں۔
 2. عمل کو دوبارہ شروع کریں Torii (یا مکمل نوڈ)۔
 3. بازیافت کی درخواست واپس کریں۔ پے لوڈ کو وصولی کے قابل رہنا چاہئے اور واپس آنے والے ڈائجسٹ کو دوبارہ شروع کرنے سے پہلے قیمت کے مطابق ہونا چاہئے۔
-4. `GET /v1/sorafs/storage/state` کا معائنہ کریں تاکہ اس بات کی تصدیق کی جاسکے کہ `bytes_used` دوبارہ شروع ہونے کے بعد ظاہر ہوتا ہے۔
+4. `GET /v2/sorafs/storage/state` کا معائنہ کریں تاکہ اس بات کی تصدیق کی جاسکے کہ `bytes_used` دوبارہ شروع ہونے کے بعد ظاہر ہوتا ہے۔
 
 ## 4. کوٹہ مسترد ٹیسٹ
 
@@ -133,7 +133,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. پور نمونہ کی درخواست کریں:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -156,7 +156,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ڈیش بورڈز کو لازمی طور پر عمل کرنا چاہئے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
-  - `/v1/sorafs/capacity/state` کے ذریعے بے نقاب ہونے والی کامیابی/ناکامی کاؤنٹرز
+  - `/v2/sorafs/capacity/state` کے ذریعے بے نقاب ہونے والی کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے تصفیہ شائع کرنے کی کوششیں
 
 ان مشقوں کے بعد یہ یقینی بناتا ہے کہ جہاز والے اسٹوریج کا کارکن اعداد و شمار کو کھا سکتا ہے ، ریبوٹس سے بچ سکتا ہے ، تشکیل شدہ کوٹے کو پورا کرسکتا ہے ، اور اس سے پہلے کہ نوڈ باقی نیٹ ورک میں اپنی صلاحیت کا اعلان کرنے سے پہلے اس سے پہلے کہ اس کی صلاحیت کا اعلان کرے۔

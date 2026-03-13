@@ -125,7 +125,7 @@ public final class LedgerFlow {
     final String encodedAccount = URLEncoder.encode(receiverAccount, StandardCharsets.UTF_8);
     final HttpRequest req =
         HttpRequest.newBuilder()
-            .uri(URI.create("http://127.0.0.1:8080/v1/accounts/" + encodedAccount + "/assets"))
+            .uri(URI.create("http://127.0.0.1:8080/v2/accounts/" + encodedAccount + "/assets"))
             .GET()
             .build();
     final HttpResponse<String> assets =

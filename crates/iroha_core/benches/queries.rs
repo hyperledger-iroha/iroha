@@ -230,7 +230,10 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
                 _ => unreachable!(),
@@ -257,7 +260,10 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
                 _ => unreachable!(),
@@ -341,7 +347,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Asset(v) => v,
                 _ => unreachable!(),
@@ -366,7 +375,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Asset(v) => v,
                 _ => unreachable!(),
@@ -440,7 +452,10 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
                 _ => unreachable!(),
@@ -465,7 +480,54 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
+            let v = match batch.into_iter().next().expect("slice") {
+                iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
+                _ => unreachable!(),
+            };
+            std::hint::black_box(v.len());
+        })
+    });
+
+    c.bench_function("snapshot_stored_sorted_asset_defs_first_continue", |b| {
+        b.iter(|| {
+            let request = iroha_data_model::query::QueryRequest::Start(
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+            );
+            let first = run_on_snapshot_with_mode(
+                &state,
+                &query_handle,
+                &auth,
+                request,
+                LaneCursorMode::Stored,
+                QueryLimits::default(),
+            )
+            .expect("lane ok");
+            let iroha_data_model::query::QueryResponse::Iterable(first) = first else {
+                panic!("expected iterable")
+            };
+            let (_first_batch, _first_remaining, cursor) = first.into_parts();
+            let cursor = cursor.expect("stored continuation");
+
+            let continued = run_on_snapshot_with_mode(
+                &state,
+                &query_handle,
+                &auth,
+                iroha_data_model::query::QueryRequest::Continue(cursor),
+                LaneCursorMode::Stored,
+                QueryLimits::default(),
+            )
+            .expect("continue ok");
+            let iroha_data_model::query::QueryResponse::Iterable(continued) = continued else {
+                panic!("expected iterable")
+            };
+            let (batch, _remaining, next_cursor) = continued.into_parts();
+            if let Some(next_cursor) = next_cursor {
+                query_handle.drop_query(&next_cursor.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
                 _ => unreachable!(),

@@ -55,7 +55,7 @@ SF-3 поставляет первый исполняемый crate `sorafs-node
 - Использовать Axum стек Torii с `norito::json` payloads.
 - Добавить Norito схемы ответов (`PinResultV1`, `FetchErrorV1`, telemetry structs).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает глубину backlog, самый старый epoch/deadline и последние success/failure timestamps по каждому провайдеру, за счет `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` для дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает глубину backlog, самый старый epoch/deadline и последние success/failure timestamps по каждому провайдеру, за счет `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` для дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Scheduler и применение квот
 

@@ -23,8 +23,8 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 - ✅ Retire the migration knob that toggled the old block messages; Vote/commit-certificate mode is now the only
   wire path.
 - ✅ Update Torii routers, CLI commands, and telemetry consumers to prefer
-  `/v1/sumeragi/*` JSON snapshots over the older block frames.
-- ✅ Integration coverage exercises `/v1/sumeragi/*` endpoints purely over the Vote/commit-certificate pipeline
+  `/v2/sumeragi/*` JSON snapshots over the older block frames.
+- ✅ Integration coverage exercises `/v2/sumeragi/*` endpoints purely over the Vote/commit-certificate pipeline
   (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ Remove the old frames once feature parity & interop tests are in place.
 
@@ -66,7 +66,7 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 ### Immediate Next Steps
 1. ✅ Bounded-jitter harness exercises pacemaker jitter metrics under a deterministic band (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. ✅ Promote RBC deferral assertions in `npos_queue_backpressure_triggers_metrics` by priming deterministic RBC store pressure (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ Extend `/v1/sumeragi/telemetry` soak to cover long-running epochs and adversarial collectors,
+3. ✅ Extend `/v2/sumeragi/telemetry` soak to cover long-running epochs and adversarial collectors,
    comparing snapshots against Prometheus counters over multiple heights. Covered by
    `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 

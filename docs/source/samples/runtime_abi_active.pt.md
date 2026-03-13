@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-01-30
 # Runtime ABI — Active Versions (Torii)
 
 Endpoint
-- `GET /v1/runtime/abi/active`
+- `GET /v2/runtime/abi/active`
 
 Response (first release; single ABI)
 ```json

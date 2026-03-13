@@ -69,13 +69,13 @@ Support d'outillage :
 Les passerelles acceptent de solliciter les déterministes HTTP qui réfléchissent aux métadonnées de
 les annonces.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Requis | Détails |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Requis | Détails |
 |-----------|----------|
 | **En-têtes** | `Range` (ventana única alineada a offsets of chunks), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` facultatif et `X-SoraFS-Stream-Token` base64 obligatoire. |
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` qui décrivent la fenêtre de service, les métadonnées `X-Sora-Chunk-Range` et les en-têtes des chunker/token écoados. |
 | **Modes de chute** | `416` pour les plages déchargées, `401` pour les jetons incorrects ou invalides, `429` lorsque les présupposés de flux/octets sont dépassés. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Récupérez un seul morceau avec les mêmes en-têtes plus le résumé déterminant du
 morceau. Utiles pour réintenter ou télécharger des tranches lorsque vous n'en avez pas besoin
@@ -126,12 +126,12 @@ Erreurs communes que vous pouvez trouver sur les opérateurs/SDK :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` envuelven les
   endpoints REST del pin-registry et impression Norito JSON brut avec blocs de
   attestation para evidencia de auditoría.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` manifestes d'acceptan
+- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` manifestes d'acceptan
   Norito ou JSON plus de preuves d'alias optionnels et de successeurs ; preuves malformées
   elevan `400`, preuves obsolètes exponen `503` avec `Warning: 110`, et preuves
   expirados devuelven `412`.
-- Les points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) comprend des structures d'attestation pour que les
+- Les points de terminaison REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) comprend des structures d'attestation pour que les
   Les clients vérifient les données sur les en-têtes du dernier bloc avant l'actionnement.
 
 ## Références- Spécification canonique :

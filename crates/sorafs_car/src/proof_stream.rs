@@ -1,7 +1,7 @@
 //! Shared helpers for SoraFS proof streaming clients.
 //!
 //! This module provides request/response representations that match the Torii
-//! `/v1/sorafs/proof/stream` endpoint together with lightweight aggregation
+//! `/v2/sorafs/proof/stream` endpoint together with lightweight aggregation
 //!\//! utilities used by the CLI and SDK integrations.
 
 use std::collections::BTreeMap;
@@ -112,7 +112,7 @@ impl VerificationStatus {
     }
 }
 
-/// Request payload for `/v1/sorafs/proof/stream`.
+/// Request payload for `/v2/sorafs/proof/stream`.
 #[derive(Clone, Debug)]
 pub struct ProofStreamRequest {
     /// Manifest digest (BLAKE3-256) encoded as lowercase hex.

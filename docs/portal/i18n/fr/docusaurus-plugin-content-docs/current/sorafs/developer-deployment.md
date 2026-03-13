@@ -23,7 +23,7 @@ Le workflow de packaging SoraFS renforce le déterminisme, donc passer de la CI 
 
 ## Configuration de l'environnement
 
-- Les gateways doivent activer l'endpoint de proof streaming (`POST /v1/sorafs/proof/stream`) pour que le CLI puisse émettre des résumés de télémétrie.
+- Les gateways doivent activer l'endpoint de proof streaming (`POST /v2/sorafs/proof/stream`) pour que le CLI puisse émettre des résumés de télémétrie.
 - Configurez la policy `sorafs_alias_cache` en utilisant les valeurs par défaut de `iroha_config` ou le helper CLI (`sorafs_cli manifest submit --alias-*`).
 - Fournissez les stream tokens (ou identifiants Torii) via un gestionnaire de secrets sécurisé.
 - Activez les exporters de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et envoyez-les vers votre stack Prometheus/OTel.

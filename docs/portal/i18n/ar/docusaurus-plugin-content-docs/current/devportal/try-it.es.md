@@ -164,7 +164,7 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 1. قم بتثبيت وحدة تثبيت مثل `fixtures/norito_rpc/transfer_asset.norito`. إستوس
    أرشيفات ابن المغلفات Norito مباشرة؛ **لا** الرموز الموجودة في base64.
 2. في Swagger أو RapidDoc، قم بتعيين نقطة النهاية NRPC (على سبيل المثال
-   `POST /v1/pipeline/submit`) وتغيير المحدد **نوع المحتوى** a
+   `POST /v2/pipeline/submit`) وتغيير المحدد **نوع المحتوى** a
    `application/x-norito`.
 3. تغيير محرر جسم الطلب إلى **ثنائي** (وضع "ملف" من Swagger أو
    محدد "Binary/File" من RapiDoc) وشحن الملف `.norito`. القطعة
@@ -186,13 +186,13 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 تغيير التركيب لأي قائمة مدخلة في `transaction_fixtures.manifest.json`
 قم بتدوين الحمولة الخاصة بك مع `cargo xtask norito-rpc-fixtures`. Cuando Torii esta en
 وضع الكناري puedes apuntar `curl` البروكسي جربه
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) لتشغيل نفس الشيء
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) لتشغيل نفس الشيء
 البنية التحتية التي تستخدم عناصر واجهة المستخدم للبوابة.
 
 ## إمكانية الملاحظة والعمليات
@@ -208,7 +208,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 مقابض الداخل:

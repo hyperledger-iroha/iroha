@@ -19,7 +19,7 @@ notes.
 - **Cadence:** regenerate Norito fixtures every 48 hours across Swift, Android,
   Python, and JS. If governance cannot meet the 48 hour cadence, fall back to a
   **weekly automatic regeneration**, accompanied by a status digest entry.
-- **Scope:** Norito fixture packs, schema hashes, and `/v1/pipeline` parity
+- **Scope:** Norito fixture packs, schema hashes, and `/v2/pipeline` parity
   vectors that back CI dashboards and SDK parity gates.
 - **Approvals:** SDK council (Swift/Android/Python/JS leads + Torii delegate)
   signed off during the Jan 2026 governance review after reviewing telemetry and

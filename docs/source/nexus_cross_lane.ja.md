@@ -116,7 +116,7 @@ public lane staking レコードから構成される。委員会メンバーは
    `LaneRelayBroadcaster` はブロック封印中に生成された `LaneRelayEnvelope` を消費し、
    高優先度の `NetworkMessage::LaneRelay` フレームとして配布する。エンベロープは検証され、
    `(lane_id,dataspace_id,height,settlement_hash)` で重複排除され、Sumeragi ステータススナップショット
-   （`/v1/sumeragi/status`）に保存される。broadcaster は今後も、DA アーティファクト
+   （`/v2/sumeragi/status`）に保存される。broadcaster は今後も、DA アーティファクト
    （RBC チャンク証明、Norito ヘッダ、SoraFS/Object の manifest）を付与し、head-of-line の
    ブロックを避けつつ merge ring に供給できるように進化する。
 
@@ -128,7 +128,7 @@ public lane staking レコードから構成される。委員会メンバーは
 
 5. **永続化と公開。**  
    Kura はレーンブロック、merge エントリ、`LaneBlockCommitment` をアトミックに書き込み、
-   リプレイで同じ削減を再構築できるようにする。`/v1/sumeragi/status` は以下を公開する:
+   リプレイで同じ削減を再構築できるようにする。`/v2/sumeragi/status` は以下を公開する:
    - `lane_commitments`（実行メタデータ）。
    - `lane_settlement_commitments`（ここで説明するペイロード）。
    - `lane_relay_envelopes`（relay ヘッダ、QC、DA ダイジェスト、settlement ハッシュ、RBC バイト数）。
@@ -167,8 +167,8 @@ merge ring はレーンコミットメントを受け入れる前に、以下を
   missing-availability のスパイクに警告を出し（reschedule カウンタはレガシーで常にゼロであるべき）、
   `lane_relay_invalid_total` は敵対的ドリル以外ではゼロを保つ。
 - **Torii サーフェス:**  
-  `/v1/sumeragi/status` は `lane_commitments`, `lane_settlement_commitments`, dataspace スナップショットを含む。
-  `/v1/nexus/lane-config`（計画中）は `LaneConfig` のジオメトリを公開し、クライアントが
+  `/v2/sumeragi/status` は `lane_commitments`, `lane_settlement_commitments`, dataspace スナップショットを含む。
+  `/v2/nexus/lane-config`（計画中）は `LaneConfig` のジオメトリを公開し、クライアントが
   `lane_id` と dataspace ラベルを対応付けられるようにする。
 - **ダッシュボード:**  
   `dashboards/grafana/nexus_lanes.json` はレーン backlog、DA 可用性シグナル、上記の settlement 合計を表示する。

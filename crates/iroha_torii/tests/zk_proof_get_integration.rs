@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for GET /v1/zk/proof/{backend}/{hash} (`app_api`).
+//! Integration tests for GET /v2/zk/proof/{backend}/{hash} (`app_api`).
 #![allow(clippy::similar_names)]
 
 use std::sync::Arc;
@@ -40,7 +40,7 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let app =
         Router::new().route(
-            "/v1/zk/proof/{backend}/{hash}",
+            "/v2/zk/proof/{backend}/{hash}",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -53,7 +53,7 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
         );
     let backend_enc = urlencoding::encode(backend);
     let hash_hex = hex::encode(proof_hash);
-    let uri = format!("/v1/zk/proof/{backend_enc}/{hash_hex}");
+    let uri = format!("/v2/zk/proof/{backend_enc}/{hash_hex}");
     (app, uri, hash_hex)
 }
 
@@ -146,7 +146,7 @@ async fn zk_proof_get_not_found() {
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let app =
         Router::new().route(
-            "/v1/zk/proof/{backend}/{hash}",
+            "/v2/zk/proof/{backend}/{hash}",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -159,7 +159,7 @@ async fn zk_proof_get_not_found() {
         );
     let backend_enc = urlencoding::encode("halo2/ipa");
     let uri = format!(
-        "/v1/zk/proof/{backend_enc}/{hash}",
+        "/v2/zk/proof/{backend_enc}/{hash}",
         hash = hex::encode([0u8; 32])
     );
     let req = http::Request::builder()

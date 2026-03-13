@@ -25,7 +25,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## نظرة عامة
 
-يوثق هذا الدليل كيفية مراقبة وفرز Pin Registry في SoraFS واتفاقيات مستوى الخدمة (SLA) للتكرار. تنبع المقاييس من `iroha_torii` وتصدر عبر Prometheus تحت مساحة الاسم `torii_sorafs_*`. يقوم Torii بأخذ عينات من حالة registry كل 30 ثانية في الخلفية، لذا تبقى لوحات المعلومات محدثة حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v1/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
+يوثق هذا الدليل كيفية مراقبة وفرز Pin Registry في SoraFS واتفاقيات مستوى الخدمة (SLA) للتكرار. تنبع المقاييس من `iroha_torii` وتصدر عبر Prometheus تحت مساحة الاسم `torii_sorafs_*`. يقوم Torii بأخذ عينات من حالة registry كل 30 ثانية في الخلفية، لذا تبقى لوحات المعلومات محدثة حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v2/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
 
 ## مرجع المقاييس
 
@@ -126,7 +126,7 @@ groups:
 
 1. **تحديد السبب**
    - اذا زادت اخفاقات SLA بينما بقي التراكم منخفضا، ركز على اداء providers (فشل PoR، الاكتمال المتاخر).
-   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v1/sorafs/pin/*`) لتاكيد manifests التي تنتظر موافقة المجلس.
+   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v2/sorafs/pin/*`) لتاكيد manifests التي تنتظر موافقة المجلس.
 2. **التحقق من حالة providers**
    - شغّل `iroha app sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
    - راجع gauges `torii_sorafs_capacity_*` لتاكيد GiB المجهزة ونجاح PoR.
@@ -147,7 +147,7 @@ groups:
 2. **Dry-run في staging**
    - انشر تغيير الاعدادات على عنقود staging يعكس طوبولوجيا الانتاج.
    - شغّل `cargo xtask sorafs-pin-fixtures` لتاكيد ان fixtures الكنسية للـ alias ما زالت تفك التشفير وتقوم بعملية round-trip؛ اي عدم تطابق يعني drift في المنبع يجب معالجته اولا.
-   - اختبر endpoints `/v1/sorafs/pin/{digest}` و `/v1/sorafs/aliases` بادلة تركيبية تغطي حالات fresh و refresh-window و expired و hard-expired. تحقق من اكواد HTTP و headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) وحقول جسم JSON مقابل هذا الدليل.
+   - اختبر endpoints `/v2/sorafs/pin/{digest}` و `/v2/sorafs/aliases` بادلة تركيبية تغطي حالات fresh و refresh-window و expired و hard-expired. تحقق من اكواد HTTP و headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) وحقول جسم JSON مقابل هذا الدليل.
 3. **التفعيل في الانتاج**
    - اطرح الاعدادات الجديدة في نافذة التغيير القياسية. طبّقها على Torii اولا، ثم اعد تشغيل gateways/خدمات SDK بمجرد ان يؤكد العقدة السياسة الجديدة في السجلات.
    - استورد `docs/source/grafana_sorafs_pin_registry.json` الى Grafana (او حدّث اللوحات الموجودة) وثبت لوحات تحديث cache للـ alias في مساحة عمل NOC.

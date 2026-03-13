@@ -19,11 +19,11 @@ translation_last_reviewed: 2026-02-07
 - コベルトゥーラ デ SDK:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` devuelve `GovernanceProposalResult` (正規化ステータス/種類)、`ToriiClient.get_governance_referendum_typed` devuelve `GovernanceReferendumResult`、`ToriiClient.get_governance_tally_typed` devuelve `GovernanceTally`、`ToriiClient.get_governance_locks_typed` devuelve `GovernanceLocksResult`、`ToriiClient.get_governance_unlock_stats_typed` devuelve `GovernanceUnlockStats`、y `ToriiClient.list_governance_instances_typed` devuelve `GovernanceInstancesPage`、imponiendo accesotipado README の使用法に関する詳細情報を参照してください。
 - Cliente ligero Python (`iroha_torii_client`): `ToriiClient.finalize_referendum` y `ToriiClient.enact_proposal` devuelven バンドルヒント `GovernanceInstructionDraft` (envolviendo el esqueleto `tx_instructions` de Torii)、 evitando parseo JSON マニュアル cuando スクリプト コンポーネント flujos Finalize/Enact。
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` 提案、住民投票、集計、ロック、統計のロック解除などのヘルパーの説明、`listGovernanceInstances(namespace, options)` 議会でのエンドポイントの評価 (`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、 `governancePersistCouncil`、`getGovernanceCouncilAudit`) クライアント Node.js のページ `/v1/gov/instances/{ns}` は、VRF のコントロール インスタンスのリストを管理します。
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` 提案、住民投票、集計、ロック、統計のロック解除などのヘルパーの説明、`listGovernanceInstances(namespace, options)` 議会でのエンドポイントの評価 (`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、 `governancePersistCouncil`、`getGovernanceCouncilAudit`) クライアント Node.js のページ `/v2/gov/instances/{ns}` は、VRF のコントロール インスタンスのリストを管理します。
 
 エンドポイント
 
-- POST `/v1/gov/proposals/deploy-contract`
+- POST `/v2/gov/proposals/deploy-contract`
   - 要請 (JSON):
     {
       "名前空間": "アプリ",
@@ -40,28 +40,28 @@ translation_last_reviewed: 2026-02-07
   - 検証: los nodos canonizan `abi_hash` para el `abi_version` provisto y rechazan desajustes。 `abi_version = "v1"` の場合、`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` を有効にしてください。
 
 API のデプロイ (デプロイ)
-- POST `/v1/contracts/deploy`
+- POST `/v2/contracts/deploy`
   - Solicitud: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 互換性: 計算 `code_hash` プログラム IVM y `abi_hash` ヘッダー `abi_version`、luego envia `RegisterSmartContractCode` (manifyto) y `RegisterSmartContractBytes` (バイト `.to` 完全) `authority` という名前。
   - 応答: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - レラシオナード:
-    - GET `/v1/contracts/code/{code_hash}` -> アルマセナドをマニフェストするデブエルブ
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> devuelve `{ code_b64 }`
-- POST `/v1/contracts/instance`
+    - GET `/v2/contracts/code/{code_hash}` -> アルマセナドをマニフェストするデブエルブ
+    - GET `/v2/contracts/code-bytes/{code_hash}` -> devuelve `{ code_b64 }`
+- POST `/v2/contracts/instance`
   - Solicitud: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 互換性: `ActivateContractInstance` 経由の `(namespace, contract_id)` のバイトコード規定とメディアのアクティベーション。
   - 応答: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }別名サービス
-- POST `/v1/aliases/voprf/evaluate`
+- POST `/v2/aliases/voprf/evaluate`
   - 要請: { "blinded_element_hex": "..." }
   - 応答: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` 評価の実装を参照してください。実際の武勇: `blake2b512-mock`。
   - 注: 評価者は、モック決定アプリケーション Blake2b512 とドミニオ `iroha.alias.voprf.mock.v1` の分離を評価しました。 Iroha のプルエバ ツール パイプライン VOPRF の生産エステケーブルを切断します。
   - エラー: HTTP `400` en 入力 16 進数形式。 Torii エンベロープのデベロップメント Norito `ValidationFail::QueryFailed::Conversion` エラー デコーダの管理。
-- POST `/v1/aliases/resolve`
+- POST `/v2/aliases/resolve`
   - ソリチュード: { "エイリアス": "GB82 WEST 1234 5698 7654 32" }
   - 回答: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - 注: ランタイム ISO ブリッジ ステージング (`[iso_bridge.account_aliases]` および `iroha_config`) が必要です。 Torii 正規化エイリアス エリミナンド エスパシオスとパサンド、マユスキュラス アンテス デル ルックアップ。 Devuelve 404 cuando el alias は存在しません 503 cuando el runtime ISO ブリッジは deshabilitado です。
-- POST `/v1/aliases/resolve_index`
+- POST `/v2/aliases/resolve_index`
   - ソリチュード: { "インデックス": 0 }
   - 回答: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - 注: 別名を指定する形式を決定するためのインデックス、設定の順序 (0 ベース)。クライアントは、オフラインで聴衆のイベントを作成し、エイリアスを確認できます。
@@ -72,7 +72,7 @@ API のデプロイ (デプロイ)
   - デフォルト: 16 MiB。損失ノード `RegisterSmartContractBytes` イメージ `.to` は、不変の違反エラーに関するトップを超えています。
   - ロス オペラドーレス プエデン アジャスター エンビアンド `SetParameter(Custom)` コン `id = "max_contract_code_bytes"` y ペイロード数値。
 
-- POST `/v1/gov/ballots/zk`
+- POST `/v2/gov/ballots/zk`
   - Solicitud: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
   - 注意事項:
@@ -80,10 +80,10 @@ API のデプロイ (デプロイ)
     - Las revotaciones ZK que intenten reducir amount o exiry se rechazan del lado del servidor con Diagnosis `BallotRejected`。
     - La ejecucion del contrato debe llamar `ZK_VOTE_VERIFY_BALLOT` antes de encolar `SubmitBallot`;ロスは、ソラベスに影響を与える可能性があります。
 
-- POST `/v1/gov/ballots/plain`
+- POST `/v2/gov/ballots/plain`
   - Solicitud: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }
-  - 注: 単独の拡張子による再発行 - 新しい投票用紙には、期限切れの期限がありません。 El `owner` は取引上の権限を持っています。最小値 `conviction_step_blocks`。- POST `/v1/gov/finalize`
+  - 注: 単独の拡張子による再発行 - 新しい投票用紙には、期限切れの期限がありません。 El `owner` は取引上の権限を持っています。最小値 `conviction_step_blocks`。- POST `/v2/gov/finalize`
   - Solicitud: { "referendum_id": "r1"、"proposal_id": "...64hex"、"authority": "i105...?"、"private_key": "...?" }
   - 応答: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - オンチェーン効果 (実際の効果): promulgar una propuesta dedeploy aprobada inserta un `ContractManifest` minimo con clave `code_hash` con el `abi_hash` esperado y marca la propuesta como が制定されました。私は `code_hash` と `abi_hash` を区別して宣言し、それを宣言します。
@@ -92,24 +92,24 @@ API のデプロイ (デプロイ)
     - 自動的に自動化される `h_end` が承認/拒否されたソロパラレファレンド プレーン。ロスリファレンドス ZK permanecen は閉じられていますが、`FinalizeReferendum` を参照してください。
     - 単独の承認+拒否による投票率の調整。クエンタ・パラ・エルの投票を棄権しない。
 
-- POST `/v1/gov/enact`
+- POST `/v2/gov/enact`
   - Solicitud: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { " lower": 0, "upper": 0 }?、 "authority": "i105…?"、 "private_key": "...?" }
   - 応答: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注: Torii envia la transaccion farmada cuando se proporcionan `authority`/`private_key`;デ・ロ・コントラリオ・デブエルブ・アン・エスケレト・パラケ・ロス・クライエンテス・ファームメン・イ・エンヴィエン。事前画像と実際の情報はオプションです。
 
-- `/v1/gov/proposals/{id}` を取得
+- `/v2/gov/proposals/{id}` を取得
   - パス `{id}`: プロパティ ID 16 進数 (64 文字)
   - 応答: { "見つかった": bool、"提案": { ... }? }
 
-- `/v1/gov/locks/{rid}` を取得
+- `/v2/gov/locks/{rid}` を取得
   - パス `{rid}`: 国民投票 ID の文字列
   - 応答: { "found": bool、"referendum_id": "rid"、"locks": { ... }? }
 
-- `/v1/gov/council/current` を取得
+- `/v2/gov/council/current` を取得
   - 回答: { "epoch": N, "members": [{ "account_id": "..." }, ...] }
   - 注意: devuelve el Councilpersistido cuando存在します。 de lo contrario deriva un respaldo determinista usando el asset de stake configurado y umbrales (refleja la especificacion VRF hasta que pruebas VRF en vivo se persistan on-chain).
 
-- POST `/v1/gov/council/derive-vrf` (機能: gov_vrf)
+- POST `/v2/gov/council/derive-vrf` (機能: gov_vrf)
   - 要請: { "committee_size": 21、"epoch": 123? , "candidates": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - 互換性: `chain_id`、`epoch` およびブロックの究極ハッシュのビーコンの入力コントラ エル 入力カノニコ デリバドのプルエバ VRF を検証します。タイブレーカーに関するサリダのバイト数を確認します。デブエルブ ロス トップ `committee_size` ミエンブロス。固執しないでください。
   - 回答: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "verified": K }
@@ -182,14 +182,14 @@ RBAC
 - メタデータ `gov_upgrade_id=<value>` (マニフェストを定義するクラベ) を含む、クンプレン エル フック デベンのトランザクションは、マニフェストの定足数を確認するために必要な有効性を確認するために必要です。
 
 便利なエンドポイント
-- POST `/v1/gov/protected-namespaces` - ノードに対するアプリケーション `gov_protected_namespaces` の指示。
+- POST `/v2/gov/protected-namespaces` - ノードに対するアプリケーション `gov_protected_namespaces` の指示。
   - Solicitud: { "名前空間": ["アプリ", "システム"] }
   - 応答: { "ok": true、"applied": 1 }
   - 注: ペンサド パラ管理/テスト。トークン API の設定が必要です。パラプロダクション、プリフィエラ環境、トランザクション会社 `SetParameter(Custom)`。ヘルパー CLI
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - 名前空間と検証に関するインスタンスの取得:
     - Torii アルマセナ バイトコード パラ Cada `code_hash`、Y su ダイジェスト Blake2b-32 は `code_hash` と一致します。
-    - アルマセナド バホ `/v1/contracts/code/{code_hash}` 報告値 `code_hash` と `abi_hash` は一致します。
+    - アルマセナド バホ `/v2/contracts/code/{code_hash}` 報告値 `code_hash` と `abi_hash` は一致します。
     - `(namespace, contract_id, code_hash, abi_hash)` で制定された提案 ID のミスモ ハッシュが存在します。
   - JSON con `results[]` por contrato (問題、マニフェスト/コード/提案の履歴書) を、ライン上の一斉射撃を再開するために出力します (`--no-summary`)。
   - 監査用の名前空間プロテクトまたは検証用のデプロイ制御システムを使用します。
@@ -206,7 +206,7 @@ RBAC
   - 履歴書の履歴書 `vote --mode zk` には、投票用紙の読み取り可能な指示コードやカンポスの指紋も含まれます (`owner`、`amount`、`duration_blocks`、`direction`)。緊急の確認を迅速に行います。
 
 インスタンスリスト
-- GET `/v1/gov/instances/{ns}` - 名前空間の制御インスタンスをリストします。
+- GET `/v2/gov/instances/{ns}` - 名前空間の制御インスタンスをリストします。
   - クエリパラメータ:
     - `contains`: `contract_id` の部分文字列のフィルター (大文字と小文字を区別します)
     - `hash_prefix`: `code_hash_hex` の 16 進数のフィルター (小文字)
@@ -216,10 +216,10 @@ RBAC
   - ヘルパー SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) o `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)。
 
 ロック解除のバリド (オペラドール/オーディトリア)
-- `/v1/gov/unlocks/stats` を取得
+- `/v2/gov/unlocks/stats` を取得
   - 応答: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_ SWEEP_height": S }
   - 注意: `last_sweep_height` ブロックの高さを確認し、ロックを解除し、フエロン バリドスと持続性を確認してください。 `expired_locks_now` は、`expiry_height <= height_current` をロックするためのエスカネアンド レジスタを計算します。
-- POST `/v1/gov/ballots/zk-v1`
+- POST `/v2/gov/ballots/zk-v1`
   - Solicitud (DTO estilo v1):
     {
       "権限": "i105...",
@@ -232,7 +232,7 @@ RBAC
       "オーナー": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (機能: `zk-ballot`)
+  - 応答: { "ok": true、"accepted": true、"tx_instructions": [{...}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (機能: `zk-ballot`)
   - JSON `BallotProof` を直接開発して `CastZkBallot` にアクセスします。
   - 要請:
     {
@@ -302,13 +302,13 @@ for (expected, kind) in offences.iter().enumerate() {
 
 オペレータとツールは、次の場所を検査し、再ブロードキャスト ペイロードを移動します。
 
-- Torii: `GET /v1/sumeragi/evidence` y `GET /v1/sumeragi/evidence/count`。
+- Torii: `GET /v2/sumeragi/evidence` y `GET /v2/sumeragi/evidence/count`。
 - CLI: `iroha ops sumeragi evidence list`、`... count`、y `... submit --evidence-hex <payload>`。
 
 ラ・ゴベルナンザ・デベ・トラタール・ロス・バイト・デ・証拠コモ・プルエバ・カノニカ:1. **ペイロードの再収集** 事前準備。アーカイブ ロス バイト Norito 高さ/ビューのメタデータの詳細。
 2. **刑罰を準備します** 国民投票または sudo 命令のペイロードを埋め込みます (ej.、`Unregister::peer`)。ペイロードの再検証。証拠は、決定的な問題を解決します。
 3. **安全なトポロジのプログラマー** は、不正な行為を行ったり、介入したりすることはありません。フルホス ティピコス エンコラン `SetParameter(Sumeragi::NextMode)` と `SetParameter(Sumeragi::ModeActivationHeight)` は、実際の名簿を確認します。
-4. **Auditar resultados** via `/v1/sumeragi/evidence` y `/v1/sumeragi/status` para asegurar que el contador de証拠を参照してください。
+4. **Auditar resultados** via `/v2/sumeragi/evidence` y `/v2/sumeragi/status` para asegurar que el contador de証拠を参照してください。
 
 ### 同意の確認
 
@@ -323,11 +323,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- `/v1/sumeragi/params` および `iroha --output-format text ops sumeragi params` を介してステージングされたランタイムと CLI 指数パラメータ、パラケ オペラドールは、有効化および有効な名簿を確認します。
+- `/v2/sumeragi/params` および `iroha --output-format text ops sumeragi params` を介してステージングされたランタイムと CLI 指数パラメータ、パラケ オペラドールは、有効化および有効な名簿を確認します。
 - La automatizacion de gobernanza siempre debe:
   1. 証拠の削除 (または再インストール) 決定の最終決定。
   2. `mode_activation_height = h_current + activation_lag_blocks` の再構成を参照してください。
-  3. Monitorear `/v1/sumeragi/status` hasta que `effective_consensus_mode` cambie a la altura esperada.
+  3. Monitorear `/v2/sumeragi/status` hasta que `effective_consensus_mode` cambie a la altura esperada.
 
 スクリプトの暗記やアップリケのスラッシュ **デベなし** 意図的なアクティベーション コンラグ チェックを省略し、ハンドオフのパラメータを削除する必要があります。前のモードでのトランザクションを確認してください。
 

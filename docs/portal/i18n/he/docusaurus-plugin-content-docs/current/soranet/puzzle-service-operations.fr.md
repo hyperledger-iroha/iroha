@@ -26,17 +26,17 @@ relay et, lorsque configure, orchester des tokens d'admission ML-DSA pour les
 קצה ממסר. אני חשוף את נקודות הקצה של cinq HTTP:
 
 - `GET /healthz` - בדיקה דה חיים.
-- `GET /v1/puzzle/config` - חזור על הפרמטרים PoW/פאזל אפקטים.
+- `GET /v2/puzzle/config` - חזור על הפרמטרים PoW/פאזל אפקטים.
   ממסר du JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - emet un ticket Argon2; un body JSON optionnel
+- `POST /v2/puzzle/mint` - emet un ticket Argon2; un body JSON optionnel
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   demande un TTL plus Court (clamp au window de policy), lie le ticket a un
   תמליל hash et renvoie un ticket signe par le relay + l'empreinte de
   חתימה lorsque des cles de signature sont configurees.
-- `GET /v1/token/config` - quand `pow.token.enabled = true`, retourne la policy
+- `GET /v2/token/config` - quand `pow.token.enabled = true`, retourne la policy
   d'admission-token פעיל (טביעת אצבע של מנפיק, מגביל TTL/הטיית שעון, מזהה ממסר,
   et l'ensemble de revocation fusionne).
-- `POST /v1/token/mint` - Emet un token d'admission ML-DSA lie au resume hash
+- `POST /v2/token/mint` - Emet un token d'admission ML-DSA lie au resume hash
   fourni; le body accepte `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Les tickets produits par le service sont מאמת dans le test d'integration
@@ -79,10 +79,10 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` est aussi disponible lorsque le secret est gere par un
-צינור מחוץ לפס. Le watcher du fichier de revocation garde `/v1/token/config`
+צינור מחוץ לפס. Le watcher du fichier de revocation garde `/v2/token/config`
 ז'ור; coordonnez les mises a jour avec la commande `soranet-admission-token revoke`
 pour eviter un etat de revocation en retard.Definissez `pow.signed_ticket_public_key_hex` ב-JSON ממסר פרסום
-la cle publique ML-DSA-44 utilisee pour verifier les pow cards signs; `/v1/puzzle/config`
+la cle publique ML-DSA-44 utilisee pour verifier les pow cards signs; `/v2/puzzle/config`
 repete la cle et son empreinte BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) afin
 que les clients puissent pinner le verificateur. Les tickets signes sont valides
 מול מזהה ממסר וחיבורי תמליל וחלק מאגר לממים חנות דה
@@ -90,7 +90,7 @@ que les clients puissent pinner le verificateur. Les tickets signes sont valides
 כרטיס חתום מוגדר. Passez le secret de signature דרך `--signed-ticket-secret-hex`
 ou `--signed-ticket-secret-path` au lancement du שירות פאזלים; le demarrage
 rejette les keypairs incoherents si le secret ne valide pas contre
-`pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` קבל `"signed": true`
+`pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` קבל `"signed": true`
 (et optionnel `"transcript_hash_hex"`) pour renvoyer un ticket signe Norito en
 plus des bytes du ticket brut; התשובות כוללות `signed_ticket_b64` et
 `signed_ticket_fingerprint_hex` pour suivre les טביעות אצבעות בשידור חוזר. לס
@@ -111,11 +111,11 @@ requêtes avec `signed = true` sont rejetees si le secret de signature n'est pas
    fois que governance annonce le cutover de rotation. Le service ne supporte
    pas le חם-טעינה מחדש; un redemarrage est requis pour prendre le nouveau descriptor
    להתחייב.
-4. ** Valider.** Emettez un ticket via `POST /v1/puzzle/mint` et confirmez que
+4. ** Valider.** Emettez un ticket via `POST /v2/puzzle/mint` et confirmez que
    `difficulty` et `expires_at` כתב א-לה-נובל מדיניות. לקשר
    להשרות (`docs/source/soranet/reports/pow_resilience.md`) לכידת דה בורס דה
    איחור משתתף לשפוך התייחסות. Lorsque les tokens sont actives, lisez
-   `/v1/token/config` pour verifier que l'suer טביעת אצבע annonce et le
+   `/v2/token/config` pour verifier que l'suer טביעת אצבע annonce et le
    נוכחות כתבת ביטול זכויות יוצרים aux valeurs.
 
 ## נוהל ביטול דחיפות
@@ -128,7 +128,7 @@ requêtes avec `signed = true` sont rejetees si le secret de signature n'est pas
 3. Redemarrez a la fois le relay et le puzzle service pour appliquer le
    שינוי.
 4. Surveillez `soranet_handshake_pow_difficulty` pour Verifier que la schwéier
-   tombe a la valeur hashcash attendue, et validez que `/v1/puzzle/config`
+   tombe a la valeur hashcash attendue, et validez que `/v2/puzzle/config`
    rapporte `puzzle = null`.
 
 ## ניטור והתראה- **SLO SLO:** Suivez `soranet_handshake_latency_seconds` et gardez le P95
@@ -138,16 +138,16 @@ requêtes avec `signed = true` sont rejetees si le secret de signature n'est pas
   ממסר מדדים pour ajuster les cooldowns `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **יישור פאזל:** `soranet_handshake_pow_difficulty` doit correspondre a la
-  harde retournee par `/v1/puzzle/config`. Une divergence indique une config
+  harde retournee par `/v2/puzzle/config`. Une divergence indique une config
   ממסר מיושן או שיעור נישואין מחדש.
-- **מוכנות אסימון:** Alertez si `/v1/token/config` מצנח א `enabled = false`
+- **מוכנות אסימון:** Alertez si `/v2/token/config` מצנח א `enabled = false`
   de maniere inattendue ou si `revocation_source` מקורה של חותמות זמן מיושן.
   Les operators doivent faire tourner le fichier de revocation Norito via le CLI
   des qu'un token est retire pour garder cet endpoint precis.
 - **בריאות השירות:** Probez `/healthz` avec la cadence de liveness habituelle et
-  alertez si `/v1/puzzle/mint` renvoie des reponses HTTP 500 (אינדיקציה לא התאמה
+  alertez si `/v2/puzzle/mint` renvoie des reponses HTTP 500 (אינדיקציה לא התאמה
   des paramets Argon2 או des echecs RNG). Les erreurs de token minting se
-  manifestent via des reponses HTTP 4xx/5xx sur `/v1/token/mint`; traitez les
+  manifestent via des reponses HTTP 4xx/5xx sur `/v2/token/mint`; traitez les
   echecs חוזר על תנאי ההחלפה.
 
 ## ציות ורישום ביקורת

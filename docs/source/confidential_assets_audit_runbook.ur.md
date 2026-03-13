@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - پالیسی میٹا ڈیٹا اور زیر التوا ٹرانزیشن دستیاب ہیں
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`) ، سوئفٹ SDK کے ذریعہ آئینہ دار
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) اور دستاویزی دستاویز
   دونوں خفیہ اثاثوں کے ڈیزائن اور ایس ڈی کے گائڈز

@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- يصدر المساعد `POST /v1/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
+```- يصدر المساعد `POST /v2/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
   تضاف الردود الى مسار السجل كسجلات NDJSON.
-- `--poll-status` يعيد الاستعلام عن `/v1/sns/registrations/{selector}` بعد كل
+- `--poll-status` يعيد الاستعلام عن `/v2/sns/registrations/{selector}` بعد كل
   ارسال (حتى `--poll-attempts`, الافتراضي 5) لتاكيد ظهور السجل. ופיר
   `--suffix-map` (JSON يحول `suffix_id` الى قيم "suffix") كي تتمكن الاداة من
   اشتقاق لواحق `{label}.{suffix}` عند polling.

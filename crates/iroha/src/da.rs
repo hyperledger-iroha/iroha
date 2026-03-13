@@ -147,7 +147,7 @@ pub struct DaManifestPersistedPaths {
     pub chunk_plan: PathBuf,
 }
 
-/// Request payload for `/v1/da/commitments` and `/v1/da/commitments/prove`.
+/// Request payload for `/v2/da/commitments` and `/v2/da/commitments/prove`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofRequest {
     /// Optional manifest digest used as the primary lookup key.
@@ -162,7 +162,7 @@ pub struct DaCommitmentProofRequest {
     pub pagination: Option<Pagination>,
 }
 
-/// Response payload for `/v1/da/commitments`.
+/// Response payload for `/v2/da/commitments`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentListResponse {
     /// Active proof-policy bundle for DA commitments.
@@ -171,7 +171,7 @@ pub struct DaCommitmentListResponse {
     pub commitments: Vec<DaCommitmentWithLocation>,
 }
 
-/// Response payload for `/v1/da/commitments/prove`.
+/// Response payload for `/v2/da/commitments/prove`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofResponse {
     /// Active proof-policy bundle for DA commitments.
@@ -180,7 +180,7 @@ pub struct DaCommitmentProofResponse {
     pub proof: DaCommitmentProof,
 }
 
-/// Response payload for `/v1/da/commitments/verify`.
+/// Response payload for `/v2/da/commitments/verify`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentVerifyResponse {
     /// Indicates whether the supplied proof verified against the current store.
@@ -189,7 +189,7 @@ pub struct DaCommitmentVerifyResponse {
     pub error: Option<String>,
 }
 
-/// Request payload for `/v1/da/pin_intents` and `/v1/da/pin_intents/prove`.
+/// Request payload for `/v2/da/pin_intents` and `/v2/da/pin_intents/prove`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentQueryRequest {
     /// Optional manifest digest used as a lookup key.
@@ -208,7 +208,7 @@ pub struct DaPinIntentQueryRequest {
     pub pagination: Option<Pagination>,
 }
 
-/// Response payload for `/v1/da/pin_intents/verify`.
+/// Response payload for `/v2/da/pin_intents/verify`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentVerifyResponse {
     /// Indicates whether the supplied pin intent verified against the current store.
@@ -216,7 +216,7 @@ pub struct DaPinIntentVerifyResponse {
 }
 
 impl DaManifestBundle {
-    /// Parse a Torii `/v1/da/manifests/{ticket}` JSON payload into a bundle.
+    /// Parse a Torii `/v2/da/manifests/{ticket}` JSON payload into a bundle.
     ///
     /// # Errors
     ///

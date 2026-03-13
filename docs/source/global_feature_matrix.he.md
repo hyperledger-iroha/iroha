@@ -25,7 +25,7 @@ translator: manual
 | שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף availability evidence. | status.md:283-284 |
 | קישור שורשי מצב ב-Commit QC | ◉ | Commit QC כולל parent/post state roots; אין שער execution QC נפרד. | status.md:latest |
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
-| טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
+| טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v2/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
 | פרסום פרמטרי קונצנזוס ואימות טופולוגיה | ◉ | נודים מפרסמים `(collectors_k, redundant_send_r)` ומוודאים זהות. | status.md:255 |
 | רוטציה מבוססת PRF ב‑permissioned | ◉ | בחירת לידר/קולקטורים ב‑permissioned משתמשת ב‑PRF seed יחד עם height/view על רוסטר קנוני; רוטציה לפי האש בלוק קודם נשארת כעזר legacy. | status.md:latest |
 
@@ -59,7 +59,7 @@ translator: manual
 |-------|------|--------|---------|
 | קבלת שדרוגים (ABI gating) | ◉ | סט ABI פעיל נאכף בקבלה עם שגיאות מבניות ובדיקות. | status.md:196 |
 | gating לפריסה בניימספייס מוגן | ▲ | מנגנון הגנה פעיל; UX/מדיניות ממשיכים. | status.md:171 |
-| קריאת ממשל ב-Torii | ◉ | `/v1/gov/*` זמינים עם בדיקות Router. | status.md:212 |
+| קריאת ממשל ב-Torii | ◉ | `/v2/gov/*` זמינים עם בדיקות Router. | status.md:212 |
 | ניהול רישום verifying-key | ◉ | רישום/עדכון/דפרקציה, ארועים ו-CLI filters זמינים. | status.md:236-239; status.md:595; status.md:603 |
 
 ## תשתית Zero-Knowledge
@@ -73,7 +73,7 @@ translator: manual
 | ביצוע הצבעות ZK ונעילות | ○ | הפקת נוליפייר, עדכוני נעילה וטוגלים; lifecycle מלא מתקדם. | status.md:126-128; status.md:194-195 |
 | פרה-ווריפיקציה של הוכחות | ◉ | בדיקת backend label, דה-דופ והPersist לפני ביצוע. | status.md:348; status.md:602 |
 | CLI והתנתקות base64 | ◉ | CLI עבר ל-API חדש עם בדיקות. | status.md:174 |
-| Endpoint לטורי הוכחות | ◉ | `/v1/zk/proof/{backend}/{hash}` זמין. | status.md:94 |
+| Endpoint לטורי הוכחות | ◉ | `/v2/zk/proof/{backend}/{hash}` זמין. | status.md:94 |
 
 ## אינטגרציית IVM/Kotodama
 
@@ -84,7 +84,7 @@ translator: manual
 | אימות Pointer-ABI ותיעוד | ◉ | מדיניות TLV נאכפת עם גולדנים ו-doc sync. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | gating Syscalls של ZK ב-CoreHost | ◉ | תורים לכל פעולה מאכפים hash לפני ISI. | crates/iroha_core/src/smartcontracts/ivm/host.rs |
 | תיעוד Grammar של Kotodama Pointer-ABI | ◉ | מסונכרן עם היישום. | status.md:299-301 |
-| מנוע ISO 20022 ו-Bridge לטורי | ◉ | סכימות וה-API `/v1/iso20022/status/{MsgId}` זמינים. | status.md:65-70 |
+| מנוע ISO 20022 ו-Bridge לטורי | ◉ | סכימות וה-API `/v2/iso20022/status/{MsgId}` זמינים. | status.md:65-70 |
 
 ## האצות חומרתיות
 

@@ -71,7 +71,7 @@ QoS ターゲットを確認します。入学封筒
 
 ゲートウェイは、HTTP 接続、отражающие метаданные объявлений をサポートします。
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Требование |ださい |
 |-----------|----------|
@@ -79,7 +79,7 @@ QoS ターゲットを確認します。入学封筒
 | **回答** | `206` 、 `Content-Type: application/vnd.ipld.car`、`Content-Range`、 описывающим выданный интервал、метаданными `X-Sora-Chunk-Range` および эхо ヘッダーチャンカー/トークン。 |
 | **障害モード** | `416` 日/日、`401` 日/日、 `429` ストリーム/バイト バジェット。 |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ヘッダーとダイジェスト チャンクを取得します。
 フォレンジック ダウンロード、CAR スライスの作成も可能です。
@@ -128,12 +128,12 @@ SDK `sorafs_orchestrator`):1. **Собрать входные данные** —
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` оборачивают
   pin-registry REST エンドポイントと認証 Norito JSON 認証
   для аудиторских доказательств。
-- `iroha app sorafs storage pin` および `torii /v1/sorafs/pin/register` および Norito
+- `iroha app sorafs storage pin` および `torii /v2/sorafs/pin/register` および Norito
   JSON マニフェストは、別名証明と後継者を表します。不正な証明
   `400`、古いプルーフ、`503` と `Warning: 110`、完全に期限切れのプルーフ
   `412`。
-- REST エンドポイント (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
-  `/v1/sorafs/replication`) 認証、認証、認証、認証
+- REST エンドポイント (`/v2/sorafs/pin`、`/v2/sorafs/aliases`、
+  `/v2/sorafs/replication`) 認証、認証、認証、認証
   ブロック ヘッダーを確認できます。
 
 ## Ссылки

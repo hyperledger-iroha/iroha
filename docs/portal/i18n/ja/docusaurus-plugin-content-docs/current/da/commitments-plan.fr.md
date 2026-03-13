@@ -31,7 +31,7 @@ SCALEでJSONアドホック。
   在庫馬台帳のコンサルタントなしで在庫を入手できます。
 - Fournir des preuves de メンバーシップは、クライアントのレジェーの範囲内で決定されます
   Verifient qu'un マニフェストのハッシュとブロックの完了を確認します。
-- 要求されたエクスポーザー Torii (`/v1/da/commitments/*`) およびプレユーブ浸透剤
+- 要求されたエクスポーザー Torii (`/v2/da/commitments/*`) およびプレユーブ浸透剤
   補助リレー、SDK、および可用性の監査の自動化
   サン・レジュエ・チャク・ブロック。
 - Conserver l'enveloppe `SignedBlockWire` canonique en transmettant les nouvelles
@@ -46,7 +46,7 @@ SCALEでJSONアドホック。
 3. **永続性/インデックス** WSV の迅速な応答に関する応答の補助
    コミットメント (`iroha_core/src/wsv/mod.rs`)。
 4. **Ajouts RPC Torii** エンドポイントのリスト/講義/証明を行う
-   `/v1/da/commitments`。
+   `/v2/da/commitments`。
 5. **統合 + 治具のテスト** ワイヤ レイアウトおよび磁束耐性の検証
    `integration_tests/tests/da/commitments.rs` です。
 
@@ -140,9 +140,9 @@ Torii は trois エンドポイントを公開します。
 
 |ルート |メトーデ |ペイロード |メモ |
 |----------|----------|----------|----------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (範囲レーン/エポック/シーケンス、ページネーションのフィルター) | Renvoie `DaCommitmentPage` 平均合計、コミットメントおよびハッシュ デ ブロック。 |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ タプル `(epoch, sequence)`)。 | avec `DaCommitmentProof` (レコード + chemin Merkle + ブロックのハッシュ) を応答します。 |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーステートレスはブロックのハッシュと有効性を計算します。 `iroha_crypto` に従って SDK を使用してください。 |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (範囲レーン/エポック/シーケンス、ページネーションのフィルター) | Renvoie `DaCommitmentPage` 平均合計、コミットメントおよびハッシュ デ ブロック。 |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ タプル `(epoch, sequence)`)。 | avec `DaCommitmentProof` (レコード + chemin Merkle + ブロックのハッシュ) を応答します。 |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーステートレスはブロックのハッシュと有効性を計算します。 `iroha_crypto` に従って SDK を使用してください。 |
 
 Tous les ペイロードは `iroha_data_model::da::commitment` を生き生きとさせます。レ・ルートゥール
 Torii モンテント ファイル ハンドラーは、DA の存在を取り込むエンドポイントのコートを提供します

@@ -61,7 +61,7 @@ SF-3 پہلا `sorafs-node` قابل عمل کریٹ فراہم کرتا ہے ج
 - Torii کا AXUM اسٹیک `norito::json` پے لوڈ کے ساتھ استعمال کریں۔
 - جوابات کے ل I Norito اسکیموں کو شامل کریں (`PinResultV1` ، `FetchErrorV1` ، ٹیلی میٹری ڈھانچے)۔
 
-- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی کے علاوہ سب سے قدیم ایپوچ/ڈیڈ لائن اور تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ فی فراہم کنندہ ، `sorafs_node::NodeHandle::por_ingestion_status` کے ذریعے ، اور Torii ریکارڈز SoraFS گاؤگس کے لئے Torii ریکارڈز کے ذریعے۔ .
+- `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی کے علاوہ سب سے قدیم ایپوچ/ڈیڈ لائن اور تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ فی فراہم کنندہ ، `sorafs_node::NodeHandle::por_ingestion_status` کے ذریعے ، اور Torii ریکارڈز SoraFS گاؤگس کے لئے Torii ریکارڈز کے ذریعے۔ .
 
 ### D. شیڈیولر اور کوٹہ تکمیل
 

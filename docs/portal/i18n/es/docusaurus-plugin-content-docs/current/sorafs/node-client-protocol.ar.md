@@ -62,13 +62,13 @@ Para obtener más información, consulte los runbooks de SoraFS.
 
 تقبل البوابات طلبات HTTP حتمية تعكس بيانات الإعلانات.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | المتطلب | التفاصيل |
 |---------|----------|
 | **Encabezados** | `Range` (Nombre y nombre de la marca) `dag-scope: block` `X-SoraFS-Chunker` `X-SoraFS-Nonce` Y `X-SoraFS-Stream-Token` base64. |
 | **Respuestas** | `206` مع `Content-Type: application/vnd.ipld.car`, و`Content-Range` يصف النافذة المقدمة, وبيانات `X-Sora-Chunk-Range`, وإعادة إرسال رؤوس trozo/ficha. |
-| **Modos de fallo** | `416` Accesorios para el hogar, `401` Accesorios para el hogar/para el hogar, `429` Otros productos ميزانيات flujo/byte. |### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+| **Modos de fallo** | `416` Accesorios para el hogar, `401` Accesorios para el hogar/para el hogar, `429` Otros productos ميزانيات flujo/byte. |### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب شريحة واحدة بنفس الرؤوس بالإضافة إلى digest الحتمي للشريحة. مفيد لإعادة
 المحاولة أو تنزيلات الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
@@ -114,11 +114,11 @@ Utilice el software SF-6 (CLI Rust para `sorafs_fetch` y SDK)
 
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` para REST
   Haga clic en los pines y Norito JSON para obtener la certificación de atestación.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` manifiestos
+- `iroha app sorafs storage pin` y `torii /v2/sorafs/pin/register` manifiestos
   بنمط Norito أو JSON مع pruebas اختيارية للـ alias yالـ sucesor؛ تؤدي pruebas
   Pruebas de `400` y pruebas de `503` y de `Warning: 110`
   pruebas المنتهية تمامًا `412`.
-- RESTO (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- RESTO (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   تضمن هياكل atestación حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.
 

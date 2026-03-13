@@ -76,7 +76,7 @@ Test :
 
 | جزو | کام | مالک/مالکان |
 |------|-----|-------------|
-| Torii Service | `/v1/sorafs/pin` (soumettre)، `/v1/sorafs/pin/{cid}` (recherche)، `/v1/sorafs/aliases` (liste/liaison)، `/v1/sorafs/replication` (commandes/reçus) pagination + filtrage | Mise en réseau TL / Core Infra |
+| Torii Service | `/v2/sorafs/pin` (soumettre)، `/v2/sorafs/pin/{cid}` (recherche)، `/v2/sorafs/aliases` (liste/liaison)، `/v2/sorafs/replication` (commandes/reçus) pagination + filtrage | Mise en réseau TL / Core Infra |
 | Attestation | réponses en hauteur/hachage du registre La structure d'attestation Norito est utilisée pour les SDK qui consomment des fichiers | Infrastructure de base |
 | CLI | `sorafs_manifest_stub` est compatible avec `sorafs_pin` CLI pour `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Outillage |
 | SDK | Le schéma Norito et les liaisons client (Rust/Go/TS) génèrent des erreurs tests d'intégration | Équipes SDK |
@@ -131,9 +131,9 @@ Tableaux de bord :
 Liste de contrôle SF-4
 Façade REST et points de terminaison de liste attestés par exemple :
 
-- `GET /v1/sorafs/pin` et `GET /v1/sorafs/pin/{digest}` manifestent des manifestations de ce genre.
+- `GET /v2/sorafs/pin` et `GET /v2/sorafs/pin/{digest}` manifestent des manifestations de ce genre.
   liaisons d'alias, ordres de réplication, ou hachage de bloc, ou objet d'attestation, etc.
-- `GET /v1/sorafs/aliases` vers `GET /v1/sorafs/replication` vers le catalogue alias vers
+- `GET /v2/sorafs/aliases` vers `GET /v2/sorafs/replication` vers le catalogue alias vers
   arriéré des ordres de réplication et pagination cohérente et filtres d'état
 
 CLI appelle et enveloppe کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,

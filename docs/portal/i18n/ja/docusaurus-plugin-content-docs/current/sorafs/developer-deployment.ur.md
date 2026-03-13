@@ -30,7 +30,7 @@ SoraFS パッケージング ワークフローの決定性 مضبوط کرتا 
 
 ## 環境設定
 
-- ゲートウェイのプルーフ ストリーミング エンドポイント (`POST /v1/sorafs/proof/stream`) により、CLI テレメトリ サマリの出力が有効になります。
+- ゲートウェイのプルーフ ストリーミング エンドポイント (`POST /v2/sorafs/proof/stream`) により、CLI テレメトリ サマリの出力が有効になります。
 - `sorafs_alias_cache` ポリシー `iroha_config` のデフォルト CLI ヘルパー (`sorafs_cli manifest submit --alias-*`) の構成
 - ストリーム トークン (Torii 資格情報) 秘密マネージャーの秘密マネージャー
 - テレメトリ エクスポータ (`torii_sorafs_proof_stream_*`、`torii_sorafs_chunk_range_*`) は、Prometheus/OTel スタックの出荷を有効にします。

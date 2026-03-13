@@ -78,7 +78,7 @@ cuando la aplicación PoR/PoTR se intensifica.
 | `sorafs_node_por_failure_total` | Mostrador | `provider_id` | Contador monotónico de muestras PoR fallidas. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Calibre | `provider` | Gauges Prometheus existentes para bytes usados, profundidad de cola, conteos PoR en vuelo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Calibre | `provider` | Datos de capacidad/uptime exitosos del proveedor expuestos en el tablero de capacidad. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | Profundidad del backlog más los contadores acumulados de fallos exportados cada vez que se consulta `/v1/sorafs/por/ingestion/{manifest}`, alimentando el panel/alerta "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | Profundidad del backlog más los contadores acumulados de fallos exportados cada vez que se consulta `/v2/sorafs/por/ingestion/{manifest}`, alimentando el panel/alerta "PoR Stalls". |
 
 ### Prueba de recuperación oportuna (PoTR) y SLA de fragmentos| Métrica | Tipo | Etiquetas | Productor | Notas |
 |--------|------|-----------|-----------|-------|

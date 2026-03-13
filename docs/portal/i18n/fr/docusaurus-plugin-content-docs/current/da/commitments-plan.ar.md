@@ -30,7 +30,7 @@ Par Norito؛ Il est compatible avec SCALE et JSON.
   الى تخزين خارج الدفتر.
 - توفير براهين عضوية حتمية لكي يتحقق العملاء الخفيفون من ان manifeste hash تم
   تثبيته في كتلة محددة.
-- Les modules Torii (`/v1/da/commitments/*`) et les relais et SDK
+- Les modules Torii (`/v2/da/commitments/*`) et les relais et SDK
   وادوات الحوكمة بتدقيق disponibilité دون اعادة تشغيل كل كتلة.
 - الحفاظ على ظرف `SignedBlockWire` القياسي عبر تمرير البنى الجديدة من خلال
   Utilisez le code Norito pour le hachage.
@@ -42,7 +42,7 @@ Par Norito؛ Il est compatible avec SCALE et JSON.
    `crates/iroha_core/src/block.rs`).
 3. **Persisting/indexes** حتى يتمكن WSV من اجابة استعلامات التعهدات بسرعة
    (`iroha_core/src/wsv/mod.rs`).
-4. **اضافات RPC pour Torii**** pour list/query/prove comme `/v1/da/commitments`.
+4. **اضافات RPC pour Torii**** pour list/query/prove comme `/v2/da/commitments`.
 5. **اختبارات تكامل + luminaires** للتحقق من disposition des fils et preuve في
    `integration_tests/tests/da/commitments.rs`.
 
@@ -127,9 +127,9 @@ Torii concerne les points de terminaison :
 
 | المسار | الطريقة | الحمولة | ملاحظات |
 |--------|---------|---------|---------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (pour la voie/l'époque/la séquence, avec la pagination) | Il s'agit d'un `DaCommitmentPage` contenant des éléments de hachage et de hachage. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste et tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (enregistrement + مسار Merkle + hachage الكتلة). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ Les SDK sont compatibles avec la version `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (pour la voie/l'époque/la séquence, avec la pagination) | Il s'agit d'un `DaCommitmentPage` contenant des éléments de hachage et de hachage. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste et tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (enregistrement + مسار Merkle + hachage الكتلة). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ Les SDK sont compatibles avec la version `iroha_crypto`. |
 
 Il s'agit de `iroha_data_model::da::commitment`. يقوم Torii pour
 les gestionnaires des points de terminaison ingèrent le jeton/mTLS.

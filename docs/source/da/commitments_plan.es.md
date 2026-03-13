@@ -27,7 +27,7 @@ controles de gobernanza. Todas las cargas útiles están codificadas con Norito;
   estado sin consultar el almacenamiento fuera del libro mayor.
 - Proporcionar pruebas de membresía deterministas para que los clientes ligeros puedan verificar que un
   El hash manifiesto se finalizó en un bloque determinado.
-- Exponer consultas Torii (`/v1/da/commitments/*`) y pruebas que permiten retransmisiones,
+- Exponer consultas Torii (`/v2/da/commitments/*`) y pruebas que permiten retransmisiones,
   SDK y disponibilidad de auditoría de automatización de gobernanza sin reproducir cada
   bloque.
 - Mantenga canónico el sobre `SignedBlockWire` existente enhebrando el nuevo
@@ -42,7 +42,7 @@ controles de gobernanza. Todas las cargas útiles están codificadas con Norito;
 3. **Persistencia/índices** para que el WSV pueda responder consultas de compromiso rápidamente
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii Adiciones de RPC** para enumerar/consultar/probar puntos finales en
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Pruebas de integración + accesorios** validando el diseño del cable y el flujo de prueba en
    `integration_tests/tests/da/commitments.rs`.
 
@@ -129,7 +129,7 @@ hasta que Torii pase paquetes reales.
 El ensamblaje del bloque y la ingesta de `BlockCreated` revalidan cada compromiso contra
 el catálogo de carriles: los carriles Merkle rechazan los compromisos extraviados de KZG, los carriles KZG requieren un
 compromiso KZG distinto de cero y `chunk_root` distinto de cero, y carriles desconocidos son
-cayó. El punto final `/v1/da/commitments/verify` de Torii refleja la misma protección,
+cayó. El punto final `/v2/da/commitments/verify` de Torii refleja la misma protección,
 e ingerir ahora entrelaza el compromiso determinista de KZG en cada
 Registro `kzg_bls12_381` para que los paquetes que cumplen con la política lleguen al ensamblaje del bloque.
 
@@ -148,9 +148,9 @@ carril para evitar ataques de repetición.
 
 Torii expone tres puntos finales:| Ruta | Método | Carga útil | Notas |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de rango por carril/época/secuencia, paginación) | Devuelve `DaCommitmentPage` con recuento total, compromisos y hash de bloque. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o tupla `(epoch, sequence)`). | Responde con `DaCommitmentProof` (registro + ruta Merkle + hash de bloque). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado que reproduce el cálculo del hash del bloque y valida la inclusión; utilizado por SDK que no pueden vincularse directamente a `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de rango por carril/época/secuencia, paginación) | Devuelve `DaCommitmentPage` con recuento total, compromisos y hash de bloque. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o tupla `(epoch, sequence)`). | Responde con `DaCommitmentProof` (registro + ruta Merkle + hash de bloque). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado que reproduce el cálculo del hash del bloque y valida la inclusión; utilizado por SDK que no pueden vincularse directamente a `iroha_crypto`. |
 
 Todas las cargas útiles se encuentran bajo `iroha_data_model::da::commitment`. Montaje de enrutadores Torii
 los controladores junto a los puntos finales de ingesta de DA existentes para reutilizar token/mTLS

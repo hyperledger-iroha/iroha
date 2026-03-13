@@ -15,8 +15,8 @@ translator: machine-google-reviewed
 Iroha Torii isteğe bağlı WalletConnect tipli WebSocket son nöqtələrini və minimal node relesini ifşa edir
 `connect` Yük funksiyası aktiv olduqda (standart). İş vaxtı davranışı konfiqurasiyada qapalıdır:
 
-- Bütün Qoşulma marşrutlarını (`/v1/connect/*`) söndürmək üçün `connect.enabled=false` təyin edin.
-- WS sessiyasının son nöqtələrini və `/v1/connect/status`-ni aktivləşdirmək üçün onu `true` (defolt) buraxın.
+- Bütün Qoşulma marşrutlarını (`/v2/connect/*`) söndürmək üçün `connect.enabled=false` təyin edin.
+- WS sessiyasının son nöqtələrini və `/v2/connect/status`-ni aktivləşdirmək üçün onu `true` (defolt) buraxın.
 
 Ətraf mühitin ləğvi (istifadəçi konfiqurasiyası → faktiki konfiqurasiya):
 
@@ -44,8 +44,8 @@ Qeydlər:
   server WebSocket-i bağlamadan əvvəl `ping_miss_tolerance` ardıcıl buraxılmış tennislərə dözür və
   `connect.ping_miss_total` metrikasını artırır.
 - İş vaxtında söndürüldükdə (`connect.enabled=false`), WS-ə qoşulun və status marşrutları deyil
-  qeydiyyatdan keçmiş; `/v1/connect/ws` və `/v1/connect/status` sorğuları 404-ü qaytarır.
-- Server `/v1/connect/session` (base64url və ya hex, 32 bayt) üçün müştəri tərəfindən təmin edilmiş `sid` tələb edir.
+  qeydiyyatdan keçmiş; `/v2/connect/ws` və `/v2/connect/status` sorğuları 404-ü qaytarır.
+- Server `/v2/connect/session` (base64url və ya hex, 32 bayt) üçün müştəri tərəfindən təmin edilmiş `sid` tələb edir.
   O, artıq `sid` ehtiyatını yaratmır.
 
 Həmçinin baxın: `crates/iroha_config/src/parameters/{user,actual}.rs` və defoltlar

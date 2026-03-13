@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/rbc/delivered/{height}/{view}
+//! Router-level test for GET /v2/sumeragi/rbc/delivered/{height}/{view}
 #![cfg(feature = "telemetry")]
 
 #[tokio::test]
@@ -34,7 +34,7 @@ async fn sumeragi_rbc_delivered_endpoint_shape() {
 
     // Build a tiny router with the delivered endpoint handler
     let app = Router::new().route(
-        "/v1/sumeragi/rbc/delivered/{height}/{view}",
+        "/v2/sumeragi/rbc/delivered/{height}/{view}",
         get(|path: axum::extract::Path<(u64, u64)>| async move {
             iroha_torii::handle_v1_sumeragi_rbc_delivered_height_view(path).await
         }),
@@ -43,7 +43,7 @@ async fn sumeragi_rbc_delivered_endpoint_shape() {
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/rbc/delivered/10/2")
+                .uri("/v2/sumeragi/rbc/delivered/10/2")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

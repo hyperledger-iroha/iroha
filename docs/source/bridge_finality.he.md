@@ -62,7 +62,7 @@ payload ה-commitment כיום.
 MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
 from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 האימות דומה להוכחה הבסיסית: לחשב מחדש `block_hash` מה-header, לאמת חתימות של
 commit certificate, ולוודא ששדות ה-commitment תואמים ל-certificate ול-hash של הבלוק.
@@ -100,9 +100,9 @@ stale/מדולגות. כאשר מסופקים anchors הוא דוחה replays ב
 
 ## משטח API
 
-- `GET /v1/bridge/finality/{height}` - מחזיר `BridgeFinalityProof` עבור גובה הבלוק המבוקש.
+- `GET /v2/bridge/finality/{height}` - מחזיר `BridgeFinalityProof` עבור גובה הבלוק המבוקש.
   Content negotiation דרך `Accept` תומך Norito או JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - מחזיר `BridgeFinalityBundle`
+- `GET /v2/bridge/finality/bundle/{height}` - מחזיר `BridgeFinalityBundle`
   (commitment + justification + header/certificate) עבור הגובה המבוקש.
 
 ## הערות ומעקבים

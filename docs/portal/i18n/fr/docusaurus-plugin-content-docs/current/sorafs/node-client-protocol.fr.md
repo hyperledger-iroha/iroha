@@ -68,7 +68,7 @@ Outillage de support :
 ## Plage de points de terminaison de la passerelleLes passerelles acceptent des requêtes HTTP déterministes qui renvoient les
 métadonnées des publicités.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Exigence | Détails |
 |----------|---------|
@@ -76,7 +76,7 @@ métadonnées des publicités.
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` décrivant la fenêtre servie, métadonnées `X-Sora-Chunk-Range`, et headers chunker/token renvoyés. |
 | **Modes d'échec** | `416` pour plages mal alignées, `401` pour tokens manquants/invalides, `429` lorsque les budgets stream/octets sont dépassés. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch d'un seul chunk avec les mêmes headers, plus le digest déterministe du
 morceau. Utile pour les tentatives ou les téléchargements médico-légaux quand les
@@ -127,12 +127,12 @@ Erreurs courantes remontées aux opérateurs/SDKs :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` emballent les fichiers
   endpoints REST du pin-registry et impression du Norito JSON brut avec blocs
   d'attestation pour l'audit.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` acceptent les
+- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` acceptent les
   manifestes Norito ou JSON, plus des preuves d'alias optionnels et des successeurs ;
   des preuves mal formées renvoient `400`, des preuves obsolètes exposent `503` avec
   `Warning: 110`, et des épreuves expirées renvoient `412`.
-- Les points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) inclut des structures d'attestation pour que les
+- Les points de terminaison REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) inclut des structures d'attestation pour que les
   les clients vérifient les données avec les derniers en-têtes de bloc avant d'agir.
 
 ##Référence- Spécification canonique :

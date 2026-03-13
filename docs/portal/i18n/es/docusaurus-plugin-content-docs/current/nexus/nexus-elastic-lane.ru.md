@@ -107,7 +107,7 @@ Después de la medición Torii, instale un nuevo ayudante de humo, cómo verific
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --status-url https://torii.example.com/v2/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \

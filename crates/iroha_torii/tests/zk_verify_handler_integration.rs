@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v1/zk/verify minimal handler.
+//! Integration test for /v2/zk/verify minimal handler.
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
 
@@ -11,7 +11,7 @@ use tower::ServiceExt as _;
 async fn zk_verify_endpoint_accepts_json_and_norito() {
     // Router with verify handler
     let app = Router::new().route(
-        "/v1/zk/verify",
+        "/v2/zk/verify",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
                 iroha_torii::handle_v1_zk_verify(headers, body).await
@@ -34,7 +34,7 @@ async fn zk_verify_endpoint_accepts_json_and_norito() {
     let body_json = norito::json::to_string(&body_json_value).expect("serialize body json");
     let req_json = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/verify")
+        .uri("/v2/zk/verify")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_json))
         .unwrap();
@@ -47,7 +47,7 @@ async fn zk_verify_endpoint_accepts_json_and_norito() {
     // Norito path: any non-empty bytes accepted by minimal handler
     let req_norito = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/verify")
+        .uri("/v2/zk/verify")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(vec![0x01, 0x02, 0x03]))
         .unwrap();
@@ -60,7 +60,7 @@ async fn zk_verify_endpoint_accepts_json_and_norito() {
     // Norito path negative: empty body should return ok=false
     let req_empty = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/verify")
+        .uri("/v2/zk/verify")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(Vec::<u8>::new()))
         .unwrap();

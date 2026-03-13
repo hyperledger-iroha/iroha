@@ -7,7 +7,7 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-روڈ میپ آئٹم **SF-2c** تقاضا کرتا ہے کہ خزانہ ثابت کرے کہ کپیسٹی فیس لیجر ہر رات انجام دی گئی XOR ٹرانسفرز سے میل کھاتا ہے۔ `scripts/telemetry/capacity_reconcile.py` helper استعمال کریں تاکہ `/v1/sorafs/capacity/state` snapshot کو انجام دی گئی ٹرانسفر بیچ کے ساتھ compare کیا جا سکے اور Alertmanager کے لیے Prometheus textfile metrics جاری ہوں۔
+روڈ میپ آئٹم **SF-2c** تقاضا کرتا ہے کہ خزانہ ثابت کرے کہ کپیسٹی فیس لیجر ہر رات انجام دی گئی XOR ٹرانسفرز سے میل کھاتا ہے۔ `scripts/telemetry/capacity_reconcile.py` helper استعمال کریں تاکہ `/v2/sorafs/capacity/state` snapshot کو انجام دی گئی ٹرانسفر بیچ کے ساتھ compare کیا جا سکے اور Alertmanager کے لیے Prometheus textfile metrics جاری ہوں۔
 
 ## پیشگی تقاضے
 - Torii سے ایکسپورٹ کیا گیا کپیسٹی اسٹیٹ snapshot (`fee_ledger` entries)۔

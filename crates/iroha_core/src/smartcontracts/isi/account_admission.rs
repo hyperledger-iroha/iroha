@@ -4,7 +4,7 @@
 //! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
 //! destination `Account` object may be created automatically if it does not exist yet.
 
-use std::sync::LazyLock;
+use std::{collections::BTreeSet, sync::LazyLock};
 
 use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
@@ -24,6 +24,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
+use mv::storage::StorageReadOnly;
 
 use crate::{
     role::RoleIdWithOwner,
@@ -198,6 +199,7 @@ fn resolve_existing_account_for_subject(
 }
 
 fn create_implicit_account(
+    authority: &AccountId,
     destination: &AccountId,
     default_role_on_create: Option<&RoleId>,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -210,11 +212,27 @@ fn create_implicit_account(
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::new(),
     };
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction
         .world
         .insert_account_with_links(account_id, account_value);
+    if let Some(linked_domain) = state_transaction
+        .world
+        .account_subject_domains
+        .get(authority)
+        .and_then(|domains| domains.iter().next().cloned())
+    {
+        state_transaction
+            .world
+            .link_account_subject_domain(&destination.to_account_id(linked_domain.clone()));
+        state_transaction
+            .world
+            .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                AccountCreated::new(account.clone(), linked_domain),
+            ))));
+    }
 
     let mut default_role_granted = None;
     if let Some(role) = default_role_on_create {
@@ -337,6 +355,7 @@ pub(super) fn ensure_receiving_account(
     }
 
     create_implicit_account(
+        authority,
         destination,
         default_role_on_create.as_ref(),
         state_transaction,
@@ -1186,19 +1205,29 @@ mod tests {
         );
 
         let events = &stx.world.internal_event_buf;
-        assert!(
+        let created_pos = events.iter().position(|event| {
             matches!(
-                events[0].as_ref(),
+                event.as_ref(),
                 DataEvent::Domain(DomainEvent::Account(AccountEvent::Created(_)))
-            ),
-            "first event should be account creation"
+            )
+        });
+        let role_granted_pos = events.iter().position(|event| {
+            matches!(
+                event.as_ref(),
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(_)))
+            )
+        });
+        assert!(
+            created_pos.is_some(),
+            "account creation event should be emitted"
         );
         assert!(
-            matches!(
-                events[1].as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(_)))
-            ),
-            "second event should be default role grant"
+            role_granted_pos.is_some(),
+            "default role grant event should be emitted"
+        );
+        assert!(
+            created_pos < role_granted_pos,
+            "account creation should happen before default role grant"
         );
     }
 

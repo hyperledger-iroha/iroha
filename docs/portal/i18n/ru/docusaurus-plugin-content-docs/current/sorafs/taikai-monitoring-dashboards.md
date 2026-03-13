@@ -66,7 +66,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    активный routing manifest (TRM) и lineage window. Хелпер
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    скопирует spool files, сгенерирует hashes и при необходимости подпишет summary.
-2. Запишите вывод `/v1/status`, отфильтрованный до
+2. Запишите вывод `/v2/status`, отфильтрованный до
    `.telemetry.taikai_alias_rotations[]`, и сохраните его рядом со spool files.
    Reviewers сравнивают `manifest_digest_hex` и границы окна с копией spool state.
 3. Экспортируйте Prometheus snapshots для метрик выше и сделайте скриншоты

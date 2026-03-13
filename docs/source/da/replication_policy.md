@@ -18,7 +18,7 @@ number of epochs and replicas without relying on submitter intent.
 | _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
 
 These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
+all `/v2/da/ingest` submissions. Torii rewrites manifests with the enforced
 retention profile and emits a warning when callers provide mismatched values so
 operators can detect stale SDKs.
 
@@ -140,7 +140,7 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
    and PDP evidence.
 
 Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
+the suite submits a mismatched retention policy to `/v2/da/ingest` and verifies
 that the fetched manifest exposes the enforced profile instead of the caller
 intent.
 
