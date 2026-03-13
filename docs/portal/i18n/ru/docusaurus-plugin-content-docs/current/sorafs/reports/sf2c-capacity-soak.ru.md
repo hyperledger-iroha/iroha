@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii теперь показывает снимки поставщиков кредитов вместе с книгами комиссий, чтобы
 информационные панели могли бы побаловать баланс и наложить штрафы:
 
-- REST: `GET /v1/sorafs/capacity/state` требует записи `credit_ledger[*]`,
+- REST: `GET /v2/sorafs/capacity/state` требует записи `credit_ledger[*]`,
   которые отражают поля бухгалтерской книги, проверенные в тесте. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит

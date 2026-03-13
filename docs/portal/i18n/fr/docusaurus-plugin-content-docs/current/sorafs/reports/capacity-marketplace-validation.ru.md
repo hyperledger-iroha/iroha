@@ -28,7 +28,7 @@ Il n'y a qu'un seul client qui a fait ses preuves auprès des opérateurs du mar
 
 | Proverbe | Validation | Documentation |
 |-------|------------|--------------|
-| Registre des déclarations canoniques | Le test d'intégration utilise `/v1/sorafs/capacity/declare` avec l'API de l'application, en vérifiant l'état des lieux, en mettant les métadonnées et avant dans les registres. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registre des déclarations canoniques | Le test d'intégration utilise `/v2/sorafs/capacity/declare` avec l'API de l'application, en vérifiant l'état des lieux, en mettant les métadonnées et avant dans les registres. | `crates/iroha_torii/src/routing.rs:7654` |
 | Le contrat intelligent отклоняет несовпадающие les charges utiles | Unit-test garantit que les fournisseurs d'identifiants et les GiB engagés sont fournis par une déclaration préalable à l'achat. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI выпускает канонические artefacts онбординга | Le harnais CLI permet de déterminer les allers-retours Norito/JSON/Base64, les opérateurs pouvant obtenir des déclarations hors ligne. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | L'opérateur local examine le flux de travail et la mise en place des garde-corps | La documentation concerne les déclarations de régime, la politique par défaut et les rapports du conseil. | `../storage-capacity-marketplace.md` |

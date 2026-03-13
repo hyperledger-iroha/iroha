@@ -47,7 +47,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii アホラは、ダッシュボードにある料金台帳とプロバイダーのクレジットのスナップショットを公開します
 プエダン ガタール ソブレ サルドス バホス y ペナルティ ストライク:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` クエリ
+- REST: `GET /v2/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` クエリ
   リフレジャン・ロス・カンポス・デル・レジャー・ベリフィカドス・アン・ラ・プルエバ・デ・ソーク。バージョン
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana のインポート: `dashboards/grafana/sorafs_capacity_penalties.json` グラフィックス

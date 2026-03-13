@@ -200,7 +200,7 @@ struct AdversarialPerceptualVariantV1 {
   - შესვლის წერტილი `run_moderation.py` (ან Rust ექვივალენტი), რომელიც ავლენს HTTP/gRPC API-ს.
 - გამოაქვეყნეთ არტეფაქტები `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`-ზე.
 - ორობითი გემები, როგორც `sorafs_ai_runner` კრატის ნაწილი. მილსადენის მშენებლობა
-  ჩაშენებულია მანიფესტ ჰეშის ბინარში (გამოვლენილი `/v1/info`-ის მეშვეობით).
+  ჩაშენებულია მანიფესტ ჰეშის ბინარში (გამოვლენილი `/v2/info`-ის მეშვეობით).
 
 ## 8. ტელემეტრია და დაკვირვება
 - Prometheus მეტრიკა:

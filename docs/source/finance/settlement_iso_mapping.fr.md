@@ -65,7 +65,7 @@ obligations que le pont Norito ↔ ISO 20022 doit faire respecter avant d'émet
   - Relevés destinés aux clients (`camt.054`) : inclure **IBAN** lorsqu'il est présent et le valider
     (longueur, règles du pays, somme de contrôle mod-97).[^swift_iban]
 - **Devise** → **ISO 4217** Code à 3 lettres, respecter l'arrondi des unités mineures.[^iso_4217]
-- **Ingestion Torii** → Soumettre les segments de financement PvP via `POST /v1/iso20022/pacs009` ; le pont
+- **Ingestion Torii** → Soumettre les segments de financement PvP via `POST /v2/iso20022/pacs009` ; le pont
   nécessite `Purp=SECU` et applique désormais les croisements BIC lorsque les données de référence sont configurées.
 
 #### Règles de validation (applicables avant émission)

@@ -66,7 +66,7 @@ Rejettent les metadonnees mal forees:
 ## 備品と備品
 
 - メタドン `range_capability` を含む 4 件のペイロードの報告、
-  `stream_budget` および `transport_hints`。応答 `/v1/sorafs/providers` et les 経由で検証します
+  `stream_budget` および `transport_hints`。応答 `/v2/sorafs/providers` et les 経由で検証します
   入場の準備。容量解析、ストリーム予算を含む JSON を再開します
   テレメトリックの摂取に関するヒントを表します。
 - `cargo xtask sorafs-admission-fixtures` ストリーム バジェットとトランスポート ヒントを公開します
@@ -78,7 +78,7 @@ Rejettent les metadonnees mal forees:
 
 ## 統合 avec l'orchestrateur et Torii
 
-- Torii `/v1/sorafs/providers` renvoie les metadonnees de capacite de plage parsees avec
+- Torii `/v2/sorafs/providers` renvoie les metadonnees de capacite de plage parsees avec
   `stream_budget` と `transport_hints`。ダウングレードの危険な警告の回避
   新しいメタドネの監視、およびゲートウェイのエンドポイントの監視
   クライアントの指示に従ってミームの制約を適用します。

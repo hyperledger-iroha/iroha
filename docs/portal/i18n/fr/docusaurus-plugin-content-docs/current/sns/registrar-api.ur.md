@@ -26,7 +26,7 @@ artefacts et le registraire du Sora Name Service (SNS) sont disponibles.
 
 ## 1. ٹرانسپورٹ اور توثیق| شرط | تفصیل |
 |-----|-------|
-| پروٹوکولز | REST `/v1/sns/*` est un service gRPC `sns.v1.Registrar`۔ Fichier Norito-JSON (`application/json`) et Norito-RPC (`application/x-norito`) pour le téléchargement |
+| پروٹوکولز | REST `/v2/sns/*` est un service gRPC `sns.v1.Registrar`۔ Fichier Norito-JSON (`application/json`) et Norito-RPC (`application/x-norito`) pour le téléchargement |
 | Authentification | Jetons `Authorization: Bearer` et certificats mTLS et gestionnaire de suffixe et gestionnaire de suffixe points de terminaison sensibles à la gouvernance (gel/dégel, affectations réservées) par `scope=sns.admin` pour |
 | ریٹ حدود | Les bureaux d'enregistrement `torii.preauth_scheme_limits` regroupent les appelants JSON et les majuscules éclatées : `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`۔ |
 | ٹیلیمیٹری | Gestionnaires d'enregistrement Torii pour `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` pour le filtre (filtre `scheme="norito_rpc"`) API pour `sns_registrar_status_total{result, suffix_id}` pour le client |
@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. Points de terminaison REST| Point de terminaison | طریقہ | Charge utile | تفصیل |
 |--------------|-------|---------|-------|
-| `/v1/sns/registrations` | POSTER | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ niveau de tarification et les preuves de paiement/gouvernance et les événements de registre émettent des preuves |
-| `/v1/sns/registrations/{selector}/renew` | POSTER | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے Grace/Redemption Windows نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | POSTER | `TransferNameRequestV1` | حکمرانی approbations لگنے کے بعد propriété منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | METTRE | `UpdateControllersRequestV1` | contrôleurs کا سیٹ بدلتا ہے؛ adresses de compte signées کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | POSTER | `FreezeNameRequestV1` | gel du tuteur/du conseil۔ ticket de gardien et dossier de gouvernance کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | SUPPRIMER | `GovernanceHookV1` | remédiation کے بعد dégeler؛ dérogation du conseil |
-| `/v1/sns/reserved/{selector}` | POSTER | `ReservedAssignmentRequestV1` | noms réservés کی intendant/conseil کی طرف سے affectation۔ |
-| `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (mise en cache)۔ |
-| `/v1/sns/registrations/{selector}` | OBTENIR | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) et کرتا ہے۔ |
+| `/v2/sns/registrations` | POSTER | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ niveau de tarification et les preuves de paiement/gouvernance et les événements de registre émettent des preuves |
+| `/v2/sns/registrations/{selector}/renew` | POSTER | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے Grace/Redemption Windows نافذ کرتا ہے۔ |
+| `/v2/sns/registrations/{selector}/transfer` | POSTER | `TransferNameRequestV1` | حکمرانی approbations لگنے کے بعد propriété منتقل کرتا ہے۔ |
+| `/v2/sns/registrations/{selector}/controllers` | METTRE | `UpdateControllersRequestV1` | contrôleurs کا سیٹ بدلتا ہے؛ adresses de compte signées کی توثیق کرتا ہے۔ |
+| `/v2/sns/registrations/{selector}/freeze` | POSTER | `FreezeNameRequestV1` | gel du tuteur/du conseil۔ ticket de gardien et dossier de gouvernance کا حوالہ درکار۔ |
+| `/v2/sns/registrations/{selector}/freeze` | SUPPRIMER | `GovernanceHookV1` | remédiation کے بعد dégeler؛ dérogation du conseil |
+| `/v2/sns/reserved/{selector}` | POSTER | `ReservedAssignmentRequestV1` | noms réservés کی intendant/conseil کی طرف سے affectation۔ |
+| `/v2/sns/policies/{suffix_id}` | OBTENIR | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (mise en cache)۔ |
+| `/v2/sns/registrations/{selector}` | OBTENIR | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) et کرتا ہے۔ |
 
 **Encodage du sélecteur :** Segment de chemin `{selector}` I105, compressé (`sora`) et hexadécimal canonique ADDR-5 pour le segment de chemin d'accès. Torii `NameSelectorV1` pour normaliser les choses**Modèle d'erreur :** Les points de terminaison Norito JSON `code`, `message`, `details` sont affichés. Codes `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` en anglais
 
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (identifiant de proposition, hachages de vote, signatures d'intendant/tuteur)۔ Le point de terminaison `/v1/sns/registrations/{selector}/...` est utilisé pour les opérateurs bêta et les surfaces Torii répètent. Les SDK sont également disponibles
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (identifiant de proposition, hachages de vote, signatures d'intendant/tuteur)۔ Le point de terminaison `/v2/sns/registrations/{selector}/...` est utilisé pour les opérateurs bêta et les surfaces Torii répètent. Les SDK sont également disponibles
 
 ## 4. Service gRPC
 
@@ -205,7 +205,7 @@ service Registrar {
 
 Torii preuves en anglais:
 
-1. Grand livre de gouvernance d'identifiant de proposition (`/v1/governance/proposals/{id}`) میں موجود ہے اور statut `Approved` ہے۔
+1. Grand livre de gouvernance d'identifiant de proposition (`/v2/governance/proposals/{id}`) میں موجود ہے اور statut `Approved` ہے۔
 2. hashs ریکارڈ شدہ votes artefacts سے match کرتے ہیں۔
 3. signatures de l'intendant/tuteur `SuffixPolicyV1` pour les clés publiques et se référer à la déclaration
 
@@ -213,7 +213,7 @@ Torii preuves en anglais:
 
 ## 6. Exemples de workflow
 
-### 6.1 Inscription standard1. Client `/v1/sns/policies/{suffix_id}` pour une requête sur les tarifs et les niveaux de grâce
+### 6.1 Inscription standard1. Client `/v2/sns/policies/{suffix_id}` pour une requête sur les tarifs et les niveaux de grâce
 2. Client `RegisterNameRequestV1` utilisé :
    - `selector` pour I105, deuxième meilleure étiquette compressée (`sora`) et dérivée
    - `term_years` پالیسی حدود میں۔
@@ -238,7 +238,7 @@ Renouvellements de grâce comme demande standard et détection de pénalité com
 
 ### 6.3 Gel des gardiens et dérogation au conseil1. Guardian `FreezeNameRequestV1` soumettre un ticket pour un identifiant d'incident et un ticket pour un ticket
 2. L'enregistrement Torii et `NameStatus::Frozen` émettent un message d'erreur.
-3. Assainissement et dérogation du conseil opérateur DELETE `/v1/sns/registrations/{selector}/freeze` et `GovernanceHookV1` sont en cours de réalisation
+3. Assainissement et dérogation du conseil opérateur DELETE `/v2/sns/registrations/{selector}/freeze` et `GovernanceHookV1` sont en cours de réalisation
 4. Torii override validate کرتا ہے، `NameUnfrozen` émet کرتا ہے۔
 
 ## 7. Validation et codes d'erreur
@@ -256,7 +256,7 @@ Codes de code `X-Iroha-Error-Code` et enveloppes structurées Norito JSON/NRPC e
 ## 8. Notes de mise en œuvre
 
 - Torii enchères en attente pour `NameRecordV1.auction` pour les tentatives d'enregistrement direct et pour `PendingAuction` pour les tentatives d'enregistrement direct et pour rejeter les enchères
-- Preuves de paiement Norito Reçus du grand livre دوبارہ استعمال کرتے ہیں؛ API d'assistance aux services de trésorerie (`/v1/finance/sns/payments`)
+- Preuves de paiement Norito Reçus du grand livre دوبارہ استعمال کرتے ہیں؛ API d'assistance aux services de trésorerie (`/v2/finance/sns/payments`)
 - Les SDK, les points de terminaison et les assistants fortement typés, ainsi que les enveloppes, les portefeuilles et les raisons d'erreur (`ERR_SNS_RESERVED`, etc.)## 9. Prochaines étapes
 
 - Enchères SN-3 pour les gestionnaires Torii et le contrat de registre avec fil de fer

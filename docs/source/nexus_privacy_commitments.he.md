@@ -189,7 +189,7 @@ LanePrivacyCommitment::snark(id, circuit)
 
 ### נראות אופרטורית
 
-Endpoint של Torii `/v1/sumeragi/status` חושף כעת את המערך `lane_governance[].privacy_commitments`
+Endpoint של Torii `/v2/sumeragi/status` חושף כעת את המערך `lane_governance[].privacy_commitments`
 כדי שמפעילים ו-SDKs יוכלו להשוות את ה-registry החי מול manifests שפורסמו בלי לקרוא מחדש את bundle.
 ה-snapshot נבנה בתוך `crates/iroha_core/src/sumeragi/status.rs`, מיוצא על ידי Torii REST/JSON
 handlers (`crates/iroha_torii/src/routing.rs`), ומפוענח על ידי כל client

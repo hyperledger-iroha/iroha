@@ -104,12 +104,12 @@ Operator Rollout (No Downtime)
 
 Torii & CLI
 - Torii
-  - `GET /v1/runtime/abi/active` → `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
-  - `GET /v1/runtime/abi/hash` → `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
-  - `GET /v1/runtime/upgrades` → list of records (implemented).
-  - `POST /v1/runtime/upgrades/propose` → wraps `ProposeRuntimeUpgrade` (returns instruction skeleton; implemented).
-  - `POST /v1/runtime/upgrades/activate/:id` → wraps `ActivateRuntimeUpgrade` (returns instruction skeleton; implemented).
-  - `POST /v1/runtime/upgrades/cancel/:id` → wraps `CancelRuntimeUpgrade` (returns instruction skeleton; implemented).
+  - `GET /v2/runtime/abi/active` → `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v2/runtime/abi/hash` → `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
+  - `GET /v2/runtime/upgrades` → list of records (implemented).
+  - `POST /v2/runtime/upgrades/propose` → wraps `ProposeRuntimeUpgrade` (returns instruction skeleton; implemented).
+  - `POST /v2/runtime/upgrades/activate/:id` → wraps `ActivateRuntimeUpgrade` (returns instruction skeleton; implemented).
+  - `POST /v2/runtime/upgrades/cancel/:id` → wraps `CancelRuntimeUpgrade` (returns instruction skeleton; implemented).
 - CLI
   - `iroha runtime abi active` (implemented)
   - `iroha runtime abi hash` (implemented)

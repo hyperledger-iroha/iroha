@@ -624,9 +624,9 @@ their change tickets.
 
 ### Torii response formats
 
-- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical I105 account
+- `GET /v2/accounts` and `POST /v2/accounts/query` emit canonical I105 account
   literals in responses.
-- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+- Asset holder listings (`GET /v2/assets/{definition_id}/holders`) and their JSON
   envelope counterpart (`POST …/holders/query`) also emit canonical I105 account
   identifiers in `items[*].account_id`.
 - **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain

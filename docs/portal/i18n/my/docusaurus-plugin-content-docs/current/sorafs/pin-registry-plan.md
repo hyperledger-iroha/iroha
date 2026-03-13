@@ -76,7 +76,7 @@ Rust Norito schemas နှင့် validation helpers သည် ဤမှတ်
 
 | အစိတ်အပိုင်း | တာဝန် | ပိုင်ရှင်(များ) |
 |----------|------|----------|
-| Torii ဝန်ဆောင်မှု | `/v1/sorafs/pin` (တင်သွင်းရန်)၊ `/v1/sorafs/pin/{cid}` (ရှာဖွေမှု)၊ `/v1/sorafs/aliases` (စာရင်း/စည်း)၊ `/v1/sorafs/replication` (အော်ဒါ/ပြေစာများ) ကို ဖော်ထုတ်ပါ။ pagination + filtering ပေးပါ။ | ကွန်ရက်ချိတ်ဆက်ခြင်း TL / Core Infra |
+| Torii ဝန်ဆောင်မှု | `/v2/sorafs/pin` (တင်သွင်းရန်)၊ `/v2/sorafs/pin/{cid}` (ရှာဖွေမှု)၊ `/v2/sorafs/aliases` (စာရင်း/စည်း)၊ `/v2/sorafs/replication` (အော်ဒါ/ပြေစာများ) ကို ဖော်ထုတ်ပါ။ pagination + filtering ပေးပါ။ | ကွန်ရက်ချိတ်ဆက်ခြင်း TL / Core Infra |
 | သက်သေခံချက် | တုံ့ပြန်မှုများတွင် registry အမြင့်/hash ကို ထည့်သွင်းပါ။ SDKs မှအသုံးပြုသော Norito သက်သေပြတည်ဆောက်ပုံကို ထည့်ပါ။ | Core Infra |
 | CLI | `sorafs_manifest_stub` သို့မဟုတ် `sorafs_pin` CLI အသစ်ကို `pin submit`၊ `alias bind`၊ `order issue`၊ `registry export` ဖြင့် တိုးချဲ့ပါ။ | Tooling WG |
 | SDK | Norito schema မှ client bindings (Rust/Go/TS) ကို ဖန်တီးပါ။ ပေါင်းစပ်စစ်ဆေးမှုများထည့်ပါ။ | SDK အဖွဲ့များ |
@@ -133,10 +133,10 @@ Rust Norito schemas နှင့် validation helpers သည် ဤမှတ်
 SF-4 အောက်တွင် လမ်းပြမြေပုံ စစ်ဆေးရေးစာရင်း အကြောင်းအရာတစ်ခုစီသည် တိုးတက်မှုလုပ်ဆောင်သည့်အခါ ဤအစီအစဉ်ကို ကိုးကားသင့်သည်။
 REST façade သည် ယခုအခါ အတည်ပြုစာရင်းဝင်သည့် အဆုံးမှတ်များနှင့်အတူ ပို့ဆောင်ပေးသည်-
 
-- `GET /v1/sorafs/pin` နှင့် `GET /v1/sorafs/pin/{digest}` return manifests နှင့်အတူ
+- `GET /v2/sorafs/pin` နှင့် `GET /v2/sorafs/pin/{digest}` return manifests နှင့်အတူ
   alias bindings, replication orders, and a attestation object တို့မှ ဆင်းသက်လာသည်။
   နောက်ဆုံးပိတ် hash။
-- `GET /v1/sorafs/aliases` နှင့် `GET /v1/sorafs/replication` တက်ကြွမှုကို ဖော်ထုတ်ပါ
+- `GET /v2/sorafs/aliases` နှင့် `GET /v2/sorafs/replication` တက်ကြွမှုကို ဖော်ထုတ်ပါ
   တသမတ်တည်း pagination နှင့် alias catalog နှင့် replication order backlog
   အခြေအနေ စစ်ထုတ်မှုများ။
 

@@ -33,7 +33,7 @@ condensa a especificacao para o publico do portal.
 
 | Componente | Objetivo | Evidencia |
 |------------|----------|-----------|
-| `sns_settlementd` | Aplica politica, assina bundles, expone `/v1/sns/settlements`. | Bundle JSON + hash. |
+| `sns_settlementd` | Aplica politica, assina bundles, expone `/v2/sns/settlements`. | Bundle JSON + hash. |
 | Settlement queue & writer | Fila idempotente + submitter do ledger conduzido por `iroha_cli app sns settlement ledger`. | Manifesto de bundle hash <-> tx hash. |
 | Reconciliation job | Diff diario + demonstrativo mensal sob `docs/source/sns/reports/`. | Markdown + JSON digest. |
 | Refund desk | Reembolsos aprovados por governanca via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

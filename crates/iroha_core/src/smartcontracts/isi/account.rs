@@ -363,6 +363,7 @@ pub mod query {
             label: details.label.clone(),
             uaid: details.uaid,
             opaque_ids: details.opaque_ids.clone(),
+            linked_domains: details.linked_domains.clone(),
         }
     }
 
@@ -609,9 +610,17 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Account>, Error> {
             let world = state_ro.world();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let filter_payload = filter.json_payload();
+            if filter_payload.is_none() {
+                let iter: Box<dyn Iterator<Item = Account> + '_> = Box::new(
+                    world
+                        .accounts_iter()
+                        .map(|entry| account_from_entry(entry.id(), entry.value())),
+                );
+                return Ok(iter);
+            }
+            let predicate_json =
+                filter_payload.and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
             let simple_id_path = predicate_json
                 .as_ref()
                 .and_then(account_predicate_simple_id_path);
@@ -666,9 +675,16 @@ pub mod query {
                 return Ok(iter);
             }
 
-            Ok(Box::new(world.accounts_iter().filter_map(move |entry| {
-                account_matches_filter(&filter, predicate_json.as_ref(), entry.id(), entry.value())
-            })))
+            let iter: Box<dyn Iterator<Item = Account> + '_> =
+                Box::new(world.accounts_iter().filter_map(move |entry| {
+                    account_matches_filter(
+                        &filter,
+                        predicate_json.as_ref(),
+                        entry.id(),
+                        entry.value(),
+                    )
+                }));
+            Ok(iter)
         }
     }
 
@@ -681,14 +697,43 @@ pub mod query {
         ) -> std::result::Result<impl Iterator<Item = Account>, Error> {
             let asset_definition_id = self.asset_definition_id().clone();
             let world = state_ro.world();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let filter_payload = filter.json_payload();
+
+            trace!(%asset_definition_id);
+
+            if filter_payload.is_none() {
+                let subjects = world
+                    .asset_definition_holders()
+                    .get(&asset_definition_id)
+                    .map(|holders| holders.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let iter: Box<dyn Iterator<Item = Account> + '_> =
+                    Box::new(subjects.into_iter().filter_map(move |subject| {
+                        let Some((account_id, account_value)) =
+                            world.accounts().get_key_value(&subject)
+                        else {
+                            return None;
+                        };
+
+                        let has_balance = world
+                            .assets_in_account_by_definition_iter(account_id, &asset_definition_id)
+                            // Skip zero-valued placeholders (including genesis seeds).
+                            .any(|asset| !asset.value().is_zero());
+
+                        if !has_balance {
+                            return None;
+                        }
+
+                        Some(account_from_entry(account_id, account_value))
+                    }));
+                return Ok(iter);
+            }
+
+            let predicate_json =
+                filter_payload.and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
             let simple_id_path = predicate_json
                 .as_ref()
                 .and_then(account_predicate_simple_id_path);
-
-            trace!(%asset_definition_id);
 
             if let Some(path) = simple_id_path {
                 let subjects = match (
@@ -875,6 +920,46 @@ pub mod query {
                 .map(|a| a.id)
                 .collect();
             assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn find_accounts_returns_registered_accounts_for_pass_predicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (acc1, _) = gen_account_in("wonderland");
+            let (acc2, _) = gen_account_in("wonderland");
+            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(acc2.clone().to_account_id(domain_id)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let mut results: Vec<_> = FindAccounts
+                .execute(CompoundPredicate::PASS, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            results.sort();
+
+            let mut expected = vec![acc1, acc2];
+            expected.sort();
+            assert_eq!(results, expected);
         }
 
         #[test]

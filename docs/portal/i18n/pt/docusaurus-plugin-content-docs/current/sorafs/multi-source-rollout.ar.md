@@ -33,7 +33,7 @@ Você pode usar a API SF-6 (`sorafs_orchestrator`, sem API). الشرائح في
 ## 1. التحقق قبل التنفيذ
 
 1. **تأكيد مدخلات الحوكمة.**
-   - يجب على جميع المزوّدين المرشحين نشر أظرفة `ProviderAdvertV1` مع حمولة قدرات النطاق وميزانيات التدفق. Verifique se `/v1/sorafs/providers` está funcionando corretamente.
+   - يجب على جميع المزوّدين المرشحين نشر أظرفة `ProviderAdvertV1` مع حمولة قدرات النطاق وميزانيات التدفق. Verifique se `/v2/sorafs/providers` está funcionando corretamente.
    - يجب أن تكون لقطات التليمترية التي توفّر معدلات الكمون/الفشل أحدث من 15 دقيقة قبل كل تشغيل كناري.
 2. **تهيئة الإعدادات.**
    - Para obter o JSON do arquivo `iroha_config`, use o código:

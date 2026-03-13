@@ -158,7 +158,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` משקף את `/v1/explorer/accounts/{id}/qr` JSON
+`ExplorerAccountQrSnapshot` משקף את `/v2/explorer/accounts/{id}/qr` JSON
 משטח: הוא כולל את מזהה החשבון הקנוני, המילולי המוצג עם
 פורמט מבוקש, מטא נתונים של קידומת רשת/תיקון שגיאות, ממדי QR ו
 מטען ה-SVG המוטבע שארנקים/חוקרים יכולים להטמיע ישירות.

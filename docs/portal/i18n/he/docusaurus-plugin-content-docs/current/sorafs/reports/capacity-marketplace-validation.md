@@ -20,7 +20,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | בדיקה | אימות | ראיה |
 |-------|------------|----------|
-| ה-registry מקבל הצהרות קיבולת קנוניות | בדיקת אינטגרציה מפעילה את `/v1/sorafs/capacity/declare` דרך app API, ומאמתת טיפול בחתימות, קליטת metadata והעברה ל-node registry. | `crates/iroha_torii/src/routing.rs:7654` |
+| ה-registry מקבל הצהרות קיבולת קנוניות | בדיקת אינטגרציה מפעילה את `/v2/sorafs/capacity/declare` דרך app API, ומאמתת טיפול בחתימות, קליטת metadata והעברה ל-node registry. | `crates/iroha_torii/src/routing.rs:7654` |
 | ה-smart contract דוחה payloads לא תואמים | בדיקת יחידה מבטיחה ש-IDs של provider ושדות GiB מחויבים תואמים להצהרה החתומה לפני persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | ה-CLI מפיק artefacts onboarding קנוניים | ה-CLI harness כותב פלטי Norito/JSON/Base64 דטרמיניסטיים ומאמת round-trips כדי שהמפעילים יוכלו להכין הצהרות offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | מדריך המפעיל מתאר את זרימת הקבלה ו-guardrails של governance | התיעוד מפרט סכמת הצהרה, policy defaults ושלבי ביקורת עבור ה-council. | `../storage-capacity-marketplace.md` |

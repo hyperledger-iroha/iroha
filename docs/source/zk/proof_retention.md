@@ -30,7 +30,7 @@ Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
 
 ## Surfacing and tooling
 
-- Status endpoint: `GET /v1/proofs/retention` returns caps, grace, prune_batch,
+- Status endpoint: `GET /v2/proofs/retention` returns caps, grace, prune_batch,
   total records, total prunable, and per-backend counts.
 - CLI: `iroha app zk proofs retention` (status) and `iroha app zk proofs prune` (manual
   enforcement).

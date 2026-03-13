@@ -58,12 +58,12 @@ hesablaşma nəticələri ilə.
 Torii xüsusi son nöqtələri ifşa edir ki, provayderlər istifadə haqqında məlumat verə və
 sifarişli naqillər olmadan işləmə müddəti:
 
-- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetriyasını qəbul edir və qaytarır
+- `POST /v2/sorafs/deal/usage` `DealUsageReport` telemetriyasını qəbul edir və qaytarır
   deterministik uçot nəticələri (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` cari pəncərəni axınla tamamlayır
+- `POST /v2/sorafs/deal/settle` cari pəncərəni axınla tamamlayır
   nəticədə `DealSettlementRecord` baza64 kodlu `DealSettlementV1` ilə birlikdə
   idarəetmə DAG nəşrinə hazırdır.
-- Torii-in `/v1/events/sse` lenti indi `SorafsGatewayEvent::DealUsage`-i yayımlayır
+- Torii-in `/v2/events/sse` lenti indi `SorafsGatewayEvent::DealUsage`-i yayımlayır
   hər bir istifadə təqdimini ümumiləşdirən qeydlər (dövr, ölçülü GiB-saatlar, bilet
   sayğaclar, deterministik yüklər), `SorafsGatewayEvent::DealSettlement`
   kanonik hesablaşma kitabçası snapshot və əlavə daxil olan qeydlər

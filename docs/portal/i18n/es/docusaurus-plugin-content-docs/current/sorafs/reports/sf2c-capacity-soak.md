@@ -45,7 +45,7 @@ fixtures externas.
 Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
 puedan gatear sobre saldos bajos y penalty strikes:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
+- REST: `GET /v2/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
   reflejan los campos del ledger verificados en la prueba de soak. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los

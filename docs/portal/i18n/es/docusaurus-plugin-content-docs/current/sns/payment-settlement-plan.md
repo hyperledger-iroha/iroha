@@ -32,7 +32,7 @@ calculo. Esta pagina destila la especificacion para audiencias del portal.
 
 | Componente | Proposito | Evidencia |
 |------------|-----------|-----------|
-| `sns_settlementd` | Aplica politica, firma bundles, expone `/v1/sns/settlements`. | Bundle JSON + hash. |
+| `sns_settlementd` | Aplica politica, firma bundles, expone `/v2/sns/settlements`. | Bundle JSON + hash. |
 | Settlement queue & writer | Cola idempotente + submitter del ledger impulsado por `iroha_cli app sns settlement ledger`. | Manifiesto de bundle hash <-> tx hash. |
 | Reconciliation job | Diff diario + estado mensual bajo `docs/source/sns/reports/`. | Markdown + JSON digest. |
 | Refund desk | Reembolsos aprobados por gobernanza via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

@@ -254,6 +254,8 @@ pub mod isi {
             let _created =
                 ensure_receiving_account(authority, &destination, None, state_transaction)?;
             let authority_is_source_owner = authority == &source;
+            let authority_is_nft_domain_owner =
+                state_transaction.world.domain(object.domain())?.owned_by() == authority;
             let required_permission: Permission =
                 iroha_executor_data_model::permission::nft::CanTransferNft {
                     nft: object.clone(),
@@ -277,7 +279,10 @@ pub mod isi {
                                     .any(|permission| permission == &required_permission)
                             })
                     });
-            if !(authority_is_source_owner || authority_has_transfer_permission) {
+            if !(authority_is_source_owner
+                || authority_is_nft_domain_owner
+                || authority_has_transfer_permission)
+            {
                 return Err(Error::InvariantViolation(
                     "Can't transfer NFT of another account".to_owned().into(),
                 ));

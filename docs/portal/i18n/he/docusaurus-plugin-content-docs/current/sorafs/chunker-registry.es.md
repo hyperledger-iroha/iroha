@@ -91,7 +91,7 @@ que requiere negociación explícita del cliente (`Accept-Chunker` + `Accept-Dig
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ סופורטדו | תוקף ידית קנוניק + כינוי, העברת דיווחים דרך `--json-out=-` y aplica la carta del registro con `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ Retirado | Constructor de manifest fuera de soporte; ארה"ב `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validación offline únicamente; los ספק פרסומות deben producirse por el pipeline de publicación y validarse vía `/v1/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validación offline únicamente; los ספק פרסומות deben producirse por el pipeline de publicación y validarse vía `/v2/sorafs/providers`. |
 | `sorafs_fetch` (מתזמר מפתח) | ✅ סופורטדו | Lee `chunk_fetch_specs`, מטענים פעילים של capacidad `range` y ensambla salida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ סופורטדו | Regeneradas vía `export_vectors`; el handle canónico aparece primero in cada list de alias y está firmado por sobres del consejo. |
 | Negociación de perfiles en gateway Torii | ✅ סופורטדו | יישום השלמה של `Accept-Chunker`, כולל כותרות `Content-Chunker` y expone el bridge CARv1 solo and solicitudes de degradation explícitas. |
@@ -99,7 +99,7 @@ que requiere negociación explícita del cliente (`Accept-Chunker` + `Accept-Dig
 Despliegue de telemetria:
 
 - **Telemetría de fetch de chunks** — la CLI de Iroha `sorafs toolkit pack` emite digests de chunk, metadata CAR y raíces PoR para ingestión en לוחות מחוונים.
-- **פרסומות של ספקים** - מטענים פרסומיים כוללים מטא נתונים וכינויים; valida cobertura vía `/v1/sorafs/providers` (עמוד ej., presencia de la capacidad `range`).
+- **פרסומות של ספקים** - מטענים פרסומיים כוללים מטא נתונים וכינויים; valida cobertura vía `/v2/sorafs/providers` (עמוד ej., presencia de la capacidad `range`).
 - **Monitoreo de gateway** — los operadores deben reportar los pareos `Content-Chunker`/`Content-Digest` para detectar הורדת דירוג אינספרד; se espera que el uso del bridge tienda a cero antes de la deprecación.
 
 מדיניות הביטול: una vez que se ratifique un perfil sucesor, programa una ventana de publicación dual

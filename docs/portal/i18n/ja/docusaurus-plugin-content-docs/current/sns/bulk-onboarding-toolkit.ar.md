@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- `POST /v1/sns/registrations` HTTP を使用します。
+- `POST /v2/sns/registrations` HTTP を使用します。
   NDJSON をご覧ください。
-- `--poll-status` يعيد الاستعلام عن `/v1/sns/registrations/{selector}` بعد كل
+- `--poll-status` يعيد الاستعلام عن `/v2/sns/registrations/{selector}` بعد كل
   (`--poll-attempts`, 5) を参照してください。うーん
   `--suffix-map` (JSON يحول `suffix_id` الى قيم "suffix") كي تتمكن الاداة من
   `{label}.{suffix}` ポーリングです。

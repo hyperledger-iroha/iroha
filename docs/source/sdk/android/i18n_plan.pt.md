@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-01-30
 | Quickstart | `docs/source/sdk/android/index.md` | `index.ja.md` | `index.he.md` | Already localized; requires AND5 sample references + screenshot updates. |
 | Key management | `docs/source/sdk/android/key_management.md` | `key_management.ja.md` | `key_management.he.md` | Update once AND2 alias lifecycle stabilizes; ensure glossary terms align with StrongBox doc. |
 | Offline signing | `docs/source/sdk/android/offline_signing.md` | `offline_signing.ja.md` | `offline_signing.he.md` | Include envelope/handoff terminology. |
-| Networking guide | `docs/source/sdk/android/networking.md` | `networking.ja.md` | `networking.he.md` | Must cover `/v1/pipeline`, Norito RPC, telemetry toggles. |
+| Networking guide | `docs/source/sdk/android/networking.md` | `networking.ja.md` | `networking.he.md` | Must cover `/v2/pipeline`, Norito RPC, telemetry toggles. |
 | Sample walkthrough — Operator console | `docs/source/sdk/android/samples/operator_console.md` | `samples/operator_console.ja.md` | `samples/operator_console.he.md` | New for AND5; share screenshots + CLI output. |
 | Sample walkthrough — Retail wallet | `docs/source/sdk/android/samples/retail_wallet.md` | `samples/retail_wallet.ja.md` | `samples/retail_wallet.he.md` | Emphasize offline signing guidance. |
 | Troubleshooting matrix | `docs/source/sdk/android/troubleshooting.md` | `troubleshooting.ja.md` | `troubleshooting.he.md` | To be written post-sample CI; include localization-ready strings. |
@@ -114,7 +114,7 @@ requirements change.
 | Quickstart | 2026-04-08 | 🈺 In Progress — request `i18n_requests/quickstart_20260408.md` in vendor queue (JP due 2026-04-12) | 🈺 In Progress — HE reviewer rota slot 2026-04-19 with Eitan Levi as backup | Kickoff evidence logged in `status.md` (2026-04-08); translators only need the refreshed screenshot bundle (due 2026-04-09). |
 | Key management | 2026-02-15 | 🈳 Not Started (waiting for AND2 alias lifecycle freeze on 2026-04-15) | 🈳 Not Started (mirrors JP delivery) | Hold request until AND2 spec freeze; schedule immediately afterward. |
 | Offline signing | 2026-04-10 | 🈺 In Progress — request `i18n_requests/offline_signing_20260410.md` assigned to Kotodama (JP drop due 2026-04-16) | 🈯 Reviewer slot reserved for 2026-04-23 | Shares glossary with quickstart; QA shadow happening in the Thu session before delivery. |
-| Networking | 2026-04-10 | 🈺 In Progress — request `i18n_requests/networking_20260410.md` queued after the 2026-04-11 NRPC diff digest | 🈳 Waiting on Torii mock stability (HE blocked until `/v1/pipeline` parity is green) | Add telemetry toggle appendix during QA shadow so HE reviewer can translate once Torii confirms `/v1/pipeline` parity. |
+| Networking | 2026-04-10 | 🈺 In Progress — request `i18n_requests/networking_20260410.md` queued after the 2026-04-11 NRPC diff digest | 🈳 Waiting on Torii mock stability (HE blocked until `/v2/pipeline` parity is green) | Add telemetry toggle appendix during QA shadow so HE reviewer can translate once Torii confirms `/v2/pipeline` parity. |
 | Operator console sample | 2026-03-24 | 🈳 Not Started | 🈳 Not Started | Awaiting localized screenshots + sample harness freeze (target 2026-04-18). |
 | Retail wallet sample | 2026-03-24 | 🈳 Not Started | 🈳 Not Started | Same dependency as operator console; combine tickets once harness is stable. |
 | Troubleshooting matrix | 2026-03-24 | 🈺 In Progress — request `i18n_requests/troubleshooting_matrix_20260324.md` tracking JP drop (due 2026-04-12) | 🈯 Scheduled — HE review window 2026-04-26 | Keep evidence bundle under `i18n_requests/troubleshooting_matrix_20260324.*`; escalate if JP drop misses the SLA. |
@@ -157,7 +157,7 @@ so auditors can replay the evidence trail without digging through CI logs.
 1. ✅ Confirm Japanese contractor availability before 2026-04-05; PO `DOCS-L10N-4901` countersigned 2026-04-04 and kickoff scheduled for 2026-04-08.
 2. ✅ Publish the HE reviewer rota (Shira Kaplan primary, Eitan Levi backup) during the April prep window; rota now captured in Section 4.3.
 3. Track quickstart request `i18n_requests/quickstart_20260408.md` through JP delivery (due 2026-04-12) and HE review (due 2026-04-19); attach evidence to the AND5 status bundle.
-4. Track networking request `i18n_requests/networking_20260410.md` (JP due 2026-04-16, HE queued once `/v1/pipeline` parity is green) and log NRPC diff digest evidence with each drop.
+4. Track networking request `i18n_requests/networking_20260410.md` (JP due 2026-04-16, HE queued once `/v2/pipeline` parity is green) and log NRPC diff digest evidence with each drop.
 5. Track offline-signing request `i18n_requests/offline_signing_20260410.md` (JP due 2026-04-16, HE review window 2026-04-23) alongside OA checklist references.
 6. Track troubleshooting request `i18n_requests/troubleshooting_matrix_20260324.md` through the JP 2026-04-12 deadline and HE 2026-04-26 review.
 7. ✅ Deliver the vendor onboarding + QA checklist (2026-04-08 artefacts) and reference it from the staffing table/status.md.

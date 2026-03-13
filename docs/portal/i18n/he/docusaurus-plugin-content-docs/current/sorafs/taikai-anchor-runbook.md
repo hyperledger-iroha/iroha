@@ -47,7 +47,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | `taikai_ingest_segment_latency_ms` | היסטוגרמת latency של ingest CMAF לפי cluster/stream (יעד: p95 < 750 ms, p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | drift של live-edge בין encoder ל-anchor workers (page כאשר p99 > 1.5 s ל-10 דקות). |
 | `taikai_ingest_segment_errors_total{reason}` | מוני שגיאות לפי סיבה (`decode`, `manifest_mismatch`, `lineage_replay`, ...). כל עליה מפעילה `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | גדל בכל פעם ש-`/v1/da/ingest` מקבל TRM חדש לאליאס; השתמשו ב-`rate()` כדי לאמת קצב רוטציה. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | גדל בכל פעם ש-`/v2/da/ingest` מקבל TRM חדש לאליאס; השתמשו ב-`rate()` כדי לאמת קצב רוטציה. |
 | `/status → telemetry.taikai_alias_rotations[]` | snapshot JSON עם `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` ו-timestamps עבור evidence bundles. |
 | `taikai_viewer_*` (rebuffer, גיל סיבוב CEK, בריאות PQ, התראות) | KPIs של viewer כדי לוודא שסיבוב CEK + מעגלי PQ נשארים בריאים במהלך anchors. |
 

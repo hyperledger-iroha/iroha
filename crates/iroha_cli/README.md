@@ -129,7 +129,7 @@ The CLI provides helpers for app‑facing ZK endpoints. For example, to fetch a 
 iroha app zk vote tally --election-id demo-election-1
 ```
 
-This posts to `/v1/zk/vote/tally` and prints the JSON response, e.g. `{ "finalized": true, "tally": [42, 58] }`.
+This posts to `/v2/zk/vote/tally` and prints the JSON response, e.g. `{ "finalized": true, "tally": [42, 58] }`.
 
 ### Governance helpers (app API convenience)
 
@@ -165,7 +165,7 @@ iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner
 
 ```bash
 curl -sS -X POST -H 'Content-Type: application/json' \
-  "$TORII/v1/gov/finalize" -d '{"referendum_id":"r1","proposal_id":"0123...ABCD"}' | jq .
+  "$TORII/v2/gov/finalize" -d '{"referendum_id":"r1","proposal_id":"0123...ABCD"}' | jq .
 
 - Build an enactment transaction (for an approved proposal):
 

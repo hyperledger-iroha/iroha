@@ -79,8 +79,8 @@ SNNet-8a разворачивает двойные collectors, которые в
 
 Torii теперь публикует два телеметрических HTTP-эндпоинта, чтобы relays и collectors могли пересылать наблюдения без встраивания собственного транспорта:
 
-- `POST /v1/soranet/privacy/event` принимает payload `RecordSoranetPrivacyEventDto`. Тело оборачивает `SoranetPrivacyEventV1` плюс необязательную метку `source`. Torii проверяет запрос по активному профилю телеметрии, записывает событие и отвечает HTTP `202 Accepted` вместе с Norito JSON-конвертом, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) и режим relay.
-- `POST /v1/soranet/privacy/share` принимает payload `RecordSoranetPrivacyShareDto`. Тело несет `SoranetPrivacyPrioShareV1` и необязательную подсказку `forwarded_by`, чтобы операторы могли аудитировать потоки collectors. Успешные отправки возвращают HTTP `202 Accepted` с Norito JSON-конвертом, суммирующим collector, окно bucket и подсказку подавления; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерминированную обработку ошибок между collectors. Цикл событий orchestrator теперь выпускает эти shares при опросе relays, сохраняя синхронизацию Prio-аккумулятора Torii с buckets на relay.
+- `POST /v2/soranet/privacy/event` принимает payload `RecordSoranetPrivacyEventDto`. Тело оборачивает `SoranetPrivacyEventV1` плюс необязательную метку `source`. Torii проверяет запрос по активному профилю телеметрии, записывает событие и отвечает HTTP `202 Accepted` вместе с Norito JSON-конвертом, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) и режим relay.
+- `POST /v2/soranet/privacy/share` принимает payload `RecordSoranetPrivacyShareDto`. Тело несет `SoranetPrivacyPrioShareV1` и необязательную подсказку `forwarded_by`, чтобы операторы могли аудитировать потоки collectors. Успешные отправки возвращают HTTP `202 Accepted` с Norito JSON-конвертом, суммирующим collector, окно bucket и подсказку подавления; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерминированную обработку ошибок между collectors. Цикл событий orchestrator теперь выпускает эти shares при опросе relays, сохраняя синхронизацию Prio-аккумулятора Torii с buckets на relay.
 
 Оба эндпоинта учитывают профиль телеметрии: они возвращают `503 Service Unavailable`, когда метрики отключены. Клиенты могут отправлять Norito binary (`application/x.norito`) или Norito JSON (`application/x.norito+json`) тела; сервер автоматически договаривается о формате через стандартные Torii extractors.
 
@@ -163,7 +163,7 @@ cargo xtask soranet-privacy-report \
 
 Говернанс по-прежнему требует доказать, что первая автоматизированная сессия уложилась в бюджет suppression. Хелпер теперь принимает `--max-suppression-ratio <0-1>`, чтобы CI или операторы могли быстро завершаться ошибкой, когда suppressed buckets превышают допустимое окно (по умолчанию 10%) или когда buckets еще отсутствуют. Рекомендуемый поток:
 
-1. Экспортировать NDJSON из admin-endpoints relay и потока orchestrator `/v1/soranet/privacy/event|share` в `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Экспортировать NDJSON из admin-endpoints relay и потока orchestrator `/v2/soranet/privacy/event|share` в `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Запустить хелпер с бюджетом политики:
 
    ```bash

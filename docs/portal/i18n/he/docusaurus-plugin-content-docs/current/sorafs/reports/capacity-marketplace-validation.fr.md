@@ -28,7 +28,7 @@ La checklist ci-dessous doit etre revue avant d'activer le marche pour des opera
 
 | בדוק | אימות | עדות |
 |-------|----------------|--------|
-| Le registry accepte les declarations canoniques de capacite | בדיקת האינטגרציה `/v1/sorafs/capacity/declare` דרך ה-API של האפליקציה, מאומתת החתימות, לכידת מטא-נתונים ו-Hand-off לעומת הרישום. | `crates/iroha_torii/src/routing.rs:7654` |
+| Le registry accepte les declarations canoniques de capacite | בדיקת האינטגרציה `/v2/sorafs/capacity/declare` דרך ה-API של האפליקציה, מאומתת החתימות, לכידת מטא-נתונים ו-Hand-off לעומת הרישום. | `crates/iroha_torii/src/routing.rs:7654` |
 | Le smart contract rejette les payloads incoherents | Le test unitaire garantit que les IDs de provider et les champs GiB עוסקת בכתב א-לה הצהרת חתם אוונט התמדה. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Le CLI emet des artefacts d'onboarding canoniques | ה-CLI לרתום את המיונים Norito/JSON/Base64 קובעים ותקפים לנסיעות הלוך ושוב כדי שהמתפעלים מכינים הצהרות במצב לא מקוון. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Le guide operationur couvre le workflow d'admission et les garde-fous de governance | התיעוד מונה את סכמת ההצהרה, ברירת המחדל של מדיניות ו-les etapes de revue pour le Council. | `../storage-capacity-marketplace.md` |

@@ -65,7 +65,7 @@ obligaciones que el puente Norito ↔ ISO 20022 debe hacer cumplir antes de emi
   - Extractos de cara al cliente (`camt.054`): incluya **IBAN** cuando esté presente y valídelo
     (longitud, reglas del país, suma de comprobación mod-97).[^swift_iban]
 - **Moneda** → **ISO 4217** Código de 3 letras, respete el redondeo de unidades menores.[^iso_4217]
-- **Ingestión de Torii** → Enviar tramos de financiación PvP a través de `POST /v1/iso20022/pacs009`; el puente
+- **Ingestión de Torii** → Enviar tramos de financiación PvP a través de `POST /v2/iso20022/pacs009`; el puente
   requiere `Purp=SECU` y ahora aplica cruces peatonales BIC cuando se configuran datos de referencia.
 
 #### Reglas de validación (se aplican antes de la emisión)

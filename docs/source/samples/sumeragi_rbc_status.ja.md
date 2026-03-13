@@ -13,7 +13,7 @@ translator: manual
 # Sumeragi — RBC 状態（Torii）
 
 エンドポイント
-- `GET /v1/sumeragi/rbc`
+- `GET /v2/sumeragi/rbc`
 
 レスポンス（例）
 ```json
@@ -28,7 +28,7 @@ translator: manual
 }
 ```
 
-セッション詳細のサンプル（`GET /v1/sumeragi/rbc/sessions`、抜粋）:
+セッション詳細のサンプル（`GET /v2/sumeragi/rbc/sessions`、抜粋）:
 
 ```json
 {

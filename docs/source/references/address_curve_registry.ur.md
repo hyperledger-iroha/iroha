@@ -57,7 +57,7 @@ machine-readable نقل اس دستاویز کے ساتھ
 
 ## صلاحیت bitmask کا اعلان
 
-`GET /v1/node/capabilities` اب `crypto.curves` کے تحت `allowed_curve_ids` فہرست
+`GET /v2/node/capabilities` اب `crypto.curves` کے تحت `allowed_curve_ids` فہرست
 اور packed `allowed_curve_bitmap` array دونوں فراہم کرتا ہے۔ یہ bitmap 64‑bit
 lanes میں little-endian ہے (زیادہ سے زیادہ چار قدریں `u8` شناخت کنندہ اسپیس
 0–255 کے لئے)۔ اگر bit `i` set ہے تو curve identifier `i` کلسٹر کی admission

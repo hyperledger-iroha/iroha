@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 #Norito-RPC جائزه
 
-Norito-RPC Torii APIs لـ باينر ٹرانسپورٹ. يتم استخدام `/v1/pipeline` وHTTP كرتا ورمز Norito لإطار الحمولات النافعة لتبادل الكرتا واستخدام تجزئات المخطط والمجاميع الاختبارية التي تتضمنها. تم استخدام هذا التطبيق بشكل ممتع وتحقق من الإجابات المضمنة، أو من خلال خط أنابيب JSON جوابات بوتل.
+Norito-RPC Torii APIs لـ باينر ٹرانسپورٹ. يتم استخدام `/v2/pipeline` وHTTP كرتا ورمز Norito لإطار الحمولات النافعة لتبادل الكرتا واستخدام تجزئات المخطط والمجاميع الاختبارية التي تتضمنها. تم استخدام هذا التطبيق بشكل ممتع وتحقق من الإجابات المضمنة، أو من خلال خط أنابيب JSON جوابات بوتل.
 
 ## کیوں تبديل کریں؟
 - CRC64 وتجزئات المخطط هي بمثابة تأطير مفيد لتصحيح الأخطاء.
@@ -20,7 +20,7 @@ Norito-RPC Torii APIs لـ باينر ٹرانسپورٹ. يتم استخدام 
 ## درخواست بھيجنا
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. الحمولة النافعة لبرنامج الترميز Norito (`iroha_client`، مساعدات SDK، أو `norito::to_bytes`) ممتازة.
@@ -39,7 +39,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 ويلبر بورت هو برنامج Try It العملي للحصول على ريوورز، وهو خصوصية خاصة للحمولات Norito وإعادة كل شيء.
 
 1. [بدء التشغيل العملي](./try-it.md#start-the-proxy-locally) و`TRYIT_PROXY_PUBLIC_URL` يحتويان على عناصر واجهة المستخدم الخاصة بالبرنامج والتي تم إنشاؤها بالفعل.
-2. هذه الصفحة **جربها** البطاقة أو `/reference/torii-swagger` بطاقة الذاكرة و`POST /v1/pipeline/submit` هي نقطة النهاية المنتخبة.
+2. هذه الصفحة **جربها** البطاقة أو `/reference/torii-swagger` بطاقة الذاكرة و`POST /v2/pipeline/submit` هي نقطة النهاية المنتخبة.
 3. **نوع المحتوى** الذي يتم تنزيله من خلال `application/x-norito` و **Binary** كخيار اختياري و`fixtures/norito_rpc/transfer_asset.norito` من البطاقة (أو `fixtures/norito_rpc/transaction_fixtures.manifest.json` أيضًا). الحمولة)۔
 4. أداة رمز جهاز OAuth أو أداة إنشاء رمز مميز لحاملها (مفاتيح `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` وتجاوزات `X-TryIt-Auth` تقبل التجاوزات).
 5. تم تشغيل ميزة الاتصال والنقر على Torii `fixtures/norito_rpc/schema_hashes.json` من الدرجة `schema_hash`. يتم حفظ علامات التجزئة المتوافقة مع رأس Norito للقفزة/القفزة النشطة.

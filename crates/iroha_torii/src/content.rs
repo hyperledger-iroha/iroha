@@ -58,7 +58,7 @@ impl IntoResponse for ContentError {
     }
 }
 
-/// GET /v1/content/{bundle}/{path...}
+/// GET /v2/content/{bundle}/{path...}
 #[allow(clippy::too_many_lines)]
 pub async fn handle_get_content(
     axum::extract::State(app): axum::extract::State<SharedAppState>,
@@ -895,7 +895,7 @@ mod tests {
             ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let headers = HeaderMap::new();
         let method = Method::GET;
-        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let uri: Uri = "/v2/content/abc/index.html".parse().expect("uri");
 
         let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
             .expect_err("signature required");
@@ -911,7 +911,7 @@ mod tests {
         manifest.auth =
             ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let method = Method::GET;
-        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let uri: Uri = "/v2/content/abc/index.html".parse().expect("uri");
         let headers = signed_headers(&account_id, &key_pair, &method, &uri);
 
         let err =
@@ -928,7 +928,7 @@ mod tests {
         let mut manifest = sample_manifest();
         manifest.auth = ContentAuthMode::Sponsor(uaid);
         let method = Method::GET;
-        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let uri: Uri = "/v2/content/abc/index.html".parse().expect("uri");
         let headers = signed_headers(&account_id, &key_pair, &method, &uri);
 
         enforce_auth(&manifest, &state, &headers, &method, &uri).expect("authorized");
@@ -949,7 +949,7 @@ mod tests {
             iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"other-uaid")),
         );
         let method = Method::GET;
-        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let uri: Uri = "/v2/content/abc/index.html".parse().expect("uri");
         let headers = signed_headers(&account_id, &key_pair, &method, &uri);
 
         let err =

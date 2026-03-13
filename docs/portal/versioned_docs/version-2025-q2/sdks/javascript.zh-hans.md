@@ -89,7 +89,7 @@ SDK 捆绑了反映 CLI 的专用流程：
 - **治理助手** – `recipes/governance.mjs` 演示分期
   与 `governance` 指令构建者的提案和投票。
 - **ISO 桥** – `recipes/iso_bridge.mjs` 显示如何提交 `pacs.008` 和
-  使用 `/v1/iso20022` 端点轮询传输状态。
+  使用 `/v2/iso20022` 端点轮询传输状态。
 - **SoraFS 和触发器** – `src/toriiClient.js` 下的分页助手公开
   合约、资产、触发器和 SoraFS 提供程序的类型化迭代器。
 

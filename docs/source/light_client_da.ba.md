@@ -21,7 +21,7 @@ translator: machine-google-reviewed
 ##
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 Аҙаҡҡы нөктә `X-API-Token` башлыҡ өсөн тап килгән бер конфигурацияланған .

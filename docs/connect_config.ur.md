@@ -20,9 +20,9 @@ WalletConnect‑اسٹائل WebSocket endpoints اور ایک minimal in‑node
 کرتا ہے۔ runtime رویہ (behaviour) کنفیگریشن کے ذریعے کنٹرول ہوتا ہے:
 
 - `connect.enabled=false` سیٹ کریں تاکہ Connect کی تمام routes
-  (`/v1/connect/*`) disable ہو جائیں۔
+  (`/v2/connect/*`) disable ہو جائیں۔
 - `true` (ڈیفالٹ) رہنے دیں تاکہ WS session endpoints اور
-  `/v1/connect/status` فعال رہیں۔
+  `/v2/connect/status` فعال رہیں۔
 
 Environment overrides (user config → actual config):
 
@@ -50,9 +50,9 @@ Environment overrides (user config → actual config):
   `ping_miss_tolerance` مرتبہ pong miss ہونے کے بعد WebSocket کنیکشن
   بند کر دیتا ہے اور میٹرک `connect.ping_miss_total` کو increment کرتا ہے۔
 - جب runtime پر Connect disable ہو (`connect.enabled=false`)، تو Connect WS
-  اور status routes رجسٹر ہی نہیں کیے جاتے؛ `/v1/connect/ws` اور
-  `/v1/connect/status` پر آنے والی requests 404 واپس کرتی ہیں۔
-- سرور `/v1/connect/session` پر client‑provided `sid` کا تقاضا کرتا ہے
+  اور status routes رجسٹر ہی نہیں کیے جاتے؛ `/v2/connect/ws` اور
+  `/v2/connect/status` پر آنے والی requests 404 واپس کرتی ہیں۔
+- سرور `/v2/connect/session` پر client‑provided `sid` کا تقاضا کرتا ہے
   (base64url یا hex، 32 bytes)؛ fallback `sid` اب مزید generate نہیں کیا
   جاتا۔
 

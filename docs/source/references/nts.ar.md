@@ -61,8 +61,8 @@ Operator guidance:
 
 ### Torii Endpoints
 
-- `GET /v1/time/now` → `{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64>, "sample_count": <u64>, "peer_count": <u64>, "fallback": <bool>, "health": { "healthy": <bool>, "min_samples_ok": <bool>, "offset_ok": <bool>, "confidence_ok": <bool> } }`
-- `GET /v1/time/status` → diagnostics and RTT histogram buckets:
+- `GET /v2/time/now` → `{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64>, "sample_count": <u64>, "peer_count": <u64>, "fallback": <bool>, "health": { "healthy": <bool>, "min_samples_ok": <bool>, "offset_ok": <bool>, "confidence_ok": <bool> } }`
+- `GET /v2/time/status` → diagnostics and RTT histogram buckets:
   - `{ "peers": <u64>, "samples_used": <u64>, "offset_ms": <i64>, "confidence_ms": <u64>, "fallback": <bool>, "health": {...}, "samples": [{"peer","last_offset_ms","last_rtt_ms","count"}, ...], "rtt": {"buckets": [{"le","count"},...], "sum_ms", "count"}, "note": "NTS running" }`
 
 ### Telemetry Metrics

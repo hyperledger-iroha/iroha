@@ -33,7 +33,7 @@ Por favor, esta seção de orquestração é postada na rede SF-6, usando a conf
 ## 1. Validação prévia
 
 1. **Confira a governança financeira.**
-   - Seus candidatos-prováveis ​​dolжны публиковать конверты `ProviderAdvertV1` com carga útil'ами диапазонных возможностей и бюджетами потоков. Verifique o `/v1/sorafs/providers` e desligue-o com um fio limpo.
+   - Seus candidatos-prováveis ​​dolжны публиковать конверты `ProviderAdvertV1` com carga útil'ами диапазонных возможностей и бюджетами потоков. Verifique o `/v2/sorafs/providers` e desligue-o com um fio limpo.
    - Снимки телеметрии с метриками латентности/сбоев должны быть не старше 15 minutos antes de каждым canary-proгоном.
 2. **Configuração de configuração.**
    - Сохраните JSON-конфиг оркестратора no local desejado `iroha_config`:

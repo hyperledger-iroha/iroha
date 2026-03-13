@@ -62,7 +62,7 @@ La cobertura de regression vive en
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## الأدوات والتركيبات- يجب أن تشتمل حمولات إعلانات المورِّد على البيانات الوصفية `range_capability`،
-  `stream_budget` و`transport_hints`. تم التحقق من صحة الرد عبر `/v1/sorafs/providers` y
+  `stream_budget` و`transport_hints`. تم التحقق من صحة الرد عبر `/v2/sorafs/providers` y
   تركيبات القبول؛ يجب أن تتضمن ملخصات JSON القدرة على التحليل،
   ميزانية الدفق ومصفوفات التلميحات لاستيعاب القياس عن بعد.
 - `cargo xtask sorafs-admission-fixtures` يعرض ميزانيات البث وتلميحات النقل داخلها
@@ -73,7 +73,7 @@ La cobertura de regression vive en
   - `multi_fetch_plan.json` حتى تتمكن مجموعات SDK من إنشاء خطة جلب
     تحديد متعدد الأقران.
 
-## التكامل مع المشغل وTorii- Torii `/v1/sorafs/providers` يقوم بتحليل البيانات الوصفية ذات سعة النطاق جنبًا إلى جنب مع
+## التكامل مع المشغل وTorii- Torii `/v2/sorafs/providers` يقوم بتحليل البيانات الوصفية ذات سعة النطاق جنبًا إلى جنب مع
   `stream_budget` و`transport_hints`. يتم إلغاء إخطارات الرجوع إلى المستوى الأدنى عندما يتم ذلك
   يحذف الموردون البيانات التعريفية الجديدة ونقاط النهاية في نطاق البوابة التي يتم تطبيقها
   القيود المفروضة على العملاء المباشرين.

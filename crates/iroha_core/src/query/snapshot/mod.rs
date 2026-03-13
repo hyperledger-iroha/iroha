@@ -190,6 +190,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_sorted_asset_definitions_returns_first_batch_without_cursor() {
+        use iroha_primitives::json::Json;
+
+        let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
+        let account = alice_account_in("w");
+        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        ad1.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
+        ad2.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+
+        let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
+        let kura = Kura::blank_kura_for_testing();
+        let store = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
+            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+        };
+        let payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+        );
+        let erased = iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            iroha_data_model::query::dsl::SelectorTuple::default(),
+            payload,
+        );
+        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
+        let qreq = iroha_data_model::query::QueryRequest::Start(
+            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+        );
+
+        let resp = run_on_snapshot(&state, &store, &ALICE_ID, qreq, QueryLimits::default())
+            .expect("query ok");
+        let iroha_data_model::query::QueryResponse::Iterable(batch) = resp else {
+            panic!("expected iterable")
+        };
+        let (output, remaining, cursor) = batch.into_parts();
+        let defs = match output.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].id(), ad2.id());
+        assert_eq!(remaining, 2);
+        assert!(cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_sorted_asset_definitions_stored_cursor_continues_in_order() {
+        use iroha_primitives::json::Json;
+
+        let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
+        let account = alice_account_in("w");
+        let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap(),
+        ))
+        .build(&ALICE_ID);
+        ad1.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
+        ad2.metadata_mut()
+            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
+
+        let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
+        let kura = Kura::blank_kura_for_testing();
+        let store = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
+            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+        };
+        let payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+        );
+        let erased = iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            iroha_data_model::query::dsl::SelectorTuple::default(),
+            payload,
+        );
+        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
+        let qreq = iroha_data_model::query::QueryRequest::Start(
+            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+        );
+
+        let resp = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            qreq,
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect("query ok");
+        let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
+            panic!("expected iterable")
+        };
+        let (output, remaining, cursor) = first.into_parts();
+        let defs = match output.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].id(), ad2.id());
+        assert_eq!(remaining, 2);
+
+        let cursor = cursor.expect("stored lane must return cursor");
+        let next = run_on_snapshot_with_mode(
+            &state,
+            &store,
+            &ALICE_ID,
+            iroha_data_model::query::QueryRequest::Continue(cursor),
+            CursorMode::Stored,
+            QueryLimits::default(),
+        )
+        .expect("continuation ok");
+        let iroha_data_model::query::QueryResponse::Iterable(next) = next else {
+            panic!("expected iterable")
+        };
+        let (output, remaining, cursor) = next.into_parts();
+        let defs = match output.into_iter().next().expect("slice") {
+            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
+            other => panic!("unexpected batch variant: {other:?}"),
+        };
+
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].id(), ad1.id());
+        assert_eq!(remaining, 1);
+        assert!(cursor.is_some());
+    }
+
+    #[tokio::test]
     async fn snapshot_iterable_continuation_is_snapshot_consistent() {
         let d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
         let d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);

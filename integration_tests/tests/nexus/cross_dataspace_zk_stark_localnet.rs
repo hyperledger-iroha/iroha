@@ -61,7 +61,6 @@ const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const TOTAL_PEERS: usize = 4;
 const VALIDATOR_STAKE_PER_LANE: u64 = 2_000;
-const STAKE_ASSET_ID: &str = "xor#nexus";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
@@ -73,6 +72,17 @@ const CIRCUIT_ID_MISMATCH: &str =
     "stark/fri-v1/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
 const SCHEMA_VALID: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v1";
 const SCHEMA_MISMATCH: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v2";
+
+fn stake_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "nexus".parse().expect("nexus domain"),
+        "xor".parse().expect("stake asset name"),
+    )
+}
+
+fn stake_asset_id_literal() -> String {
+    stake_asset_definition_id().to_string()
+}
 
 enum RouteProbeOutcome {
     Approved,
@@ -91,9 +101,7 @@ fn has_test_network_feature(feature: &str) -> bool {
 }
 
 fn localnet_builder() -> NetworkBuilder {
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain should parse");
-    let gas_account_str =
-        AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
+    let gas_account_str = ALICE_ID.to_string();
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -225,7 +233,10 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
                 )
-                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
                     gas_account_str.clone(),
@@ -264,17 +275,14 @@ fn npos_multilane_genesis_post_topology_transactions(
     );
 
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
-    let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
+    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let stake_asset_id = stake_asset_definition_id();
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(ivm_domain.clone())).into(),
-        Register::account(Account::new(
-            gas_account_id.to_account_id(ivm_domain.clone()),
-        ))
-        .into(),
+        Register::domain(Domain::new(ds1_domain)).into(),
+        Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())

@@ -41,7 +41,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 ## إمكانية الملاحظة
 
-Torii هو لقطات ائتمانية لموفر الخدمة ودفاتر رسوم الرسوم وتسجيل لوحات المعلومات والأرصدة وضربات الجزاء على البوابة:- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` إدخالات وابس كرتا واختبار جو نقع للتحقق من النهاية
+Torii هو لقطات ائتمانية لموفر الخدمة ودفاتر رسوم الرسوم وتسجيل لوحات المعلومات والأرصدة وضربات الجزاء على البوابة:- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` إدخالات وابس كرتا واختبار جو نقع للتحقق من النهاية
   حقول دفتر الأستاذ هي الاسم المستعار. رائع
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - استيراد Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` عدادات الضربات المصدرة، إجماليات العقوبات،

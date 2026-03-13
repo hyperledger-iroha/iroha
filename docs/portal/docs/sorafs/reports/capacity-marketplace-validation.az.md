@@ -27,7 +27,7 @@ Xarici operatorlar üçün bazarı işə salmazdan əvvəl aşağıdakı yoxlama
 
 | Yoxlayın | Doğrulama | Sübut |
 |-------|------------|----------|
-| Reyestr kanonik qabiliyyət bəyannamələrini qəbul edir | İnteqrasiya testi tətbiq API vasitəsilə `/v1/sorafs/capacity/declare` tapşırıqlarını yerinə yetirir, imzaların idarə edilməsini, metadata ələ keçirilməsini və qovşaq reyestrinə ötürülməsini yoxlayır. | `crates/iroha_torii/src/routing.rs:7654` |
+| Reyestr kanonik qabiliyyət bəyannamələrini qəbul edir | İnteqrasiya testi tətbiq API vasitəsilə `/v2/sorafs/capacity/declare` tapşırıqlarını yerinə yetirir, imzaların idarə edilməsini, metadata ələ keçirilməsini və qovşaq reyestrinə ötürülməsini yoxlayır. | `crates/iroha_torii/src/routing.rs:7654` |
 | Ağıllı müqavilə uyğun olmayan faydalı yükləri rədd edir | Vahid testi davam etməzdən əvvəl provayder identifikatorlarının və qəbul edilmiş GiB sahələrinin imzalanmış bəyannamə ilə uyğunluğunu təmin edir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI kanonik onboarding artefaktları yayır | CLI qoşqu deterministik Norito/JSON/Base64 çıxışlarını yazır və gedişləri təsdiqləyir ki, operatorlar bəyannamələri oflayn rejimdə həyata keçirə bilsinlər. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Operator təlimatı qəbul iş prosesini və idarəetmə qoruyucularını əks etdirir | Sənədlər bəyannamə sxemini, siyasət defoltlarını və şura üçün nəzərdən keçirmə addımlarını sadalayır. | `../storage-capacity-marketplace.md` |

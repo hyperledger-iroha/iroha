@@ -20,7 +20,7 @@ qo'llanmalar va o'quv qo'llanmalar rivojlanadi.
 - **Norito codec overview** – `reference/norito-codec.md` links directly to the authoritative
   `norito.md` specification while the portal table is being populated.
 - **Torii OpenAPI** – `/reference/torii-openapi` renders the latest Torii REST specification using
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
   Redok. `npm run sync-openapi -- --version=current --latest` bilan spetsifikatsiyani qayta tiklang (qo'shing
   `--mirror=<label>` to copy the snapshot into additional historical versions).
 - **Configuration tables** – The full parameter catalog is kept in

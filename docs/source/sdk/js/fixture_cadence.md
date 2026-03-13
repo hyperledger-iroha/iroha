@@ -20,7 +20,7 @@ scope, ownership, cadence, evidence, and rollback expectations.
   so the SDK mirrors the same DTO shapes as the Python/Swift suites.【javascript/iroha_js/test/toriiClient.test.js:33】
 - **Integration stack.** `scripts/run_integration.mjs` starts the canonical
   `defaults/docker-compose.single.yml` stack and exercises the latest fixtures
-  via `/v1/pipeline`/Connect/ISO helpers, ensuring regression coverage every
+  via `/v2/pipeline`/Connect/ISO helpers, ensuring regression coverage every
   time the fixture bundle rotates.【javascript/iroha_js/scripts/run_integration.mjs:1】
 
 ## Cadence

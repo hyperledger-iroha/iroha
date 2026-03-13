@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-my
   ```
 
 - Torii လုပ်ငန်းစဉ်သည် `data_dir` သို့ ဖတ်ရှု/ရေးနိုင်ခွင့်ရှိကြောင်း သေချာပါစေ။
-- ကြေငြာချက်တစ်ခုမှတ်တမ်းတင်သည်နှင့်တစ်ပြိုင်နက် node သည်မျှော်လင့်ထားသောစွမ်းရည်ကို `GET /v1/sorafs/capacity/state` မှတစ်ဆင့်ကြေငြာကြောင်းအတည်ပြုပါ။
+- ကြေငြာချက်တစ်ခုမှတ်တမ်းတင်သည်နှင့်တစ်ပြိုင်နက် node သည်မျှော်လင့်ထားသောစွမ်းရည်ကို `GET /v2/sorafs/capacity/state` မှတစ်ဆင့်ကြေငြာကြောင်းအတည်ပြုပါ။
 - ချောမွေ့မှုကို ဖွင့်ထားသောအခါ၊ ဒက်ရှ်ဘုတ်များသည် အကြမ်းထည်နှင့် ချောမွေ့သော GiB·hour/PoR ကောင်တာများကို အစက်အပြောက်တန်ဖိုးများနှင့်အတူ တုန်လှုပ်မှုမရှိသော ခေတ်ရေစီးကြောင်းများကို မီးမောင်းထိုးပြရန် ထုတ်ဖော်ပြသသည်။
 
 ### CLI Dry Run (ချန်လှပ်ထားနိုင်သည်)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 Torii ကို တိုက်ရိုက်လွှင့်ပြီးသည်နှင့် HTTP မှတစ်ဆင့် အလားတူပစ္စည်းများကို သင်ရယူနိုင်သည်-
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 အဆုံးမှတ်နှစ်ခုလုံးကို မြှုပ်ထားသည့် သိုလှောင်မှုဝန်ထမ်းက ဆောင်ရွက်ပေးသည်၊ ထို့ကြောင့် CLI မီးခိုးစမ်းသပ်မှုများနှင့် ဂိတ်ဝေးစုံစမ်းစစ်ဆေးမှုများသည် တစ်ပြိုင်တည်းရှိနေပါသည်။【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. base64 ကုဒ်ဖြင့် မန်နီးဖက်စ်ကို တင်ပြပါ-
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. ပင်ထိုးထားသောဒေတာကို ရယူပါ-
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. အထက်ဖော်ပြပါအတိုင်း အနည်းဆုံး manifest တစ်ခုကို ပင်ထိုးပါ။
 2. Torii လုပ်ငန်းစဉ် (သို့မဟုတ် node တစ်ခုလုံး) ကို ပြန်လည်စတင်ပါ။
 3. ထုတ်ယူမှုတောင်းဆိုချက်ကို ပြန်လည်တင်ပြပါ။ ပေးဆောင်မှုအား ပြန်လည်ထုတ်ယူနိုင်ဆဲဖြစ်ရမည်ဖြစ်ပြီး ပြန်ပေးသည့်အညွှန်းသည် ကြိုတင်ပြန်လည်စတင်သည့်တန်ဖိုးနှင့် ကိုက်ညီရပါမည်။
-4. ပြန်လည်စတင်ပြီးနောက် ဆက်ရှိနေသော သရုပ်များကို ထင်ဟပ်စေသည့် `bytes_used` ကို အတည်ပြုရန် `GET /v1/sorafs/storage/state` ကို စစ်ဆေးပါ။
+4. ပြန်လည်စတင်ပြီးနောက် ဆက်ရှိနေသော သရုပ်များကို ထင်ဟပ်စေသည့် `bytes_used` ကို အတည်ပြုရန် `GET /v2/sorafs/storage/state` ကို စစ်ဆေးပါ။
 
 ## 4. Quota Rejection Test
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. PoR နမူနာကို တောင်းဆိုပါ-
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ဒက်ရှ်ဘုတ်များသည် ခြေရာခံသင့်သည်-
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` နှင့် `torii_sorafs_storage_fetch_inflight`
-  - `/v1/sorafs/capacity/state` မှတစ်ဆင့် PoR အောင်မြင်မှု/ကျရှုံးမှုကောင်တာများ ပေါ်လာသည်။
+  - `/v2/sorafs/capacity/state` မှတစ်ဆင့် PoR အောင်မြင်မှု/ကျရှုံးမှုကောင်တာများ ပေါ်လာသည်။
   - `sorafs_node_deal_publish_total{result=success|failure}` မှတစ်ဆင့် ဖြေရှင်းရန် ကြိုးစားမှုများ ထုတ်ဝေခြင်း။
 
 ဤလေ့ကျင့်ခန်းများကို လိုက်နာခြင်းဖြင့် မြှပ်နှံထားသော သိုလှောင်မှုလုပ်သားသည် ဒေတာထည့်သွင်းနိုင်ခြင်း၊ ပြန်လည်စတင်ခြင်းများကို ရှင်သန်နိုင်စေခြင်း၊ ပြင်ဆင်သတ်မှတ်ထားသော ခွဲတမ်းများကို လေးစားလိုက်နာနိုင်ပြီး node သည် ပိုမိုကျယ်ပြန့်သောကွန်ရက်သို့ စွမ်းရည်မကြော်ငြာမီ တိကျသေချာသော PoR အထောက်အထားများကို ထုတ်လုပ်နိုင်မည်ဖြစ်သည်။

@@ -52,12 +52,12 @@ operadores de micropagos ganan اور prórroga de crédito کو resultados de l
 ## Integración Torii
 
 Los puntos finales dedicados Torii exponen el informe de uso de proveedores de کرتا ہے تاکہ کر سکیں اور
-بدون cableado a medida کے unidad de ciclo de vida del acuerdo کر سکیں:- La telemetría `POST /v1/sorafs/deal/usage` `DealUsageReport` acepta کرتا ہے اور
+بدون cableado a medida کے unidad de ciclo de vida del acuerdo کر سکیں:- La telemetría `POST /v2/sorafs/deal/usage` `DealUsageReport` acepta کرتا ہے اور
   resultados contables deterministas (`UsageOutcome`) retorno کرتا ہے۔
-- `POST /v1/sorafs/deal/settle` ventana actual finalizar کرتا ہے، اور
+- `POST /v2/sorafs/deal/settle` ventana actual finalizar کرتا ہے، اور
   نتیجے میں بننے والا `DealSettlementRecord` codificado en base64 `DealSettlementV1` کے ساتھ stream کرتا ہے
   جو publicación del DAG de gobernanza کے لیے تیار ہوتا ہے۔
-- Torii کا `/v1/events/sse` feed اب `SorafsGatewayEvent::DealUsage` registros transmitidos کرتا ہے
+- Torii کا `/v2/events/sse` feed اب `SorafsGatewayEvent::DealUsage` registros transmitidos کرتا ہے
   جو ہر envío de uso کا خلاصہ دیتے ہیں (época, horas GiB medidas, mostradores de boletos,
   cargos deterministas), registros `SorafsGatewayEvent::DealSettlement`, instantánea del libro mayor de liquidación canónica کے ساتھ
   artefacto de gobernanza en disco کا BLAKE3 digest/size/base64 شامل کرتے ہیں، اور

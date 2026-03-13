@@ -115,7 +115,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      so omit the alias flags unless governance requests a dedicated namespace
      (e.g. `docs:portal-sbom`).
    - Set `${SUBMITTED_EPOCH}` to the current consensus epoch (obtainable from
-     `curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your ops
+     `curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` or your ops
      dashboard) so the registry can track when the manifest entered the ledger.
 
 2. **Alternative: `iroha app sorafs pin register`**
@@ -133,7 +133,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      --alias-proof "${ALIAS_PROOF}"
      ```
 
-   - This wrapper hits the same `/v1/sorafs/pin/register` endpoint but
+   - This wrapper hits the same `/v2/sorafs/pin/register` endpoint but
      relies on a precomputed digest.
 
 3. **Verify registry state**

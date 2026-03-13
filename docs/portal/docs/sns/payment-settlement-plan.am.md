@@ -35,7 +35,7 @@ translator: machine-google-reviewed
 
 | አካል | ዓላማ | ማስረጃ |
 |-------|---------|-------|
-| `sns_settlementd` | ፖሊሲን፣ የምልክት ጥቅሎችን፣ ላዩን `/v1/sns/settlements` ይተገበራል። | JSON ጥቅል + ሃሽ። |
+| `sns_settlementd` | ፖሊሲን፣ የምልክት ጥቅሎችን፣ ላዩን `/v2/sns/settlements` ይተገበራል። | JSON ጥቅል + ሃሽ። |
 | የሰፈራ ወረፋ እና ጸሐፊ | በ`iroha_cli app sns settlement ledger` የሚነዳ ተስማሚ ወረፋ + የሂሳብ መዝገብ አስረክብ። | ጥቅል ሃሽ ↔ tx hash መግለጫ። |
 | የማስታረቅ ስራ | ዕለታዊ ልዩነት + ወርሃዊ መግለጫ በ`docs/source/sns/reports/` ስር። | Markdown + JSON መፍጨት። |
 | የተመላሽ ገንዘብ ዴስክ | በ`/settlements/{id}/refund` በኩል በመንግስት የጸደቀ ተመላሽ ገንዘቦች። | `RefundRecordV1` + ትኬት። |

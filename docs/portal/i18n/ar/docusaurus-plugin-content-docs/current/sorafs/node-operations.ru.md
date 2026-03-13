@@ -47,7 +47,7 @@ Torii. كل ما عليك فعله هو تسليم التسليمات المرغ
 
 - تأكد من أن العملية Torii ستؤدي إلى توصيل/تسجيل الدخول إلى `data_dir`.
 - تأكد من أن المنتج يوصلك إلى هناك
-  `GET /v1/sorafs/capacity/state` بعد كتابة الإعلانات.
+  `GET /v2/sorafs/capacity/state` بعد كتابة الإعلانات.
 - عند عرض لوحات التحكم الشاملة، يتم توضيح ما إذا كان الجو مناسبًا أم لا، وما هو الترتيب الذي تريده
   مراقبة GiB·hour/PoR لتتبع الاتجاهات دون الحاجة إلى الاهتزاز
   عبارات رائعة.
@@ -95,8 +95,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 بعد الانتهاء من Torii، يمكنك الحصول على هذه العناصر عبر HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 تستخدم نقطة النهاية هذه عامل تخزين قوي، وهو اختبار دخان CLI و
@@ -107,7 +107,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. تنفيذ البيان في الترميز base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -117,7 +117,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. احصل على البيانات المخفية:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -134,7 +134,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. عملية إعادة الإرسال Torii (أو كل شيء).
 3. قم بالرجوع مرة أخرى للجلب. يتم إخراج الحمولة الزائدة من الحمولة، ملخصًا في
    تخلص من التكلفة العالية من خلال التوصيل المسبق.
-4. تحقق من `GET /v1/sorafs/storage/state` لتتمكن من التحقق من أن `bytes_used` سيتم حذفه
+4. تحقق من `GET /v2/sorafs/storage/state` لتتمكن من التحقق من أن `bytes_used` سيتم حذفه
    تظهر البيانات المصاحبة بعد التخفيض.
 
 ## 4. اختبار الخروج
@@ -152,7 +152,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. التحقق من اختيار المنتج:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - تفاصيل لوحة المفاتيح:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و `torii_sorafs_storage_fetch_inflight`
-  - مذكرات النجاح/المسؤولية PoR، متاحة للجمهور من خلال `/v1/sorafs/capacity/state`
+  - مذكرات النجاح/المسؤولية PoR، متاحة للجمهور من خلال `/v2/sorafs/capacity/state`
   - تسوية منشورات الدفع عبر `sorafs_node_deal_publish_total{result=success|failure}`
 
 ضمان هذا العنصر من الحماية أنه من الممكن أن يكون عامل التخزين جاهزًا

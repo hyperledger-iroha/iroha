@@ -58,13 +58,13 @@ id: ストレージ容量マーケットプレイス
 - يربط `ReplicationOrderV1` は、SLA のマニフェストをマニフェストします。検証バリデータはチャンカーを処理します。期限は Torii です。 [crates/sorafs_manifest/src/capacity.rs:301]
 - يعبر `CapacityTelemetryV1` スナップショット الحقبة (GiB المعلنة مقابل المستخدمة، عدادات النسخ، نسب uptime/PoR) التي最高です。 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - ヘルパー (`CapacityMetadataEntry` و`PricingScheduleV1` レーン/割り当て/SLA) のヘルプ。 CI ダウンストリーム ツールの開発。【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` スナップショット `/v1/sorafs/capacity/state` 手数料台帳خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` スナップショット `/v2/sorafs/capacity/state` 手数料台帳خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 管理者は、管理者と管理者を処理します。 فحوص نطاق التليمترية حتى تظهر الانحدارات فوراً في CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- 情報: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 仕様、Norito ペイロード、base64 BLOB、JSONフィクスチャを `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` で確認してください。 محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 参考治具 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`。### 2. いいえ。
+- 情報: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 仕様、Norito ペイロード、base64 BLOB、JSONフィクスチャを `/v2/sorafs/capacity/declare` و`/v2/sorafs/capacity/telemetry` で確認してください。 محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 参考治具 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`。### 2. いいえ。
 
 |ああ |所有者 |重要 |
 |------|----------|------|
-| Torii `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` و`/v1/sorafs/capacity/orders` Norito JSON。 | Torii チーム | حاكاة منطق التحقق؛ Norito JSON ヘルパー。 |
+| Torii `/v2/sorafs/capacity/declare` و`/v2/sorafs/capacity/telemetry` و`/v2/sorafs/capacity/orders` Norito JSON。 | Torii チーム | حاكاة منطق التحقق؛ Norito JSON ヘルパー。 |
 |スナップショットと `CapacityDeclarationV1` のメタデータ、オーケストレーター、ゲートウェイ。 |ツーリング WG / オーケストレーター チーム | تمديد `provider_metadata` スコア レーン。 |
 |オーケストレーター/ゲートウェイの割り当てとフェールオーバーが必要です。 |ネットワーキング TL / ゲートウェイ チーム |スコアボード ビルダーのスコアボード ビルダー。 |
 | CLI: `sorafs_cli`、`capacity declare`、`capacity telemetry`、`capacity orders import`。 |ツーリングWG | JSON スコア + スコアボード。 |
@@ -87,7 +87,7 @@ id: ストレージ容量マーケットプレイス
 |支払い額: 支払い額 + XOR 支払い額 支払い額台帳。 |財務/保管チーム |ディールエンジン/財務省輸出。 |
 |ダッシュボード/アラート (バックログの取り込み)。 |可観測性 | Grafana は SF-6/SF-7 です。 |
 
-- Torii `/v1/sorafs/capacity/telemetry` و`/v1/sorafs/capacity/state` (JSON + Norito) スナップショット台帳を管理するための元帳を管理する【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii `/v2/sorafs/capacity/telemetry` و`/v2/sorafs/capacity/state` (JSON + Norito) スナップショット台帳を管理するための元帳を管理する【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - 評価 `PinProviderRegistry` 評価 - 評価 - 評価 - エンドポイント評価CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) のエイリアス、ハッシュ エイリアス。
 - スナップショット `CapacityTelemetrySnapshot` スナップショット `metering` レビュー Prometheus エクスポートGrafana セキュリティ `docs/source/grafana_sorafs_metering.json` セキュリティ セキュリティ `docs/source/grafana_sorafs_metering.json` セキュリティ セキュリティ GiB 時間 والرسوم nano-SORA المتوقعة والامتثال لـ SLA في الوقت الحقيقي.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - メータリング スムージングのスナップショット `smoothed_gib_hours` و`smoothed_por_success_bps` の EMA の測定支払い額を計算します。【crates/sorafs_node/src/metering.rs:401】
@@ -155,7 +155,7 @@ id: ストレージ容量マーケットプレイス
 
 ### プロバイダーのオンボーディングと終了スモーク テスト
 - アーティファクトの作成/編集、`sorafs_manifest_stub capacity ...` وأعد تشغيل ختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
-- Torii (`/v1/sorafs/capacity/declare`) と `/v1/sorafs/capacity/state` と Grafana。 `docs/source/sorafs/capacity_onboarding_runbook.md` です。
+- Torii (`/v2/sorafs/capacity/declare`) と `/v2/sorafs/capacity/state` と Grafana。 `docs/source/sorafs/capacity_onboarding_runbook.md` です。
 - アーティファクトと和解 `docs/examples/sorafs_capacity_marketplace_validation/`。
 
 ## いいえ

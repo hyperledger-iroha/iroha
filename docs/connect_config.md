@@ -3,8 +3,8 @@
 Iroha Torii exposes optional WalletConnect-style WebSocket endpoints and a minimal in-node relay
 when the `connect` Cargo feature is enabled (default). The runtime behavior is gated at config:
 
-- Set `connect.enabled=false` to disable all Connect routes (`/v1/connect/*`).
-- Leave it `true` (default) to enable the WS session endpoints and `/v1/connect/status`.
+- Set `connect.enabled=false` to disable all Connect routes (`/v2/connect/*`).
+- Leave it `true` (default) to enable the WS session endpoints and `/v2/connect/status`.
 
 Environment overrides (user config → actual config):
 
@@ -40,12 +40,12 @@ Notes:
 - Per direction, sequence numbers are strict and contiguous starting at `1`; non-contiguous frames
   terminate the session with `connect_sequence_violation` and increment
   `connect.sequence_violation_closes_total`.
-- `/v1/connect/status` reports top-level fields `p2p_rebroadcasts_total` and
+- `/v2/connect/status` reports top-level fields `p2p_rebroadcasts_total` and
   `p2p_rebroadcast_skipped_total` (mirrored by telemetry metrics
   `connect.p2p_rebroadcasts_total` and `connect.p2p_rebroadcast_skipped_total`). The rebroadcast
   counter increments when a frame is sent over Iroha P2P; the skipped counter increments when relay
   is configured as `broadcast` but no P2P network handle is attached at runtime.
-- `/v1/connect/status.policy` includes both configured and effective relay mode:
+- `/v2/connect/status.policy` includes both configured and effective relay mode:
   `relay_strategy` (normalized config), `relay_effective_strategy` (runtime behavior), and
   `relay_p2p_attached` (whether Torii currently has a P2P relay handle). This allows operators to
   confirm that cross-node forwarding is happening over decentralized node-to-node transport.
@@ -53,8 +53,8 @@ Notes:
   the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
   increments the `connect.ping_miss_total` metric.
 - When disabled at runtime (`connect.enabled=false`), Connect WS and status routes are not
-  registered; requests to `/v1/connect/ws` and `/v1/connect/status` return 404.
-- The server requires a client‑provided `sid` for `/v1/connect/session` (base64url or hex, 32 bytes).
+  registered; requests to `/v2/connect/ws` and `/v2/connect/status` return 404.
+- The server requires a client‑provided `sid` for `/v2/connect/session` (base64url or hex, 32 bytes).
   It no longer generates a fallback `sid`.
 
 See also: `crates/iroha_config/src/parameters/{user,actual}.rs` and defaults in

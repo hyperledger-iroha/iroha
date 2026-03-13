@@ -61,7 +61,7 @@ La plomberie ランタイムは、`sorafs_node::por` を介して相互作用 Po
 実装上の注意:- スタック Axum de Torii のペイロード `norito::json` を使用します。
 - Ajouter des schémas Norito pour les réponses (`PinResultV1`、`FetchErrorV1`、structs de télémétrie)。
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` は、`sorafs_node::NodeHandle::por_ingestion_status`、および Torii を介して、プロバイダーごとにバックログのバックログのメンテナンス/成功/成功のタイムスタンプを公開します。また、Torii はゲージを登録します`torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` 注ぎますダッシュボード.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` は、`sorafs_node::NodeHandle::por_ingestion_status`、および Torii を介して、プロバイダーごとにバックログのバックログのメンテナンス/成功/成功のタイムスタンプを公開します。また、Torii はゲージを登録します`torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` 注ぎますダッシュボード.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. スケジューラとアプリケーションのクォータ
 

@@ -165,9 +165,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Torii گیٹ وے اب اسی کی بنیاد پر صرف پڑھنے والے مددگاروں کو بے نقاب کرتا ہے
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - مینی فیسٹ لوٹاتا ہے
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - مینی فیسٹ لوٹاتا ہے
 > Norito ذخیرہ شدہ (BASE64) ڈائجسٹ/میٹا ڈیٹا کے ساتھ۔ 【کریٹس/اروہہ_ٹوری/ایس آر سی/sorafs/api.rs: 1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - حصہ منصوبہ لوٹاتا ہے
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - حصہ منصوبہ لوٹاتا ہے
 > بہاو والے ٹولز کے لئے عین مطابق JSON (`chunk_fetch_specs`)۔
 >
 > یہ اختتامی نکات CLI آؤٹ پٹ کی عکاسی کرتے ہیں تاکہ پائپ لائنیں گزر سکیں
@@ -208,18 +208,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      ایک بار گورننس ماڈل کی تعریف کی گئی ہے۔ اس لمحے کے لئے ، ڈیزائن فرض کرتا ہے
      آپریٹر کے ذریعہ شروع کردہ سخت کوٹے اور انپن آپریشنز۔
 
-### صلاحیت کا اعلان اور شیڈولنگ انضمام- Torii اب `/v1/sorafs/capacity/declare` سے `CapacityDeclarationRecord` اپڈیٹس ریلیز کرتا ہے
+### صلاحیت کا اعلان اور شیڈولنگ انضمام- Torii اب `/v2/sorafs/capacity/declare` سے `CapacityDeclarationRecord` اپڈیٹس ریلیز کرتا ہے
   ایمبیڈڈ `CapacityManager` کو ، تاکہ ہر نوڈ اس کا ایک میموری نظریہ بنائے
   چنکر/لین مختص کرنے میں مصروف ہے۔ منیجر ٹیلی میٹری کے لئے صرف پڑھنے والے سنیپ شاٹس کو بے نقاب کرتا ہے
-  (`GET /v1/sorafs/capacity/state`) اور اس سے پہلے ہر پروفائل یا فی لین کے تحفظات کا اطلاق ہوتا ہے
+  (`GET /v2/sorafs/capacity/state`) اور اس سے پہلے ہر پروفائل یا فی لین کے تحفظات کا اطلاق ہوتا ہے
   نئی کمانڈز قبول نہیں کی جاتی ہیں۔ 【کریٹس/sorafs_node/src/capact.rs: 1 】【 کریٹس/sorafs_node/src/lib.rs: 60】
-- `/v1/sorafs/capacity/schedule` اختتامی نقطہ گورننس کے ذریعہ جاری کردہ پے لوڈ `ReplicationOrderV1` کو قبول کرتا ہے۔
+- `/v2/sorafs/capacity/schedule` اختتامی نقطہ گورننس کے ذریعہ جاری کردہ پے لوڈ `ReplicationOrderV1` کو قبول کرتا ہے۔
   جب آرڈر مقامی فراہم کنندہ کو نشانہ بناتا ہے تو ، مینیجر ڈپلیکیٹ پلاننگ کی جانچ پڑتال کرتا ہے ، اس کی توثیق کرتا ہے
   گنجائش چنکر/لین ، سلاٹ محفوظ رکھتا ہے ، اور باقی صلاحیتوں کو بیان کرتے ہوئے `ReplicationPlan` واپس کرتا ہے
   تاکہ آرکیسٹریشن ٹولز ادخال کو جاری رکھ سکیں۔ دوسرے فراہم کنندگان کے لئے احکامات
   ملٹی آپریٹر کے ورک فلوز کی سہولت کے ل I `ignored` ردعمل کے ساتھ تسلیم کیا جاتا ہے۔
 - تکمیل ہکس (جیسے کامیاب ادخال کے بعد متحرک) کال کریں
-  `POST /v1/sorafs/capacity/complete` `CapacityManager::complete_order` کے ذریعے تحفظات جاری کرنے کے لئے۔
+  `POST /v2/sorafs/capacity/complete` `CapacityManager::complete_order` کے ذریعے تحفظات جاری کرنے کے لئے۔
   جواب میں ایک اسنیپ شاٹ `ReplicationRelease` (باقی باقی ، چنکر/لین کے باقیات) شامل ہیں
   آرکیسٹریشن ٹولز بغیر پولنگ کے اگلے کمانڈ کو قطار میں لگاسکتے ہیں۔ مستقبل کا کام لنک کرے گا
   جب یہ ادخال کی منطق تیار ہوتی ہے تو اس میں حصہ کی پائپ لائن کا یہ۔

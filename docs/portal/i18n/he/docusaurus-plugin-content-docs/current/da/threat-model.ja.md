@@ -231,7 +231,7 @@ DA או לקוחות; **בינוני** מוריד איכות אך נשאר בר-
 
 - replay cache והתמדת cursors הוטמעו ב-DA-2. ראו את המימוש ב-
   `crates/iroha_core/src/da/replay_cache.rs` (לוגיקת cache) ואת אינטגרציית Torii
-  ב-`crates/iroha_torii/src/da/ingest.rs`, שמחילה בדיקות fingerprint דרך `/v1/da/ingest`.
+  ב-`crates/iroha_torii/src/da/ingest.rs`, שמחילה בדיקות fingerprint דרך `/v2/da/ingest`.
 - סימולציות streaming של PDP/PoTR מופעלות דרך harness proof-stream ב-
   `crates/sorafs_car/tests/sorafs_cli.rs`, ומכסות זרימות בקשה PoR/PDP/PoTR
   ותרחישי כשל שמוצגים במודל האיומים.

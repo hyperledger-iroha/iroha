@@ -3433,7 +3433,7 @@
         ]
       }
     },
-    "/v1/accounts": {
+    "/v2/accounts": {
       "get": {
         "description": "List accounts visible to the caller.",
         "responses": {
@@ -3454,7 +3454,7 @@
         ]
       }
     },
-    "/v1/accounts/onboard": {
+    "/v2/accounts/onboard": {
       "post": {
         "description": "Register or onboard an account; when the UAID is not bound to the global dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
         "requestBody": {
@@ -3485,7 +3485,7 @@
         ]
       }
     },
-    "/v1/accounts/query": {
+    "/v2/accounts/query": {
       "post": {
         "description": "Query accounts with JSON envelope.",
         "requestBody": {
@@ -3516,7 +3516,7 @@
         ]
       }
     },
-    "/v1/accounts/{account_id}/assets": {
+    "/v2/accounts/{account_id}/assets": {
       "get": {
         "description": "List assets held by an account (supports pagination and optional asset_id filtering).",
         "parameters": [
@@ -3577,7 +3577,7 @@
         ]
       }
     },
-    "/v1/accounts/{account_id}/assets/query": {
+    "/v2/accounts/{account_id}/assets/query": {
       "post": {
         "description": "Query assets held by an account.",
         "parameters": [
@@ -3619,7 +3619,7 @@
         ]
       }
     },
-    "/v1/accounts/{account_id}/permissions": {
+    "/v2/accounts/{account_id}/permissions": {
       "get": {
         "description": "List permissions granted to an account.",
         "parameters": [
@@ -3651,7 +3651,7 @@
         ]
       }
     },
-    "/v1/accounts/{account_id}/transactions": {
+    "/v2/accounts/{account_id}/transactions": {
       "get": {
         "description": "List transactions authored by an account (supports pagination and optional asset_id filtering).",
         "parameters": [
@@ -3712,7 +3712,7 @@
         ]
       }
     },
-    "/v1/accounts/{account_id}/transactions/query": {
+    "/v2/accounts/{account_id}/transactions/query": {
       "post": {
         "description": "Query transactions for a specific account.",
         "parameters": [
@@ -3754,7 +3754,7 @@
         ]
       }
     },
-    "/v1/accounts/{uaid}/portfolio": {
+    "/v2/accounts/{uaid}/portfolio": {
       "get": {
         "description": "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
         "parameters": [
@@ -3795,7 +3795,7 @@
         ]
       }
     },
-    "/v1/aliases/resolve": {
+    "/v2/aliases/resolve": {
       "post": {
         "description": "Returns the canonical alias spelling, the bound account identifier, and (if known) the deterministic alias index.",
         "operationId": "aliasResolve",
@@ -3857,7 +3857,7 @@
         ]
       }
     },
-    "/v1/aliases/resolve_index": {
+    "/v2/aliases/resolve_index": {
       "post": {
         "description": "Returns the alias string and account identifier registered under the provided index.",
         "operationId": "aliasResolveIndex",
@@ -3909,7 +3909,7 @@
         ]
       }
     },
-    "/v1/aliases/voprf/evaluate": {
+    "/v2/aliases/voprf/evaluate": {
       "post": {
         "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
         "operationId": "aliasVoprfEvaluate",
@@ -3961,7 +3961,7 @@
         ]
       }
     },
-    "/v1/api/versions": {
+    "/v2/api/versions": {
       "get": {
         "description": "Return the supported Torii API versions and defaults.",
         "responses": {
@@ -3982,7 +3982,7 @@
         ]
       }
     },
-    "/v1/assets/definitions": {
+    "/v2/assets/definitions": {
       "get": {
         "description": "List asset definitions.",
         "responses": {
@@ -4003,7 +4003,7 @@
         ]
       }
     },
-    "/v1/assets/definitions/query": {
+    "/v2/assets/definitions/query": {
       "post": {
         "description": "Query asset definitions with JSON envelope.",
         "requestBody": {
@@ -4034,7 +4034,7 @@
         ]
       }
     },
-    "/v1/assets/{definition_id}/holders": {
+    "/v2/assets/{definition_id}/holders": {
       "get": {
         "description": "List holders for an asset definition (supports pagination and optional asset_id filtering).",
         "parameters": [
@@ -4095,7 +4095,7 @@
         ]
       }
     },
-    "/v1/assets/{definition_id}/holders/query": {
+    "/v2/assets/{definition_id}/holders/query": {
       "post": {
         "description": "Query holders for an asset definition.",
         "parameters": [
@@ -4137,7 +4137,7 @@
         ]
       }
     },
-    "/v1/bridge/finality/bundle/{height}": {
+    "/v2/bridge/finality/bundle/{height}": {
       "get": {
         "description": "Returns a commitment (block hash + authority set) and justification (signatures) alongside the block header and commit certificate for the requested height.",
         "operationId": "bridgeFinalityBundle",
@@ -4191,7 +4191,7 @@
         ]
       }
     },
-    "/v1/bridge/finality/{height}": {
+    "/v2/bridge/finality/{height}": {
       "get": {
         "description": "Returns the block header and commit certificate for the requested height, allowing external chains to verify finality with the provided validator set signatures.",
         "operationId": "bridgeFinalityProof",
@@ -4245,7 +4245,7 @@
         ]
       }
     },
-    "/v1/confidential/assets/{definition_id}/transitions": {
+    "/v2/confidential/assets/{definition_id}/transitions": {
       "get": {
         "description": "Fetch confidential asset transition history for an asset definition.",
         "parameters": [
@@ -4277,7 +4277,7 @@
         ]
       }
     },
-    "/v1/confidential/derive-keyset": {
+    "/v2/confidential/derive-keyset": {
       "post": {
         "description": "Derive a confidential compute keyset for a lane.",
         "requestBody": {
@@ -4308,7 +4308,7 @@
         ]
       }
     },
-    "/v1/connect/session": {
+    "/v2/connect/session": {
       "post": {
         "description": "Create a Connect session for wallet pairing.",
         "requestBody": {
@@ -4339,7 +4339,7 @@
         ]
       }
     },
-    "/v1/connect/session/{sid}": {
+    "/v2/connect/session/{sid}": {
       "delete": {
         "description": "Terminate a Connect session by session id.",
         "parameters": [
@@ -4371,7 +4371,7 @@
         ]
       }
     },
-    "/v1/connect/status": {
+    "/v2/connect/status": {
       "get": {
         "description": "Return Connect relay status information.",
         "responses": {
@@ -4392,7 +4392,7 @@
         ]
       }
     },
-    "/v1/connect/ws": {
+    "/v2/connect/ws": {
       "get": {
         "description": "Upgrade to the Connect WebSocket stream.",
         "responses": {
@@ -4413,7 +4413,7 @@
         ]
       }
     },
-    "/v1/content/{bundle}/{path}": {
+    "/v2/content/{bundle}/{path}": {
       "get": {
         "description": "Fetch content bundle bytes (path captures the remaining path segments). Role- or sponsor-gated bundles require canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`).",
         "parameters": [
@@ -4455,7 +4455,7 @@
         ]
       }
     },
-    "/v1/contracts/call": {
+    "/v2/contracts/call": {
       "post": {
         "description": "Invoke a contract instance entrypoint.",
         "requestBody": {
@@ -4486,7 +4486,7 @@
         ]
       }
     },
-    "/v1/contracts/code": {
+    "/v2/contracts/code": {
       "post": {
         "description": "Submit contract bytecode for registration.",
         "requestBody": {
@@ -4517,7 +4517,7 @@
         ]
       }
     },
-    "/v1/contracts/code-bytes/{code_hash}": {
+    "/v2/contracts/code-bytes/{code_hash}": {
       "get": {
         "description": "Fetch contract code bytes (base64) by code hash.",
         "parameters": [
@@ -4549,7 +4549,7 @@
         ]
       }
     },
-    "/v1/contracts/code/{code_hash}": {
+    "/v2/contracts/code/{code_hash}": {
       "get": {
         "description": "Fetch contract metadata by code hash.",
         "parameters": [
@@ -4581,7 +4581,7 @@
         ]
       }
     },
-    "/v1/contracts/deploy": {
+    "/v2/contracts/deploy": {
       "post": {
         "description": "Deploy contract code to a namespace.",
         "requestBody": {
@@ -4612,7 +4612,7 @@
         ]
       }
     },
-    "/v1/contracts/instance": {
+    "/v2/contracts/instance": {
       "post": {
         "description": "Create a contract instance from registered code.",
         "requestBody": {
@@ -4643,7 +4643,7 @@
         ]
       }
     },
-    "/v1/contracts/instance/activate": {
+    "/v2/contracts/instance/activate": {
       "post": {
         "description": "Activate a previously created contract instance.",
         "requestBody": {
@@ -4674,7 +4674,7 @@
         ]
       }
     },
-    "/v1/contracts/instances/{ns}": {
+    "/v2/contracts/instances/{ns}": {
       "get": {
         "description": "Return active contract instances for a namespace.",
         "parameters": [
@@ -4706,7 +4706,7 @@
         ]
       }
     },
-    "/v1/contracts/state": {
+    "/v2/contracts/state": {
       "get": {
         "description": "Read smart contract state by exact path, path list, or prefix.",
         "parameters": [
@@ -4785,7 +4785,7 @@
         ]
       }
     },
-    "/v1/da/commitments": {
+    "/v2/da/commitments": {
       "post": {
         "description": "Returns DA commitments captured from recent blocks. Results can be filtered by manifest hash or lane/epoch/sequence and paginated.",
         "operationId": "daCommitmentsList",
@@ -4827,7 +4827,7 @@
         ]
       }
     },
-    "/v1/da/commitments/prove": {
+    "/v2/da/commitments/prove": {
       "post": {
         "description": "Locates a DA commitment by manifest or lane/epoch/sequence and returns its indexed location. Inclusion proofs will be added once Merkle wiring lands.",
         "operationId": "daCommitmentsProve",
@@ -4869,7 +4869,7 @@
         ]
       }
     },
-    "/v1/da/commitments/verify": {
+    "/v2/da/commitments/verify": {
       "post": {
         "description": "Validates a provided DA commitment payload against the node's in-memory index. This is a placeholder until Merkle proofs are available.",
         "operationId": "daCommitmentsVerify",
@@ -4911,7 +4911,7 @@
         ]
       }
     },
-    "/v1/da/ingest": {
+    "/v2/da/ingest": {
       "post": {
         "description": "Submit data availability payloads for indexing and commitment.",
         "requestBody": {
@@ -4942,7 +4942,7 @@
         ]
       }
     },
-    "/v1/da/manifests/{ticket}": {
+    "/v2/da/manifests/{ticket}": {
       "get": {
         "description": "Retrieve a previously ingested DA manifest by its ticket.",
         "parameters": [
@@ -4974,7 +4974,7 @@
         ]
       }
     },
-    "/v1/da/pin_intents": {
+    "/v2/da/pin_intents": {
       "post": {
         "description": "List pin intent commitments indexed by the node.",
         "requestBody": {
@@ -5005,7 +5005,7 @@
         ]
       }
     },
-    "/v1/da/pin_intents/prove": {
+    "/v2/da/pin_intents/prove": {
       "post": {
         "description": "Locate a pin intent by key and return the indexed location.",
         "requestBody": {
@@ -5036,7 +5036,7 @@
         ]
       }
     },
-    "/v1/da/pin_intents/verify": {
+    "/v2/da/pin_intents/verify": {
       "post": {
         "description": "Verify a pin intent proof bundle.",
         "requestBody": {
@@ -5067,7 +5067,7 @@
         ]
       }
     },
-    "/v1/da/proof_policies": {
+    "/v2/da/proof_policies": {
       "get": {
         "description": "Return the configured DA proof policy set.",
         "responses": {
@@ -5088,7 +5088,7 @@
         ]
       }
     },
-    "/v1/da/proof_policy_snapshot": {
+    "/v2/da/proof_policy_snapshot": {
       "get": {
         "description": "Return the active DA proof policy snapshot bundle.",
         "responses": {
@@ -5109,7 +5109,7 @@
         ]
       }
     },
-    "/v1/debug/axt/cache": {
+    "/v2/debug/axt/cache": {
       "get": {
         "description": "Return the cached AXT proof snapshot.",
         "responses": {
@@ -5130,7 +5130,7 @@
         ]
       }
     },
-    "/v1/domains": {
+    "/v2/domains": {
       "get": {
         "description": "List registered domains.",
         "responses": {
@@ -5151,7 +5151,7 @@
         ]
       }
     },
-    "/v1/domains/query": {
+    "/v2/domains/query": {
       "post": {
         "description": "Query domains with JSON envelope.",
         "requestBody": {
@@ -5182,7 +5182,7 @@
         ]
       }
     },
-    "/v1/events/sse": {
+    "/v2/events/sse": {
       "get": {
         "description": "Stream pipeline events via Server-Sent Events.",
         "responses": {
@@ -5203,7 +5203,7 @@
         ]
       }
     },
-    "/v1/explorer/accounts": {
+    "/v2/explorer/accounts": {
       "get": {
         "description": "List accounts for explorer usage.",
         "responses": {
@@ -5224,7 +5224,7 @@
         ]
       }
     },
-    "/v1/explorer/accounts/{account_id}": {
+    "/v2/explorer/accounts/{account_id}": {
       "get": {
         "description": "Fetch account detail for explorer usage.",
         "parameters": [
@@ -5256,7 +5256,7 @@
         ]
       }
     },
-    "/v1/explorer/accounts/{account_id}/qr": {
+    "/v2/explorer/accounts/{account_id}/qr": {
       "get": {
         "description": "Return a QR code for the account identifier.",
         "parameters": [
@@ -5289,7 +5289,7 @@
         ]
       }
     },
-    "/v1/explorer/asset-definitions": {
+    "/v2/explorer/asset-definitions": {
       "get": {
         "description": "List asset definitions for explorer usage.",
         "responses": {
@@ -5310,7 +5310,7 @@
         ]
       }
     },
-    "/v1/explorer/asset-definitions/{definition_id}": {
+    "/v2/explorer/asset-definitions/{definition_id}": {
       "get": {
         "description": "Fetch asset definition detail for explorer usage.",
         "parameters": [
@@ -5342,7 +5342,7 @@
         ]
       }
     },
-    "/v1/explorer/asset-definitions/{definition_id}/econometrics": {
+    "/v2/explorer/asset-definitions/{definition_id}/econometrics": {
       "get": {
         "description": "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition.",
         "parameters": [
@@ -5374,7 +5374,7 @@
         ]
       }
     },
-    "/v1/explorer/asset-definitions/{definition_id}/snapshot": {
+    "/v2/explorer/asset-definitions/{definition_id}/snapshot": {
       "get": {
         "description": "Fetch econometrics snapshot (holders + distribution metrics) for an asset definition.",
         "parameters": [
@@ -5406,7 +5406,7 @@
         ]
       }
     },
-    "/v1/explorer/assets": {
+    "/v2/explorer/assets": {
       "get": {
         "description": "List assets for explorer usage (supports pagination and optional owned_by/definition/asset_id filtering).",
         "parameters": [
@@ -5476,7 +5476,7 @@
         ]
       }
     },
-    "/v1/explorer/assets/{asset_id}": {
+    "/v2/explorer/assets/{asset_id}": {
       "get": {
         "description": "Fetch asset detail for explorer usage.",
         "parameters": [
@@ -5508,7 +5508,7 @@
         ]
       }
     },
-    "/v1/explorer/blocks": {
+    "/v2/explorer/blocks": {
       "get": {
         "description": "List blocks for explorer usage.",
         "responses": {
@@ -5529,7 +5529,7 @@
         ]
       }
     },
-    "/v1/explorer/blocks/stream": {
+    "/v2/explorer/blocks/stream": {
       "get": {
         "description": "Stream block updates via SSE.",
         "responses": {
@@ -5550,7 +5550,7 @@
         ]
       }
     },
-    "/v1/explorer/blocks/{identifier}": {
+    "/v2/explorer/blocks/{identifier}": {
       "get": {
         "description": "Fetch block detail for explorer usage.",
         "parameters": [
@@ -5582,7 +5582,7 @@
         ]
       }
     },
-    "/v1/explorer/domains": {
+    "/v2/explorer/domains": {
       "get": {
         "description": "List domains for explorer usage.",
         "responses": {
@@ -5603,7 +5603,7 @@
         ]
       }
     },
-    "/v1/explorer/domains/{domain_id}": {
+    "/v2/explorer/domains/{domain_id}": {
       "get": {
         "description": "Fetch domain detail for explorer usage.",
         "parameters": [
@@ -5635,7 +5635,7 @@
         ]
       }
     },
-    "/v1/explorer/instructions": {
+    "/v2/explorer/instructions": {
       "get": {
         "description": "List instructions for explorer usage (supports pagination and optional account/authority/transaction/block/kind/asset_id filtering).",
         "parameters": [
@@ -5742,7 +5742,7 @@
         ]
       }
     },
-    "/v1/explorer/instructions/stream": {
+    "/v2/explorer/instructions/stream": {
       "get": {
         "description": "Stream instruction updates via SSE.",
         "responses": {
@@ -5763,7 +5763,7 @@
         ]
       }
     },
-    "/v1/explorer/instructions/{hash}/{index}": {
+    "/v2/explorer/instructions/{hash}/{index}": {
       "get": {
         "description": "Fetch instruction detail for explorer usage.",
         "parameters": [
@@ -5805,7 +5805,7 @@
         ]
       }
     },
-    "/v1/explorer/metrics": {
+    "/v2/explorer/metrics": {
       "get": {
         "description": "Return explorer metrics snapshot.",
         "responses": {
@@ -5826,7 +5826,7 @@
         ]
       }
     },
-    "/v1/explorer/nfts": {
+    "/v2/explorer/nfts": {
       "get": {
         "description": "List NFTs for explorer usage.",
         "responses": {
@@ -5847,7 +5847,7 @@
         ]
       }
     },
-    "/v1/explorer/nfts/{nft_id}": {
+    "/v2/explorer/nfts/{nft_id}": {
       "get": {
         "description": "Fetch NFT detail for explorer usage.",
         "parameters": [
@@ -5879,7 +5879,7 @@
         ]
       }
     },
-    "/v1/explorer/transactions": {
+    "/v2/explorer/transactions": {
       "get": {
         "description": "List transactions for explorer usage (supports pagination and optional authority/block/status/asset_id filtering).",
         "parameters": [
@@ -5959,7 +5959,7 @@
         ]
       }
     },
-    "/v1/explorer/transactions/stream": {
+    "/v2/explorer/transactions/stream": {
       "get": {
         "description": "Stream transaction updates via SSE.",
         "responses": {
@@ -5980,7 +5980,7 @@
         ]
       }
     },
-    "/v1/explorer/transactions/{hash}": {
+    "/v2/explorer/transactions/{hash}": {
       "get": {
         "description": "Fetch transaction detail for explorer usage.",
         "parameters": [
@@ -6012,7 +6012,7 @@
         ]
       }
     },
-    "/v1/gov/ballots/plain": {
+    "/v2/gov/ballots/plain": {
       "post": {
         "description": "Submit a non-ZK ballot; Torii submits when private_key is provided.",
         "requestBody": {
@@ -6043,7 +6043,7 @@
         ]
       }
     },
-    "/v1/gov/ballots/zk": {
+    "/v2/gov/ballots/zk": {
       "post": {
         "description": "Submit a zero-knowledge ballot; Torii submits when private_key is provided.",
         "requestBody": {
@@ -6074,7 +6074,7 @@
         ]
       }
     },
-    "/v1/gov/ballots/zk-v1": {
+    "/v2/gov/ballots/zk-v1": {
       "post": {
         "description": "Submit a ZK ballot using the v1 envelope; Torii submits when private_key is provided.",
         "requestBody": {
@@ -6105,7 +6105,7 @@
         ]
       }
     },
-    "/v1/gov/ballots/zk-v1/ballot-proof": {
+    "/v2/gov/ballots/zk-v1/ballot-proof": {
       "post": {
         "description": "Submit a ZK ballot proof bundle; Torii submits when private_key is provided.",
         "requestBody": {
@@ -6136,7 +6136,7 @@
         ]
       }
     },
-    "/v1/gov/council/audit": {
+    "/v2/gov/council/audit": {
       "get": {
         "description": "Return governance council derivation audit data.",
         "responses": {
@@ -6157,7 +6157,7 @@
         ]
       }
     },
-    "/v1/gov/council/current": {
+    "/v2/gov/council/current": {
       "get": {
         "description": "Return the current governance council roster.",
         "responses": {
@@ -6178,7 +6178,7 @@
         ]
       }
     },
-    "/v1/gov/council/derive-vrf": {
+    "/v2/gov/council/derive-vrf": {
       "post": {
         "description": "Derive VRF inputs for council selection.",
         "requestBody": {
@@ -6209,7 +6209,7 @@
         ]
       }
     },
-    "/v1/gov/council/persist": {
+    "/v2/gov/council/persist": {
       "post": {
         "description": "Persist a governance council roster for an epoch.",
         "requestBody": {
@@ -6240,7 +6240,7 @@
         ]
       }
     },
-    "/v1/gov/council/replace": {
+    "/v2/gov/council/replace": {
       "post": {
         "description": "Replace a council member using the next alternate.",
         "requestBody": {
@@ -6271,7 +6271,7 @@
         ]
       }
     },
-    "/v1/gov/enact": {
+    "/v2/gov/enact": {
       "post": {
         "description": "Enact an approved referendum; Torii submits when authority/private_key are provided.",
         "requestBody": {
@@ -6302,7 +6302,7 @@
         ]
       }
     },
-    "/v1/gov/finalize": {
+    "/v2/gov/finalize": {
       "post": {
         "description": "Finalize referendum tally and status; Torii submits when authority/private_key are provided.",
         "requestBody": {
@@ -6333,7 +6333,7 @@
         ]
       }
     },
-    "/v1/gov/instances/{ns}": {
+    "/v2/gov/instances/{ns}": {
       "get": {
         "description": "List governance contract instances for a namespace.",
         "parameters": [
@@ -6365,7 +6365,7 @@
         ]
       }
     },
-    "/v1/gov/locks/{rid}": {
+    "/v2/gov/locks/{rid}": {
       "get": {
         "description": "Fetch governance lock records by referendum id.",
         "parameters": [
@@ -6397,7 +6397,7 @@
         ]
       }
     },
-    "/v1/gov/proposals/deploy-contract": {
+    "/v2/gov/proposals/deploy-contract": {
       "post": {
         "description": "Submit a governance proposal for contract deployment; optionally sign and submit when authority/private_key are provided.",
         "requestBody": {
@@ -6428,7 +6428,7 @@
         ]
       }
     },
-    "/v1/gov/proposals/{id}": {
+    "/v2/gov/proposals/{id}": {
       "get": {
         "description": "Fetch a governance proposal by id.",
         "parameters": [
@@ -6460,7 +6460,7 @@
         ]
       }
     },
-    "/v1/gov/protected-namespaces": {
+    "/v2/gov/protected-namespaces": {
       "get": {
         "description": "List protected namespaces for governance.",
         "responses": {
@@ -6510,7 +6510,7 @@
         ]
       }
     },
-    "/v1/gov/referenda/{id}": {
+    "/v2/gov/referenda/{id}": {
       "get": {
         "description": "Fetch a referendum by id.",
         "parameters": [
@@ -6542,7 +6542,7 @@
         ]
       }
     },
-    "/v1/gov/stream": {
+    "/v2/gov/stream": {
       "get": {
         "description": "Stream governance update notifications via SSE.",
         "responses": {
@@ -6563,7 +6563,7 @@
         ]
       }
     },
-    "/v1/gov/tally/{id}": {
+    "/v2/gov/tally/{id}": {
       "get": {
         "description": "Fetch a tally snapshot by referendum id.",
         "parameters": [
@@ -6595,7 +6595,7 @@
         ]
       }
     },
-    "/v1/gov/unlocks/stats": {
+    "/v2/gov/unlocks/stats": {
       "get": {
         "description": "Return governance unlock statistics.",
         "responses": {
@@ -6616,7 +6616,7 @@
         ]
       }
     },
-    "/v1/iso20022/pacs008": {
+    "/v2/iso20022/pacs008": {
       "post": {
         "description": "Submit a pacs.008 message for ISO 20022 bridging.",
         "requestBody": {
@@ -6647,7 +6647,7 @@
         ]
       }
     },
-    "/v1/iso20022/pacs009": {
+    "/v2/iso20022/pacs009": {
       "post": {
         "description": "Submit a pacs.009 message for ISO 20022 bridging.",
         "requestBody": {
@@ -6678,7 +6678,7 @@
         ]
       }
     },
-    "/v1/iso20022/status/{msg_id}": {
+    "/v2/iso20022/status/{msg_id}": {
       "get": {
         "description": "Return ISO 20022 message status by message id.",
         "parameters": [
@@ -6710,7 +6710,7 @@
         ]
       }
     },
-    "/v1/kaigi/relays": {
+    "/v2/kaigi/relays": {
       "get": {
         "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
         "operationId": "kaigiRelaysList",
@@ -6742,7 +6742,7 @@
         ]
       }
     },
-    "/v1/kaigi/relays/events": {
+    "/v2/kaigi/relays/events": {
       "get": {
         "description": "Streams relay registration and health events as Server-Sent Events. Optional query parameters filter by domain, relay, or event kind.",
         "operationId": "kaigiRelayEvents",
@@ -6803,7 +6803,7 @@
         ]
       }
     },
-    "/v1/kaigi/relays/health": {
+    "/v2/kaigi/relays/health": {
       "get": {
         "description": "Returns totals for healthy/degraded/unavailable relays along with registrations, failovers, and per-domain counters.",
         "operationId": "kaigiRelayHealth",
@@ -6835,7 +6835,7 @@
         ]
       }
     },
-    "/v1/kaigi/relays/{relay_id}": {
+    "/v2/kaigi/relays/{relay_id}": {
       "get": {
         "description": "Returns relay registration metadata, base64 HPKE key material, latest health report context, and aggregated per-domain counters.",
         "operationId": "kaigiRelayDetail",
@@ -6898,7 +6898,7 @@
         ]
       }
     },
-    "/v1/ledger/block/{height}/proof/{entry_hash}": {
+    "/v2/ledger/block/{height}/proof/{entry_hash}": {
       "get": {
         "description": "Returns the inclusion and execution Merkle proofs for the specified transaction entrypoint within a block.",
         "operationId": "ledgerBlockProof",
@@ -6961,7 +6961,7 @@
         ]
       }
     },
-    "/v1/ledger/headers": {
+    "/v2/ledger/headers": {
       "get": {
         "description": "Returns a newest-first window of block headers with optional `from`/`limit` query parameters and Norito/JSON negotiation via `Accept`.",
         "operationId": "ledgerHeaders",
@@ -7003,7 +7003,7 @@
         ]
       }
     },
-    "/v1/ledger/state-proof/{height}": {
+    "/v2/ledger/state-proof/{height}": {
       "get": {
         "description": "Returns the execution Quorum Certificate (QC) attesting the post-state root for the specified block height, suitable for light clients.",
         "operationId": "ledgerStateProof",
@@ -7037,7 +7037,7 @@
         ]
       }
     },
-    "/v1/ledger/state/{height}": {
+    "/v2/ledger/state/{height}": {
       "get": {
         "description": "Returns the execution post-state root recorded for the specified block height. Supports JSON or Norito content negotiation via the `Accept` header.",
         "operationId": "ledgerStateRoot",
@@ -7071,7 +7071,7 @@
         ]
       }
     },
-    "/v1/mcp": {
+    "/v2/mcp": {
       "get": {
         "description": "Returns server capabilities and tool count for the native MCP bridge.",
         "operationId": "mcpCapabilities",
@@ -7123,7 +7123,7 @@
         ]
       }
     },
-    "/v1/nexus/dataspaces/accounts/{literal}/summary": {
+    "/v2/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
         "description": "Resolves the supplied canonical I105 account literal and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
         "operationId": "nexusDataspacesAccountSummary",
@@ -7176,7 +7176,7 @@
         ]
       }
     },
-    "/v1/nexus/lifecycle": {
+    "/v2/nexus/lifecycle": {
       "post": {
         "description": "Apply a Nexus lane lifecycle plan.",
         "requestBody": {
@@ -7207,7 +7207,7 @@
         ]
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
+    "/v2/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
         "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
@@ -7279,7 +7279,7 @@
         ]
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/stake": {
+    "/v2/nexus/public_lanes/{lane_id}/stake": {
       "get": {
         "description": "Returns bonded stake per validator/staker pair for the requested public lane, including pending unbond timers. Supports an optional validator filter.",
         "operationId": "nexusPublicLaneStake",
@@ -7332,7 +7332,7 @@
         ]
       }
     },
-    "/v1/nexus/public_lanes/{lane_id}/validators": {
+    "/v2/nexus/public_lanes/{lane_id}/validators": {
       "get": {
         "description": "Returns validators servicing the requested public lane with lifecycle status (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height, and `release_at_ms` when an exit timer is running.",
         "operationId": "nexusPublicLaneValidators",
@@ -7376,7 +7376,7 @@
         ]
       }
     },
-    "/v1/nfts": {
+    "/v2/nfts": {
       "get": {
         "description": "List NFTs visible to the caller.",
         "responses": {
@@ -7397,7 +7397,7 @@
         ]
       }
     },
-    "/v1/nfts/query": {
+    "/v2/nfts/query": {
       "post": {
         "description": "Query NFTs with JSON envelope.",
         "requestBody": {
@@ -7428,7 +7428,7 @@
         ]
       }
     },
-    "/v1/node/capabilities": {
+    "/v2/node/capabilities": {
       "get": {
         "description": "Return supported runtime capabilities.",
         "responses": {
@@ -7449,7 +7449,7 @@
         ]
       }
     },
-    "/v1/notify/devices": {
+    "/v2/notify/devices": {
       "post": {
         "description": "Register a device token for push notifications.",
         "requestBody": {
@@ -7503,7 +7503,7 @@
         ]
       }
     },
-    "/v1/offline/allowances": {
+    "/v2/offline/allowances": {
       "get": {
         "description": "Returns operator-issued offline wallet certificates plus ledger-maintained counter checkpoints. Supports optional filter, pagination, and sort parameters encoded as query arguments.",
         "operationId": "offlineAllowancesList",
@@ -7756,7 +7756,7 @@
         ]
       }
     },
-    "/v1/offline/allowances/query": {
+    "/v2/offline/allowances/query": {
       "post": {
         "description": "Accepts the Norito `QueryEnvelope` structure so clients can submit complex filters, selectors, and pagination hints when listing allowances.",
         "operationId": "offlineAllowancesQuery",
@@ -7807,7 +7807,7 @@
         ]
       }
     },
-    "/v1/offline/allowances/{certificate_id_hex}": {
+    "/v2/offline/allowances/{certificate_id_hex}": {
       "get": {
         "description": "Returns the on-ledger OfflineAllowanceRecord for the provided certificate id.",
         "operationId": "offlineAllowanceGet",
@@ -7859,7 +7859,7 @@
         ]
       }
     },
-    "/v1/offline/allowances/{certificate_id_hex}/renew": {
+    "/v2/offline/allowances/{certificate_id_hex}/renew": {
       "post": {
         "description": "Accepts a new OfflineWalletCertificate and enqueues a RegisterOfflineAllowance transaction, scoped to an existing certificate id.",
         "operationId": "offlineAllowanceRenew",
@@ -7921,7 +7921,7 @@
         ]
       }
     },
-    "/v1/offline/build-claims/issue": {
+    "/v2/offline/build-claims/issue": {
       "post": {
         "description": "Signs an OfflineBuildClaim bound to a receipt tx id using Torii's configured offline issuer key.",
         "operationId": "offlineBuildClaimIssue",
@@ -7972,7 +7972,7 @@
         ]
       }
     },
-    "/v1/offline/bundle/proof_status": {
+    "/v2/offline/bundle/proof_status": {
       "get": {
         "description": "Computes the Poseidon receipts root for the stored bundle, compares it to the receipts root advertised by the optional aggregate proof envelope, and returns a concise status payload without streaming full receipts.",
         "operationId": "offlineBundleProofStatus",
@@ -8043,7 +8043,7 @@
         ]
       }
     },
-    "/v1/offline/certificates": {
+    "/v2/offline/certificates": {
       "get": {
         "description": "Returns operator-issued offline wallet certificates plus ledger-maintained counter checkpoints. Supports optional filter, pagination, and sort parameters encoded as query arguments.",
         "operationId": "offlineAllowancesList",
@@ -8296,7 +8296,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/issue": {
+    "/v2/offline/certificates/issue": {
       "post": {
         "description": "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed certificate payload without registering it on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
         "operationId": "offlineCertificateIssue",
@@ -8347,7 +8347,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/query": {
+    "/v2/offline/certificates/query": {
       "post": {
         "description": "Accepts the Norito `QueryEnvelope` structure so clients can submit complex filters, selectors, and pagination hints when listing allowances.",
         "operationId": "offlineAllowancesQuery",
@@ -8398,7 +8398,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/revoke": {
+    "/v2/offline/certificates/revoke": {
       "post": {
         "description": "Enqueues a RegisterOfflineVerdictRevocation transaction referencing the attestation verdict tied to the supplied certificate id.",
         "operationId": "offlineCertificateRevoke",
@@ -8449,7 +8449,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/{certificate_id_hex}": {
+    "/v2/offline/certificates/{certificate_id_hex}": {
       "get": {
         "description": "Returns the on-ledger OfflineAllowanceRecord for the provided certificate id.",
         "operationId": "offlineAllowanceGet",
@@ -8501,7 +8501,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/{certificate_id_hex}/renew": {
+    "/v2/offline/certificates/{certificate_id_hex}/renew": {
       "post": {
         "description": "Accepts a new OfflineWalletCertificate and enqueues a RegisterOfflineAllowance transaction, scoped to an existing certificate id.",
         "operationId": "offlineAllowanceRenew",
@@ -8563,7 +8563,7 @@
         ]
       }
     },
-    "/v1/offline/certificates/{certificate_id_hex}/renew/issue": {
+    "/v2/offline/certificates/{certificate_id_hex}/renew/issue": {
       "post": {
         "description": "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced allowance exists on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
         "operationId": "offlineCertificateRenewIssue",
@@ -8625,7 +8625,7 @@
         ]
       }
     },
-    "/v1/offline/receipts": {
+    "/v2/offline/receipts": {
       "get": {
         "description": "Returns individual spend receipts extracted from offline-to-online transfer bundles, suitable for audit dashboards.",
         "operationId": "offlineReceiptsList",
@@ -8760,7 +8760,7 @@
         ]
       }
     },
-    "/v1/offline/receipts/query": {
+    "/v2/offline/receipts/query": {
       "post": {
         "description": "Supports the Norito QueryEnvelope body to paginate and filter receipts extracted from settlement bundles.",
         "operationId": "offlineReceiptsQuery",
@@ -8811,7 +8811,7 @@
         ]
       }
     },
-    "/v1/offline/rejections": {
+    "/v2/offline/rejections": {
       "get": {
         "description": "Returns aggregated counts grouped by platform and rejection reason so operators can monitor App Attest and KeyMint validation failures.",
         "operationId": "offlineRejections",
@@ -8852,7 +8852,7 @@
         ]
       }
     },
-    "/v1/offline/revocations": {
+    "/v2/offline/revocations": {
       "get": {
         "description": "Return the latest offline revocation entries.",
         "responses": {
@@ -8873,7 +8873,7 @@
         ]
       }
     },
-    "/v1/offline/revocations/query": {
+    "/v2/offline/revocations/query": {
       "post": {
         "description": "Submit a QueryEnvelope to filter offline revocations.",
         "requestBody": {
@@ -8904,9 +8904,9 @@
         ]
       }
     },
-    "/v1/offline/settlements": {
+    "/v2/offline/settlements": {
       "get": {
-        "description": "Alias of `/v1/offline/transfers` for settlement audit readers.",
+        "description": "Alias of `/v2/offline/transfers` for settlement audit readers.",
         "operationId": "offlineSettlementsList",
         "parameters": [
           {
@@ -9184,7 +9184,7 @@
         ]
       }
     },
-    "/v1/offline/settlements/query": {
+    "/v2/offline/settlements/query": {
       "post": {
         "description": "Supports the Norito `QueryEnvelope` body to paginate and filter bundle records, enabling regulator views or PSP dashboards.",
         "operationId": "offlineTransfersQuery",
@@ -9235,9 +9235,9 @@
         ]
       }
     },
-    "/v1/offline/settlements/{bundle_id_hex}": {
+    "/v2/offline/settlements/{bundle_id_hex}": {
       "get": {
-        "description": "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a single `bundle_id_hex`.",
+        "description": "Returns the same enriched transfer payload as `/v2/offline/transfers`, scoped to a single `bundle_id_hex`.",
         "operationId": "offlineTransferGet",
         "parameters": [
           {
@@ -9287,7 +9287,7 @@
         ]
       }
     },
-    "/v1/offline/spend-receipts": {
+    "/v2/offline/spend-receipts": {
       "post": {
         "description": "Validates receipt signatures and returns their Poseidon merkle root.",
         "operationId": "offlineSpendReceiptsSubmit",
@@ -9338,7 +9338,7 @@
         ]
       }
     },
-    "/v1/offline/state": {
+    "/v2/offline/state": {
       "get": {
         "description": "Returns registered allowances, settlement bundles, counter summaries, and verdict revocations for wallet sync.",
         "operationId": "offlineStateGet",
@@ -9360,7 +9360,7 @@
         ]
       }
     },
-    "/v1/offline/summaries": {
+    "/v2/offline/summaries": {
       "get": {
         "description": "Returns controller-facing summaries of the latest App Attest and Android marker counters observed for each allowance certificate.",
         "operationId": "offlineSummariesList",
@@ -9441,7 +9441,7 @@
         ]
       }
     },
-    "/v1/offline/summaries/query": {
+    "/v2/offline/summaries/query": {
       "post": {
         "description": "Accepts the Norito `QueryEnvelope` structure so operators can fetch counter checkpoints with complex filters, selectors, and pagination hints.",
         "operationId": "offlineSummariesQuery",
@@ -9492,7 +9492,7 @@
         ]
       }
     },
-    "/v1/offline/transfers": {
+    "/v2/offline/transfers": {
       "get": {
         "description": "Returns bundles with their receiver/deposit accounts, receipts, and balance proofs for audit or settlement dashboards.",
         "operationId": "offlineTransfersList",
@@ -9723,7 +9723,7 @@
         ]
       }
     },
-    "/v1/offline/transfers/proof": {
+    "/v2/offline/transfers/proof": {
       "post": {
         "description": "Generate FASTPQ witness payloads from a transfer payload.",
         "requestBody": {
@@ -9754,7 +9754,7 @@
         ]
       }
     },
-    "/v1/offline/transfers/query": {
+    "/v2/offline/transfers/query": {
       "post": {
         "description": "Supports the Norito `QueryEnvelope` body to paginate and filter bundle records, enabling regulator views or PSP dashboards.",
         "operationId": "offlineTransfersQuery",
@@ -9805,9 +9805,9 @@
         ]
       }
     },
-    "/v1/offline/transfers/{bundle_id_hex}": {
+    "/v2/offline/transfers/{bundle_id_hex}": {
       "get": {
-        "description": "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a single `bundle_id_hex`.",
+        "description": "Returns the same enriched transfer payload as `/v2/offline/transfers`, scoped to a single `bundle_id_hex`.",
         "operationId": "offlineTransferGet",
         "parameters": [
           {
@@ -9857,7 +9857,7 @@
         ]
       }
     },
-    "/v1/operator/auth/login/options": {
+    "/v2/operator/auth/login/options": {
       "post": {
         "description": "Issues WebAuthn authentication options.",
         "operationId": "operatorAuthLoginOptions",
@@ -9919,7 +9919,7 @@
         ]
       }
     },
-    "/v1/operator/auth/login/verify": {
+    "/v2/operator/auth/login/verify": {
       "post": {
         "description": "Verifies a WebAuthn assertion and issues a session token.",
         "operationId": "operatorAuthLoginVerify",
@@ -9991,7 +9991,7 @@
         ]
       }
     },
-    "/v1/operator/auth/registration/options": {
+    "/v2/operator/auth/registration/options": {
       "post": {
         "description": "Issues WebAuthn registration options. Requires operator bootstrap auth.",
         "operationId": "operatorAuthRegistrationOptions",
@@ -10043,7 +10043,7 @@
         ]
       }
     },
-    "/v1/operator/auth/registration/verify": {
+    "/v2/operator/auth/registration/verify": {
       "post": {
         "description": "Verifies a WebAuthn attestation and stores the credential.",
         "operationId": "operatorAuthRegistrationVerify",
@@ -10115,7 +10115,7 @@
         ]
       }
     },
-    "/v1/parameters": {
+    "/v2/parameters": {
       "get": {
         "description": "Return system parameter snapshots.",
         "responses": {
@@ -10136,7 +10136,7 @@
         ]
       }
     },
-    "/v1/pipeline/recovery/{height}": {
+    "/v2/pipeline/recovery/{height}": {
       "get": {
         "description": "Return pipeline recovery metadata for the given height.",
         "parameters": [
@@ -10169,7 +10169,7 @@
         ]
       }
     },
-    "/v1/pipeline/transactions/status": {
+    "/v2/pipeline/transactions/status": {
       "get": {
         "description": "Return the latest pipeline status for a signed transaction hash.",
         "parameters": [
@@ -10211,7 +10211,7 @@
         ]
       }
     },
-    "/v1/policy": {
+    "/v2/policy": {
       "get": {
         "description": "Return the current node policy and limits.",
         "responses": {
@@ -10232,7 +10232,7 @@
         ]
       }
     },
-    "/v1/proofs/query": {
+    "/v2/proofs/query": {
       "post": {
         "description": "Query proof records with a JSON envelope.",
         "requestBody": {
@@ -10263,7 +10263,7 @@
         ]
       }
     },
-    "/v1/proofs/retention": {
+    "/v2/proofs/retention": {
       "get": {
         "description": "Return proof retention configuration and counters.",
         "responses": {
@@ -10284,7 +10284,7 @@
         ]
       }
     },
-    "/v1/proofs/{id}": {
+    "/v2/proofs/{id}": {
       "get": {
         "description": "Return a proof record by id.",
         "parameters": [
@@ -10316,7 +10316,7 @@
         ]
       }
     },
-    "/v1/repo/agreements": {
+    "/v2/repo/agreements": {
       "get": {
         "description": "Returns the active repo agreements recorded on-chain with optional pagination and filtering.",
         "parameters": [
@@ -10375,7 +10375,7 @@
         ]
       }
     },
-    "/v1/repo/agreements/query": {
+    "/v2/repo/agreements/query": {
       "post": {
         "description": "Structured query endpoint accepting a JSON envelope with pagination, sort, and filter fields.",
         "requestBody": {
@@ -10406,7 +10406,7 @@
         ]
       }
     },
-    "/v1/runtime/abi/active": {
+    "/v2/runtime/abi/active": {
       "get": {
         "description": "Return active ABI version list.",
         "responses": {
@@ -10427,7 +10427,7 @@
         ]
       }
     },
-    "/v1/runtime/abi/hash": {
+    "/v2/runtime/abi/hash": {
       "get": {
         "description": "Return the ABI hash for the active policy.",
         "responses": {
@@ -10448,7 +10448,7 @@
         ]
       }
     },
-    "/v1/runtime/metrics": {
+    "/v2/runtime/metrics": {
       "get": {
         "description": "Return runtime metrics snapshot.",
         "responses": {
@@ -10469,7 +10469,7 @@
         ]
       }
     },
-    "/v1/runtime/upgrades": {
+    "/v2/runtime/upgrades": {
       "get": {
         "description": "List proposed and activated runtime upgrades.",
         "responses": {
@@ -10490,7 +10490,7 @@
         ]
       }
     },
-    "/v1/runtime/upgrades/activate/{id}": {
+    "/v2/runtime/upgrades/activate/{id}": {
       "post": {
         "description": "Activate a runtime upgrade by id.",
         "parameters": [
@@ -10532,7 +10532,7 @@
         ]
       }
     },
-    "/v1/runtime/upgrades/cancel/{id}": {
+    "/v2/runtime/upgrades/cancel/{id}": {
       "post": {
         "description": "Cancel a runtime upgrade by id.",
         "parameters": [
@@ -10574,7 +10574,7 @@
         ]
       }
     },
-    "/v1/runtime/upgrades/propose": {
+    "/v2/runtime/upgrades/propose": {
       "post": {
         "description": "Submit a runtime upgrade proposal.",
         "requestBody": {
@@ -10605,7 +10605,7 @@
         ]
       }
     },
-    "/v1/sns/governance/cases": {
+    "/v2/sns/governance/cases": {
       "get": {
         "description": "List SNS governance cases.",
         "responses": {
@@ -10655,7 +10655,7 @@
         ]
       }
     },
-    "/v1/sns/policies/{suffix_id}": {
+    "/v2/sns/policies/{suffix_id}": {
       "get": {
         "description": "Fetch SNS policy by suffix id.",
         "parameters": [
@@ -10687,7 +10687,7 @@
         ]
       }
     },
-    "/v1/sns/registrations": {
+    "/v2/sns/registrations": {
       "post": {
         "description": "Register a SNS suffix.",
         "requestBody": {
@@ -10718,7 +10718,7 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}": {
+    "/v2/sns/registrations/{selector}": {
       "get": {
         "description": "Fetch a SNS registration by selector.",
         "parameters": [
@@ -10750,7 +10750,7 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/controllers": {
+    "/v2/sns/registrations/{selector}/controllers": {
       "post": {
         "description": "Update SNS registration controllers.",
         "parameters": [
@@ -10792,7 +10792,7 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/freeze": {
+    "/v2/sns/registrations/{selector}/freeze": {
       "delete": {
         "description": "Unfreeze a SNS registration.",
         "parameters": [
@@ -10864,7 +10864,7 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/renew": {
+    "/v2/sns/registrations/{selector}/renew": {
       "post": {
         "description": "Renew a SNS registration by selector.",
         "parameters": [
@@ -10906,7 +10906,7 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/transfer": {
+    "/v2/sns/registrations/{selector}/transfer": {
       "post": {
         "description": "Transfer a SNS registration by selector.",
         "parameters": [
@@ -10948,7 +10948,7 @@
         ]
       }
     },
-    "/v1/soradns/directory/events": {
+    "/v2/soradns/directory/events": {
       "get": {
         "description": "Stream SoraDNS directory events via SSE.",
         "responses": {
@@ -10969,7 +10969,7 @@
         ]
       }
     },
-    "/v1/soradns/directory/latest": {
+    "/v2/soradns/directory/latest": {
       "get": {
         "description": "Fetch the latest SoraDNS directory snapshot.",
         "responses": {
@@ -10990,7 +10990,7 @@
         ]
       }
     },
-    "/v1/sorafs/aliases": {
+    "/v2/sorafs/aliases": {
       "get": {
         "description": "List SoraFS aliases.",
         "responses": {
@@ -11011,7 +11011,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/claim": {
+    "/v2/sorafs/audit/repair/claim": {
       "post": {
         "description": "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
         "requestBody": {
@@ -11042,7 +11042,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/complete": {
+    "/v2/sorafs/audit/repair/complete": {
       "post": {
         "description": "Complete a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
         "requestBody": {
@@ -11073,7 +11073,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/fail": {
+    "/v2/sorafs/audit/repair/fail": {
       "post": {
         "description": "Fail a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
         "requestBody": {
@@ -11104,7 +11104,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/heartbeat": {
+    "/v2/sorafs/audit/repair/heartbeat": {
       "post": {
         "description": "Record a SoraFS repair worker heartbeat (requires manifest_digest_hex, idempotency key, and worker signature).",
         "requestBody": {
@@ -11135,7 +11135,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/report": {
+    "/v2/sorafs/audit/repair/report": {
       "post": {
         "description": "Submit a SoraFS repair report.",
         "requestBody": {
@@ -11166,7 +11166,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/slash": {
+    "/v2/sorafs/audit/repair/slash": {
       "post": {
         "description": "Submit a SoraFS repair slash.",
         "requestBody": {
@@ -11197,7 +11197,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/status": {
+    "/v2/sorafs/audit/repair/status": {
       "get": {
         "description": "List SoraFS repair status across manifests (each entry includes Norito base64 record + ordered event log).",
         "parameters": [
@@ -11238,7 +11238,7 @@
         ]
       }
     },
-    "/v1/sorafs/audit/repair/status/{manifest_hex}": {
+    "/v2/sorafs/audit/repair/status/{manifest_hex}": {
       "get": {
         "description": "Fetch repair status for a manifest (each entry includes Norito base64 record + ordered event log).",
         "parameters": [
@@ -11288,7 +11288,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/complete": {
+    "/v2/sorafs/capacity/complete": {
       "post": {
         "description": "Submit a capacity completion notice.",
         "requestBody": {
@@ -11319,7 +11319,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/declare": {
+    "/v2/sorafs/capacity/declare": {
       "post": {
         "description": "Declare SoraFS capacity availability.",
         "requestBody": {
@@ -11350,7 +11350,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/dispute": {
+    "/v2/sorafs/capacity/dispute": {
       "post": {
         "description": "Submit a capacity dispute request.",
         "requestBody": {
@@ -11381,7 +11381,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/failure": {
+    "/v2/sorafs/capacity/failure": {
       "post": {
         "description": "Submit capacity failure report.",
         "requestBody": {
@@ -11412,7 +11412,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/por": {
+    "/v2/sorafs/capacity/por": {
       "post": {
         "description": "Submit PoR capacity report.",
         "requestBody": {
@@ -11443,7 +11443,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/por-challenge": {
+    "/v2/sorafs/capacity/por-challenge": {
       "post": {
         "description": "Submit proof-of-replication challenge.",
         "requestBody": {
@@ -11474,7 +11474,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/por-proof": {
+    "/v2/sorafs/capacity/por-proof": {
       "post": {
         "description": "Submit proof-of-replication proof.",
         "requestBody": {
@@ -11505,7 +11505,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/por-verdict": {
+    "/v2/sorafs/capacity/por-verdict": {
       "post": {
         "description": "Submit proof-of-replication verdict.",
         "requestBody": {
@@ -11536,7 +11536,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/schedule": {
+    "/v2/sorafs/capacity/schedule": {
       "post": {
         "description": "Submit a capacity schedule request.",
         "requestBody": {
@@ -11567,7 +11567,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/state": {
+    "/v2/sorafs/capacity/state": {
       "get": {
         "description": "Fetch SoraFS capacity state.",
         "responses": {
@@ -11588,7 +11588,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/telemetry": {
+    "/v2/sorafs/capacity/telemetry": {
       "post": {
         "description": "Submit SoraFS capacity telemetry.",
         "requestBody": {
@@ -11619,7 +11619,7 @@
         ]
       }
     },
-    "/v1/sorafs/capacity/uptime": {
+    "/v2/sorafs/capacity/uptime": {
       "post": {
         "description": "Submit capacity uptime metrics.",
         "requestBody": {
@@ -11650,7 +11650,7 @@
         ]
       }
     },
-    "/v1/sorafs/deal/settle": {
+    "/v2/sorafs/deal/settle": {
       "post": {
         "description": "Submit a SoraFS deal settlement.",
         "requestBody": {
@@ -11681,7 +11681,7 @@
         ]
       }
     },
-    "/v1/sorafs/deal/usage": {
+    "/v2/sorafs/deal/usage": {
       "post": {
         "description": "Submit a SoraFS deal usage report.",
         "requestBody": {
@@ -11712,7 +11712,7 @@
         ]
       }
     },
-    "/v1/sorafs/pin": {
+    "/v2/sorafs/pin": {
       "get": {
         "description": "Fetch the SoraFS pin registry.",
         "responses": {
@@ -11733,7 +11733,7 @@
         ]
       }
     },
-    "/v1/sorafs/pin/register": {
+    "/v2/sorafs/pin/register": {
       "post": {
         "description": "Register a pin manifest for SoraFS.",
         "requestBody": {
@@ -11764,7 +11764,7 @@
         ]
       }
     },
-    "/v1/sorafs/pin/{digest_hex}": {
+    "/v2/sorafs/pin/{digest_hex}": {
       "get": {
         "description": "Fetch a pin manifest by digest.",
         "parameters": [
@@ -11796,7 +11796,7 @@
         ]
       }
     },
-    "/v1/sorafs/por/export": {
+    "/v2/sorafs/por/export": {
       "get": {
         "description": "Export the PoR report bundle.",
         "responses": {
@@ -11817,7 +11817,7 @@
         ]
       }
     },
-    "/v1/sorafs/por/ingestion/{manifest_digest_hex}": {
+    "/v2/sorafs/por/ingestion/{manifest_digest_hex}": {
       "get": {
         "description": "Fetch PoR ingestion status for a manifest digest.",
         "parameters": [
@@ -11849,7 +11849,7 @@
         ]
       }
     },
-    "/v1/sorafs/por/report/{iso_week}": {
+    "/v2/sorafs/por/report/{iso_week}": {
       "get": {
         "description": "Fetch PoR report for an ISO week.",
         "parameters": [
@@ -11881,7 +11881,7 @@
         ]
       }
     },
-    "/v1/sorafs/por/status": {
+    "/v2/sorafs/por/status": {
       "get": {
         "description": "Fetch proof-of-replication status.",
         "responses": {
@@ -11902,7 +11902,7 @@
         ]
       }
     },
-    "/v1/sorafs/proof/stream": {
+    "/v2/sorafs/proof/stream": {
       "post": {
         "description": "Request a proof stream payload.",
         "requestBody": {
@@ -11933,7 +11933,7 @@
         ]
       }
     },
-    "/v1/sorafs/providers": {
+    "/v2/sorafs/providers": {
       "get": {
         "description": "List SoraFS providers.",
         "responses": {
@@ -11954,7 +11954,7 @@
         ]
       }
     },
-    "/v1/sorafs/providers/advert": {
+    "/v2/sorafs/providers/advert": {
       "post": {
         "description": "Submit a SoraFS provider advert.",
         "requestBody": {
@@ -11985,7 +11985,7 @@
         ]
       }
     },
-    "/v1/sorafs/replication": {
+    "/v2/sorafs/replication": {
       "get": {
         "description": "List SoraFS replication orders.",
         "responses": {
@@ -12006,7 +12006,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/car/{manifest_id}": {
+    "/v2/sorafs/storage/car/{manifest_id}": {
       "get": {
         "description": "Fetch CAR bytes for a manifest.",
         "parameters": [
@@ -12039,7 +12039,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}": {
+    "/v2/sorafs/storage/chunk/{manifest_id}/{chunk_digest}": {
       "get": {
         "description": "Fetch a storage chunk by digest.",
         "parameters": [
@@ -12081,7 +12081,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/fetch": {
+    "/v2/sorafs/storage/fetch": {
       "post": {
         "description": "Submit a storage fetch request.",
         "requestBody": {
@@ -12112,7 +12112,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/manifest/{manifest_id}": {
+    "/v2/sorafs/storage/manifest/{manifest_id}": {
       "get": {
         "description": "Fetch SoraFS storage manifest.",
         "parameters": [
@@ -12144,7 +12144,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/pin": {
+    "/v2/sorafs/storage/pin": {
       "post": {
         "description": "Submit a storage pin request.",
         "requestBody": {
@@ -12175,7 +12175,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/plan/{manifest_id}": {
+    "/v2/sorafs/storage/plan/{manifest_id}": {
       "get": {
         "description": "Fetch SoraFS storage plan.",
         "parameters": [
@@ -12207,7 +12207,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/por-challenge": {
+    "/v2/sorafs/storage/por-challenge": {
       "post": {
         "description": "Submit a storage PoR challenge.",
         "requestBody": {
@@ -12238,7 +12238,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/por-proof": {
+    "/v2/sorafs/storage/por-proof": {
       "post": {
         "description": "Submit a storage PoR proof.",
         "requestBody": {
@@ -12269,7 +12269,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/por-sample": {
+    "/v2/sorafs/storage/por-sample": {
       "post": {
         "description": "Request a proof-of-replication sample.",
         "requestBody": {
@@ -12300,7 +12300,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/por-verdict": {
+    "/v2/sorafs/storage/por-verdict": {
       "post": {
         "description": "Submit a storage PoR verdict.",
         "requestBody": {
@@ -12331,7 +12331,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/state": {
+    "/v2/sorafs/storage/state": {
       "get": {
         "description": "Fetch SoraFS storage state.",
         "responses": {
@@ -12352,7 +12352,7 @@
         ]
       }
     },
-    "/v1/sorafs/storage/token": {
+    "/v2/sorafs/storage/token": {
       "post": {
         "description": "Request a storage access token.",
         "requestBody": {
@@ -12383,7 +12383,7 @@
         ]
       }
     },
-    "/v1/soranet/privacy/event": {
+    "/v2/soranet/privacy/event": {
       "post": {
         "description": "Submit a SoraNet privacy event payload.",
         "requestBody": {
@@ -12414,7 +12414,7 @@
         ]
       }
     },
-    "/v1/soranet/privacy/share": {
+    "/v2/soranet/privacy/share": {
       "post": {
         "description": "Submit a SoraNet privacy share payload.",
         "requestBody": {
@@ -12445,7 +12445,7 @@
         ]
       }
     },
-    "/v1/space-directory/manifests": {
+    "/v2/space-directory/manifests": {
       "post": {
         "description": "Publish a space directory manifest.",
         "requestBody": {
@@ -12476,7 +12476,7 @@
         ]
       }
     },
-    "/v1/space-directory/manifests/revoke": {
+    "/v2/space-directory/manifests/revoke": {
       "post": {
         "description": "Revoke a space directory manifest.",
         "requestBody": {
@@ -12507,7 +12507,7 @@
         ]
       }
     },
-    "/v1/space-directory/uaids/{uaid}": {
+    "/v2/space-directory/uaids/{uaid}": {
       "get": {
         "description": "Fetch bindings for a user account identifier.",
         "parameters": [
@@ -12539,7 +12539,7 @@
         ]
       }
     },
-    "/v1/space-directory/uaids/{uaid}/manifests": {
+    "/v2/space-directory/uaids/{uaid}/manifests": {
       "get": {
         "description": "Fetch manifests registered for a user account identifier.",
         "parameters": [
@@ -12571,7 +12571,7 @@
         ]
       }
     },
-    "/v1/subscriptions": {
+    "/v2/subscriptions": {
       "get": {
         "description": "List subscriptions with optional filters.",
         "parameters": [
@@ -12670,7 +12670,7 @@
         ]
       }
     },
-    "/v1/subscriptions/plans": {
+    "/v2/subscriptions/plans": {
       "get": {
         "description": "List subscription plans by provider.",
         "parameters": [
@@ -12751,7 +12751,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}": {
+    "/v2/subscriptions/{subscription_id}": {
       "get": {
         "description": "Fetch a subscription by NFT id.",
         "parameters": [
@@ -12783,7 +12783,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/cancel": {
+    "/v2/subscriptions/{subscription_id}/cancel": {
       "post": {
         "description": "Cancel a subscription immediately or schedule cancellation at period end.",
         "parameters": [
@@ -12825,7 +12825,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/charge-now": {
+    "/v2/subscriptions/{subscription_id}/charge-now": {
       "post": {
         "description": "Trigger immediate billing for a subscription.",
         "parameters": [
@@ -12867,7 +12867,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/keep": {
+    "/v2/subscriptions/{subscription_id}/keep": {
       "post": {
         "description": "Undo a scheduled period-end cancellation and keep billing active.",
         "parameters": [
@@ -12909,7 +12909,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/pause": {
+    "/v2/subscriptions/{subscription_id}/pause": {
       "post": {
         "description": "Pause a subscription and unregister billing triggers.",
         "parameters": [
@@ -12951,7 +12951,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/resume": {
+    "/v2/subscriptions/{subscription_id}/resume": {
       "post": {
         "description": "Resume a subscription and re-schedule billing.",
         "parameters": [
@@ -12993,7 +12993,7 @@
         ]
       }
     },
-    "/v1/subscriptions/{subscription_id}/usage": {
+    "/v2/subscriptions/{subscription_id}/usage": {
       "post": {
         "description": "Record usage for a subscription via a usage trigger.",
         "parameters": [
@@ -13035,7 +13035,7 @@
         ]
       }
     },
-    "/v1/sumeragi/bls_keys": {
+    "/v2/sumeragi/bls_keys": {
       "get": {
         "description": "Return the consensus BLS key set.",
         "responses": {
@@ -13056,7 +13056,7 @@
         ]
       }
     },
-    "/v1/sumeragi/checkpoints": {
+    "/v2/sumeragi/checkpoints": {
       "get": {
         "description": "Return checkpoint snapshots.",
         "responses": {
@@ -13077,7 +13077,7 @@
         ]
       }
     },
-    "/v1/sumeragi/collectors": {
+    "/v2/sumeragi/collectors": {
       "get": {
         "description": "Return collector status snapshot.",
         "responses": {
@@ -13098,7 +13098,7 @@
         ]
       }
     },
-    "/v1/sumeragi/commit-certificates": {
+    "/v2/sumeragi/commit-certificates": {
       "get": {
         "description": "Returns the bounded history of commit certificates produced by validators. Supports JSON or Norito content negotiation via the `Accept` header.",
         "operationId": "sumeragiQcs",
@@ -13150,7 +13150,7 @@
         ]
       }
     },
-    "/v1/sumeragi/commit_qc/{hash}": {
+    "/v2/sumeragi/commit_qc/{hash}": {
       "get": {
         "description": "Fetch commit QC by block hash.",
         "parameters": [
@@ -13182,7 +13182,7 @@
         ]
       }
     },
-    "/v1/sumeragi/consensus-keys": {
+    "/v2/sumeragi/consensus-keys": {
       "get": {
         "description": "Return consensus key material snapshot.",
         "responses": {
@@ -13203,7 +13203,7 @@
         ]
       }
     },
-    "/v1/sumeragi/evidence": {
+    "/v2/sumeragi/evidence": {
       "get": {
         "description": "List evidence entries recorded by the node.",
         "responses": {
@@ -13253,7 +13253,7 @@
         ]
       }
     },
-    "/v1/sumeragi/evidence/count": {
+    "/v2/sumeragi/evidence/count": {
       "get": {
         "description": "Return the total number of evidence entries.",
         "responses": {
@@ -13274,7 +13274,7 @@
         ]
       }
     },
-    "/v1/sumeragi/key-lifecycle": {
+    "/v2/sumeragi/key-lifecycle": {
       "get": {
         "description": "Returns the bounded history of consensus/committee key lifecycle records (activation/expiry/HSM metadata) with JSON or Norito negotiation via `Accept`.",
         "operationId": "sumeragiKeyLifecycle",
@@ -13306,7 +13306,7 @@
         ]
       }
     },
-    "/v1/sumeragi/leader": {
+    "/v2/sumeragi/leader": {
       "get": {
         "description": "Return the current Sumeragi leader snapshot.",
         "responses": {
@@ -13327,7 +13327,7 @@
         ]
       }
     },
-    "/v1/sumeragi/new_view/json": {
+    "/v2/sumeragi/new_view/json": {
       "get": {
         "description": "Return new view status snapshot.",
         "responses": {
@@ -13348,7 +13348,7 @@
         ]
       }
     },
-    "/v1/sumeragi/new_view/sse": {
+    "/v2/sumeragi/new_view/sse": {
       "get": {
         "description": "Stream new view events via SSE.",
         "responses": {
@@ -13369,7 +13369,7 @@
         ]
       }
     },
-    "/v1/sumeragi/pacemaker": {
+    "/v2/sumeragi/pacemaker": {
       "get": {
         "description": "Return pacemaker status snapshot.",
         "responses": {
@@ -13390,7 +13390,7 @@
         ]
       }
     },
-    "/v1/sumeragi/params": {
+    "/v2/sumeragi/params": {
       "get": {
         "description": "Return Sumeragi consensus parameters.",
         "responses": {
@@ -13411,7 +13411,7 @@
         ]
       }
     },
-    "/v1/sumeragi/phases": {
+    "/v2/sumeragi/phases": {
       "get": {
         "description": "Return consensus phase status snapshot.",
         "responses": {
@@ -13432,7 +13432,7 @@
         ]
       }
     },
-    "/v1/sumeragi/qc": {
+    "/v2/sumeragi/qc": {
       "get": {
         "description": "Return quorum certificate snapshots.",
         "responses": {
@@ -13453,7 +13453,7 @@
         ]
       }
     },
-    "/v1/sumeragi/rbc": {
+    "/v2/sumeragi/rbc": {
       "get": {
         "description": "Return RBC status snapshot.",
         "responses": {
@@ -13474,7 +13474,7 @@
         ]
       }
     },
-    "/v1/sumeragi/rbc/delivered/{height}/{view}": {
+    "/v2/sumeragi/rbc/delivered/{height}/{view}": {
       "get": {
         "description": "Return RBC delivered status for a block height and view.",
         "parameters": [
@@ -13517,7 +13517,7 @@
         ]
       }
     },
-    "/v1/sumeragi/rbc/sample": {
+    "/v2/sumeragi/rbc/sample": {
       "post": {
         "description": "Request an RBC sampling payload.",
         "requestBody": {
@@ -13548,7 +13548,7 @@
         ]
       }
     },
-    "/v1/sumeragi/rbc/sessions": {
+    "/v2/sumeragi/rbc/sessions": {
       "get": {
         "description": "Return RBC session snapshots.",
         "responses": {
@@ -13569,7 +13569,7 @@
         ]
       }
     },
-    "/v1/sumeragi/status": {
+    "/v2/sumeragi/status": {
       "get": {
         "description": "Return Sumeragi status snapshot.",
         "responses": {
@@ -13590,7 +13590,7 @@
         ]
       }
     },
-    "/v1/sumeragi/status/sse": {
+    "/v2/sumeragi/status/sse": {
       "get": {
         "description": "Stream Sumeragi status via SSE.",
         "responses": {
@@ -13611,7 +13611,7 @@
         ]
       }
     },
-    "/v1/sumeragi/telemetry": {
+    "/v2/sumeragi/telemetry": {
       "get": {
         "description": "Return Sumeragi telemetry snapshot.",
         "responses": {
@@ -13632,7 +13632,7 @@
         ]
       }
     },
-    "/v1/sumeragi/validator-sets": {
+    "/v2/sumeragi/validator-sets": {
       "get": {
         "description": "Returns a bounded history of validator-set snapshots derived from commit certificates with optional `from`/`limit` query parameters and JSON/Norito negotiation via `Accept`.",
         "operationId": "sumeragiValidatorSets",
@@ -13684,7 +13684,7 @@
         ]
       }
     },
-    "/v1/sumeragi/validator-sets/{height}": {
+    "/v2/sumeragi/validator-sets/{height}": {
       "get": {
         "description": "Returns the validator-set snapshot derived from the commit certificate for the specified block height.",
         "operationId": "sumeragiValidatorSetByHeight",
@@ -13738,7 +13738,7 @@
         ]
       }
     },
-    "/v1/sumeragi/vrf/commit": {
+    "/v2/sumeragi/vrf/commit": {
       "post": {
         "description": "Submit VRF commit payload.",
         "requestBody": {
@@ -13769,7 +13769,7 @@
         ]
       }
     },
-    "/v1/sumeragi/vrf/epoch/{epoch}": {
+    "/v2/sumeragi/vrf/epoch/{epoch}": {
       "get": {
         "description": "Fetch VRF epoch data.",
         "parameters": [
@@ -13802,7 +13802,7 @@
         ]
       }
     },
-    "/v1/sumeragi/vrf/penalties/{epoch}": {
+    "/v2/sumeragi/vrf/penalties/{epoch}": {
       "get": {
         "description": "Fetch VRF penalties for an epoch.",
         "parameters": [
@@ -13835,7 +13835,7 @@
         ]
       }
     },
-    "/v1/sumeragi/vrf/reveal": {
+    "/v2/sumeragi/vrf/reveal": {
       "post": {
         "description": "Submit VRF reveal payload.",
         "requestBody": {
@@ -13866,7 +13866,7 @@
         ]
       }
     },
-    "/v1/telemetry/live": {
+    "/v2/telemetry/live": {
       "get": {
         "description": "Stream peer and network telemetry updates via SSE.",
         "responses": {
@@ -13887,7 +13887,7 @@
         ]
       }
     },
-    "/v1/telemetry/peers-info": {
+    "/v2/telemetry/peers-info": {
       "get": {
         "description": "Return the latest peer telemetry snapshot.",
         "responses": {
@@ -13908,7 +13908,7 @@
         ]
       }
     },
-    "/v1/time/now": {
+    "/v2/time/now": {
       "get": {
         "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
         "operationId": "timeNow",
@@ -13930,7 +13930,7 @@
         ]
       }
     },
-    "/v1/time/status": {
+    "/v2/time/status": {
       "get": {
         "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
         "operationId": "timeStatus",
@@ -13952,7 +13952,7 @@
         ]
       }
     },
-    "/v1/webhooks": {
+    "/v2/webhooks": {
       "get": {
         "description": "List registered webhooks.",
         "responses": {
@@ -14002,7 +14002,7 @@
         ]
       }
     },
-    "/v1/webhooks/{id}": {
+    "/v2/webhooks/{id}": {
       "delete": {
         "description": "Delete a webhook subscription.",
         "parameters": [
@@ -14034,7 +14034,7 @@
         ]
       }
     },
-    "/v1/zk/attachments": {
+    "/v2/zk/attachments": {
       "get": {
         "description": "List stored ZK attachments.",
         "responses": {
@@ -14084,7 +14084,7 @@
         ]
       }
     },
-    "/v1/zk/attachments/count": {
+    "/v2/zk/attachments/count": {
       "get": {
         "description": "Return attachment counts.",
         "responses": {
@@ -14105,7 +14105,7 @@
         ]
       }
     },
-    "/v1/zk/attachments/{id}": {
+    "/v2/zk/attachments/{id}": {
       "delete": {
         "description": "Delete a ZK attachment by id.",
         "parameters": [
@@ -14167,7 +14167,7 @@
         ]
       }
     },
-    "/v1/zk/ivm/prove": {
+    "/v2/zk/ivm/prove": {
       "post": {
         "description": "Submit an IVM proved payload and return a job identifier for proof generation.",
         "requestBody": {
@@ -14198,7 +14198,7 @@
         ]
       }
     },
-    "/v1/zk/ivm/prove/{job_id}": {
+    "/v2/zk/ivm/prove/{job_id}": {
       "delete": {
         "description": "Delete an IVM proof generation job entry.",
         "parameters": [
@@ -14260,7 +14260,7 @@
         ]
       }
     },
-    "/v1/zk/proof-tags/{backend}/{hash}": {
+    "/v2/zk/proof-tags/{backend}/{hash}": {
       "get": {
         "description": "Fetch proof tags by backend and hash.",
         "parameters": [
@@ -14301,7 +14301,7 @@
         ]
       }
     },
-    "/v1/zk/proof/{backend}/{hash}": {
+    "/v2/zk/proof/{backend}/{hash}": {
       "get": {
         "description": "Fetch a proof record by backend and hash.",
         "parameters": [
@@ -14342,7 +14342,7 @@
         ]
       }
     },
-    "/v1/zk/proofs": {
+    "/v2/zk/proofs": {
       "get": {
         "description": "List stored proofs.",
         "responses": {
@@ -14363,7 +14363,7 @@
         ]
       }
     },
-    "/v1/zk/proofs/count": {
+    "/v2/zk/proofs/count": {
       "get": {
         "description": "Return total proof count.",
         "responses": {
@@ -14384,7 +14384,7 @@
         ]
       }
     },
-    "/v1/zk/roots": {
+    "/v2/zk/roots": {
       "post": {
         "description": "Fetch zero-knowledge root set information.",
         "requestBody": {
@@ -14415,7 +14415,7 @@
         ]
       }
     },
-    "/v1/zk/submit-proof": {
+    "/v2/zk/submit-proof": {
       "post": {
         "description": "Submit a proof for verification and recording.",
         "requestBody": {
@@ -14446,7 +14446,7 @@
         ]
       }
     },
-    "/v1/zk/verify": {
+    "/v2/zk/verify": {
       "post": {
         "description": "Verify a zero-knowledge proof envelope.",
         "requestBody": {
@@ -14477,7 +14477,7 @@
         ]
       }
     },
-    "/v1/zk/vk": {
+    "/v2/zk/vk": {
       "get": {
         "description": "List registered verification keys.",
         "responses": {
@@ -14498,7 +14498,7 @@
         ]
       }
     },
-    "/v1/zk/vk/register": {
+    "/v2/zk/vk/register": {
       "post": {
         "description": "Register a verification key for a ZK backend.",
         "requestBody": {
@@ -14529,7 +14529,7 @@
         ]
       }
     },
-    "/v1/zk/vk/update": {
+    "/v2/zk/vk/update": {
       "post": {
         "description": "Update a verification key entry.",
         "requestBody": {
@@ -14560,7 +14560,7 @@
         ]
       }
     },
-    "/v1/zk/vk/{backend}/{name}": {
+    "/v2/zk/vk/{backend}/{name}": {
       "get": {
         "description": "Fetch a verification key by backend and name.",
         "parameters": [
@@ -14601,7 +14601,7 @@
         ]
       }
     },
-    "/v1/zk/vote/tally": {
+    "/v2/zk/vote/tally": {
       "post": {
         "description": "Compute a ZK ballot tally from the provided payload.",
         "requestBody": {
@@ -14641,7 +14641,7 @@
   ],
   "tags": [
     {
-      "description": "Alias helper endpoints exposed under `/v1/aliases/*`.",
+      "description": "Alias helper endpoints exposed under `/v2/aliases/*`.",
       "name": "Aliases"
     },
     {
@@ -14653,23 +14653,23 @@
       "name": "Ledger"
     },
     {
-      "description": "Data availability commitments exposed under `/v1/da/*`.",
+      "description": "Data availability commitments exposed under `/v2/da/*`.",
       "name": "DataAvailability"
     },
     {
-      "description": "Consensus diagnostics and checkpoints under `/v1/sumeragi/*`.",
+      "description": "Consensus diagnostics and checkpoints under `/v2/sumeragi/*`.",
       "name": "Sumeragi"
     },
     {
-      "description": "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.",
+      "description": "Offline wallet, audit, and settlement endpoints under `/v2/offline/*`.",
       "name": "Offline"
     },
     {
-      "description": "Bridge finality surfaces exposed under `/v1/bridge/*`.",
+      "description": "Bridge finality surfaces exposed under `/v2/bridge/*`.",
       "name": "Bridge"
     },
     {
-      "description": "Kaigi relay telemetry endpoints under `/v1/kaigi/*`.",
+      "description": "Kaigi relay telemetry endpoints under `/v2/kaigi/*`.",
       "name": "Kaigi"
     },
     {

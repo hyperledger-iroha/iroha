@@ -2279,7 +2279,7 @@ fn method_from_key(key: &str) -> Option<Method> {
 fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bool) -> bool {
     if matches!(
         path,
-        "/events" | "/block/stream" | "/p2p" | "/v1/connect/ws" | "/v1/mcp"
+        "/events" | "/block/stream" | "/p2p" | "/v2/connect/ws" | "/v2/mcp"
     ) {
         return true;
     }
@@ -2299,7 +2299,7 @@ fn should_skip_operation(path: &str, operation: &Map, expose_operator_routes: bo
                         .filter_map(Value::as_str)
                         .any(|tag| tag == "OperatorAuth")
                 });
-        if has_operator_tag || path.starts_with("/v1/operator/") {
+        if has_operator_tag || path.starts_with("/v2/operator/") {
             return true;
         }
     }
@@ -2363,7 +2363,7 @@ async fn dispatch_connect_session_create(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/connect/session",
+        "/v2/connect/session",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -2494,7 +2494,7 @@ async fn dispatch_connect_session_delete(
     arguments: &Map,
 ) -> Result<Value, String> {
     let sid = extract_connect_sid_argument(arguments)?;
-    let mut path = String::from("/v1/connect/session/");
+    let mut path = String::from("/v2/connect/session/");
     path.push_str(&urlencoding::encode(sid));
     dispatch_route(
         app,
@@ -2521,7 +2521,7 @@ async fn dispatch_connect_status(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/connect/status",
+        "/v2/connect/status",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2584,7 +2584,7 @@ async fn dispatch_iroha_parameters_get(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/parameters",
+        "/v2/parameters",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2605,7 +2605,7 @@ async fn dispatch_iroha_node_capabilities(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/node/capabilities",
+        "/v2/node/capabilities",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2626,7 +2626,7 @@ async fn dispatch_iroha_time_now(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/time/now",
+        "/v2/time/now",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2647,7 +2647,7 @@ async fn dispatch_iroha_time_status(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/time/status",
+        "/v2/time/status",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2668,7 +2668,7 @@ async fn dispatch_iroha_api_versions(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/api/versions",
+        "/v2/api/versions",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2687,7 +2687,7 @@ async fn dispatch_iroha_sumeragi_commit_certificates(
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
     let route = append_query(
-        "/v1/sumeragi/commit-certificates".to_owned(),
+        "/v2/sumeragi/commit-certificates".to_owned(),
         query.as_ref(),
     )?;
     dispatch_route(
@@ -2715,7 +2715,7 @@ async fn dispatch_iroha_sumeragi_validator_sets_list(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/validator-sets",
+        "/v2/sumeragi/validator-sets",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2736,7 +2736,7 @@ async fn dispatch_iroha_sumeragi_validator_sets_get(
     let mut path_args = Map::new();
     path_args.insert("height".into(), Value::String(height));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/validator-sets/{height}", Some(&path_value))?;
+    let route = fill_path_template("/v2/sumeragi/validator-sets/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -2762,7 +2762,7 @@ async fn dispatch_iroha_sumeragi_rbc(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/rbc",
+        "/v2/sumeragi/rbc",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2783,7 +2783,7 @@ async fn dispatch_iroha_sumeragi_pacemaker(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/pacemaker",
+        "/v2/sumeragi/pacemaker",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2804,7 +2804,7 @@ async fn dispatch_iroha_sumeragi_phases(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/phases",
+        "/v2/sumeragi/phases",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2825,7 +2825,7 @@ async fn dispatch_iroha_sumeragi_params(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/params",
+        "/v2/sumeragi/params",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2846,7 +2846,7 @@ async fn dispatch_iroha_sumeragi_status(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/status",
+        "/v2/sumeragi/status",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2867,7 +2867,7 @@ async fn dispatch_iroha_sumeragi_leader(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/leader",
+        "/v2/sumeragi/leader",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2888,7 +2888,7 @@ async fn dispatch_iroha_sumeragi_qc(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/qc",
+        "/v2/sumeragi/qc",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2909,7 +2909,7 @@ async fn dispatch_iroha_sumeragi_checkpoints(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/checkpoints",
+        "/v2/sumeragi/checkpoints",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2930,7 +2930,7 @@ async fn dispatch_iroha_sumeragi_consensus_keys(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/consensus-keys",
+        "/v2/sumeragi/consensus-keys",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2951,7 +2951,7 @@ async fn dispatch_iroha_sumeragi_bls_keys(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/bls_keys",
+        "/v2/sumeragi/bls_keys",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2972,7 +2972,7 @@ async fn dispatch_iroha_da_proof_policies(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/da/proof_policies",
+        "/v2/da/proof_policies",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -2993,7 +2993,7 @@ async fn dispatch_iroha_sumeragi_key_lifecycle(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/key-lifecycle",
+        "/v2/sumeragi/key-lifecycle",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3014,7 +3014,7 @@ async fn dispatch_iroha_sumeragi_telemetry(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/telemetry",
+        "/v2/sumeragi/telemetry",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3035,7 +3035,7 @@ async fn dispatch_iroha_sumeragi_rbc_sessions(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/rbc/sessions",
+        "/v2/sumeragi/rbc/sessions",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3056,7 +3056,7 @@ async fn dispatch_iroha_sumeragi_commit_qc_get(
     let mut path_args = Map::new();
     path_args.insert("hash".into(), Value::String(hash));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/commit_qc/{hash}", Some(&path_value))?;
+    let route = fill_path_template("/v2/sumeragi/commit_qc/{hash}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3082,7 +3082,7 @@ async fn dispatch_iroha_sumeragi_collectors(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/collectors",
+        "/v2/sumeragi/collectors",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3103,7 +3103,7 @@ async fn dispatch_iroha_sumeragi_evidence_count(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/evidence/count",
+        "/v2/sumeragi/evidence/count",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3121,7 +3121,7 @@ async fn dispatch_iroha_sumeragi_evidence_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/sumeragi/evidence".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/sumeragi/evidence".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3149,7 +3149,7 @@ async fn dispatch_iroha_sumeragi_evidence_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/sumeragi/evidence/submit",
+        "/v2/sumeragi/evidence/submit",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3170,7 +3170,7 @@ async fn dispatch_iroha_sumeragi_new_view(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/new_view/json",
+        "/v2/sumeragi/new_view/json",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3194,7 +3194,7 @@ async fn dispatch_iroha_sumeragi_rbc_delivered(
     path_args.insert("view".into(), Value::String(view));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/sumeragi/rbc/delivered/{height}/{view}",
+        "/v2/sumeragi/rbc/delivered/{height}/{view}",
         Some(&path_value),
     )?;
     dispatch_route(
@@ -3222,7 +3222,7 @@ async fn dispatch_iroha_sumeragi_vrf_penalties(
     let mut path_args = Map::new();
     path_args.insert("epoch".into(), Value::String(epoch));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/vrf/penalties/{epoch}", Some(&path_value))?;
+    let route = fill_path_template("/v2/sumeragi/vrf/penalties/{epoch}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3248,7 +3248,7 @@ async fn dispatch_iroha_sumeragi_vrf_epoch(
     let mut path_args = Map::new();
     path_args.insert("epoch".into(), Value::String(epoch));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/vrf/epoch/{epoch}", Some(&path_value))?;
+    let route = fill_path_template("/v2/sumeragi/vrf/epoch/{epoch}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3274,7 +3274,7 @@ async fn dispatch_iroha_sumeragi_vrf_commit(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/vrf/commit",
+        "/v2/sumeragi/vrf/commit",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3295,7 +3295,7 @@ async fn dispatch_iroha_sumeragi_vrf_reveal(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/sumeragi/vrf/reveal",
+        "/v2/sumeragi/vrf/reveal",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3313,7 +3313,7 @@ async fn dispatch_iroha_sumeragi_rbc_sample(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/sumeragi/rbc/sample".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/sumeragi/rbc/sample".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3341,7 +3341,7 @@ async fn dispatch_iroha_da_ingest(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/ingest",
+        "/v2/da/ingest",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3362,7 +3362,7 @@ async fn dispatch_iroha_da_proof_policy_snapshot(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/da/proof_policy_snapshot",
+        "/v2/da/proof_policy_snapshot",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3383,7 +3383,7 @@ async fn dispatch_iroha_da_manifests_get(
     let mut path_args = Map::new();
     path_args.insert("ticket".into(), Value::String(ticket));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/da/manifests/{ticket}", Some(&path_value))?;
+    let route = fill_path_template("/v2/da/manifests/{ticket}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3411,7 +3411,7 @@ async fn dispatch_iroha_da_commitments_list(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/commitments",
+        "/v2/da/commitments",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3434,7 +3434,7 @@ async fn dispatch_iroha_da_commitments_prove(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/commitments/prove",
+        "/v2/da/commitments/prove",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3457,7 +3457,7 @@ async fn dispatch_iroha_da_commitments_verify(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/commitments/verify",
+        "/v2/da/commitments/verify",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3480,7 +3480,7 @@ async fn dispatch_iroha_da_pin_intents_list(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents",
+        "/v2/da/pin_intents",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3503,7 +3503,7 @@ async fn dispatch_iroha_da_pin_intents_prove(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents/prove",
+        "/v2/da/pin_intents/prove",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3526,7 +3526,7 @@ async fn dispatch_iroha_da_pin_intents_verify(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/da/pin_intents/verify",
+        "/v2/da/pin_intents/verify",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3547,7 +3547,7 @@ async fn dispatch_iroha_runtime_abi_active(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/runtime/abi/active",
+        "/v2/runtime/abi/active",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3568,7 +3568,7 @@ async fn dispatch_iroha_runtime_abi_hash(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/runtime/abi/hash",
+        "/v2/runtime/abi/hash",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3589,7 +3589,7 @@ async fn dispatch_iroha_runtime_metrics(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/runtime/metrics",
+        "/v2/runtime/metrics",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3610,7 +3610,7 @@ async fn dispatch_iroha_runtime_upgrades_list(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/runtime/upgrades",
+        "/v2/runtime/upgrades",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3633,7 +3633,7 @@ async fn dispatch_iroha_runtime_upgrades_propose(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/runtime/upgrades/propose",
+        "/v2/runtime/upgrades/propose",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3654,7 +3654,7 @@ async fn dispatch_iroha_runtime_upgrades_activate(
         app,
         inbound_headers,
         arguments,
-        "/v1/runtime/upgrades/activate/{id}",
+        "/v2/runtime/upgrades/activate/{id}",
     )
     .await
 }
@@ -3668,7 +3668,7 @@ async fn dispatch_iroha_runtime_upgrades_cancel(
         app,
         inbound_headers,
         arguments,
-        "/v1/runtime/upgrades/cancel/{id}",
+        "/v2/runtime/upgrades/cancel/{id}",
     )
     .await
 }
@@ -3711,7 +3711,7 @@ async fn dispatch_iroha_ledger_headers(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/ledger/headers".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/ledger/headers".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3737,7 +3737,7 @@ async fn dispatch_iroha_ledger_state_root(
     let mut path_args = Map::new();
     path_args.insert("height".into(), Value::String(height));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/ledger/state/{height}", Some(&path_value))?;
+    let route = fill_path_template("/v2/ledger/state/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3763,7 +3763,7 @@ async fn dispatch_iroha_ledger_state_proof(
     let mut path_args = Map::new();
     path_args.insert("height".into(), Value::String(height));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/ledger/state-proof/{height}", Some(&path_value))?;
+    let route = fill_path_template("/v2/ledger/state-proof/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3792,7 +3792,7 @@ async fn dispatch_iroha_ledger_block_proof(
     path_args.insert("entry_hash".into(), Value::String(entry_hash));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/ledger/block/{height}/proof/{entry_hash}",
+        "/v2/ledger/block/{height}/proof/{entry_hash}",
         Some(&path_value),
     )?;
     dispatch_route(
@@ -3820,7 +3820,7 @@ async fn dispatch_iroha_bridge_finality_proof(
     let mut path_args = Map::new();
     path_args.insert("height".into(), Value::String(height));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/bridge/finality/{height}", Some(&path_value))?;
+    let route = fill_path_template("/v2/bridge/finality/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3846,7 +3846,7 @@ async fn dispatch_iroha_bridge_finality_bundle(
     let mut path_args = Map::new();
     path_args.insert("height".into(), Value::String(height));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/bridge/finality/bundle/{height}", Some(&path_value))?;
+    let route = fill_path_template("/v2/bridge/finality/bundle/{height}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3872,7 +3872,7 @@ async fn dispatch_iroha_proofs_get(
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(proof_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/proofs/{id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/proofs/{id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -3900,7 +3900,7 @@ async fn dispatch_iroha_proofs_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/proofs/query",
+        "/v2/proofs/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3921,7 +3921,7 @@ async fn dispatch_iroha_proofs_retention(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/proofs/retention",
+        "/v2/proofs/retention",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -3943,7 +3943,7 @@ async fn dispatch_iroha_gov_instances_list(
     path_args.insert("ns".into(), Value::String(namespace));
     let path_value = Value::Object(path_args);
     let query = collect_query_arguments(arguments, &["path", "headers", "accept"])?;
-    let route = fill_path_template("/v1/gov/instances/{ns}", Some(&path_value))?;
+    let route = fill_path_template("/v2/gov/instances/{ns}", Some(&path_value))?;
     let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
@@ -3972,7 +3972,7 @@ async fn dispatch_iroha_gov_proposals_deploy_contract(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/proposals/deploy-contract",
+        "/v2/gov/proposals/deploy-contract",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -3993,7 +3993,7 @@ async fn dispatch_iroha_gov_proposals_get(
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/proposals/{id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/gov/proposals/{id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4019,7 +4019,7 @@ async fn dispatch_iroha_gov_locks_get(
     let mut path_args = Map::new();
     path_args.insert("rid".into(), Value::String(rid));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/locks/{rid}", Some(&path_value))?;
+    let route = fill_path_template("/v2/gov/locks/{rid}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4045,7 +4045,7 @@ async fn dispatch_iroha_gov_referenda_get(
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/referenda/{id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/gov/referenda/{id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4071,7 +4071,7 @@ async fn dispatch_iroha_gov_tally_get(
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/gov/tally/{id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/gov/tally/{id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4099,7 +4099,7 @@ async fn dispatch_iroha_gov_ballots_zk(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/ballots/zk",
+        "/v2/gov/ballots/zk",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4122,7 +4122,7 @@ async fn dispatch_iroha_gov_ballots_zk_v1(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/ballots/zk-v1",
+        "/v2/gov/ballots/zk-v1",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4145,7 +4145,7 @@ async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "/v2/gov/ballots/zk-v1/ballot-proof",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4168,7 +4168,7 @@ async fn dispatch_iroha_gov_ballots_plain(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/ballots/plain",
+        "/v2/gov/ballots/plain",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4189,7 +4189,7 @@ async fn dispatch_iroha_gov_protected_namespaces_list(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/gov/protected-namespaces",
+        "/v2/gov/protected-namespaces",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4212,7 +4212,7 @@ async fn dispatch_iroha_gov_protected_namespaces_update(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/protected-namespaces",
+        "/v2/gov/protected-namespaces",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4233,7 +4233,7 @@ async fn dispatch_iroha_gov_unlocks_stats(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/gov/unlocks/stats",
+        "/v2/gov/unlocks/stats",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4254,7 +4254,7 @@ async fn dispatch_iroha_gov_council_current(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/gov/council/current",
+        "/v2/gov/council/current",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4277,7 +4277,7 @@ async fn dispatch_iroha_gov_council_persist(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/council/persist",
+        "/v2/gov/council/persist",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4300,7 +4300,7 @@ async fn dispatch_iroha_gov_council_replace(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/council/replace",
+        "/v2/gov/council/replace",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4321,7 +4321,7 @@ async fn dispatch_iroha_gov_council_audit(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/gov/council/audit",
+        "/v2/gov/council/audit",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4344,7 +4344,7 @@ async fn dispatch_iroha_gov_council_derive_vrf(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/council/derive-vrf",
+        "/v2/gov/council/derive-vrf",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4367,7 +4367,7 @@ async fn dispatch_iroha_gov_enact(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/enact",
+        "/v2/gov/enact",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4390,7 +4390,7 @@ async fn dispatch_iroha_gov_finalize(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/gov/finalize",
+        "/v2/gov/finalize",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4413,7 +4413,7 @@ async fn dispatch_iroha_aliases_resolve(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/aliases/resolve",
+        "/v2/aliases/resolve",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4436,7 +4436,7 @@ async fn dispatch_iroha_aliases_resolve_index(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/aliases/resolve_index",
+        "/v2/aliases/resolve_index",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4453,7 +4453,7 @@ async fn dispatch_iroha_contracts_code_register(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/code").await
+    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v2/contracts/code").await
 }
 
 async fn dispatch_iroha_contracts_code_get(
@@ -4465,7 +4465,7 @@ async fn dispatch_iroha_contracts_code_get(
     let mut path_args = Map::new();
     path_args.insert("code_hash".into(), Value::String(code_hash));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/contracts/code/{code_hash}", Some(&path_value))?;
+    let route = fill_path_template("/v2/contracts/code/{code_hash}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4491,7 +4491,7 @@ async fn dispatch_iroha_contracts_code_bytes_get(
     let mut path_args = Map::new();
     path_args.insert("code_hash".into(), Value::String(code_hash));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/contracts/code-bytes/{code_hash}", Some(&path_value))?;
+    let route = fill_path_template("/v2/contracts/code-bytes/{code_hash}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4513,7 +4513,7 @@ async fn dispatch_iroha_contracts_deploy(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/deploy").await
+    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v2/contracts/deploy").await
 }
 
 async fn dispatch_iroha_contracts_instance_create(
@@ -4521,7 +4521,7 @@ async fn dispatch_iroha_contracts_instance_create(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/instance").await
+    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v2/contracts/instance").await
 }
 
 async fn dispatch_iroha_contracts_instance_activate(
@@ -4533,7 +4533,7 @@ async fn dispatch_iroha_contracts_instance_activate(
         app,
         inbound_headers,
         arguments,
-        "/v1/contracts/instance/activate",
+        "/v2/contracts/instance/activate",
     )
     .await
 }
@@ -4548,7 +4548,7 @@ async fn dispatch_iroha_contracts_instances_list(
     path_args.insert("ns".into(), Value::String(namespace));
     let path_value = Value::Object(path_args);
     let query = collect_query_arguments(arguments, &["path", "headers", "accept"])?;
-    let route = fill_path_template("/v1/contracts/instances/{ns}", Some(&path_value))?;
+    let route = fill_path_template("/v2/contracts/instances/{ns}", Some(&path_value))?;
     let route = append_query(route, query.as_ref())?;
     dispatch_route(
         app,
@@ -4571,7 +4571,7 @@ async fn dispatch_iroha_contracts_call(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/call").await
+    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v2/contracts/call").await
 }
 
 async fn dispatch_iroha_contracts_call_and_wait(
@@ -4615,7 +4615,7 @@ async fn dispatch_iroha_contracts_state_get(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/contracts/state".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/contracts/state".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4662,7 +4662,7 @@ async fn dispatch_iroha_accounts_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/accounts".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/accounts".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4688,7 +4688,7 @@ async fn dispatch_iroha_accounts_get(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/accounts/{account_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/accounts/{account_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4714,7 +4714,7 @@ async fn dispatch_iroha_accounts_qr(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/accounts/{account_id}/qr", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/accounts/{account_id}/qr", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4742,7 +4742,7 @@ async fn dispatch_iroha_accounts_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/accounts/query",
+        "/v2/accounts/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4765,7 +4765,7 @@ async fn dispatch_iroha_accounts_onboard(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/accounts/onboard",
+        "/v2/accounts/onboard",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4786,7 +4786,7 @@ async fn dispatch_iroha_account_transactions(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/transactions", Some(&path_value))?;
+    let route = fill_path_template("/v2/accounts/{account_id}/transactions", Some(&path_value))?;
     let query = collect_query_arguments(
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
@@ -4818,7 +4818,7 @@ async fn dispatch_iroha_account_transactions_query(
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/accounts/{account_id}/transactions/query",
+        "/v2/accounts/{account_id}/transactions/query",
         Some(&path_value),
     )?;
     let body = build_query_envelope_body(arguments)?;
@@ -4848,7 +4848,7 @@ async fn dispatch_iroha_account_assets(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/assets", Some(&path_value))?;
+    let route = fill_path_template("/v2/accounts/{account_id}/assets", Some(&path_value))?;
     let query = collect_query_arguments(
         arguments,
         &["path", "account_id", "query", "headers", "accept"],
@@ -4879,7 +4879,7 @@ async fn dispatch_iroha_account_assets_query(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/assets/query", Some(&path_value))?;
+    let route = fill_path_template("/v2/accounts/{account_id}/assets/query", Some(&path_value))?;
     let body = build_query_envelope_body(arguments)?;
     let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
     dispatch_route(
@@ -4907,7 +4907,7 @@ async fn dispatch_iroha_account_permissions(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{account_id}/permissions", Some(&path_value))?;
+    let route = fill_path_template("/v2/accounts/{account_id}/permissions", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4933,7 +4933,7 @@ async fn dispatch_iroha_account_portfolio(
     let mut path_args = Map::new();
     path_args.insert("uaid".into(), Value::String(uaid));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/accounts/{uaid}/portfolio", Some(&path_value))?;
+    let route = fill_path_template("/v2/accounts/{uaid}/portfolio", Some(&path_value))?;
     let query =
         collect_query_arguments(arguments, &["path", "uaid", "query", "headers", "accept"])?;
     let route = append_query(route, query.as_ref())?;
@@ -4959,7 +4959,7 @@ async fn dispatch_iroha_domains_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/domains".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/domains".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4985,7 +4985,7 @@ async fn dispatch_iroha_domains_get(
     let mut path_args = Map::new();
     path_args.insert("domain_id".into(), Value::String(domain_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/domains/{domain_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/domains/{domain_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5013,7 +5013,7 @@ async fn dispatch_iroha_domains_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/domains/query",
+        "/v2/domains/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5031,7 +5031,7 @@ async fn dispatch_iroha_subscriptions_plans_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/subscriptions/plans".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/subscriptions/plans".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5059,7 +5059,7 @@ async fn dispatch_iroha_subscriptions_plans_create(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/subscriptions/plans",
+        "/v2/subscriptions/plans",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5077,7 +5077,7 @@ async fn dispatch_iroha_subscriptions_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/subscriptions".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/subscriptions".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5105,7 +5105,7 @@ async fn dispatch_iroha_subscriptions_create(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/subscriptions",
+        "/v2/subscriptions",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5126,7 +5126,7 @@ async fn dispatch_iroha_subscriptions_get(
     let mut path_args = Map::new();
     path_args.insert("subscription_id".into(), Value::String(subscription_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/subscriptions/{subscription_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/subscriptions/{subscription_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5202,7 +5202,7 @@ async fn dispatch_iroha_subscription_action(
     path_args.insert("subscription_id".into(), Value::String(subscription_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        format!("/v1/subscriptions/{{subscription_id}}/{action}").as_str(),
+        format!("/v2/subscriptions/{{subscription_id}}/{action}").as_str(),
         Some(&path_value),
     )?;
     let body = build_object_body_or_default(arguments)?;
@@ -5229,7 +5229,7 @@ async fn dispatch_iroha_asset_definitions(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/assets/definitions".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/assets/definitions".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5256,7 +5256,7 @@ async fn dispatch_iroha_asset_definitions_get(
     path_args.insert("definition_id".into(), Value::String(definition_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/explorer/asset-definitions/{definition_id}",
+        "/v2/explorer/asset-definitions/{definition_id}",
         Some(&path_value),
     )?;
     dispatch_route(
@@ -5286,7 +5286,7 @@ async fn dispatch_iroha_asset_definitions_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/assets/definitions/query",
+        "/v2/assets/definitions/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5307,7 +5307,7 @@ async fn dispatch_iroha_asset_holders(
     let mut path_args = Map::new();
     path_args.insert("definition_id".into(), Value::String(definition_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/assets/{definition_id}/holders", Some(&path_value))?;
+    let route = fill_path_template("/v2/assets/{definition_id}/holders", Some(&path_value))?;
     let query = collect_query_arguments(
         arguments,
         &["path", "definition_id", "query", "headers", "accept"],
@@ -5339,7 +5339,7 @@ async fn dispatch_iroha_asset_holders_query(
     path_args.insert("definition_id".into(), Value::String(definition_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/assets/{definition_id}/holders/query",
+        "/v2/assets/{definition_id}/holders/query",
         Some(&path_value),
     )?;
     let body = build_query_envelope_body(arguments)?;
@@ -5366,7 +5366,7 @@ async fn dispatch_iroha_assets_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/assets".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/explorer/assets".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5392,7 +5392,7 @@ async fn dispatch_iroha_assets_get(
     let mut path_args = Map::new();
     path_args.insert("asset_id".into(), Value::String(asset_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/assets/{asset_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/assets/{asset_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5415,7 +5415,7 @@ async fn dispatch_iroha_nfts_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/nfts".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/explorer/nfts".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5441,7 +5441,7 @@ async fn dispatch_iroha_nfts_chain_list(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/nfts",
+        "/v2/nfts",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -5462,7 +5462,7 @@ async fn dispatch_iroha_nfts_get(
     let mut path_args = Map::new();
     path_args.insert("nft_id".into(), Value::String(nft_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/nfts/{nft_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/nfts/{nft_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5490,7 +5490,7 @@ async fn dispatch_iroha_nfts_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/nfts/query",
+        "/v2/nfts/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5508,7 +5508,7 @@ async fn dispatch_iroha_offline_transfers_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/transfers".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/transfers".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5534,7 +5534,7 @@ async fn dispatch_iroha_offline_transfers_get(
     let mut path_args = Map::new();
     path_args.insert("bundle_id_hex".into(), Value::String(bundle_id_hex));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/offline/transfers/{bundle_id_hex}", Some(&path_value))?;
+    let route = fill_path_template("/v2/offline/transfers/{bundle_id_hex}", Some(&path_value))?;
     let query = collect_query_arguments(arguments, &["query", "headers", "accept", "path"])?;
     let route = append_query(route, query.as_ref())?;
     dispatch_route(
@@ -5564,7 +5564,7 @@ async fn dispatch_iroha_offline_transfers_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/transfers/query",
+        "/v2/offline/transfers/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5582,7 +5582,7 @@ async fn dispatch_iroha_offline_settlements_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/settlements".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/settlements".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5608,7 +5608,7 @@ async fn dispatch_iroha_offline_settlements_get(
     let mut path_args = Map::new();
     path_args.insert("bundle_id_hex".into(), Value::String(bundle_id_hex));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/offline/settlements/{bundle_id_hex}", Some(&path_value))?;
+    let route = fill_path_template("/v2/offline/settlements/{bundle_id_hex}", Some(&path_value))?;
     let query = collect_query_arguments(arguments, &["query", "headers", "accept", "path"])?;
     let route = append_query(route, query.as_ref())?;
     dispatch_route(
@@ -5638,7 +5638,7 @@ async fn dispatch_iroha_offline_settlements_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/settlements/query",
+        "/v2/offline/settlements/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5661,7 +5661,7 @@ async fn dispatch_iroha_offline_settlements_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/settlements",
+        "/v2/offline/settlements",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5679,7 +5679,7 @@ async fn dispatch_iroha_offline_certificates_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/certificates".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/certificates".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -5709,7 +5709,7 @@ async fn dispatch_iroha_offline_certificates_get(
     );
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/offline/certificates/{certificate_id_hex}",
+        "/v2/offline/certificates/{certificate_id_hex}",
         Some(&path_value),
     )?;
     let query = collect_query_arguments(
@@ -5752,7 +5752,7 @@ async fn dispatch_iroha_offline_certificates_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/certificates/query",
+        "/v2/offline/certificates/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5775,7 +5775,7 @@ async fn dispatch_iroha_offline_certificates_issue(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/certificates/issue",
+        "/v2/offline/certificates/issue",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5800,7 +5800,7 @@ async fn dispatch_iroha_offline_certificates_renew(
     );
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/offline/certificates/{certificate_id_hex}/renew",
+        "/v2/offline/certificates/{certificate_id_hex}/renew",
         Some(&path_value),
     )?;
     let body = build_object_body_or_flat_shortcuts(
@@ -5845,7 +5845,7 @@ async fn dispatch_iroha_offline_certificates_renew_issue(
     );
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/offline/certificates/{certificate_id_hex}/renew/issue",
+        "/v2/offline/certificates/{certificate_id_hex}/renew/issue",
         Some(&path_value),
     )?;
     let body = build_object_body_or_flat_shortcuts(
@@ -5888,7 +5888,7 @@ async fn dispatch_iroha_offline_certificates_revoke(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/certificates/revoke",
+        "/v2/offline/certificates/revoke",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5913,7 +5913,7 @@ async fn dispatch_iroha_offline_allowances_get(
     );
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/offline/allowances/{certificate_id_hex}",
+        "/v2/offline/allowances/{certificate_id_hex}",
         Some(&path_value),
     )?;
     let query = collect_query_arguments(
@@ -5956,7 +5956,7 @@ async fn dispatch_iroha_offline_allowances_issue(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/allowances",
+        "/v2/offline/allowances",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -5981,7 +5981,7 @@ async fn dispatch_iroha_offline_allowances_renew(
     );
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/offline/allowances/{certificate_id_hex}/renew",
+        "/v2/offline/allowances/{certificate_id_hex}/renew",
         Some(&path_value),
     )?;
     let body = build_object_body_or_flat_shortcuts(
@@ -6019,7 +6019,7 @@ async fn dispatch_iroha_offline_allowances_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/allowances".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/allowances".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6047,7 +6047,7 @@ async fn dispatch_iroha_offline_allowances_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/allowances/query",
+        "/v2/offline/allowances/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6065,7 +6065,7 @@ async fn dispatch_iroha_offline_receipts_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/receipts".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/receipts".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6093,7 +6093,7 @@ async fn dispatch_iroha_offline_receipts_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/receipts/query",
+        "/v2/offline/receipts/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6111,7 +6111,7 @@ async fn dispatch_iroha_offline_revocations_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/revocations".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/revocations".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6139,7 +6139,7 @@ async fn dispatch_iroha_offline_revocations_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/revocations/query",
+        "/v2/offline/revocations/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6162,7 +6162,7 @@ async fn dispatch_iroha_offline_transfers_proof(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/transfers/proof",
+        "/v2/offline/transfers/proof",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6185,7 +6185,7 @@ async fn dispatch_iroha_offline_spend_receipts_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/spend-receipts",
+        "/v2/offline/spend-receipts",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6206,7 +6206,7 @@ async fn dispatch_iroha_offline_state(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/offline/state",
+        "/v2/offline/state",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -6241,7 +6241,7 @@ async fn dispatch_iroha_offline_bundle_proof_status(
 
     let query_value = Value::Object(query);
     let route = append_query(
-        "/v1/offline/bundle/proof_status".to_owned(),
+        "/v2/offline/bundle/proof_status".to_owned(),
         Some(&query_value),
     )?;
     dispatch_route(
@@ -6269,7 +6269,7 @@ async fn dispatch_iroha_offline_rejections_list(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/offline/rejections",
+        "/v2/offline/rejections",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -6287,7 +6287,7 @@ async fn dispatch_iroha_offline_summaries_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/offline/summaries".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/offline/summaries".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6315,7 +6315,7 @@ async fn dispatch_iroha_offline_summaries_query(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/offline/summaries/query",
+        "/v2/offline/summaries/query",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -6333,7 +6333,7 @@ async fn dispatch_iroha_transactions_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/transactions".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/explorer/transactions".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6359,7 +6359,7 @@ async fn dispatch_iroha_transactions_get(
     let mut path_args = Map::new();
     path_args.insert("hash".into(), Value::String(hash));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/transactions/{hash}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/transactions/{hash}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6382,7 +6382,7 @@ async fn dispatch_iroha_instructions_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/instructions".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/explorer/instructions".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6411,7 +6411,7 @@ async fn dispatch_iroha_instructions_get(
     path_args.insert("index".into(), Value::String(index));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(
-        "/v1/explorer/instructions/{hash}/{index}",
+        "/v2/explorer/instructions/{hash}/{index}",
         Some(&path_value),
     )?;
     dispatch_route(
@@ -6436,7 +6436,7 @@ async fn dispatch_iroha_blocks_list(
     arguments: &Map,
 ) -> Result<Value, String> {
     let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/explorer/blocks".to_owned(), query.as_ref())?;
+    let route = append_query("/v2/explorer/blocks".to_owned(), query.as_ref())?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6462,7 +6462,7 @@ async fn dispatch_iroha_blocks_get(
     let mut path_args = Map::new();
     path_args.insert("identifier".into(), Value::String(identifier));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/blocks/{identifier}", Some(&path_value))?;
+    let route = fill_path_template("/v2/explorer/blocks/{identifier}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6615,7 +6615,7 @@ async fn dispatch_iroha_iso20022_pacs008_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/iso20022/pacs008",
+        "/v2/iso20022/pacs008",
         arguments.get("headers"),
         body,
         content_type,
@@ -6637,7 +6637,7 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/iso20022/pacs009",
+        "/v2/iso20022/pacs009",
         arguments.get("headers"),
         body,
         content_type,
@@ -6658,7 +6658,7 @@ async fn dispatch_iroha_iso20022_status_get(
     let mut path_args = Map::new();
     path_args.insert("msg_id".into(), Value::String(msg_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/iso20022/status/{msg_id}", Some(&path_value))?;
+    let route = fill_path_template("/v2/iso20022/status/{msg_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -6871,7 +6871,7 @@ async fn dispatch_iroha_transactions_status(
 
     let query_value = Value::Object(query);
     let route = append_query(
-        "/v1/pipeline/transactions/status".to_owned(),
+        "/v2/pipeline/transactions/status".to_owned(),
         Some(&query_value),
     )?;
     dispatch_route(
@@ -7993,7 +7993,7 @@ fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Resu
         .unwrap_or_else(|| infer_node_url(inbound_headers));
 
     let mut url = parse_node_url(&node)?;
-    url.set_path("/v1/connect/ws");
+    url.set_path("/v2/connect/ws");
     {
         let mut query = url.query_pairs_mut();
         query.clear();
@@ -8058,7 +8058,7 @@ fn connect_ws_ticket_tool() -> ToolSpec {
         description: "Build Connect WebSocket join metadata (URL + auth headers/protocol token)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/connect/ws".to_owned(),
+        path_template: "/v2/connect/ws".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8097,7 +8097,7 @@ fn connect_session_create_tool() -> ToolSpec {
         name: "connect.session.create".to_owned(),
         description: "Create an Iroha Connect session and return app/wallet tokens.".to_owned(),
         method: Method::POST,
-        path_template: "/v1/connect/session".to_owned(),
+        path_template: "/v2/connect/session".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8138,7 +8138,7 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
         name: "connect.session.create_and_ticket".to_owned(),
         description: "Create an Iroha Connect session and immediately build WebSocket join metadata for a selected role.".to_owned(),
         method: Method::POST,
-        path_template: "/v1/connect/session".to_owned(),
+        path_template: "/v2/connect/session".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8189,7 +8189,7 @@ fn connect_session_delete_tool() -> ToolSpec {
         name: "connect.session.delete".to_owned(),
         description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
         method: Method::DELETE,
-        path_template: "/v1/connect/session/{sid}".to_owned(),
+        path_template: "/v2/connect/session/{sid}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8234,7 +8234,7 @@ fn connect_status_tool() -> ToolSpec {
         name: "connect.status".to_owned(),
         description: "Get Iroha Connect relay/session status.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/connect/status".to_owned(),
+        path_template: "/v2/connect/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8327,9 +8327,9 @@ fn iroha_status_tool() -> ToolSpec {
 fn iroha_parameters_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.parameters.get".to_owned(),
-        description: "Get node parameters snapshot (`/v1/parameters`).".to_owned(),
+        description: "Get node parameters snapshot (`/v2/parameters`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/parameters".to_owned(),
+        path_template: "/v2/parameters".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8347,9 +8347,9 @@ fn iroha_parameters_get_tool() -> ToolSpec {
 fn iroha_node_capabilities_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.capabilities".to_owned(),
-        description: "Get node capability metadata (`/v1/node/capabilities`).".to_owned(),
+        description: "Get node capability metadata (`/v2/node/capabilities`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/node/capabilities".to_owned(),
+        path_template: "/v2/node/capabilities".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8367,9 +8367,9 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
 fn iroha_time_now_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.now".to_owned(),
-        description: "Get node wall-clock snapshot (`/v1/time/now`).".to_owned(),
+        description: "Get node wall-clock snapshot (`/v2/time/now`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/time/now".to_owned(),
+        path_template: "/v2/time/now".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8387,9 +8387,9 @@ fn iroha_time_now_tool() -> ToolSpec {
 fn iroha_time_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.status".to_owned(),
-        description: "Get time synchronization status (`/v1/time/status`).".to_owned(),
+        description: "Get time synchronization status (`/v2/time/status`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/time/status".to_owned(),
+        path_template: "/v2/time/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8407,9 +8407,9 @@ fn iroha_time_status_tool() -> ToolSpec {
 fn iroha_api_versions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.api.versions".to_owned(),
-        description: "List supported Torii API versions (`/v1/api/versions`).".to_owned(),
+        description: "List supported Torii API versions (`/v2/api/versions`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/api/versions".to_owned(),
+        path_template: "/v2/api/versions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8428,10 +8428,10 @@ fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_certificates".to_owned(),
         description:
-            "List recent commit certificates (`/v1/sumeragi/commit-certificates`) with optional `from`/`limit` query shortcuts."
+            "List recent commit certificates (`/v2/sumeragi/commit-certificates`) with optional `from`/`limit` query shortcuts."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/commit-certificates".to_owned(),
+        path_template: "/v2/sumeragi/commit-certificates".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -8455,9 +8455,9 @@ fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
 fn iroha_sumeragi_validator_sets_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.validator_sets.list".to_owned(),
-        description: "List validator set snapshots (`/v1/sumeragi/validator-sets`).".to_owned(),
+        description: "List validator set snapshots (`/v2/sumeragi/validator-sets`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/validator-sets".to_owned(),
+        path_template: "/v2/sumeragi/validator-sets".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8475,9 +8475,9 @@ fn iroha_sumeragi_validator_sets_list_tool() -> ToolSpec {
 fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.validator_sets.get".to_owned(),
-        description: "Fetch validator set snapshot by height (`/v1/sumeragi/validator-sets/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
+        description: "Fetch validator set snapshot by height (`/v2/sumeragi/validator-sets/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/validator-sets/{height}".to_owned(),
+        path_template: "/v2/sumeragi/validator-sets/{height}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8511,9 +8511,9 @@ fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc".to_owned(),
-        description: "Fetch RBC status (`/v1/sumeragi/rbc`).".to_owned(),
+        description: "Fetch RBC status (`/v2/sumeragi/rbc`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/rbc".to_owned(),
+        path_template: "/v2/sumeragi/rbc".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8531,9 +8531,9 @@ fn iroha_sumeragi_rbc_tool() -> ToolSpec {
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.pacemaker".to_owned(),
-        description: "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).".to_owned(),
+        description: "Fetch pacemaker status (`/v2/sumeragi/pacemaker`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/pacemaker".to_owned(),
+        path_template: "/v2/sumeragi/pacemaker".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8551,9 +8551,9 @@ fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
 fn iroha_sumeragi_phases_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.phases".to_owned(),
-        description: "Fetch phase status (`/v1/sumeragi/phases`).".to_owned(),
+        description: "Fetch phase status (`/v2/sumeragi/phases`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/phases".to_owned(),
+        path_template: "/v2/sumeragi/phases".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8571,9 +8571,9 @@ fn iroha_sumeragi_phases_tool() -> ToolSpec {
 fn iroha_sumeragi_params_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.params".to_owned(),
-        description: "Fetch Sumeragi parameters (`/v1/sumeragi/params`).".to_owned(),
+        description: "Fetch Sumeragi parameters (`/v2/sumeragi/params`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/params".to_owned(),
+        path_template: "/v2/sumeragi/params".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8591,9 +8591,9 @@ fn iroha_sumeragi_params_tool() -> ToolSpec {
 fn iroha_sumeragi_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.status".to_owned(),
-        description: "Fetch Sumeragi status snapshot (`/v1/sumeragi/status`).".to_owned(),
+        description: "Fetch Sumeragi status snapshot (`/v2/sumeragi/status`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/status".to_owned(),
+        path_template: "/v2/sumeragi/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8611,9 +8611,9 @@ fn iroha_sumeragi_status_tool() -> ToolSpec {
 fn iroha_sumeragi_leader_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.leader".to_owned(),
-        description: "Fetch current Sumeragi leader info (`/v1/sumeragi/leader`).".to_owned(),
+        description: "Fetch current Sumeragi leader info (`/v2/sumeragi/leader`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/leader".to_owned(),
+        path_template: "/v2/sumeragi/leader".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8631,10 +8631,10 @@ fn iroha_sumeragi_leader_tool() -> ToolSpec {
 fn iroha_sumeragi_qc_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.qc".to_owned(),
-        description: "Fetch latest Sumeragi quorum-certificate summary (`/v1/sumeragi/qc`)."
+        description: "Fetch latest Sumeragi quorum-certificate summary (`/v2/sumeragi/qc`)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/qc".to_owned(),
+        path_template: "/v2/sumeragi/qc".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8652,9 +8652,9 @@ fn iroha_sumeragi_qc_tool() -> ToolSpec {
 fn iroha_sumeragi_checkpoints_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.checkpoints".to_owned(),
-        description: "Fetch Sumeragi checkpoint summary (`/v1/sumeragi/checkpoints`).".to_owned(),
+        description: "Fetch Sumeragi checkpoint summary (`/v2/sumeragi/checkpoints`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/checkpoints".to_owned(),
+        path_template: "/v2/sumeragi/checkpoints".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8672,10 +8672,10 @@ fn iroha_sumeragi_checkpoints_tool() -> ToolSpec {
 fn iroha_sumeragi_consensus_keys_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.consensus_keys".to_owned(),
-        description: "Fetch active Sumeragi consensus keys (`/v1/sumeragi/consensus-keys`)."
+        description: "Fetch active Sumeragi consensus keys (`/v2/sumeragi/consensus-keys`)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/consensus-keys".to_owned(),
+        path_template: "/v2/sumeragi/consensus-keys".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8693,9 +8693,9 @@ fn iroha_sumeragi_consensus_keys_tool() -> ToolSpec {
 fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.bls_keys".to_owned(),
-        description: "Fetch Sumeragi BLS key roster (`/v1/sumeragi/bls_keys`).".to_owned(),
+        description: "Fetch Sumeragi BLS key roster (`/v2/sumeragi/bls_keys`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/bls_keys".to_owned(),
+        path_template: "/v2/sumeragi/bls_keys".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8713,10 +8713,10 @@ fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
 fn iroha_sumeragi_key_lifecycle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.key_lifecycle".to_owned(),
-        description: "Fetch Sumeragi key lifecycle snapshots (`/v1/sumeragi/key-lifecycle`)."
+        description: "Fetch Sumeragi key lifecycle snapshots (`/v2/sumeragi/key-lifecycle`)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/key-lifecycle".to_owned(),
+        path_template: "/v2/sumeragi/key-lifecycle".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8734,9 +8734,9 @@ fn iroha_sumeragi_key_lifecycle_tool() -> ToolSpec {
 fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.telemetry".to_owned(),
-        description: "Fetch Sumeragi telemetry snapshot (`/v1/sumeragi/telemetry`).".to_owned(),
+        description: "Fetch Sumeragi telemetry snapshot (`/v2/sumeragi/telemetry`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/telemetry".to_owned(),
+        path_template: "/v2/sumeragi/telemetry".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8754,9 +8754,9 @@ fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sessions".to_owned(),
-        description: "List Sumeragi RBC sessions (`/v1/sumeragi/rbc/sessions`).".to_owned(),
+        description: "List Sumeragi RBC sessions (`/v2/sumeragi/rbc/sessions`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/sessions".to_owned(),
+        path_template: "/v2/sumeragi/rbc/sessions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8774,9 +8774,9 @@ fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
 fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_qc.get".to_owned(),
-        description: "Fetch Sumeragi commit QC by block hash (`/v1/sumeragi/commit_qc/{hash}`; `hash` shortcut supported).".to_owned(),
+        description: "Fetch Sumeragi commit QC by block hash (`/v2/sumeragi/commit_qc/{hash}`; `hash` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/commit_qc/{hash}".to_owned(),
+        path_template: "/v2/sumeragi/commit_qc/{hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8806,9 +8806,9 @@ fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
 fn iroha_sumeragi_collectors_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.collectors".to_owned(),
-        description: "Fetch Sumeragi collectors snapshot (`/v1/sumeragi/collectors`).".to_owned(),
+        description: "Fetch Sumeragi collectors snapshot (`/v2/sumeragi/collectors`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/collectors".to_owned(),
+        path_template: "/v2/sumeragi/collectors".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8826,9 +8826,9 @@ fn iroha_sumeragi_collectors_tool() -> ToolSpec {
 fn iroha_sumeragi_evidence_count_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.count".to_owned(),
-        description: "Fetch Sumeragi evidence count (`/v1/sumeragi/evidence/count`).".to_owned(),
+        description: "Fetch Sumeragi evidence count (`/v2/sumeragi/evidence/count`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/evidence/count".to_owned(),
+        path_template: "/v2/sumeragi/evidence/count".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8847,10 +8847,10 @@ fn iroha_sumeragi_evidence_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.list".to_owned(),
         description:
-            "List Sumeragi evidence entries (`/v1/sumeragi/evidence`) with optional query shortcuts."
+            "List Sumeragi evidence entries (`/v2/sumeragi/evidence`) with optional query shortcuts."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/evidence".to_owned(),
+        path_template: "/v2/sumeragi/evidence".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -8873,10 +8873,10 @@ fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.submit".to_owned(),
         description:
-            "Submit consensus evidence (`/v1/sumeragi/evidence/submit`); accepts raw `body` or flat top-level body shortcuts."
+            "Submit consensus evidence (`/v2/sumeragi/evidence/submit`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/sumeragi/evidence/submit".to_owned(),
+        path_template: "/v2/sumeragi/evidence/submit".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -8903,9 +8903,9 @@ fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
 fn iroha_sumeragi_new_view_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.new_view".to_owned(),
-        description: "Fetch NEW_VIEW counters (`/v1/sumeragi/new_view/json`).".to_owned(),
+        description: "Fetch NEW_VIEW counters (`/v2/sumeragi/new_view/json`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/new_view/json".to_owned(),
+        path_template: "/v2/sumeragi/new_view/json".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8923,9 +8923,9 @@ fn iroha_sumeragi_new_view_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.delivered".to_owned(),
-        description: "Fetch RBC delivered status (`/v1/sumeragi/rbc/delivered/{height}/{view}`; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
+        description: "Fetch RBC delivered status (`/v2/sumeragi/rbc/delivered/{height}/{view}`; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
+        path_template: "/v2/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8964,9 +8964,9 @@ fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.penalties".to_owned(),
-        description: "Fetch VRF penalties for an epoch (`/v1/sumeragi/vrf/penalties/{epoch}`; `epoch` shortcut supported).".to_owned(),
+        description: "Fetch VRF penalties for an epoch (`/v2/sumeragi/vrf/penalties/{epoch}`; `epoch` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/penalties/{epoch}".to_owned(),
+        path_template: "/v2/sumeragi/vrf/penalties/{epoch}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -8996,9 +8996,9 @@ fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_epoch_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.epoch".to_owned(),
-        description: "Fetch VRF epoch snapshot (`/v1/sumeragi/vrf/epoch/{epoch}`; `epoch` shortcut supported).".to_owned(),
+        description: "Fetch VRF epoch snapshot (`/v2/sumeragi/vrf/epoch/{epoch}`; `epoch` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/epoch/{epoch}".to_owned(),
+        path_template: "/v2/sumeragi/vrf/epoch/{epoch}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9028,9 +9028,9 @@ fn iroha_sumeragi_vrf_epoch_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_commit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.commit".to_owned(),
-        description: "Fetch latest VRF commit snapshot (`/v1/sumeragi/vrf/commit`).".to_owned(),
+        description: "Fetch latest VRF commit snapshot (`/v2/sumeragi/vrf/commit`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/commit".to_owned(),
+        path_template: "/v2/sumeragi/vrf/commit".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9048,9 +9048,9 @@ fn iroha_sumeragi_vrf_commit_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_reveal_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.reveal".to_owned(),
-        description: "Fetch latest VRF reveal snapshot (`/v1/sumeragi/vrf/reveal`).".to_owned(),
+        description: "Fetch latest VRF reveal snapshot (`/v2/sumeragi/vrf/reveal`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/reveal".to_owned(),
+        path_template: "/v2/sumeragi/vrf/reveal".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9069,10 +9069,10 @@ fn iroha_sumeragi_rbc_sample_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sample".to_owned(),
         description:
-            "Fetch RBC sampled sessions (`/v1/sumeragi/rbc/sample`) with optional query shortcuts."
+            "Fetch RBC sampled sessions (`/v2/sumeragi/rbc/sample`) with optional query shortcuts."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/sumeragi/rbc/sample".to_owned(),
+        path_template: "/v2/sumeragi/rbc/sample".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9095,10 +9095,10 @@ fn iroha_da_ingest_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.ingest".to_owned(),
         description:
-            "Ingest DA payload (`/v1/da/ingest`); accepts raw `body` or flat top-level body shortcuts."
+            "Ingest DA payload (`/v2/da/ingest`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/ingest".to_owned(),
+        path_template: "/v2/da/ingest".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9121,9 +9121,9 @@ fn iroha_da_ingest_tool() -> ToolSpec {
 fn iroha_da_proof_policies_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policies".to_owned(),
-        description: "Fetch DA proof policies (`/v1/da/proof_policies`).".to_owned(),
+        description: "Fetch DA proof policies (`/v2/da/proof_policies`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/da/proof_policies".to_owned(),
+        path_template: "/v2/da/proof_policies".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9141,9 +9141,9 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
 fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policy_snapshot".to_owned(),
-        description: "Fetch DA proof policy snapshot (`/v1/da/proof_policy_snapshot`).".to_owned(),
+        description: "Fetch DA proof policy snapshot (`/v2/da/proof_policy_snapshot`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/da/proof_policy_snapshot".to_owned(),
+        path_template: "/v2/da/proof_policy_snapshot".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9162,10 +9162,10 @@ fn iroha_da_manifests_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.manifests.get".to_owned(),
         description:
-            "Fetch DA manifest payload (`/v1/da/manifests/{ticket}`; `ticket`/`manifest_ticket`/`id` shortcuts supported)."
+            "Fetch DA manifest payload (`/v2/da/manifests/{ticket}`; `ticket`/`manifest_ticket`/`id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/da/manifests/{ticket}".to_owned(),
+        path_template: "/v2/da/manifests/{ticket}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9204,10 +9204,10 @@ fn iroha_da_commitments_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.list".to_owned(),
         description:
-            "List DA commitments (`/v1/da/commitments`); accepts raw `body` or flat top-level body shortcuts."
+            "List DA commitments (`/v2/da/commitments`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/commitments".to_owned(),
+        path_template: "/v2/da/commitments".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9231,10 +9231,10 @@ fn iroha_da_commitments_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.prove".to_owned(),
         description:
-            "Compute DA commitment proof placeholder (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
+            "Compute DA commitment proof placeholder (`/v2/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/commitments/prove".to_owned(),
+        path_template: "/v2/da/commitments/prove".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9258,10 +9258,10 @@ fn iroha_da_commitments_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.verify".to_owned(),
         description:
-            "Verify DA commitment payload (`/v1/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts."
+            "Verify DA commitment payload (`/v2/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/commitments/verify".to_owned(),
+        path_template: "/v2/da/commitments/verify".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9285,10 +9285,10 @@ fn iroha_da_pin_intents_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.list".to_owned(),
         description:
-            "List DA pin intents (`/v1/da/pin_intents`); accepts raw `body` or flat top-level body shortcuts."
+            "List DA pin intents (`/v2/da/pin_intents`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents".to_owned(),
+        path_template: "/v2/da/pin_intents".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9312,10 +9312,10 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.prove".to_owned(),
         description:
-            "Fetch DA pin intent proof data (`/v1/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
+            "Fetch DA pin intent proof data (`/v2/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents/prove".to_owned(),
+        path_template: "/v2/da/pin_intents/prove".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9339,10 +9339,10 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.verify".to_owned(),
         description:
-            "Verify DA pin intent proof payload (`/v1/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
+            "Verify DA pin intent proof payload (`/v2/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/da/pin_intents/verify".to_owned(),
+        path_template: "/v2/da/pin_intents/verify".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9365,9 +9365,9 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
 fn iroha_runtime_abi_active_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.active".to_owned(),
-        description: "Fetch active runtime ABI versions (`/v1/runtime/abi/active`).".to_owned(),
+        description: "Fetch active runtime ABI versions (`/v2/runtime/abi/active`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/runtime/abi/active".to_owned(),
+        path_template: "/v2/runtime/abi/active".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9385,9 +9385,9 @@ fn iroha_runtime_abi_active_tool() -> ToolSpec {
 fn iroha_runtime_abi_hash_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.hash".to_owned(),
-        description: "Fetch active runtime ABI hash (`/v1/runtime/abi/hash`).".to_owned(),
+        description: "Fetch active runtime ABI hash (`/v2/runtime/abi/hash`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/runtime/abi/hash".to_owned(),
+        path_template: "/v2/runtime/abi/hash".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9405,9 +9405,9 @@ fn iroha_runtime_abi_hash_tool() -> ToolSpec {
 fn iroha_runtime_metrics_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.metrics".to_owned(),
-        description: "Fetch runtime metrics (`/v1/runtime/metrics`).".to_owned(),
+        description: "Fetch runtime metrics (`/v2/runtime/metrics`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/runtime/metrics".to_owned(),
+        path_template: "/v2/runtime/metrics".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9425,9 +9425,9 @@ fn iroha_runtime_metrics_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.list".to_owned(),
-        description: "List runtime upgrades (`/v1/runtime/upgrades`).".to_owned(),
+        description: "List runtime upgrades (`/v2/runtime/upgrades`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/runtime/upgrades".to_owned(),
+        path_template: "/v2/runtime/upgrades".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9446,10 +9446,10 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.propose".to_owned(),
         description:
-            "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts."
+            "Propose a runtime upgrade (`/v2/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/runtime/upgrades/propose".to_owned(),
+        path_template: "/v2/runtime/upgrades/propose".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9472,9 +9472,9 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.activate".to_owned(),
-        description: "Activate a runtime upgrade (`/v1/runtime/upgrades/activate/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
+        description: "Activate a runtime upgrade (`/v2/runtime/upgrades/activate/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/runtime/upgrades/activate/{id}".to_owned(),
+        path_template: "/v2/runtime/upgrades/activate/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9513,9 +9513,9 @@ fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_cancel_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.cancel".to_owned(),
-        description: "Cancel a runtime upgrade (`/v1/runtime/upgrades/cancel/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
+        description: "Cancel a runtime upgrade (`/v2/runtime/upgrades/cancel/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/runtime/upgrades/cancel/{id}".to_owned(),
+        path_template: "/v2/runtime/upgrades/cancel/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9555,10 +9555,10 @@ fn iroha_ledger_headers_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.headers".to_owned(),
         description:
-            "Fetch recent block headers (`/v1/ledger/headers`) with optional `from`/`limit` query shortcuts."
+            "Fetch recent block headers (`/v2/ledger/headers`) with optional `from`/`limit` query shortcuts."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/ledger/headers".to_owned(),
+        path_template: "/v2/ledger/headers".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9582,9 +9582,9 @@ fn iroha_ledger_headers_tool() -> ToolSpec {
 fn iroha_ledger_state_root_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_root".to_owned(),
-        description: "Fetch execution state root by height (`/v1/ledger/state/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
+        description: "Fetch execution state root by height (`/v2/ledger/state/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/ledger/state/{height}".to_owned(),
+        path_template: "/v2/ledger/state/{height}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9618,9 +9618,9 @@ fn iroha_ledger_state_root_tool() -> ToolSpec {
 fn iroha_ledger_state_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_proof".to_owned(),
-        description: "Fetch execution state proof (QC) by height (`/v1/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
+        description: "Fetch execution state proof (QC) by height (`/v2/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/ledger/state-proof/{height}".to_owned(),
+        path_template: "/v2/ledger/state-proof/{height}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9654,9 +9654,9 @@ fn iroha_ledger_state_proof_tool() -> ToolSpec {
 fn iroha_ledger_block_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.block_proof".to_owned(),
-        description: "Fetch block-entry Merkle proofs (`/v1/ledger/block/{height}/proof/{entry_hash}`; `height`/`block_height` and `entry_hash`/`tx_hash`/`hash` shortcuts supported).".to_owned(),
+        description: "Fetch block-entry Merkle proofs (`/v2/ledger/block/{height}/proof/{entry_hash}`; `height`/`block_height` and `entry_hash`/`tx_hash`/`hash` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/ledger/block/{height}/proof/{entry_hash}".to_owned(),
+        path_template: "/v2/ledger/block/{height}/proof/{entry_hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9703,9 +9703,9 @@ fn iroha_ledger_block_proof_tool() -> ToolSpec {
 fn iroha_bridge_finality_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.proof".to_owned(),
-        description: "Fetch bridge finality proof by height (`/v1/bridge/finality/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
+        description: "Fetch bridge finality proof by height (`/v2/bridge/finality/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/bridge/finality/{height}".to_owned(),
+        path_template: "/v2/bridge/finality/{height}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9739,9 +9739,9 @@ fn iroha_bridge_finality_proof_tool() -> ToolSpec {
 fn iroha_bridge_finality_bundle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.bundle".to_owned(),
-        description: "Fetch bridge finality commitment+justification bundle by height (`/v1/bridge/finality/bundle/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
+        description: "Fetch bridge finality commitment+justification bundle by height (`/v2/bridge/finality/bundle/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/bridge/finality/bundle/{height}".to_owned(),
+        path_template: "/v2/bridge/finality/bundle/{height}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9776,10 +9776,10 @@ fn iroha_proofs_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.get".to_owned(),
         description:
-            "Fetch a proof record by id (`/v1/proofs/{id}`; `id`/`proof_id` shortcuts supported)."
+            "Fetch a proof record by id (`/v2/proofs/{id}`; `id`/`proof_id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/proofs/{id}".to_owned(),
+        path_template: "/v2/proofs/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9814,10 +9814,10 @@ fn iroha_proofs_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.query".to_owned(),
         description:
-            "Query proof records (`/v1/proofs/query`); accepts raw `body` or flat top-level body shortcuts."
+            "Query proof records (`/v2/proofs/query`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/proofs/query".to_owned(),
+        path_template: "/v2/proofs/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9840,9 +9840,9 @@ fn iroha_proofs_query_tool() -> ToolSpec {
 fn iroha_proofs_retention_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.retention".to_owned(),
-        description: "Fetch proof retention status (`/v1/proofs/retention`).".to_owned(),
+        description: "Fetch proof retention status (`/v2/proofs/retention`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/proofs/retention".to_owned(),
+        path_template: "/v2/proofs/retention".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9886,10 +9886,10 @@ fn iroha_gov_instances_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.instances.list".to_owned(),
         description:
-            "List governance instances by namespace (`/v1/gov/instances/{ns}`; `ns`/`namespace` shortcuts supported)."
+            "List governance instances by namespace (`/v2/gov/instances/{ns}`; `ns`/`namespace` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/instances/{ns}".to_owned(),
+        path_template: "/v2/gov/instances/{ns}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -9932,8 +9932,8 @@ fn iroha_gov_instances_list_tool() -> ToolSpec {
 fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.proposals.deploy_contract",
-        "Propose contract deployment (`/v1/gov/proposals/deploy-contract`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/proposals/deploy-contract",
+        "Propose contract deployment (`/v2/gov/proposals/deploy-contract`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/proposals/deploy-contract",
     )
 }
 
@@ -9941,10 +9941,10 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.proposals.get".to_owned(),
         description:
-            "Fetch governance proposal detail (`/v1/gov/proposals/{id}`; `id`/`proposal_id` shortcuts supported)."
+            "Fetch governance proposal detail (`/v2/gov/proposals/{id}`; `id`/`proposal_id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/proposals/{id}".to_owned(),
+        path_template: "/v2/gov/proposals/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -9979,10 +9979,10 @@ fn iroha_gov_locks_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.locks.get".to_owned(),
         description:
-            "Fetch governance lock records (`/v1/gov/locks/{rid}`; `rid`/`referendum_id` shortcuts supported)."
+            "Fetch governance lock records (`/v2/gov/locks/{rid}`; `rid`/`referendum_id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/locks/{rid}".to_owned(),
+        path_template: "/v2/gov/locks/{rid}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10021,10 +10021,10 @@ fn iroha_gov_referenda_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.referenda.get".to_owned(),
         description:
-            "Fetch governance referendum detail (`/v1/gov/referenda/{id}`; `id`/`referendum_id` shortcuts supported)."
+            "Fetch governance referendum detail (`/v2/gov/referenda/{id}`; `id`/`referendum_id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/referenda/{id}".to_owned(),
+        path_template: "/v2/gov/referenda/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10059,10 +10059,10 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.tally.get".to_owned(),
         description:
-            "Fetch governance tally detail (`/v1/gov/tally/{id}`; `id`/`tally_id` shortcuts supported)."
+            "Fetch governance tally detail (`/v2/gov/tally/{id}`; `id`/`tally_id` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/tally/{id}".to_owned(),
+        path_template: "/v2/gov/tally/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10096,42 +10096,42 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
 fn iroha_gov_ballots_zk_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.ballots.zk",
-        "Submit a governance ZK ballot (`/v1/gov/ballots/zk`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk",
+        "Submit a governance ZK ballot (`/v2/gov/ballots/zk`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/ballots/zk",
     )
 }
 
 fn iroha_gov_ballots_zk_v1_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.ballots.zk_v1",
-        "Submit a governance ZK v1 ballot (`/v1/gov/ballots/zk-v1`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk-v1",
+        "Submit a governance ZK v1 ballot (`/v2/gov/ballots/zk-v1`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/ballots/zk-v1",
     )
 }
 
 fn iroha_gov_ballots_zk_v1_ballot_proof_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.ballots.zk_v1.ballot_proof",
-        "Submit a governance ZK ballot proof bundle (`/v1/gov/ballots/zk-v1/ballot-proof`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "Submit a governance ZK ballot proof bundle (`/v2/gov/ballots/zk-v1/ballot-proof`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/ballots/zk-v1/ballot-proof",
     )
 }
 
 fn iroha_gov_ballots_plain_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.ballots.plain",
-        "Submit a governance plain ballot (`/v1/gov/ballots/plain`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/ballots/plain",
+        "Submit a governance plain ballot (`/v2/gov/ballots/plain`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/ballots/plain",
     )
 }
 
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.protected_namespaces.list".to_owned(),
-        description: "List protected governance namespaces (`/v1/gov/protected-namespaces`)."
+        description: "List protected governance namespaces (`/v2/gov/protected-namespaces`)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/protected-namespaces".to_owned(),
+        path_template: "/v2/gov/protected-namespaces".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10149,17 +10149,17 @@ fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
 fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.protected_namespaces.update",
-        "Update protected governance namespaces (`/v1/gov/protected-namespaces`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/protected-namespaces",
+        "Update protected governance namespaces (`/v2/gov/protected-namespaces`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/protected-namespaces",
     )
 }
 
 fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.unlocks.stats".to_owned(),
-        description: "Fetch governance unlock statistics (`/v1/gov/unlocks/stats`).".to_owned(),
+        description: "Fetch governance unlock statistics (`/v2/gov/unlocks/stats`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/unlocks/stats".to_owned(),
+        path_template: "/v2/gov/unlocks/stats".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10177,9 +10177,9 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
 fn iroha_gov_council_current_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.current".to_owned(),
-        description: "Fetch current governance council set (`/v1/gov/council/current`).".to_owned(),
+        description: "Fetch current governance council set (`/v2/gov/council/current`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/council/current".to_owned(),
+        path_template: "/v2/gov/council/current".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10197,26 +10197,26 @@ fn iroha_gov_council_current_tool() -> ToolSpec {
 fn iroha_gov_council_persist_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.persist",
-        "Persist a governance council roster (`/v1/gov/council/persist`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/persist",
+        "Persist a governance council roster (`/v2/gov/council/persist`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/council/persist",
     )
 }
 
 fn iroha_gov_council_replace_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.replace",
-        "Replace a governance council member (`/v1/gov/council/replace`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/replace",
+        "Replace a governance council member (`/v2/gov/council/replace`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/council/replace",
     )
 }
 
 fn iroha_gov_council_audit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.audit".to_owned(),
-        description: "Fetch governance council derivation audit data (`/v1/gov/council/audit`)."
+        description: "Fetch governance council derivation audit data (`/v2/gov/council/audit`)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/council/audit".to_owned(),
+        path_template: "/v2/gov/council/audit".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10234,33 +10234,33 @@ fn iroha_gov_council_audit_tool() -> ToolSpec {
 fn iroha_gov_council_derive_vrf_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.derive_vrf",
-        "Derive governance council VRF inputs (`/v1/gov/council/derive-vrf`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/council/derive-vrf",
+        "Derive governance council VRF inputs (`/v2/gov/council/derive-vrf`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/council/derive-vrf",
     )
 }
 
 fn iroha_gov_enact_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.enact",
-        "Enact governance proposal effects (`/v1/gov/enact`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/enact",
+        "Enact governance proposal effects (`/v2/gov/enact`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/enact",
     )
 }
 
 fn iroha_gov_finalize_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.finalize",
-        "Finalize governance tally (`/v1/gov/finalize`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/finalize",
+        "Finalize governance tally (`/v2/gov/finalize`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v2/gov/finalize",
     )
 }
 
 fn iroha_aliases_resolve_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve".to_owned(),
-        description: "Resolve an alias to its account binding (`/v1/aliases/resolve`).".to_owned(),
+        description: "Resolve an alias to its account binding (`/v2/aliases/resolve`).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/aliases/resolve".to_owned(),
+        path_template: "/v2/aliases/resolve".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10287,10 +10287,10 @@ fn iroha_aliases_resolve_tool() -> ToolSpec {
 fn iroha_aliases_resolve_index_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve_index".to_owned(),
-        description: "Resolve an alias index to its account binding (`/v1/aliases/resolve_index`)."
+        description: "Resolve an alias index to its account binding (`/v2/aliases/resolve_index`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/aliases/resolve_index".to_owned(),
+        path_template: "/v2/aliases/resolve_index".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10342,8 +10342,8 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
 fn iroha_contracts_code_register_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.code.register",
-        "Register contract code/manifest (`/v1/contracts/code`).",
-        "/v1/contracts/code",
+        "Register contract code/manifest (`/v2/contracts/code`).",
+        "/v2/contracts/code",
     )
 }
 
@@ -10352,7 +10352,7 @@ fn iroha_contracts_code_get_tool() -> ToolSpec {
         name: "iroha.contracts.code.get".to_owned(),
         description: "Fetch contract code metadata (`code_hash` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/contracts/code/{code_hash}".to_owned(),
+        path_template: "/v2/contracts/code/{code_hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10387,10 +10387,10 @@ fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.bytes.get".to_owned(),
         description:
-            "Fetch contract code bytes (`/v1/contracts/code-bytes/{code_hash}`; `code_hash` shortcut supported)."
+            "Fetch contract code bytes (`/v2/contracts/code-bytes/{code_hash}`; `code_hash` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/contracts/code-bytes/{code_hash}".to_owned(),
+        path_template: "/v2/contracts/code-bytes/{code_hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10424,24 +10424,24 @@ fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
 fn iroha_contracts_deploy_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.deploy",
-        "Deploy contract code (`/v1/contracts/deploy`).",
-        "/v1/contracts/deploy",
+        "Deploy contract code (`/v2/contracts/deploy`).",
+        "/v2/contracts/deploy",
     )
 }
 
 fn iroha_contracts_instance_create_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.instance.create",
-        "Deploy and activate a contract instance (`/v1/contracts/instance`).",
-        "/v1/contracts/instance",
+        "Deploy and activate a contract instance (`/v2/contracts/instance`).",
+        "/v2/contracts/instance",
     )
 }
 
 fn iroha_contracts_instance_activate_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.instance.activate",
-        "Activate a contract instance (`/v1/contracts/instance/activate`).",
-        "/v1/contracts/instance/activate",
+        "Activate a contract instance (`/v2/contracts/instance/activate`).",
+        "/v2/contracts/instance/activate",
     )
 }
 
@@ -10449,10 +10449,10 @@ fn iroha_contracts_instances_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.instances.list".to_owned(),
         description:
-            "List contract instances by namespace (`/v1/contracts/instances/{ns}`; `ns`/`namespace` shortcut supported)."
+            "List contract instances by namespace (`/v2/contracts/instances/{ns}`; `ns`/`namespace` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/contracts/instances/{ns}".to_owned(),
+        path_template: "/v2/contracts/instances/{ns}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10495,8 +10495,8 @@ fn iroha_contracts_instances_list_tool() -> ToolSpec {
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.call",
-        "Call a deployed contract instance (`/v1/contracts/call`).",
-        "/v1/contracts/call",
+        "Call a deployed contract instance (`/v2/contracts/call`).",
+        "/v2/contracts/call",
     )
 }
 
@@ -10507,7 +10507,7 @@ fn iroha_contracts_call_and_wait_tool() -> ToolSpec {
             "Call a deployed contract instance and poll pipeline status until a terminal state."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/contracts/call".to_owned(),
+        path_template: "/v2/contracts/call".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10556,10 +10556,10 @@ fn iroha_contracts_state_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.state.get".to_owned(),
         description:
-            "Read contract state (`/v1/contracts/state`) using path/paths/prefix query modes."
+            "Read contract state (`/v2/contracts/state`) using path/paths/prefix query modes."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/contracts/state".to_owned(),
+        path_template: "/v2/contracts/state".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10591,7 +10591,7 @@ fn iroha_accounts_list_tool() -> ToolSpec {
             "List accounts with optional query filters/pagination (supports flat top-level query args)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/accounts".to_owned(),
+        path_template: "/v2/accounts".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10618,7 +10618,7 @@ fn iroha_accounts_get_tool() -> ToolSpec {
         name: "iroha.accounts.get".to_owned(),
         description: "Fetch explorer account detail (`account_id` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/accounts/{account_id}".to_owned(),
+        path_template: "/v2/explorer/accounts/{account_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10650,7 +10650,7 @@ fn iroha_accounts_qr_tool() -> ToolSpec {
         name: "iroha.accounts.qr".to_owned(),
         description: "Fetch explorer account QR code (`account_id` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/accounts/{account_id}/qr".to_owned(),
+        path_template: "/v2/explorer/accounts/{account_id}/qr".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10684,7 +10684,7 @@ fn iroha_accounts_query_tool() -> ToolSpec {
             "Query accounts with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/accounts/query".to_owned(),
+        path_template: "/v2/accounts/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10719,7 +10719,7 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
             "Onboard an account (`alias` + `account_id` shortcuts supported when `body` is omitted)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/accounts/onboard".to_owned(),
+        path_template: "/v2/accounts/onboard".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10763,7 +10763,7 @@ fn iroha_account_transactions_tool() -> ToolSpec {
             "List transactions authored by a specific account (`account_id` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/accounts/{account_id}/transactions".to_owned(),
+        path_template: "/v2/accounts/{account_id}/transactions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10799,7 +10799,7 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
         name: "iroha.accounts.transactions.query".to_owned(),
         description: "Query transactions authored by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/accounts/{account_id}/transactions/query".to_owned(),
+        path_template: "/v2/accounts/{account_id}/transactions/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10845,7 +10845,7 @@ fn iroha_account_assets_tool() -> ToolSpec {
         description: "List assets held by a specific account (`account_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/accounts/{account_id}/assets".to_owned(),
+        path_template: "/v2/accounts/{account_id}/assets".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -10884,7 +10884,7 @@ fn iroha_account_assets_query_tool() -> ToolSpec {
         name: "iroha.accounts.assets.query".to_owned(),
         description: "Query assets held by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/accounts/{account_id}/assets/query".to_owned(),
+        path_template: "/v2/accounts/{account_id}/assets/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10931,7 +10931,7 @@ fn iroha_account_permissions_tool() -> ToolSpec {
             "List permissions granted to a specific account (`account_id` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/accounts/{account_id}/permissions".to_owned(),
+        path_template: "/v2/accounts/{account_id}/permissions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -10963,7 +10963,7 @@ fn iroha_account_portfolio_tool() -> ToolSpec {
         name: "iroha.accounts.portfolio".to_owned(),
         description: "Fetch a UAID portfolio snapshot (`uaid` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/accounts/{uaid}/portfolio".to_owned(),
+        path_template: "/v2/accounts/{uaid}/portfolio".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11003,7 +11003,7 @@ fn iroha_domains_list_tool() -> ToolSpec {
         name: "iroha.domains.list".to_owned(),
         description: "List domains with optional flat pagination/query fields.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/domains".to_owned(),
+        path_template: "/v2/domains".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11029,7 +11029,7 @@ fn iroha_domains_get_tool() -> ToolSpec {
         name: "iroha.domains.get".to_owned(),
         description: "Fetch explorer domain detail (`domain_id` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/domains/{domain_id}".to_owned(),
+        path_template: "/v2/explorer/domains/{domain_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11067,7 +11067,7 @@ fn iroha_domains_query_tool() -> ToolSpec {
             "Query domains with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/domains/query".to_owned(),
+        path_template: "/v2/domains/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11100,7 +11100,7 @@ fn iroha_subscriptions_plans_list_tool() -> ToolSpec {
         name: "iroha.subscriptions.plans.list".to_owned(),
         description: "List subscription plans with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/subscriptions/plans".to_owned(),
+        path_template: "/v2/subscriptions/plans".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11127,7 +11127,7 @@ fn iroha_subscriptions_plans_create_tool() -> ToolSpec {
         name: "iroha.subscriptions.plans.create".to_owned(),
         description: "Create a subscription plan (`body` payload).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/subscriptions/plans".to_owned(),
+        path_template: "/v2/subscriptions/plans".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11152,7 +11152,7 @@ fn iroha_subscriptions_list_tool() -> ToolSpec {
         name: "iroha.subscriptions.list".to_owned(),
         description: "List subscriptions with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/subscriptions".to_owned(),
+        path_template: "/v2/subscriptions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11181,7 +11181,7 @@ fn iroha_subscriptions_create_tool() -> ToolSpec {
         name: "iroha.subscriptions.create".to_owned(),
         description: "Create a subscription (`body` payload).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/subscriptions".to_owned(),
+        path_template: "/v2/subscriptions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11207,7 +11207,7 @@ fn iroha_subscriptions_get_tool() -> ToolSpec {
         description: "Fetch subscription detail (`subscription_id`/`id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/subscriptions/{subscription_id}".to_owned(),
+        path_template: "/v2/subscriptions/{subscription_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11302,7 +11302,7 @@ fn iroha_subscription_action_tool(
         name: name.to_owned(),
         description: description.to_owned(),
         method: Method::POST,
-        path_template: format!("/v1/subscriptions/{{subscription_id}}/{action}"),
+        path_template: format!("/v2/subscriptions/{{subscription_id}}/{action}"),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11345,7 +11345,7 @@ fn iroha_asset_definitions_tool() -> ToolSpec {
             "List asset definitions with optional flat pagination/sort/filter query fields."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/assets/definitions".to_owned(),
+        path_template: "/v2/assets/definitions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11374,7 +11374,7 @@ fn iroha_asset_definitions_get_tool() -> ToolSpec {
         description: "Fetch explorer asset definition detail (`definition_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/asset-definitions/{definition_id}".to_owned(),
+        path_template: "/v2/explorer/asset-definitions/{definition_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11407,7 +11407,7 @@ fn iroha_asset_definitions_query_tool() -> ToolSpec {
         description: "Query asset definitions with QueryEnvelope shortcuts when `body` is omitted."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/assets/definitions/query".to_owned(),
+        path_template: "/v2/assets/definitions/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11441,7 +11441,7 @@ fn iroha_asset_holders_tool() -> ToolSpec {
         description: "List asset holders for one definition (`definition_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/assets/{definition_id}/holders".to_owned(),
+        path_template: "/v2/assets/{definition_id}/holders".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11480,7 +11480,7 @@ fn iroha_asset_holders_query_tool() -> ToolSpec {
         name: "iroha.assets.holders.query".to_owned(),
         description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/assets/{definition_id}/holders/query".to_owned(),
+        path_template: "/v2/assets/{definition_id}/holders/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11525,7 +11525,7 @@ fn iroha_assets_list_tool() -> ToolSpec {
         name: "iroha.assets.list".to_owned(),
         description: "List explorer assets with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/assets".to_owned(),
+        path_template: "/v2/explorer/assets".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11554,7 +11554,7 @@ fn iroha_assets_get_tool() -> ToolSpec {
         name: "iroha.assets.get".to_owned(),
         description: "Fetch explorer asset detail (`asset_id` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/assets/{asset_id}".to_owned(),
+        path_template: "/v2/explorer/assets/{asset_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11590,7 +11590,7 @@ fn iroha_nfts_list_tool() -> ToolSpec {
         name: "iroha.nfts.list".to_owned(),
         description: "List explorer NFTs with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/nfts".to_owned(),
+        path_template: "/v2/explorer/nfts".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11616,9 +11616,9 @@ fn iroha_nfts_list_tool() -> ToolSpec {
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.chain.list".to_owned(),
-        description: "List NFTs from chain state (`/v1/nfts`).".to_owned(),
+        description: "List NFTs from chain state (`/v2/nfts`).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/nfts".to_owned(),
+        path_template: "/v2/nfts".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11638,7 +11638,7 @@ fn iroha_nfts_get_tool() -> ToolSpec {
         name: "iroha.nfts.get".to_owned(),
         description: "Fetch explorer NFT detail (`nft_id` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/nfts/{nft_id}".to_owned(),
+        path_template: "/v2/explorer/nfts/{nft_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11676,7 +11676,7 @@ fn iroha_nfts_query_tool() -> ToolSpec {
             "Query NFTs with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/nfts/query".to_owned(),
+        path_template: "/v2/nfts/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11709,7 +11709,7 @@ fn iroha_offline_transfers_list_tool() -> ToolSpec {
         name: "iroha.offline.transfers.list".to_owned(),
         description: "List offline transfer bundles with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/transfers".to_owned(),
+        path_template: "/v2/offline/transfers".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11740,7 +11740,7 @@ fn iroha_offline_transfers_get_tool() -> ToolSpec {
         description: "Fetch one offline transfer bundle (`bundle_id_hex` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/transfers/{bundle_id_hex}".to_owned(),
+        path_template: "/v2/offline/transfers/{bundle_id_hex}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11782,7 +11782,7 @@ fn iroha_offline_transfers_query_tool() -> ToolSpec {
         description: "Query offline transfer bundles via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/transfers/query".to_owned(),
+        path_template: "/v2/offline/transfers/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11815,7 +11815,7 @@ fn iroha_offline_settlements_list_tool() -> ToolSpec {
         name: "iroha.offline.settlements.list".to_owned(),
         description: "List offline settlement bundles with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/settlements".to_owned(),
+        path_template: "/v2/offline/settlements".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11846,7 +11846,7 @@ fn iroha_offline_settlements_get_tool() -> ToolSpec {
         description: "Fetch one offline settlement bundle (`bundle_id_hex` shortcut supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/settlements/{bundle_id_hex}".to_owned(),
+        path_template: "/v2/offline/settlements/{bundle_id_hex}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11889,7 +11889,7 @@ fn iroha_offline_settlements_query_tool() -> ToolSpec {
             "Query offline settlement bundles via QueryEnvelope (flat shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/settlements/query".to_owned(),
+        path_template: "/v2/offline/settlements/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11922,7 +11922,7 @@ fn iroha_offline_settlements_submit_tool() -> ToolSpec {
         name: "iroha.offline.settlements.submit".to_owned(),
         description: "Submit an offline settlement transaction payload (flat top-level fields are forwarded as body when `body` is omitted).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/settlements".to_owned(),
+        path_template: "/v2/offline/settlements".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11960,7 +11960,7 @@ fn iroha_offline_certificates_list_tool() -> ToolSpec {
         name: "iroha.offline.certificates.list".to_owned(),
         description: "List offline certificates with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/certificates".to_owned(),
+        path_template: "/v2/offline/certificates".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -11990,7 +11990,7 @@ fn iroha_offline_certificates_get_tool() -> ToolSpec {
             "Fetch an offline certificate by id (`certificate_id_hex` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
+        path_template: "/v2/offline/certificates/{certificate_id_hex}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12035,7 +12035,7 @@ fn iroha_offline_certificates_query_tool() -> ToolSpec {
         description: "Query offline certificates via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/certificates/query".to_owned(),
+        path_template: "/v2/offline/certificates/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12066,10 +12066,10 @@ fn iroha_offline_certificates_query_tool() -> ToolSpec {
 fn iroha_offline_certificates_issue_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.certificates.issue".to_owned(),
-        description: "Issue an offline certificate draft (`/v1/offline/certificates/issue`)."
+        description: "Issue an offline certificate draft (`/v2/offline/certificates/issue`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/certificates/issue".to_owned(),
+        path_template: "/v2/offline/certificates/issue".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12095,7 +12095,7 @@ fn iroha_offline_certificates_renew_tool() -> ToolSpec {
         description: "Renew an offline certificate (`certificate_id_hex` shortcut supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/certificates/{certificate_id_hex}/renew".to_owned(),
+        path_template: "/v2/offline/certificates/{certificate_id_hex}/renew".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12142,7 +12142,7 @@ fn iroha_offline_certificates_renew_issue_tool() -> ToolSpec {
             "Issue a renewed offline certificate (`certificate_id_hex` shortcut supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
+        path_template: "/v2/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12185,10 +12185,10 @@ fn iroha_offline_certificates_renew_issue_tool() -> ToolSpec {
 fn iroha_offline_certificates_revoke_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.certificates.revoke".to_owned(),
-        description: "Revoke an offline certificate verdict (`/v1/offline/certificates/revoke`)."
+        description: "Revoke an offline certificate verdict (`/v2/offline/certificates/revoke`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/certificates/revoke".to_owned(),
+        path_template: "/v2/offline/certificates/revoke".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12215,7 +12215,7 @@ fn iroha_offline_allowances_get_tool() -> ToolSpec {
             "Fetch an offline allowance by certificate id (`certificate_id_hex` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/allowances/{certificate_id_hex}".to_owned(),
+        path_template: "/v2/offline/allowances/{certificate_id_hex}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12257,10 +12257,10 @@ fn iroha_offline_allowances_get_tool() -> ToolSpec {
 fn iroha_offline_allowances_issue_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.allowances.issue".to_owned(),
-        description: "Register a new offline allowance certificate (`/v1/offline/allowances`)."
+        description: "Register a new offline allowance certificate (`/v2/offline/allowances`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/allowances".to_owned(),
+        path_template: "/v2/offline/allowances".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12287,7 +12287,7 @@ fn iroha_offline_allowances_renew_tool() -> ToolSpec {
             "Renew an offline allowance certificate (`certificate_id_hex` shortcut supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/allowances/{certificate_id_hex}/renew".to_owned(),
+        path_template: "/v2/offline/allowances/{certificate_id_hex}/renew".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12332,7 +12332,7 @@ fn iroha_offline_allowances_list_tool() -> ToolSpec {
         name: "iroha.offline.allowances.list".to_owned(),
         description: "List offline allowances with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/allowances".to_owned(),
+        path_template: "/v2/offline/allowances".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12361,7 +12361,7 @@ fn iroha_offline_allowances_query_tool() -> ToolSpec {
         description: "Query offline allowances via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/allowances/query".to_owned(),
+        path_template: "/v2/offline/allowances/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12394,7 +12394,7 @@ fn iroha_offline_receipts_list_tool() -> ToolSpec {
         name: "iroha.offline.receipts.list".to_owned(),
         description: "List offline receipts with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/receipts".to_owned(),
+        path_template: "/v2/offline/receipts".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12423,7 +12423,7 @@ fn iroha_offline_receipts_query_tool() -> ToolSpec {
         description: "Query offline receipts via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/receipts/query".to_owned(),
+        path_template: "/v2/offline/receipts/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12456,7 +12456,7 @@ fn iroha_offline_revocations_list_tool() -> ToolSpec {
         name: "iroha.offline.revocations.list".to_owned(),
         description: "List offline revocations with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/revocations".to_owned(),
+        path_template: "/v2/offline/revocations".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12485,7 +12485,7 @@ fn iroha_offline_revocations_query_tool() -> ToolSpec {
         description: "Query offline revocations via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/revocations/query".to_owned(),
+        path_template: "/v2/offline/revocations/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12516,10 +12516,10 @@ fn iroha_offline_revocations_query_tool() -> ToolSpec {
 fn iroha_offline_transfers_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.transfers.proof".to_owned(),
-        description: "Submit an offline transfer proof request (`/v1/offline/transfers/proof`)."
+        description: "Submit an offline transfer proof request (`/v2/offline/transfers/proof`)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/transfers/proof".to_owned(),
+        path_template: "/v2/offline/transfers/proof".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12563,9 +12563,9 @@ fn iroha_offline_transfers_proof_tool() -> ToolSpec {
 fn iroha_offline_spend_receipts_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.spend_receipts.submit".to_owned(),
-        description: "Validate offline spend receipts (`/v1/offline/spend-receipts`).".to_owned(),
+        description: "Validate offline spend receipts (`/v2/offline/spend-receipts`).".to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/spend-receipts".to_owned(),
+        path_template: "/v2/offline/spend-receipts".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12598,7 +12598,7 @@ fn iroha_offline_state_tool() -> ToolSpec {
         name: "iroha.offline.state".to_owned(),
         description: "Fetch the aggregated offline state snapshot.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/state".to_owned(),
+        path_template: "/v2/offline/state".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12618,7 +12618,7 @@ fn iroha_offline_bundle_proof_status_tool() -> ToolSpec {
         name: "iroha.offline.bundle.proof_status".to_owned(),
         description: "Fetch lightweight proof status for an offline bundle (`bundle_id_hex` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/bundle/proof_status".to_owned(),
+        path_template: "/v2/offline/bundle/proof_status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12651,7 +12651,7 @@ fn iroha_offline_rejections_list_tool() -> ToolSpec {
         name: "iroha.offline.rejections.list".to_owned(),
         description: "List aggregated offline rejection counters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/rejections".to_owned(),
+        path_template: "/v2/offline/rejections".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12671,7 +12671,7 @@ fn iroha_offline_summaries_list_tool() -> ToolSpec {
         name: "iroha.offline.summaries.list".to_owned(),
         description: "List offline counter summaries with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/offline/summaries".to_owned(),
+        path_template: "/v2/offline/summaries".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12700,7 +12700,7 @@ fn iroha_offline_summaries_query_tool() -> ToolSpec {
         description: "Query offline summaries via QueryEnvelope (flat shortcuts supported)."
             .to_owned(),
         method: Method::POST,
-        path_template: "/v1/offline/summaries/query".to_owned(),
+        path_template: "/v2/offline/summaries/query".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12735,7 +12735,7 @@ fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
             "Submit an ISO 20022 pacs.008 payload (`message_xml`/`xml` shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/iso20022/pacs008".to_owned(),
+        path_template: "/v2/iso20022/pacs008".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12776,7 +12776,7 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
             "Submit an ISO 20022 pacs.009 payload (`message_xml`/`xml` shortcuts supported)."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/iso20022/pacs009".to_owned(),
+        path_template: "/v2/iso20022/pacs009".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12815,7 +12815,7 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
         name: "iroha.iso20022.status.get".to_owned(),
         description: "Fetch ISO 20022 bridge status by message id (`msg_id`/`message_id` shortcuts supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/iso20022/status/{msg_id}".to_owned(),
+        path_template: "/v2/iso20022/status/{msg_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12906,7 +12906,7 @@ fn iroha_transactions_list_tool() -> ToolSpec {
         name: "iroha.transactions.list".to_owned(),
         description: "List explorer transactions with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/transactions".to_owned(),
+        path_template: "/v2/explorer/transactions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -12936,7 +12936,7 @@ fn iroha_transactions_get_tool() -> ToolSpec {
         name: "iroha.transactions.get".to_owned(),
         description: "Fetch explorer transaction detail (`hash` shortcut supported).".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/transactions/{hash}".to_owned(),
+        path_template: "/v2/explorer/transactions/{hash}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12979,7 +12979,7 @@ fn iroha_instructions_list_tool() -> ToolSpec {
         name: "iroha.instructions.list".to_owned(),
         description: "List explorer instructions with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/instructions".to_owned(),
+        path_template: "/v2/explorer/instructions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -13013,7 +13013,7 @@ fn iroha_instructions_get_tool() -> ToolSpec {
         description: "Fetch explorer instruction detail (`hash` + `index` shortcuts supported)."
             .to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/instructions/{hash}/{index}".to_owned(),
+        path_template: "/v2/explorer/instructions/{hash}/{index}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -13065,7 +13065,7 @@ fn iroha_blocks_list_tool() -> ToolSpec {
         name: "iroha.blocks.list".to_owned(),
         description: "List explorer blocks with optional flat query filters.".to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/blocks".to_owned(),
+        path_template: "/v2/explorer/blocks".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -13093,7 +13093,7 @@ fn iroha_blocks_get_tool() -> ToolSpec {
             "Fetch explorer block detail (`identifier` shortcut and block aliases supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/blocks/{identifier}".to_owned(),
+        path_template: "/v2/explorer/blocks/{identifier}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -13264,7 +13264,7 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
             "Poll pipeline status for an existing transaction hash until a terminal state."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/pipeline/transactions/status".to_owned(),
+        path_template: "/v2/pipeline/transactions/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -13322,7 +13322,7 @@ fn iroha_transactions_status_tool() -> ToolSpec {
             "Get latest pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/pipeline/transactions/status".to_owned(),
+        path_template: "/v2/pipeline/transactions/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -13415,7 +13415,7 @@ mod tests {
             name: name.to_owned(),
             description: "sample".to_owned(),
             method,
-            path_template: "/v1/sample".to_owned(),
+            path_template: "/v2/sample".to_owned(),
             input_schema: norito::json!({ "type": "object" }),
         }
     }
@@ -14394,8 +14394,8 @@ mod tests {
             "role": "wallet"
         });
         let path =
-            fill_path_template("/v1/connect/session/{sid}/{role}", Some(&args)).expect("filled");
-        assert_eq!(path, "/v1/connect/session/abc/wallet");
+            fill_path_template("/v2/connect/session/{sid}/{role}", Some(&args)).expect("filled");
+        assert_eq!(path, "/v2/connect/session/abc/wallet");
     }
 
     #[test]
@@ -14413,7 +14413,7 @@ mod tests {
             .get("ws_url")
             .and_then(Value::as_str)
             .expect("ws url");
-        assert!(ws_url.starts_with("ws://node.example/v1/connect/ws?"));
+        assert!(ws_url.starts_with("ws://node.example/v2/connect/ws?"));
         assert_eq!(
             ticket
                 .get("sec_websocket_protocol")

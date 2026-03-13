@@ -78,4 +78,4 @@ Metamaʼlumotlarning yoʻqligi ushbu yoʻlak uchun bufer snapshotini oʻchirib q
 ## Dalillar va ma'lumotnomalar
 - NX-3 hisob-kitob routerini qabul qilish bo'yicha eslatmalar: `status.md` (NX-3 bo'limi).
 - Operator sirtlari: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Qabul qilish sxemasi va API sirtlari: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.
+- Qabul qilish sxemasi va API sirtlari: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.

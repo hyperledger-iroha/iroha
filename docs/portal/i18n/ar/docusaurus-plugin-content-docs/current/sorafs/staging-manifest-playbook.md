@@ -67,13 +67,13 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. استعلم عن نقطة discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول إدخال.

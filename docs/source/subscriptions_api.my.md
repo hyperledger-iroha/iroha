@@ -227,18 +227,18 @@ Alternative:
   `CanTransferAsset` grants from the subscriber. Use only if needed.
 
 ## Torii API Surface
-- `POST /v1/subscriptions/plans` - register plan (AssetDefinition metadata).
-- `GET /v1/subscriptions/plans` - list plans by provider.
-- `POST /v1/subscriptions` - create subscription + billing trigger.
-- `GET /v1/subscriptions` - list subscriptions with optional filters.
-- `GET /v1/subscriptions/{subscription_id}` - fetch one subscription.
-- `POST /v1/subscriptions/{subscription_id}/pause` - set `status=paused`, cancel triggers.
-- `POST /v1/subscriptions/{subscription_id}/resume` - set `status=active`, re-schedule.
-- `POST /v1/subscriptions/{subscription_id}/cancel` - set `status=canceled`, unregister trigger.
-- `POST /v1/subscriptions/{subscription_id}/usage` - record usage (by-call trigger).
-- `POST /v1/subscriptions/{subscription_id}/charge-now` - execute billing immediately.
+- `POST /v2/subscriptions/plans` - register plan (AssetDefinition metadata).
+- `GET /v2/subscriptions/plans` - list plans by provider.
+- `POST /v2/subscriptions` - create subscription + billing trigger.
+- `GET /v2/subscriptions` - list subscriptions with optional filters.
+- `GET /v2/subscriptions/{subscription_id}` - fetch one subscription.
+- `POST /v2/subscriptions/{subscription_id}/pause` - set `status=paused`, cancel triggers.
+- `POST /v2/subscriptions/{subscription_id}/resume` - set `status=active`, re-schedule.
+- `POST /v2/subscriptions/{subscription_id}/cancel` - set `status=canceled`, unregister trigger.
+- `POST /v2/subscriptions/{subscription_id}/usage` - record usage (by-call trigger).
+- `POST /v2/subscriptions/{subscription_id}/charge-now` - execute billing immediately.
 
-### POST /v1/subscriptions/plans
+### POST /v2/subscriptions/plans
 Registers a plan on an asset definition. `authority` must match `plan.provider`.
 ```json
 {
@@ -253,7 +253,7 @@ Response:
 { "ok": true, "plan_id": "aws_compute#subscriptions", "tx_hash_hex": "<hex>" }
 ```
 
-### GET /v1/subscriptions/plans
+### GET /v2/subscriptions/plans
 Query params:
 - `provider` (optional) - filter by provider account id.
 - `limit`, `offset` (optional) - pagination.
@@ -262,7 +262,7 @@ Response:
 { "items": [ { "plan_id": "...", "plan": { "...": "..." } } ], "total": 1 }
 ```
 
-### POST /v1/subscriptions
+### POST /v2/subscriptions
 Creates a subscription NFT and billing trigger. `authority` must be the subscriber (NFT owner).
 ```json
 {
@@ -295,7 +295,7 @@ Response:
 }
 ```
 
-### GET /v1/subscriptions
+### GET /v2/subscriptions
 Query params:
 - `owned_by` (optional) - filter by subscriber account id.
 - `provider` (optional) - filter by provider account id.
@@ -316,23 +316,23 @@ Response:
 }
 ```
 
-### GET /v1/subscriptions/{subscription_id}
+### GET /v2/subscriptions/{subscription_id}
 Returns the subscription state, latest invoice (if any), and plan metadata (if present).
 
-### POST /v1/subscriptions/{subscription_id}/pause
+### POST /v2/subscriptions/{subscription_id}/pause
 ```json
 { "authority": "i105...", "private_key": "<hex>" }
 ```
 Sets `status=paused` and unregisters the billing trigger.
 
-### POST /v1/subscriptions/{subscription_id}/resume
+### POST /v2/subscriptions/{subscription_id}/resume
 ```json
 { "authority": "i105...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
 ```
 Sets `status=active`, resets `failure_count`, recomputes the current period, and re-schedules billing.
 `charge_at_ms` follows the same defaults as `first_charge_ms` when omitted.
 
-### POST /v1/subscriptions/{subscription_id}/cancel
+### POST /v2/subscriptions/{subscription_id}/cancel
 ```json
 { "authority": "i105...", "private_key": "<hex>", "cancel_mode": "immediate" }
 ```
@@ -344,14 +344,14 @@ or
 `cancel_mode=period_end` keeps the subscription active until the current period ends, then stops
 future billing without charging the next period.
 
-### POST /v1/subscriptions/{subscription_id}/keep
+### POST /v2/subscriptions/{subscription_id}/keep
 ```json
 { "authority": "i105...", "private_key": "<hex>" }
 ```
 Clears `cancel_at_period_end` and keeps the subscription active for future billing cycles. Returns
 an error if the subscription is not scheduled to cancel at period end.
 
-### POST /v1/subscriptions/{subscription_id}/usage
+### POST /v2/subscriptions/{subscription_id}/usage
 ```json
 {
   "authority": "i105...",
@@ -363,7 +363,7 @@ an error if the subscription is not scheduled to cancel at period end.
 ```
 Executes the usage trigger with `SubscriptionUsageDelta`. `delta` must be non-negative.
 
-### POST /v1/subscriptions/{subscription_id}/charge-now
+### POST /v2/subscriptions/{subscription_id}/charge-now
 ```json
 { "authority": "i105...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
 ```

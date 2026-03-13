@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | چھیڑ چھاڑ کی تشکیل کا اظہار | `ClientConfig` درخواست دینے سے پہلے ظاہر (ہیش + اسکیما) کی توثیق کرتا ہے اور لاگ ان نے `android.telemetry.config.reload` کے ذریعے دوبارہ لوڈز سے انکار کیا۔ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java` ؛ `docs/source/android_runbook.md` §1–2. |
 | چابیاں پر دستخط کرنے سے سمجھوتہ | مضبوط بوکس سے لازمی پالیسیاں ، تصدیق کے استعمال ، اور ڈیوائس میٹرکس آڈٹ بڑھنے کی نشاندہی کرتے ہیں۔ ہر واقعے کو دستاویزی دستاویزات میں اوور رائڈز۔ | `docs/source/sdk/android/key_management.md` ؛ `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` ؛ `scripts/android_strongbox_attestation_ci.sh`۔ |
 | ٹیلی میٹری میں PII رساو | بلیک 2 بی ہیشڈ حکام ، بالٹیڈ ڈیوائس پروفائلز ، کیریئر کی غلطی ، لاگنگ کو اوور رائڈ۔ | `docs/source/sdk/android/telemetry_redaction.md` ؛ سپورٹ پلے بک §8۔ |
-| Torii RPC | پر ری پلے یا ڈاؤن گریڈ کریں `/v1/pipeline` درخواست بلڈر TLS کو پننگ ، شور چینل کی پالیسی ، اور ہیشڈ اتھارٹی کے سیاق و سباق کے ساتھ بجٹ کی دوبارہ کوشش کریں۔ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` ؛ `docs/source/sdk/android/networking.md` (منصوبہ بند)۔ |
+| Torii RPC | پر ری پلے یا ڈاؤن گریڈ کریں `/v2/pipeline` درخواست بلڈر TLS کو پننگ ، شور چینل کی پالیسی ، اور ہیشڈ اتھارٹی کے سیاق و سباق کے ساتھ بجٹ کی دوبارہ کوشش کریں۔ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` ؛ `docs/source/sdk/android/networking.md` (منصوبہ بند)۔ |
 | دستخط شدہ یا غیر قابل تدریسی ریلیز | cyclonedx SBOM + Sigstore and6 چیک لسٹ کے ذریعہ گیٹڈ ؛ ریلیز آر ایف سی کو `docs/source/release/provenance/android/` میں شواہد کی ضرورت ہوتی ہے۔ | `docs/source/sdk/android/developer_experience_plan.md` ؛ `docs/source/compliance/android/eu/sbom_attestation.md`۔ |
 | نامکمل واقعہ ہینڈلنگ | رن بک + پلے بوک اوور رائڈس ، افراتفری کی مشقیں ، اور بڑھتی ہوئی درخت کی وضاحت کرتی ہے۔ ٹیلی میٹری اوور رائڈس کے لئے دستخط شدہ Norito درخواستوں کی ضرورت ہوتی ہے۔ | `docs/source/android_runbook.md` ؛ `docs/source/android_support_playbook.md`۔ |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 ایکسیس کنٹرول | مضبوط باکس پالیسیاں + اوور رائڈ ورک فلو جس میں دستخط شدہ Norito نمونے کی ضرورت ہوتی ہے۔ |
 | 7.5 کریپٹوگرافک کنٹرول | کلیدی نسل ، اسٹوریج ، اور And2 (کلیدی انتظامیہ گائیڈ) سے تصدیق کی ضروریات۔ |
 | 7.6 آپریشن سیکیورٹی | ٹیلی میٹری ہیشنگ ، افراتفری کی مشقیں ، واقعہ کا ردعمل ، اور شواہد کا گیٹنگ جاری کریں۔ |
-| 7.7 مواصلات سیکیورٹی | `/v1/pipeline` TLS پالیسی + ہیشڈ حکام (ٹیلی میٹری ریڈ ایکشن ڈاکٹر)۔ |
+| 7.7 مواصلات سیکیورٹی | `/v2/pipeline` TLS پالیسی + ہیشڈ حکام (ٹیلی میٹری ریڈ ایکشن ڈاکٹر)۔ |
 | 7.8 سسٹم کے حصول / ترقی | تولیدی گریڈ ، اور 5/اور 6 منصوبوں میں تولیدی گریڈ ، ایس بی او ایم ، اور پروویژن گیٹس بناتا ہے۔ |
 | 7.9 سپلائر تعلقات | بلڈکائٹ + Sigstore تیسری پارٹی کے انحصار SBOMs کے ساتھ ساتھ ریکارڈ کیا گیا ہے۔ |
 | 7.10 واقعہ کا انتظام | رن بک/پلے بوک اسکیلیشن ، اوور رائڈ لاگنگ ، ٹیلی میٹری فیل کاؤنٹرز۔ |

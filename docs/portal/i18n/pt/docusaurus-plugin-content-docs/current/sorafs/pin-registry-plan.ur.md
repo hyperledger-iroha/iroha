@@ -76,7 +76,7 @@ Teste:
 
 | sim | کام | مالک/مالکان |
 |------|-----|------------|
-| Serviço Torii | `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular)، `/v1/sorafs/replication` (pedidos/recebimentos) فراہم کریں۔ paginação + filtragem مہیا کریں۔ | Rede TL / Core Infra |
+| Serviço Torii | `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (pesquisa), `/v2/sorafs/aliases` (listar/vincular)، `/v2/sorafs/replication` (pedidos/recebimentos) فراہم کریں۔ paginação + filtragem مہیا کریں۔ | Rede TL / Core Infra |
 | Atestado | respostas میں altura / hash do registro شامل کریں؛ Estrutura de atestado Norito شامل کریں جسے SDKs consomem کریں۔ | Infra principal |
 | CLI | `sorafs_manifest_stub` میں توسیع یا نئی `sorafs_pin` CLI بنائیں جس میں `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Ferramentaria |
 | SDK | Esquema Norito سے ligações de cliente (Rust/Go/TS) geram کریں؛ testes de integração | Equipes SDK |
@@ -131,9 +131,9 @@ Painéis:
 Lista de verificação SF-4 کے ہر
 Fachada REST اب endpoints de listagem atestados کے ساتھ آتی ہے:
 
-- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` manifesta واپس کرتے ہیں جن میں
+- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` manifesta واپس کرتے ہیں جن میں
   ligações de alias, ordens de replicação, اور تازہ ترین bloco hash سے ماخوذ objeto de atestado شامل ہے۔
-- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` no catálogo de alias
+- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` no catálogo de alias
   backlog de pedidos de replicação کو paginação consistente اور filtros de status کے ساتھ ظاہر کرتے ہیں۔
 
 CLI não chama کو wrap کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,

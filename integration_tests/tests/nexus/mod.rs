@@ -9,6 +9,7 @@ mod cross_dataspace_zk_stark_localnet;
 mod cross_lane;
 mod global_commit;
 mod lane_registry;
+mod multilane_kura_layout;
 mod multilane_pipeline;
 mod multilane_router;
 mod runtime_dataspace_registration_perf;

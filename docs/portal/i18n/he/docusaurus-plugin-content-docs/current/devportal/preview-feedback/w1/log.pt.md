@@ -29,7 +29,7 @@ reproduzir as evidencias sem perseguir כרטיסים externos.
 | partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | בסדר 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | Concluido 2025-04-26 | soraps-op-01; focado em evidencia de paridade dos docs do orchestrator. |
 | partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | בסדר 2025-04-03 | 12-04-2025 15:03 | 12-04-2025 15:15 | Concluido 2025-04-26 | soraps-op-02; validou crosslinks Norito/telemetria. |
 | partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | בסדר 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | Concluido 2025-04-26 | soraps-op-03; executou drills de failover multi-source. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | בסדר 2025-04-04 | 12-04-2025 15:09 | 2025-04-12 15:21 | Concluido 2025-04-26 | torii-int-01; revisao do cookbook Torii `/v1/pipeline` + נסה את זה. |
+| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | בסדר 2025-04-04 | 12-04-2025 15:09 | 2025-04-12 15:21 | Concluido 2025-04-26 | torii-int-01; revisao do cookbook Torii `/v2/pipeline` + נסה את זה. |
 | partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | בסדר 2025-04-05 | 12-04-2025 15:12 | 2025-04-12 15:23 | Concluido 2025-04-26 | torii-int-02; acompanhou a atualizacao do צילום מסך נסה את זה (docs-preview/w1 #2). |
 | partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | בסדר 2025-04-05 | 12-04-2025 15:15 | 2025-04-12 15:26 | Concluido 2025-04-26 | sdk-partner-01; משוב על ספרי הבישול JS/Swift + בדיקות שפיות עושות גשר ISO. |
 | partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | בסדר 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | Concluido 2025-04-26 | sdk-partner-02; תאימות aprovado 2025-04-11, focado em notas de Connect/telemetria. |

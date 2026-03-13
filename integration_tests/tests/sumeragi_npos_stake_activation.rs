@@ -27,7 +27,7 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
@@ -36,7 +36,6 @@ const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
-const STAKE_ASSET_ID: &str = "xor#nexus";
 const STAKE_DOMAIN_ID: &str = "ivm";
 const WAIT_HEIGHT: u64 = 16;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
@@ -46,6 +45,17 @@ const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 enum StakeActivationProfile {
     MinStakeFilter,
     EntityCorrelationCap,
+}
+
+fn stake_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "nexus".parse().expect("nexus domain"),
+        "xor".parse().expect("stake asset name"),
+    )
+}
+
+fn stake_asset_id_literal() -> String {
+    stake_asset_definition_id().to_string()
 }
 
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
@@ -73,11 +83,15 @@ fn stake_genesis_post_topology_transactions(
 ) -> Vec<Vec<InstructionBox>> {
     let stake_domain: DomainId = STAKE_DOMAIN_ID.parse().expect("stake domain id");
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain id");
-    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset id");
+    let stake_asset_id = stake_asset_definition_id();
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
-    let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-        .with_metadata(Metadata::default());
+    let definition = {
+        let __asset_definition_id = stake_asset_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+            .with_name(__asset_definition_id.name().to_string())
+    }
+    .with_metadata(Metadata::default());
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(stake_domain.clone())).into(),
@@ -149,8 +163,7 @@ async fn advance_to_height(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<()> {
     init_instruction_registry();
-    let gas_account_str =
-        AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
+    let gas_account_str = ALICE_ID.to_string();
 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -159,7 +172,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
-                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
                     gas_account_str.clone(),
@@ -230,7 +246,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     .await?;
     let collectors_url = client
         .torii_url
-        .join("v1/sumeragi/collectors")
+        .join("v2/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     assert_no_single_collector(
         &collectors_url,
@@ -326,8 +342,7 @@ async fn collector_peer_ids(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     init_instruction_registry();
-    let gas_account_str =
-        AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
+    let gas_account_str = ALICE_ID.to_string();
 
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -336,7 +351,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
-                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
                     gas_account_str.clone(),
@@ -412,7 +430,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
 
     let collectors_url = client
         .torii_url
-        .join("v1/sumeragi/collectors")
+        .join("v2/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let http = reqwest::Client::new();
     let deadline = Instant::now() + COLLECTOR_RETRY;

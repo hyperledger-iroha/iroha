@@ -57,12 +57,12 @@ probabiliste pour que les opérateurs puissent corréler les gains de micropaiem
 ## אינטגרציה Torii
 
 Torii לחשוף את נקודות הקצה dédiés pour que les fournisseurs signalent l'usage et pilotent
-le cycle de vie des accords ללא מפרט החיווט:- `POST /v1/sorafs/deal/usage` accepte la télémétrie `DealUsageReport` et renvoie
+le cycle de vie des accords ללא מפרט החיווט:- `POST /v2/sorafs/deal/usage` accepte la télémétrie `DealUsageReport` et renvoie
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` לסיים את הפנתרים, en streamant le
+- `POST /v2/sorafs/deal/settle` לסיים את הפנתרים, en streamant le
   `DealSettlementRecord` résultant avec un `DealSettlementV1` קידוד בבסיס64
   prêt pour publication dans le DAG de gouvernance.
-- Le feed `/v1/events/sse` de Torii מפוזר désormais des enregistrements
+- Le feed `/v2/events/sse` de Torii מפוזר désormais des enregistrements
   `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (תקופה, GiB-heures mesurés,
   מתחרים של כרטיסים, חיובים דטרמיניסטים), הרשמות
   `SorafsGatewayEvent::DealSettlement` qui incluent le snapshot canonique du ledger de règlement

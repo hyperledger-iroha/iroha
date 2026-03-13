@@ -64,7 +64,7 @@ translation_last_reviewed: 2026-02-07
 ## ציוד ואביזרי
 
 - يجب أن تتضمن payloads إعلانات المزود `range_capability` و`stream_budget` و`transport_hints`.
-  تحقّق عبر استجابات `/v1/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
+  تحقّق عبر استجابات `/v2/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
   ملخصات JSON القدرة المحللة وميزانية البث ومصفوفات hints لابتلاع التليمترية.
 - `cargo xtask sorafs-admission-fixtures` תקציבי זרימה ורמזים לתחבורה
   artefacts JSON كي تتابع لوحات المراقبة تبني الميزة.
@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
   - adverts متعددة المصادر قياسية،
   - `multi_fetch_plan.json` لكي تعيد مجموعات SDK تشغيل خطة fetch متعددة الأقران بشكل حتمي.
 
-## تكامل المُنسق وTorii- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
+## تكامل المُنسق وTorii- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` ו`transport_hints`. تُطلق تحذيرات downgrade عندما يحذف
   المزودون البيانات الجديدة، وتطبق نقاط نطاق البوابة القيود نفسها للعملاء المباشرين.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

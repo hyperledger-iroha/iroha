@@ -143,7 +143,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` يعكس JSON `/v1/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية القياسية I105، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة.
+`ExplorerAccountQrSnapshot` يعكس JSON `/v2/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية القياسية I105، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة.
 
 ## 7. اشترك في الأحداث
 

@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii ダッシュボード上でクレジット プロバイダーのメンテナンス スナップショットと手数料台帳を公開します
 puissent ゲート sur les faibles ソルデスとペナルティストライク:
 
-- REST: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
+- REST: `GET /v2/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
   シャンプ・デュ・レジャー・ベリフィエをテスト・ド・ソークに反映します。ヴォワール
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` トレース ファイルをインポートします

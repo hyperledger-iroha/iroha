@@ -69,7 +69,7 @@ SBOMs) მიედინება SoraFS მანიფესტის მი�
 
 გამოიყენეთ `sorafs_cli manifest submit`, რათა აიძულოთ მანიფესტები Torii-ში და დააკავშიროთ მეტსახელები.
 დააყენეთ `${SUBMITTED_EPOCH}` უახლეს კონსენსუსის ეპოქაზე (დან
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` ან თქვენი დაფა).
+`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` ან თქვენი დაფა).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -77,7 +77,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

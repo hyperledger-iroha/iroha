@@ -72,7 +72,7 @@ Tarefas:
 
 | Componente | Tarefa | Responsavel(es) |
 |------------|--------|-----------------|
-| Servico Torii | Export `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recibos). Fornecer paginacao + filtragem. | Redes TL / Core Infraestructura |
+| Servico Torii | Export `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (búsqueda), `/v2/sorafs/aliases` (listar/vincular), `/v2/sorafs/replication` (pedidos/recibos). Fornecer paginacao + filtragem. | Redes TL / Core Infraestructura |
 | Atestacao | Incluir altura/hash do registro nas respuestas; Agregar estructura de atestacao Norito consumida pelos SDK. | Infraestructura básica |
 | CLI | Coloque `sorafs_manifest_stub` o una nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Generar fijaciones de cliente (Rust/Go/TS) a partir del esquema Norito; Adicionar testes de integracao. | Equipos SDK |
@@ -123,10 +123,10 @@ Alertas:
 5. Actualizar documentos/runbooks y marcar elementos de la hoja de ruta como completos.
 
 Cada lista de verificación del SF-4 debe hacer referencia a este plano cuando usted progresa.
-A fachada REST ahora entrega endpoints de listagem com atestacao:- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` retorno de manifiestos com
+A fachada REST ahora entrega endpoints de listagem com atestacao:- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` retorno de manifiestos com
   enlaces de alias, órdenes de replicación y un objeto de atestacao derivado del
   hash do ultimo bloco.
-- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` exposición o catálogo de
+- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` exposición o catálogo de
   alias ativo e o backlog de órdenes de replicacao com paginacao consistente e
   filtros de estado.
 

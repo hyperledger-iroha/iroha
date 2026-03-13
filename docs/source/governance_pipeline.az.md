@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 - İdarəetmə təklifləri aşağıdakı kimi həyata keçirilir: təklifçi → referendum → tally → qüvvəyə minmə. Referendum pəncərələri və iştirak/təsdiq hədləri `gov.md`-də təsvir olunduğu kimi tətbiq edilir; kilidlər yalnız uzadılır və müddəti bitdikdən sonra kilidini açın.
 - Parlament seçimində deterministik sıralama və müddət sərhədləri ilə VRF əsaslı tirajlardan istifadə edilir; heç bir davamlı siyahı mövcud olmadıqda, Torii `gov.parliament_*` konfiqurasiyasından istifadə edərək ehtiyat əldə edir. Şura girişi və kvorum yoxlamaları `gov_parliament_bodies` / `gov_pipeline_sla` testlərində həyata keçirilir.
 - Səsvermə rejimləri: ZK (standart, daxili baytlarla `Active` VK tələb olunur) və Düz (kvadrat çəki). Rejim uyğunsuzluğu rədd edilir; kilidin yaradılması/uzatılması ZK üçün reqressiya testləri və sadə təkrar səslər ilə hər iki rejimdə monotondur.
-- Təsdiqləyicinin səhv davranışı sübut boru kəməri (`/v1/sumeragi/evidence*`, CLI köməkçiləri) vasitəsilə `NextMode` + `ModeActivationHeight` tərəfindən tətbiq edilən birgə konsensus təhvil-təslimləri ilə fəaliyyət göstərir.
+- Təsdiqləyicinin səhv davranışı sübut boru kəməri (`/v2/sumeragi/evidence*`, CLI köməkçiləri) vasitəsilə `NextMode` + `ModeActivationHeight` tərəfindən tətbiq edilən birgə konsensus təhvil-təslimləri ilə fəaliyyət göstərir.
 - Qorunan ad məkanları, iş vaxtını təkmilləşdirmə qarmaqları və idarəetmə manifestinin qəbulu `governance_api.md`-də sənədləşdirilib və telemetriya ilə əhatə olunub (`governance_manifest_*`, `governance_protected_namespace_total`).
 
 # Uçuş zamanı / geriləmə

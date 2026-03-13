@@ -29,7 +29,7 @@ Le flux d'emballage de SoraFS répond à la détermination, car le passage de CI
 - **Política de admissionión** — réviser les annonces du fournisseur firmados et les preuves d'alias nécessaires pour `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook de registre PIN** — mantén `docs/source/sorafs/runbooks/pin_registry_ops.md` à la main pour les scénarios de récupération (rotation d'alias, erreurs de réplication).
 
-## Configuration de l'arrivée- Les passerelles doivent permettre au point final de streaming des preuves (`POST /v1/sorafs/proof/stream`) pour que la CLI émette des résultats de télémétrie.
+## Configuration de l'arrivée- Les passerelles doivent permettre au point final de streaming des preuves (`POST /v2/sorafs/proof/stream`) pour que la CLI émette des résultats de télémétrie.
 - Configurez la politique `sorafs_alias_cache` en utilisant les valeurs prédéfinies de `iroha_config` ou l'assistant de CLI (`sorafs_cli manifest submit --alias-*`).
 - Proposer des jetons de flux (ou identifiants Torii) à l'aide d'un gestionnaire de secrets sécurisés.
 - Habilita les exportateurs de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et les envoie à votre pile Prometheus/OTel.

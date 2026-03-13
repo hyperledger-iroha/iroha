@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- О помощник, эмите um `POST /v1/sns/registrations` по запросу и прерыванию не в первую очередь
+- О помощник, эмите um `POST /v2/sns/registrations` по запросу и прерыванию не в первую очередь
   ошибка HTTP. В качестве ответов на запросы или журналы регистрации NDJSON.
-- `--poll-status` проконсультируйтесь с `/v1/sns/registrations/{selector}` после каждой отправки
+- `--poll-status` проконсультируйтесь с `/v2/sns/registrations/{selector}` после каждой отправки
   (ate `--poll-attempts`, по умолчанию 5) для подтверждения того, что регистрация является видимой.
   Forneca `--suffix-map` (JSON de `suffix_id` для значений «суффикс»), чтобы
   Ferramenta извлекает буквенные `{label}.{suffix}` для опроса.

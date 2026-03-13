@@ -25,7 +25,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## סקירה
 
-ה-runbook מתעד כיצד לנטר ולבצע טריאז' ל-Pin Registry של SoraFS ול-SLA של הרפליקציה. המדדים מגיעים מ-`iroha_torii` ומיוצאים דרך Prometheus תחת מרחב השמות `torii_sorafs_*`. Torii דוגם את מצב ה-registry כל 30 שניות ברקע, כך שהדשבורדים נשארים מעודכנים גם כאשר אין מפעילים שפונים ל-endpoints `/v1/sorafs/pin/*`. יש לייבא את הדשבורד המובנה (`docs/source/grafana_sorafs_pin_registry.json`) כדי לקבל פריסת Grafana מוכנה שממפה ישירות לסעיפים הבאים.
+ה-runbook מתעד כיצד לנטר ולבצע טריאז' ל-Pin Registry של SoraFS ול-SLA של הרפליקציה. המדדים מגיעים מ-`iroha_torii` ומיוצאים דרך Prometheus תחת מרחב השמות `torii_sorafs_*`. Torii דוגם את מצב ה-registry כל 30 שניות ברקע, כך שהדשבורדים נשארים מעודכנים גם כאשר אין מפעילים שפונים ל-endpoints `/v2/sorafs/pin/*`. יש לייבא את הדשבורד המובנה (`docs/source/grafana_sorafs_pin_registry.json`) כדי לקבל פריסת Grafana מוכנה שממפה ישירות לסעיפים הבאים.
 
 ## ייחוס מדדים
 
@@ -126,7 +126,7 @@ groups:
 
 1. **זיהוי סיבה**
    - אם החמצות SLA עולות בזמן שה-backlog נמוך, התמקדו בביצועי providers (כשלי PoR, השלמות מאוחרות).
-   - אם ה-backlog גדל עם החמצות יציבות, בדקו את ה-admission (`/v1/sorafs/pin/*`) כדי לאשר manifests שממתינים לאישור המועצה.
+   - אם ה-backlog גדל עם החמצות יציבות, בדקו את ה-admission (`/v2/sorafs/pin/*`) כדי לאשר manifests שממתינים לאישור המועצה.
 2. **אימות מצב providers**
    - הריצו `iroha app sorafs providers list` ואמתו שהיכולות המוצהרות תואמות לדרישות הרפליקציה.
    - בדקו את מדדי `torii_sorafs_capacity_*` כדי לאשר GiB מוקצים והצלחת PoR.
@@ -147,7 +147,7 @@ groups:
 2. **Dry-run ב-staging**
    - פרסו את שינוי התצורה בקלאסטר staging שמדמה את טופולוגיית הפרודקשן.
    - הריצו `cargo xtask sorafs-pin-fixtures` כדי לוודא שה-alias fixtures הקנוניים עדיין מתפענחים ומבצעים round-trip; כל אי התאמה מצביעה על drift במעלה הזרם שיש לטפל בו קודם.
-   - הפעילו את endpoints `/v1/sorafs/pin/{digest}` ו-`/v1/sorafs/aliases` עם הוכחות סינתטיות המכסות fresh, refresh-window, expired ו-hard-expired. אמתו את קודי ה-HTTP, ה-headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) ושדות גוף ה-JSON מול ה-runbook.
+   - הפעילו את endpoints `/v2/sorafs/pin/{digest}` ו-`/v2/sorafs/aliases` עם הוכחות סינתטיות המכסות fresh, refresh-window, expired ו-hard-expired. אמתו את קודי ה-HTTP, ה-headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) ושדות גוף ה-JSON מול ה-runbook.
 3. **הפעלה בפרודקשן**
    - פרסו את התצורה החדשה בחלון שינוי סטנדרטי. החילו על Torii תחילה, ואז אתחלו gateways/שירותי SDK לאחר שה-node מאשר את המדיניות החדשה בלוגים.
    - ייבאו את `docs/source/grafana_sorafs_pin_registry.json` ל-Grafana (או עדכנו דשבורדים קיימים) וקבעו את פאנלי רענון ה-alias cache בסביבת NOC.

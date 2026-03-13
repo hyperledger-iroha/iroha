@@ -84,7 +84,7 @@ manifest のコミットメントを保持し、pin ポリシーを強制し、T
 
 | コンポーネント | タスク | 担当 |
 |----------------|------|------|
-| Torii サービス | `/v1/sorafs/pin` (submit)、`/v1/sorafs/pin/{cid}` (lookup)、`/v1/sorafs/aliases` (list/bind)、`/v1/sorafs/replication` (orders/receipts) を公開。ページネーション + フィルタを提供。 | Networking TL / Core Infra |
+| Torii サービス | `/v2/sorafs/pin` (submit)、`/v2/sorafs/pin/{cid}` (lookup)、`/v2/sorafs/aliases` (list/bind)、`/v2/sorafs/replication` (orders/receipts) を公開。ページネーション + フィルタを提供。 | Networking TL / Core Infra |
 | アテステーション | レスポンスに registry の高さ/ハッシュを含め、SDK が消費する Norito アテステーション構造体を追加。 | Core Infra |
 | CLI | `sorafs_manifest_stub` 拡張または新 CLI `sorafs_pin` に `pin submit`, `alias bind`, `order issue`, `registry export` を追加。 | Tooling WG |
 | SDK | Norito スキーマからクライアントバインディング (Rust/Go/TS) を生成し、統合テストを追加。 | SDK Teams |
@@ -141,10 +141,10 @@ manifest のコミットメントを保持し、pin ポリシーを強制し、T
 SF-4 のチェックリスト項目は進捗時に本計画を参照すること。
 REST ファサードはアテスト付きリストエンドポイントを提供済み:
 
-- `GET /v1/sorafs/pin` と `GET /v1/sorafs/pin/{digest}` は manifest を返し、
+- `GET /v2/sorafs/pin` と `GET /v2/sorafs/pin/{digest}` は manifest を返し、
   alias bindings、レプリケーションオーダー、最新ブロックハッシュ由来の
   アテステーションオブジェクトを含む。
-- `GET /v1/sorafs/aliases` と `GET /v1/sorafs/replication` はアクティブな
+- `GET /v2/sorafs/aliases` と `GET /v2/sorafs/replication` はアクティブな
   alias カタログとレプリケーションオーダー backlog を一貫したページネーションと
   ステータスフィルタで公開。
 

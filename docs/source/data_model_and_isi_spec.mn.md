@@ -200,7 +200,7 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 - Гаалийн нэр + дансны бүрэлдэхүүн хэсгүүд:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Каноник тусламжийн нэрсийг шийдвэрлэх:
-  - JSON `{ "alias": "pkr#ubl@sbp" }`-тэй `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }`-тэй `POST /v2/assets/aliases/resolve`
 
 Шилжилтийн тэмдэглэл:
 - `name#domain` текстийн хөрөнгийн тодорхойлолтын ID-г эхний хувилбар дээр санаатайгаар дэмждэггүй.

@@ -340,7 +340,7 @@ summary below tracks the headline items surfaced to release engineering.
 | SM3 | GB/T 32905 | GM/T 0004 | 256-bit hash; deterministic hashing across scalar and ARMv8 accelerated paths. |
 | SM4 | GB/T 32907 | GM/T 0002 | 128-bit block cipher; Iroha provides GCM/CCM helpers and ensures big-endian parity across implementations. |
 
-- **Capability manifest:** The Torii `/v1/node/capabilities` endpoint advertises the following JSON shape so operators and tooling can consume the SM manifest programmatically:
+- **Capability manifest:** The Torii `/v2/node/capabilities` endpoint advertises the following JSON shape so operators and tooling can consume the SM manifest programmatically:
 
 ```json
 {

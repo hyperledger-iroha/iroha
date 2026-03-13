@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```## 3. Автоматическая отправка
 
@@ -132,10 +132,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник запросит запрос `POST /v1/sns/registrations` для HTTP-запроса.
+- Помощник запросит запрос `POST /v2/sns/registrations` для HTTP-запроса.
   ошибка или прерывание کرتا ہے۔ Путь к журналу ответов, записи NDJSON и добавление
   ہوتے ہیں۔
-- `--poll-status` ہر представление `/v1/sns/registrations/{selector}` کو
+- `--poll-status` ہر представление `/v2/sns/registrations/{selector}` کو
   دوبارہ query کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, по умолчанию 5) تاکہ запись
   видимый ہونے کی تصدیق ہو۔ `--suffix-map` (JSON или `suffix_id` для значений «суффикса»).
   سے карта کرے) فراہم کریں تاکہ инструмент `{label}.{suffix}` литералы получают کر سکے۔

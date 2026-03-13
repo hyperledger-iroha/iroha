@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    лавлах `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Үйлчилгээ үзүүлэгчийн зарыг илрүүлэх API-ээр дамжуулж байгааг баталгаажуулна уу:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Манифест/төлөвлөгөөний төгсгөлийн цэгүүдийг засаглалын гарчигтай дасгал хийх:
    ```bash

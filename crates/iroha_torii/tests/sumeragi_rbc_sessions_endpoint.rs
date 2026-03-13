@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/rbc/sessions
+//! Router-level test for GET /v2/sumeragi/rbc/sessions
 #![cfg(feature = "telemetry")]
 
 #[tokio::test]
@@ -32,14 +32,14 @@ async fn rbc_sessions_endpoint_shape() {
     handle.update(summary, SystemTime::now());
 
     let app = Router::new().route(
-        "/v1/sumeragi/rbc/sessions",
+        "/v2/sumeragi/rbc/sessions",
         get(|| async move { iroha_torii::handle_v1_sumeragi_rbc_sessions().await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/rbc/sessions")
+                .uri("/v2/sumeragi/rbc/sessions")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

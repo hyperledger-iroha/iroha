@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Tasdiqdan keyingi konfiguratsiya suratlari
 
 Referendum yoki boshqaruv ovoz berish tugagandan so'ng va `[settlement.repo]`
-o'zgartirish amalga oshirildi, har bir tengdoshdan `/v1/configuration` suratlarini oling
+o'zgartirish amalga oshirildi, har bir tengdoshdan `/v2/configuration` suratlarini oling
 auditorlar tasdiqlangan siyosat klaster bo'ylab amalda ekanligini isbotlashlari mumkin (qarang
 Dalillar ish jarayoni uchun `docs/source/finance/repo_ops.md` §2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

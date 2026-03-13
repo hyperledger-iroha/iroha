@@ -165,7 +165,7 @@ Isso é possível, esse instantâneo do TEU, metadaнные alias e bandeiras ma
 
 - **Rust/CLI.** `iroha_cli` e клиентский crate Rust опускают поле `lane_id`, когда вы не передаете `--lane-id` / `LaneSelector`. O roteador de fila está no mesmo lugar em `default_lane`. Use a bandeira `--lane-id`/`--dataspace-id` para trabalhar sem faixa padrão.
 - **JS/Swift/Android.** As configurações do SDK disponíveis são `laneId`/`lane_id` opcionais e alternativas, verificado em `/status`. Держите политику маршрутизации синхронизированной между encenação e produção, чтобы мобильным приложениям не требовались аварийные перенастройки.
-- **Testes de pipeline/SSE.** Os filtros de transação são enviados para `tx_lane_id == <u32>` (como `docs/source/pipeline.md`). Подпишитесь на `/v1/pipeline/events/transactions` com um filtro, чтобы доказать, что записи, отправленные без явного lane, приходят под fallback lane id.
+- **Testes de pipeline/SSE.** Os filtros de transação são enviados para `tx_lane_id == <u32>` (como `docs/source/pipeline.md`). Подпишитесь на `/v2/pipeline/events/transactions` com um filtro, чтобы доказать, что записи, отправленные без явного lane, приходят под fallback lane id.
 
 ## 7. Observabilidade e ganchos de governança- `/status` também é publicado `nexus_lane_governance_sealed_total` e `nexus_lane_governance_sealed_aliases`, o Alertmanager pode ser usado para gerar o manifesto da pista. Deixe esses alertas ativados hoje no devnet.
 - O cartão do agendador de telemetria e governança do painel para pistas (`dashboards/grafana/nexus_lanes.json`) contém um alias/slug do catálogo. Você está experimentando alias, experimentando e gerenciando o diretor Kura, seu auditor детерминированные пути (отслеживается no NX-1).

@@ -30,7 +30,7 @@ Sidebar_label: علامات الاستفهام
 
 ## تخزين التكوين
 
-- يجب أن تشتمل البوابات على دفق إثبات نقطة النهاية (`POST /v1/sorafs/proof/stream`)، بحيث يمكن لـ CLI استخدام البث عن بعد.
+- يجب أن تشتمل البوابات على دفق إثبات نقطة النهاية (`POST /v2/sorafs/proof/stream`)، بحيث يمكن لـ CLI استخدام البث عن بعد.
 - قم بإنشاء السياسة `sorafs_alias_cache` باستخدام مساعد CLI (`sorafs_cli manifest submit --alias-*`).
 - إعادة إرسال الرموز المميزة للتيار (أو البيانات الجيدة Torii) من خلال المدير السري الآمن.
 - قم بتضمين مصدري القياس عن بعد (`torii_sorafs_proof_stream_*`، `torii_sorafs_chunk_range_*`) وقم بتوجيههم إلى جهازك Prometheus/OTel.## طرح الإستراتيجية

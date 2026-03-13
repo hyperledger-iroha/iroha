@@ -70,7 +70,7 @@ SoraFS プロバイダー `ProviderAdvertV1` ペイロード (دیکھیں)
 ゲートウェイの決定論的な HTTP リクエストは、広告メタデータとミラーリングを受け入れます。
 ありがとうございます
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 |要件 |詳細 |
 |-----------|-----------|
@@ -78,7 +78,7 @@ SoraFS プロバイダー `ProviderAdvertV1` ペイロード (دیکھیں)
 | **回答** | `206` と `Content-Type: application/vnd.ipld.car`、`Content-Range` は、サーブド ウィンドウを表示します。 `X-Sora-Chunk-Range` メタデータは、チャンカー/トークン ヘッダーとエコーを表示します。 |
 | **障害モード** |範囲が正しくありません `416`、欠落/無効なトークン `401`、ストリーム/バイト バジェットが超過 `429`۔ |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 単一チャンクのフェッチ、ヘッダー、および決定論的なチャンク ダイジェスト再試行
 フォレンジックのダウンロード、分析、車のスライス、分析、分析、分析、分析、分析、分析、分析、分析、分析、分析、分析、分析、分析
@@ -127,11 +127,11 @@ SF-6 マルチソースフェッチが有効化 (`sorafs_fetch` 経由の Rust C
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` ピン レジストリ
   REST エンドポイントは、監査証拠をラップし、構成証明ブロックをラップします。
   raw Norito JSON 印刷
-- `iroha app sorafs storage pin` 国際 `torii /v1/sorafs/pin/register` Norito 国際 JSON
+- `iroha app sorafs storage pin` 国際 `torii /v2/sorafs/pin/register` Norito 国際 JSON
   マニフェスト オプションのエイリアス証明 後継者は受け入れます奇形な
   プルーフ `400`、古いプルーフ `503`、`Warning: 110`、完全に期限切れのプルーフ
   پر `412`۔
-- REST エンドポイント (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
+- REST エンドポイント (`/v2/sorafs/pin`、`/v2/sorafs/aliases`、`/v2/sorafs/replication`)
   認証構造 クライアントの最新のブロック ヘッダー
   データ検証
 

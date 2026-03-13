@@ -61,7 +61,7 @@ test('enforceOAuthConfig returns config when valid', () => {
 
 test('buildSecurityHeaders includes HTTPS origins in connect-src', () => {
   const headers = buildSecurityHeaders({
-    analyticsUrl: 'https://metrics.example.com/v1',
+    analyticsUrl: 'https://metrics.example.com/v2',
     tryItUrl: 'https://tryit.example.com/proxy',
   });
   assert.ok(
@@ -73,7 +73,7 @@ test('buildSecurityHeaders includes HTTPS origins in connect-src', () => {
 
 test('buildSecurityHeaders includes OAuth endpoints in connect-src', () => {
   const headers = buildSecurityHeaders({
-    analyticsUrl: 'https://metrics.example.com/v1',
+    analyticsUrl: 'https://metrics.example.com/v2',
     tryItUrl: 'https://tryit.example.com/proxy',
     deviceCodeUrl: 'https://auth.example.com/device',
     tokenUrl: 'https://auth.example.com/token',

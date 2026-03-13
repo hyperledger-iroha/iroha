@@ -160,9 +160,9 @@ Las cargas útiles hacen un viaje de ida y vuelta correctamente antes de que las
 > O gateway Torii ahora expoe helpers de solo lectura apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifiesto
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifiesto
 > Norito armado (base64) junto con digest/metadata. [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de trozo
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de trozo
 > JSON determinístico (`chunk_fetch_specs`) para herramientas posteriores. [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > Estos puntos finales se envían a la CLI para que las tuberías tengan un trocar
@@ -202,19 +202,19 @@ Las cargas útiles hacen un viaje de ida y vuelta correctamente antes de que las
      de gobernancia estiver definida; por ora o diseño asumir cuotas estritas e
      operaciones de desvinculación iniciadas por el operador.
 
-### Declaración de capacidad e integración de programación- Torii ahora actualiza las actualizaciones de `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
+### Declaración de capacidad e integración de programación- Torii ahora actualiza las actualizaciones de `CapacityDeclarationRecord` de `/v2/sorafs/capacity/declare`
   para o `CapacityManager` embutido, de modo que cada nodo constroi uma visao em memoria
   de sus alojamientos comprometidos de chunker e lane. O manager expone instantáneas de solo lectura
-  para telemetría (`GET /v1/sorafs/capacity/state`) e imponer reservas por perfil o carril
+  para telemetría (`GET /v2/sorafs/capacity/state`) e imponer reservas por perfil o carril
   antes de novas ordens serem aceitas. [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- O endpoint `/v1/sorafs/capacity/schedule` cargas útiles aceita `ReplicationOrderV1`
+- O endpoint `/v2/sorafs/capacity/schedule` cargas útiles aceita `ReplicationOrderV1`
   emitidos pelagobernanza. Quando a ordem mira o provedor local o manager verifica
   programación duplicada, valida capacidade de chunker/lane, reserva o slice e retorna
   um `ReplicationPlan` descrevendo la capacidad restante para que ferramentas de
   orquestracao possam seguir com a ingestao. Ordenes para otros proveedores sao
   reconhecidas com resposta `ignored` para facilitar flujos de trabajo multioperador. [crates/iroha_torii/src/routing.rs:4845]
 - Hooks de conclusao (por ejemplo, disparados apos ingestao bem sucedida) chamam
-  `POST /v1/sorafs/capacity/complete` para liberar reservas vía
+  `POST /v2/sorafs/capacity/complete` para liberar reservas vía
   `CapacityManager::complete_order`. Una respuesta que incluye una instantánea.
   `ReplicationRelease` (totalmente restantes, residuos de fragmentador/carril) para herramientas
   de orquestracao possa enfileirar a proxima ordem sem polling. Trabajo futuro

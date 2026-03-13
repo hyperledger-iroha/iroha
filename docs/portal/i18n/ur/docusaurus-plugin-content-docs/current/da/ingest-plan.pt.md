@@ -39,7 +39,7 @@ DA-2 ورک اسٹریم Torii کو ایک بلاب انجشن API کے ساتھ
 ## سطح API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -221,7 +221,7 @@ pub struct DaIngestReceipt {
   جو پہلے ہی `iroha app sorafs fetch` کو کھانا کھلاتا ہے۔ آپریٹر نمونے کی طرف اشارہ کرسکتے ہیں
   منشور + چنک پلان سے (`--manifest` ، `--plan` ، `--manifest-id`) ** یا **
   `--storage-ticket` کے ذریعے اسٹوریج ٹکٹ Torii پاس کریں۔ جب کا راستہ
-  ٹکٹ اور استعمال شدہ ، CLI `/v1/da/manifests/<ticket>` کا مظہر ڈاؤن لوڈ کرتا ہے ،
+  ٹکٹ اور استعمال شدہ ، CLI `/v2/da/manifests/<ticket>` کا مظہر ڈاؤن لوڈ کرتا ہے ،
   بنڈل `artifacts/da/fetch_<timestamp>/` کے تحت برقرار ہے (اس کے ساتھ اوور رائڈ
   `--manifest-cache-dir`) ، `--manifest-id` کے لئے بلاب ہیش کو اخذ کرتا ہے ، اور پھر
   فراہم کردہ فہرست `--gateway-provider` کے ساتھ آرکسٹریٹر چلاتا ہے۔ سب
@@ -232,7 +232,7 @@ pub struct DaIngestReceipt {
   آخری سے آخر تک دستیابی کے معیارات بغیر کسی نقل کے `da` نام کی جگہ کے تحت مکمل طور پر رواں دواں ہیں
   آرکسٹریٹر منطق۔
 - `iroha app da get-blob` ڈاؤن لوڈ ، اتارنا Torii سے براہ راست منشور ظاہر کرتا ہے
-  `GET /v1/da/manifests/{storage_ticket}`۔ کمانڈ لکھتا ہے
+  `GET /v2/da/manifests/{storage_ticket}`۔ کمانڈ لکھتا ہے
   `manifest_{ticket}.norito` ، `manifest_{ticket}.json` اور
   `chunk_plan_{ticket}.json` `artifacts/da/fetch_<timestamp>/` کے تحت (یا a
   `--output-dir` صارف کے ذریعہ فراہم کردہ) عین مطابق کمانڈ پرنٹ کرتے وقت

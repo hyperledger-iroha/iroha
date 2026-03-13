@@ -73,9 +73,9 @@ following structure:
     "proof_replay_hex": null,
     "metadata": {
       "fastpq.parameter_set": "fastpq-offline-v1",
-      "fastpq.circuit.sum": "fastpq/offline_sum/v1",
-      "fastpq.circuit.counter": "fastpq/offline_counter/v1",
-      "fastpq.circuit.replay": "fastpq/offline_replay/v1"
+      "fastpq.circuit.sum": "fastpq/offline_sum/v2",
+      "fastpq.circuit.counter": "fastpq/offline_counter/v2",
+      "fastpq.circuit.replay": "fastpq/offline_replay/v2"
     }
   },
   "counter_checkpoint": 40,

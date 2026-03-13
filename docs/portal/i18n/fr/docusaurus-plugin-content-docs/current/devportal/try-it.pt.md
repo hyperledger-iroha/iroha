@@ -152,7 +152,7 @@ portail, les propriétaires du SDK et les réviseurs peuvent reproduire les octe
 1. Escolha um luminaire como `fixtures/norito_rpc/transfer_asset.norito`. Essès
    arquivos sao enveloppes Norito brutos; **nao** faca base64.
 2. Dans Swagger ou RapiDoc, localisez le point final NRPC (par exemple
-   `POST /v1/pipeline/submit`) et modifier le sélecteur **Content-Type** para
+   `POST /v2/pipeline/submit`) et modifier le sélecteur **Content-Type** para
    `application/x-norito`.
 3. Accédez à l'éditeur de corps pour **binaire** (mode "Fichier" de Swagger ou
    sélectionnez "Binaire/Fichier" dans RapiDoc) et envoyez le fichier `.norito`. Ô widget
@@ -174,13 +174,13 @@ lorsque vous validez le proxy ou supprimez les réponses de la passerelle :
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 Troque o luminaire por n'importe quelle entrée listada em `transaction_fixtures.manifest.json`
 ou codifier votre propre charge utile avec `cargo xtask norito-rpc-fixtures`. Quand le Torii est-il
 en mode Canary, vous pouvez proposer le `curl` pour l'essayer par proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) pour exercer le message
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) pour exercer le message
 infraestrutura usada pelos widgets do portail.
 
 ## Observabilité et opérations
@@ -196,7 +196,7 @@ J'ai utilisé la sonde incluse pendant le déploiement ou selon un calendrier :
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Boutons d'ambiance :- `TRYIT_PROXY_SAMPLE_PATH` - rotation Torii facultative (sem `/proxy`) pour l'exercice.

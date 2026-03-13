@@ -13,7 +13,7 @@ translator: manual
 # ‏ABI בזמן ריצה — גיבוב קנוני (Torii)
 
 נקודת קצה
-- `GET /v1/runtime/abi/hash`
+- `GET /v2/runtime/abi/hash`
 
 תגובה (מהדורה ראשונה; מדיניות יחידה V1)
 ```json

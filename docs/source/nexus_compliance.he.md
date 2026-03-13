@@ -98,9 +98,9 @@ LaneCompliancePolicy {
 
 Torii חושף:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — משיכת policy reference העדכני.
-- `POST /v1/lane-compliance/policies` — endpoint לממשל בלבד שמשקף את ISI proposal helpers.
-- `GET /v1/lane-compliance/decisions` — יומן ביקורת מדורג עם מסננים לפי `lane_id`, `decision`, `jurisdiction`, `reason_code`.
+- `GET /v2/lane-compliance/policies/{lane_id}` — משיכת policy reference העדכני.
+- `POST /v2/lane-compliance/policies` — endpoint לממשל בלבד שמשקף את ISI proposal helpers.
+- `GET /v2/lane-compliance/decisions` — יומן ביקורת מדורג עם מסננים לפי `lane_id`, `decision`, `jurisdiction`, `reason_code`.
 
 פקודות CLI/SDK עוטפות את משטחי ה-HTTP הללו כדי שמפעילים יוכלו לאוטומט סקירות
 ולקבל artefacts (policy blob חתום + reviewer attestations).
@@ -109,7 +109,7 @@ Torii חושף:
 
 1. **קבלה (Torii)**
    - `Torii` מוריד את המדיניות הפעילה כאשר lane manifest משתנה או כאשר חתימת הקאש פגה.
-   - כל טרנזקציה שנכנסת לתור `/v1/pipeline` מתויגת עם `LaneComplianceContext`
+   - כל טרנזקציה שנכנסת לתור `/v2/pipeline` מתויגת עם `LaneComplianceContext`
      (ids של משתתפים, UAID, metadata של manifest ב-dataspace, policy id, וה-snapshot העדכני של `LanePrivacyRegistry`
      המתואר ב-`crates/iroha_core/src/interlane/mod.rs`).
    - סמכויות עם UAID חייבות להחזיק manifest פעיל של Space Directory עבור ה-dataspace המנותב;

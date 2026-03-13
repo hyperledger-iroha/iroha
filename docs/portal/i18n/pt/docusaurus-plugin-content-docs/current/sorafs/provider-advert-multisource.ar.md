@@ -64,7 +64,7 @@ Isso é útil para cargas úteis e fofocas.
 ## Jogos e luminárias
 
 - Você pode usar cargas úteis como `range_capability`, `stream_budget` e `transport_hints`.
-  تحقّق عبر استجابات `/v1/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
+  تحقّق عبر استجابات `/v2/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
   ملخصات JSON القدرة المحللة وميزانية البث ومصفوفات dicas لابتلاع التليمترية.
 - `cargo xtask sorafs-admission-fixtures` يعرض orçamentos de fluxo e dicas de transporte داخل
   artefacts JSON é o que você precisa para usar o arquivo JSON.
@@ -72,7 +72,7 @@ Isso é útil para cargas úteis e fofocas.
   - anúncios متعددة المصادر قياسية,
   - `multi_fetch_plan.json` para que o SDK do SDK possa ser usado para buscar o recurso de busca.
 
-## تكامل المُنسق وTorii- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
+## تكامل المُنسق وTorii- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` e `transport_hints`. Faça o downgrade do seu computador
   Você pode fazer isso sem precisar de mais nada.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

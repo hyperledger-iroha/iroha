@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] མཐའ་མའི་གཏན་འབེབས་བརྟག་དཔྱད་ཐོན་འབྲས་འཛིན་ཡོད།
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, དང་།
       Norito སྒོར་རིམ་སྒྲིག་བཀོད་ཚུ།
-- [ ] [ ] Torii `/v1/node/capabilities` ཁྱབ་བསྒྲགས་ (via `iroha runtime capabilities`) ཐོ་བཀོད་འབད་དེ་ `crypto.sm` གསལ་སྟོན་ས་སྒོ་དང་ མགྱོགས་དྲགས་སྲིད་བྱུས་ཀྱི་ པར་རིས་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ།
+- [ ] [ ] Torii `/v2/node/capabilities` ཁྱབ་བསྒྲགས་ (via `iroha runtime capabilities`) ཐོ་བཀོད་འབད་དེ་ `crypto.sm` གསལ་སྟོན་ས་སྒོ་དང་ མགྱོགས་དྲགས་སྲིད་བྱུས་ཀྱི་ པར་རིས་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ།
 
 # གྲལ་གཉེར་ལག་ལེན།
 

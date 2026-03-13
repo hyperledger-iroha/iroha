@@ -100,7 +100,7 @@ Utilisez le probe fourni pour vérifier `/healthz` et une route d’exemple :
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
 npm run probe:tryit-proxy
 ```
 

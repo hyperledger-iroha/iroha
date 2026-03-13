@@ -648,7 +648,7 @@ mod compliance_tests {
         let proof_token_b64 = proof_token.encode_base64();
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(spec.digest)
         );

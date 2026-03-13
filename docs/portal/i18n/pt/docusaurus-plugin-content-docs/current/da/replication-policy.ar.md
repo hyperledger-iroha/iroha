@@ -32,7 +32,7 @@ Não há nada de errado com você.
 | _Padrão (كل الفئات الاخرى)_ | 6 dias | 30 dias | 3 | `warm` | `da.default` |
 
 Você pode usar o `torii.da_ingest.replication_policy` para obter mais informações
-طلبات `/v1/da/ingest`. يعيد Torii كتابة manifestos مع ملف الاحتفاظ المفروض ويصدر
+طلبات `/v2/da/ingest`. يعيد Torii كتابة manifestos مع ملف الاحتفاظ المفروض ويصدر
 Faça o download do pacote de software com SDKs
 المتقادمة.
 
@@ -145,5 +145,5 @@ Deixe os blobs de lado.
    e PDP.
 
 A solução de problemas é `integration_tests/tests/da/replication_policy.rs`; تقوم
-A solução de problemas de segurança do computador é o `/v1/da/ingest` e o valor de `/v1/da/ingest`
+A solução de problemas de segurança do computador é o `/v2/da/ingest` e o valor de `/v2/da/ingest`
 manifesto. يعرض الملف المفروض بدلا من نية المتصل.

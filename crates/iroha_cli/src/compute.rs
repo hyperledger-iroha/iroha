@@ -186,7 +186,7 @@ where
 
     let request = build_gateway_request(&call, &payload);
     let url = format!(
-        "{}/v1/compute/{}/{}",
+        "{}/v2/compute/{}/{}",
         args.endpoint.trim_end_matches('/'),
         route.service,
         route.method

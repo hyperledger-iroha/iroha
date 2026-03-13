@@ -80,8 +80,8 @@ SNNet-8a dual collectors تعینات کرتا ہے جو secret-shared Prio buck
 
 Torii اب دو telemetry-gated HTTP endpoints فراہم کرتا ہے تاکہ relays اور collectors کسی bespoke transport کے بغیر observations forward کر سکیں:
 
-- `POST /v1/soranet/privacy/event` ایک `RecordSoranetPrivacyEventDto` payload قبول کرتا ہے۔ body میں `SoranetPrivacyEventV1` کے ساتھ ایک optional `source` label شامل ہوتا ہے۔ Torii request کو فعال telemetry profile کے مطابق validate کرتا ہے، event ریکارڈ کرتا ہے، اور HTTP `202 Accepted` کے ساتھ ایک Norito JSON envelope واپس کرتا ہے جس میں computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) اور relay mode ہوتا ہے۔
-- `POST /v1/soranet/privacy/share` ایک `RecordSoranetPrivacyShareDto` payload قبول کرتا ہے۔ body میں `SoranetPrivacyPrioShareV1` اور optional `forwarded_by` hint ہوتا ہے تاکہ آپریٹرز collector flows کا audit کر سکیں۔ کامیاب submissions HTTP `202 Accepted` کے ساتھ Norito JSON envelope واپس کرتی ہیں جو collector، bucket window، اور suppression hint کو summarize کرتا ہے؛ validation failures telemetry `Conversion` response سے map ہوتے ہیں تاکہ collectors کے درمیان deterministic error handling برقرار رہے۔ orchestrator کا event loop اب relay polling کے دوران یہ shares emit کرتا ہے، جس سے Torii کا Prio accumulator on-relay buckets کے ساتھ sync رہتا ہے۔
+- `POST /v2/soranet/privacy/event` ایک `RecordSoranetPrivacyEventDto` payload قبول کرتا ہے۔ body میں `SoranetPrivacyEventV1` کے ساتھ ایک optional `source` label شامل ہوتا ہے۔ Torii request کو فعال telemetry profile کے مطابق validate کرتا ہے، event ریکارڈ کرتا ہے، اور HTTP `202 Accepted` کے ساتھ ایک Norito JSON envelope واپس کرتا ہے جس میں computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) اور relay mode ہوتا ہے۔
+- `POST /v2/soranet/privacy/share` ایک `RecordSoranetPrivacyShareDto` payload قبول کرتا ہے۔ body میں `SoranetPrivacyPrioShareV1` اور optional `forwarded_by` hint ہوتا ہے تاکہ آپریٹرز collector flows کا audit کر سکیں۔ کامیاب submissions HTTP `202 Accepted` کے ساتھ Norito JSON envelope واپس کرتی ہیں جو collector، bucket window، اور suppression hint کو summarize کرتا ہے؛ validation failures telemetry `Conversion` response سے map ہوتے ہیں تاکہ collectors کے درمیان deterministic error handling برقرار رہے۔ orchestrator کا event loop اب relay polling کے دوران یہ shares emit کرتا ہے، جس سے Torii کا Prio accumulator on-relay buckets کے ساتھ sync رہتا ہے۔
 
 دونوں endpoints telemetry profile کی پابندی کرتے ہیں: metrics disabled ہونے پر `503 Service Unavailable` واپس کرتے ہیں۔ clients Norito binary (`application/x.norito`) یا Norito JSON (`application/x.norito+json`) bodies بھیج سکتے ہیں؛ server standard Torii extractors کے ذریعے format خود بخود negotiate کرتا ہے۔
 
@@ -164,7 +164,7 @@ cargo xtask soranet-privacy-report \
 
 Governance اب بھی ثبوت چاہتا ہے کہ پہلی automation run suppression budget میں رہی۔ helper اب `--max-suppression-ratio <0-1>` قبول کرتا ہے تاکہ CI یا آپریٹرز اس وقت fail fast کر سکیں جب suppressed buckets allowed window سے بڑھ جائیں (default 10%) یا جب ابھی کوئی buckets موجود نہ ہوں۔ تجویز کردہ flow:
 
-1. relay admin endpoint(s) اور orchestrator کے `/v1/soranet/privacy/event|share` stream سے NDJSON export کر کے `artifacts/sorafs_privacy/<relay>.ndjson` میں محفوظ کریں۔
+1. relay admin endpoint(s) اور orchestrator کے `/v2/soranet/privacy/event|share` stream سے NDJSON export کر کے `artifacts/sorafs_privacy/<relay>.ndjson` میں محفوظ کریں۔
 2. policy budget کے ساتھ helper چلائیں:
 
    ```bash

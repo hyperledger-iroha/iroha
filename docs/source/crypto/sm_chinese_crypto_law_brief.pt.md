@@ -68,7 +68,7 @@ Os operadores devem:1. **Registrar o sistema blockchain** no Departamento de Seg
 1. **Documentação**
    - Adicionar um apêndice de conformidade ao `docs/source/crypto/sm_program.md` observando o status da criptografia comercial estadual, expectativas de arquivamento e pontos de contato.
    - Publicar um campo de manifesto Norito (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) que os operadores possam usar ao preparar arquivamentos.
-   - Certifique-se de que o anúncio Torii `/v1/node/capabilities` (e o alias CLI `iroha runtime capabilities`) seja enviado com cada versão para que os operadores possam capturar o instantâneo do manifesto `crypto.sm` para evidências de MLPS/密评.
+   - Certifique-se de que o anúncio Torii `/v2/node/capabilities` (e o alias CLI `iroha runtime capabilities`) seja enviado com cada versão para que os operadores possam capturar o instantâneo do manifesto `crypto.sm` para evidências de MLPS/密评.
    - Fornece início rápido de conformidade bilíngue (EN/ZH), resumindo as obrigações.
 2. **Liberar artefatos**
    - Envie arquivos SBOM/CycloneDX para compilações habilitadas para SM.

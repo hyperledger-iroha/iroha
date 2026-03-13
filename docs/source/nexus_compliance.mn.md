@@ -114,10 +114,10 @@ LaneCompliancePolicy {
 
 Torii exposes:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — fetch latest policy reference.
-- `POST /v1/lane-compliance/policies` — governance-only endpoint mirroring the
+- `GET /v2/lane-compliance/policies/{lane_id}` — fetch latest policy reference.
+- `POST /v2/lane-compliance/policies` — governance-only endpoint mirroring the
   ISI proposal helpers.
-- `GET /v1/lane-compliance/decisions` — paginated audit log with filters for
+- `GET /v2/lane-compliance/decisions` — paginated audit log with filters for
   `lane_id`, `decision`, `jurisdiction`, and `reason_code`.
 
 CLI/SDK commands wrap those HTTP surfaces so operators can script reviews and
@@ -128,7 +128,7 @@ fetch artefacts (signed policy blob + reviewer attestations).
 1. **Admission (Torii)**  
    - `Torii` downloads the active policy when a lane manifest changes or when
      the cached signature expires.  
-   - Every transaction entering the `/v1/pipeline` queue is tagged with
+   - Every transaction entering the `/v2/pipeline` queue is tagged with
      `LaneComplianceContext` (participant ids, UAID, dataspace manifest metadata, policy id, and the
      latest `LanePrivacyRegistry` snapshot described in `crates/iroha_core/src/interlane/mod.rs`).  
    - UAID-carrying authorities are resolved globally by account UAID. If a Space Directory manifest exists for the routed dataspace, it must be active; missing target-dataspace manifests do not block admission before any policy rules are evaluated.  

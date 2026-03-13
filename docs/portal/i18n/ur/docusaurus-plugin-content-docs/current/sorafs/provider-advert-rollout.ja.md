@@ -53,7 +53,7 @@ surface پر cut-over کو کوآرڈی نیٹ کرتا ہے جو multi-source c
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` اور واضح `max_span`
      - GREASE TLVs کی صورت میں `allow_unknown_capabilities=<true|false>`
-   - `/v1/sorafs/providers` اور `sorafs_fetch` سے validate کریں؛ unknown
+   - `/v2/sorafs/providers` اور `sorafs_fetch` سے validate کریں؛ unknown
      capabilities کی warnings کو triage کریں۔
 3. **Validate multi-source readiness.**
    - `sorafs_fetch` کو `--provider-advert=<path>` کے ساتھ چلائیں؛ اب `chunk_range_fetch`
@@ -174,8 +174,8 @@ groups:
 
 - **Weekly status mailer.** DevRel admission metrics، outstanding warnings اور آنے والی deadlines کا خلاصہ شیئر کرتا ہے۔
 - **Incident response.** اگر `reject` alerts فائر ہوں تو on-call انجینئر:
-  1. Torii discovery (`/v1/sorafs/providers`) سے offending advert fetch کریں۔
-  2. provider pipeline میں advert validation دوبارہ چلائیں اور `/v1/sorafs/providers` سے compare کریں تاکہ error reproduce ہو۔
+  1. Torii discovery (`/v2/sorafs/providers`) سے offending advert fetch کریں۔
+  2. provider pipeline میں advert validation دوبارہ چلائیں اور `/v2/sorafs/providers` سے compare کریں تاکہ error reproduce ہو۔
   3. provider کے ساتھ coordinate کریں تاکہ اگلی refresh deadline سے پہلے advert rotate ہو جائے۔
 - **Change freezes.** R1/R2 کے دوران capability schema میں تبدیلیاں نہ کریں جب تک rollout کمیٹی منظوری نہ دے؛ GREASE trials کو ہفتہ وار maintenance window میں schedule کریں اور migration ledger میں log کریں۔
 

@@ -54,12 +54,12 @@ Sidebar_label: تداول التداولات
 ## تكامل Torii
 
 تعرض Torii نقاط نهاية كي المعدادون مخصص من أجل الاستخدام وتحريك
-دورة حياة الصفقة بدون أسلاك مخصصة:- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+دورة حياة الصفقة بدون أسلاك مخصصة:- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   نتائج المحاسبة حتمية (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+- `POST /v2/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
   `DealSettlementRecord` الناتج إلى الجانب `DealSettlementV1` مشفرة بـ base64
   وجاهزًا للنشر في DAG التورم.
-- يغذي `/v1/events/sse` في Torii أرشيفات الآن `SorafsGatewayEvent::DealUsage`
+- يغذي `/v2/events/sse` في Torii أرشيفات الآن `SorafsGatewayEvent::DealUsage`
   التي تلخص كل تبادل استخدام (العصر، ساعات GiB المثالية، تعدادات الربح،
   الحتمية)، وتسجيلات `SorafsGatewayEvent::DealSettlement`
   التي تحتوي على لقطة دفتر الأستاذ المعتمدة للتسويق مع Digest/الحجم/base64 من BLAKE3

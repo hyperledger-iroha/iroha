@@ -131,8 +131,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > ה-gateway של Torii חושף כעת helpers לקריאה בלבד שמבוססים על אותו `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — מחזיר manifest Norito מאוחסן (base64) יחד עם digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — מחזיר את תוכנית ה-chunk הדטרמיניסטית JSON (`chunk_fetch_specs`) לכלי downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — מחזיר manifest Norito מאוחסן (base64) יחד עם digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — מחזיר את תוכנית ה-chunk הדטרמיניסטית JSON (`chunk_fetch_specs`) לכלי downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > נקודות קצה אלה משקפות את פלט ה-CLI כך שפייפליינים יכולים לעבור מסקריפטים מקומיים לבדיקות HTTP בלי לשנות פרסרים.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -159,9 +159,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 ### הצהרת קיבולת ואינטגרציית תזמון
 
-- Torii מעבירה כעת עדכוני `CapacityDeclarationRecord` מ-`/v1/sorafs/capacity/declare` אל `CapacityManager` המוטמע, כך שכל צומת בונה תמונת מצב בזיכרון של הקצאות chunker/lane שלו. ה-manager חושף snapshots לקריאה בלבד לטלמטריה (`GET /v1/sorafs/capacity/state`) ואוכף הזמנות לפי פרופיל או lane לפני קבלת הזמנות חדשות.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- נקודת הקצה `/v1/sorafs/capacity/schedule` מקבלת payloads של `ReplicationOrderV1` מהגוב. כאשר ההזמנה מכוונת לספק המקומי, ה-manager בודק כפילויות תזמון, מאמת קיבולת chunker/lane, מזמין את הפרוסה ומחזיר `ReplicationPlan` שמתאר את הקיבולת שנותרה כדי שכלי orchestration יוכלו להמשיך בהטענה. הזמנות לספקים אחרים נענות ב-`ignored` כדי להקל על תהליכי עבודה מרובי מפעילים.【crates/iroha_torii/src/routing.rs:4845】
-- Hooks של השלמה (למשל לאחר הצלחת ingest) קוראים ל-`POST /v1/sorafs/capacity/complete` כדי לשחרר הזמנות דרך `CapacityManager::complete_order`. התגובה כוללת snapshot `ReplicationRelease` (סך נותר, שאריות chunker/lane) כדי שכלי orchestration יוכלו לתזמן את ההזמנה הבאה ללא polling. עבודה עתידית תחבר זאת לפייפליין של chunk store כשהלוגיקה של ingest תיכנס.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- Torii מעבירה כעת עדכוני `CapacityDeclarationRecord` מ-`/v2/sorafs/capacity/declare` אל `CapacityManager` המוטמע, כך שכל צומת בונה תמונת מצב בזיכרון של הקצאות chunker/lane שלו. ה-manager חושף snapshots לקריאה בלבד לטלמטריה (`GET /v2/sorafs/capacity/state`) ואוכף הזמנות לפי פרופיל או lane לפני קבלת הזמנות חדשות.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- נקודת הקצה `/v2/sorafs/capacity/schedule` מקבלת payloads של `ReplicationOrderV1` מהגוב. כאשר ההזמנה מכוונת לספק המקומי, ה-manager בודק כפילויות תזמון, מאמת קיבולת chunker/lane, מזמין את הפרוסה ומחזיר `ReplicationPlan` שמתאר את הקיבולת שנותרה כדי שכלי orchestration יוכלו להמשיך בהטענה. הזמנות לספקים אחרים נענות ב-`ignored` כדי להקל על תהליכי עבודה מרובי מפעילים.【crates/iroha_torii/src/routing.rs:4845】
+- Hooks של השלמה (למשל לאחר הצלחת ingest) קוראים ל-`POST /v2/sorafs/capacity/complete` כדי לשחרר הזמנות דרך `CapacityManager::complete_order`. התגובה כוללת snapshot `ReplicationRelease` (סך נותר, שאריות chunker/lane) כדי שכלי orchestration יוכלו לתזמן את ההזמנה הבאה ללא polling. עבודה עתידית תחבר זאת לפייפליין של chunk store כשהלוגיקה של ingest תיכנס.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - ה-`TelemetryAccumulator` המוטמע ניתן לעדכון דרך `NodeHandle::update_telemetry`, מה שמאפשר ל-workers ברקע לרשום דגימות PoR/uptime ולבסוף להפיק payloads קנוניים `CapacityTelemetryV1` בלי לגעת ביישום הפנימי של ה-scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### אינטגרציות ועבודה עתידית

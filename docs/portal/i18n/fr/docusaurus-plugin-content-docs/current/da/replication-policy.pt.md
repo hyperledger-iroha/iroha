@@ -30,7 +30,7 @@ requis par l'époque et les répliques dépendent de l'intention de l'émetteur.
 | `nexus_lane_sidecar` | 6 heures | 7 jours | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 heures | 180 jours | 3 | `cold` | `da.governance` |
 | _Default (toujours comme classes demais)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |Valeurs sao embauchées dans `torii.da_ingest.replication_policy` et appliquées
-a todas comme soumissions `/v1/da/ingest`. Torii réenregistrer les manifestes avec le profil
+a todas comme soumissions `/v2/da/ingest`. Torii réenregistrer les manifestes avec le profil
 de retenir l'imposture et d'émettre un avertissement lorsque les appelants ont des valeurs divergentes
 pour que les opérateurs détectent les SDK désaturés.
 
@@ -147,5 +147,5 @@ automatique.
    que SRE peut référencer le résumé et les preuves PDP.
 
 La couverture de régression est vive dans `integration_tests/tests/da/replication_policy.rs` ;
-suite à l'envoi d'une politique de retenue divergente pour `/v1/da/ingest` et vérification
+suite à l'envoi d'une politique de retenue divergente pour `/v2/da/ingest` et vérification
 que le manifeste buscado expose le profil imposto em vez da intencao do caller.

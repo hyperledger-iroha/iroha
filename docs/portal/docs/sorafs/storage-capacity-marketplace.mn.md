@@ -63,15 +63,15 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
 - `ReplicationOrderV1` нь манифестуудыг засаглалаас олгосон үүрэг даалгаврыг илүүдэл зорилтууд, SLA-ийн босго, даалгавар тус бүрийн баталгаатай холбодог; Баталгаажуулагчид Torii эсвэл бүртгэл захиалгыг хүлээн авахаас өмнө каноник chunker бариул, өвөрмөц үйлчилгээ үзүүлэгч болон эцсийн хугацааны хязгаарлалтыг хэрэгжүүлдэг.【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` нь хураамжийн хуваарилалтыг хангадаг эрин үеийн агшин зуурын агшингуудыг (ашигласан GiB ба хуулбарлах тоолуур, ажиллах хугацаа/PoR хувь) илэрхийлдэг. Хязгаарын шалгалт нь ашиглалтыг мэдүүлгийн хүрээнд, хувь хэмжээг 0 – 100% дотор байлгадаг.【crates/sorafs_manifest/src/capacity.rs:476】
 - Хуваалцсан туслагчид (`PricingScheduleV1`, `PricingScheduleV1`, эгнээ/даалгавар/SLA баталгаажуулагч) нь CI болон доод талын хэрэгслүүдийг дахин ашиглах боломжтойг тодорхойлох түлхүүрийн баталгаажуулалт болон алдааны мэдээг өгдөг.【crates/sorafs_manifest/src/capacity.rs:230
-- `PinProviderRegistry` одоо `/v1/sorafs/capacity/state`-ээр дамжуулан гинжин хэлхээний агшин зуурын зургийг гаргаж, Norito тодорхойлогчийн ард үйлчилгээ үзүүлэгчийн мэдүүлэг болон хураамжийн бүртгэлийн бичилтүүдийг нэгтгэдэг. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` одоо `/v2/sorafs/capacity/state`-ээр дамжуулан гинжин хэлхээний агшин зуурын зургийг гаргаж, Norito тодорхойлогчийн ард үйлчилгээ үзүүлэгчийн мэдүүлэг болон хураамжийн бүртгэлийн бичилтүүдийг нэгтгэдэг. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Баталгаажуулалтын хамрах хүрээ нь каноник бариулын хэрэгжилт, давхардлыг илрүүлэх, эгнээ тус бүрийн хязгаар, хуулбарлах хуваарилалтын хамгаалалт, телеметрийн хүрээг шалгах дасгалуудыг хийдэг тул регрессүүд CI-д шууд гарч ирдэг.【crates/sorafs_manifest/src/capacity.rs:792】
-- Операторын хэрэгсэл: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` хүний унших боломжтой үзүүлэлтүүдийг каноник Norito ачаалал, base64 blob болон JSON хураангуй болгон хувиргадаг тул операторууд `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, локал засварын захиалгаар хуулбарлах боломжтой. баталгаажуулалт.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Лавлагаа төхөөрөмж нь `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`)-д амьдардаг бөгөөд I000.03NI5-аар үүсгэгддэг.
+- Операторын хэрэгсэл: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` хүний унших боломжтой үзүүлэлтүүдийг каноник Norito ачаалал, base64 blob болон JSON хураангуй болгон хувиргадаг тул операторууд `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, локал засварын захиалгаар хуулбарлах боломжтой. баталгаажуулалт.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Лавлагаа төхөөрөмж нь `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`)-д амьдардаг бөгөөд I000.03NI5-аар үүсгэгддэг.
 
 ### 2. Хяналтын хавтгайн интеграци
 
 | Даалгавар | Эзэмшигч(үүд) | Тэмдэглэл |
 |------|----------|-------|
-| `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Torii Norito JSON ачаалалтай зохицуулагчийг нэмнэ үү. | Torii баг | Толин тусгал баталгаажуулагч логик; Norito JSON туслахуудыг дахин ашиглах. |
+| `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` Torii Norito JSON ачаалалтай зохицуулагчийг нэмнэ үү. | Torii баг | Толин тусгал баталгаажуулагч логик; Norito JSON туслахуудыг дахин ашиглах. |
 | `CapacityDeclarationV1` агшин зуурын агшинг найруулагчийн онооны самбарын мета өгөгдөл болон гарц татах төлөвлөгөөнд түгээнэ үү. | Багажны АХ / Оркестрийн баг | `provider_metadata`-г хүчин чадлын лавлагаагаар сунгаж, олон эх сурвалжийн оноолт нь эгнээний хязгаарыг хүндэтгэдэг. |
 | Даалгавар болон бүтэлгүйтлийн зөвлөмжийг жолоодохын тулд хуулбарлах захиалгыг найруулагч/гарц үйлчлүүлэгч рүү илгээнэ үү. | Сүлжээний TL / Gateway баг | Онооны самбар бүтээгч нь засаглалын гарын үсэгтэй хуулбарлах захиалгыг ашигладаг. |
 | CLI хэрэгсэл: `sorafs_cli`-г `capacity declare`, `capacity telemetry`, `capacity orders import` ашиглан сунгана. | Багажны WG | Тодорхойлогч JSON + онооны самбарын гаралтыг өгөх. |
@@ -94,7 +94,7 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
 | Төлбөр тооцооны шугам: телеметр + хуулбарын өгөгдлийг XOR-ээр илэрхийлсэн төлбөр болгон хөрвүүлэх, засаглалд бэлэн хураангуй мэдээлэл гаргах, дэвтэрийн төлөвийг бүртгэх. | Төрийн сан / Хадгалах баг | Deal Engine руу утас / Төрийн сангийн экспорт. |
 | Эрүүл мэндийн хэмжилтийн хяналтын самбар/сануулгыг экспортлох (хоцрогдол, хуучирсан телеметр). | Ажиглалт | SF-6/SF-7-д дурдсан Grafana багцыг сунгах. |
 
-- Torii нь одоо `/v1/sorafs/capacity/telemetry` болон `/v1/sorafs/capacity/state` (JSON + Norito)-г ил болгож байгаа тул операторууд эрин үеийн телеметрийн агшин зуурын зургийг илгээж, байцаагчид аудитын нотлох баримтыг олж авах боломжтой. савлагаа.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii нь одоо `/v2/sorafs/capacity/telemetry` болон `/v2/sorafs/capacity/state` (JSON + Norito)-г ил болгож байгаа тул операторууд эрин үеийн телеметрийн агшин зуурын зургийг илгээж, байцаагчид аудитын нотлох баримтыг олж авах боломжтой. савлагаа.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - `PinProviderRegistry` интеграци нь хуулбарлах захиалгыг ижил төгсгөлийн цэгээр дамжуулан авах боломжтой болгодог; CLI туслахууд (`sorafs_cli capacity telemetry --from-file telemetry.json`) одоо автоматжуулалтын автоматжуулалтаас телеметрийг баталгаажуулах/нийтлэх, детерминист хэш болон нэрийн нягтаршилтай.
 - Хэмжилтийн хормын хувилбарууд нь `metering` агшин зуурт бэхлэгдсэн `CapacityTelemetrySnapshot` оруулгуудыг үүсгэдэг ба Prometheus экспортууд нь импортлоход бэлэн Grafana самбарыг I18NI7003X хаягаар тэжээдэг. аккруэл, тооцоолсон нано-SORA хураамж, бодит цаг хугацаанд SLA-ын нийцэл.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - Хэмжилтийг жигдрүүлэхийг идэвхжүүлсэн үед агшин зуурын зурагт `smoothed_gib_hours` болон `smoothed_por_success_bps` багтсан тул операторууд EMA-трендтэй утгыг засаглалын төлбөр тооцоонд ашигладаг түүхий тоолууртай харьцуулах боломжтой.【crates/sorafs_node/src/metering.rs:401
@@ -168,7 +168,7 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
 ### Үйлчилгээ үзүүлэгчийн онгоцонд суух, гарах утааны туршилт
 - `sorafs_manifest_stub capacity ...` ашиглан мэдэгдэл/телеметрийн олдворуудыг сэргээж, дахин тоглуулаарай
   Илгээхээс өмнө CLI тест хийдэг (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Torii (`/v1/sorafs/capacity/declare`)-ээр илгээж, дараа нь `/v1/sorafs/capacity/state` нэмэх
+- Torii (`/v2/sorafs/capacity/declare`)-ээр илгээж, дараа нь `/v2/sorafs/capacity/state` нэмэх
   Grafana дэлгэцийн агшин. `docs/source/sorafs/capacity_onboarding_runbook.md` дээр гарах урсгалыг дагана уу.
 - Гарын үсэг зурсан олдвор, эвлэрлийн гаргалгааг дотор нь архивлах
   `docs/examples/sorafs_capacity_marketplace_validation/`.

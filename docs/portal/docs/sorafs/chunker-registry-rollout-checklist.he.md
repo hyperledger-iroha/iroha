@@ -75,7 +75,7 @@ description: תכנית rollout שלב-אחר-שלב לעדכוני רישום c
    על ידי `torii.sorafs.discovery.admission.envelopes_dir`.
 3. ודאו ש-provider adverts מתפשטים דרך API ה-discovery:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. הפעילו את endpoints של manifest/plan עם headers של governance:
    ```bash

@@ -72,7 +72,7 @@ Taikai-ի խարիսխների գրքում: Նկարեք դրանք ստորև 
    որ երթուղային մանիֆեստը (TRM) և տոհմային պատուհանը ակտիվ էին: Օգնականը
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    կպատճենի պտույտի ֆայլերը, կթողարկի հեշեր և ընտրովի կստորագրի ամփոփագիրը:
-2. Record `/v1/status` ելքը զտված է
+2. Record `/v2/status` ելքը զտված է
    `.telemetry.taikai_alias_rotations[]` և պահեք այն կծիկի ֆայլերի կողքին:
    Գրախոսները համեմատում են հաղորդված `manifest_digest_hex`-ը և պատուհանի սահմանները
    պատճենված կծիկի վիճակը:

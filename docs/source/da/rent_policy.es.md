@@ -15,7 +15,7 @@ translator: machine-google-reviewed
 _Estado: Redacción — Propietarios: Grupo de Trabajo de Economía / Tesorería / Equipo de Almacenamiento_
 
 El elemento de la hoja de ruta **DA-7** introduce una renta explícita denominada XOR para cada blob
-enviado a `/v1/da/ingest`, además de bonificaciones que recompensan la ejecución de PDP/PoTR y
+enviado a `/v2/da/ingest`, además de bonificaciones que recompensan la ejecución de PDP/PoTR y
 La salida servía para buscar clientes. Este documento define los parámetros iniciales,
 su representación del modelo de datos y el flujo de trabajo de cálculo utilizado por Torii,
 SDK y paneles de tesorería.
@@ -161,7 +161,7 @@ auditorías para demostrar qué parámetros estaban vigentes para un blob determ
 
 ## Flujo operativo
 
-1. **Ingesta:** `/v1/da/ingest` carga el `DaRentPolicyV1` activo, cotiza el alquiler
+1. **Ingesta:** `/v2/da/ingest` carga el `DaRentPolicyV1` activo, cotiza el alquiler
    basado en el tamaño y la retención del blob, e incorpora la cotización en Norito
    manifiesto. El remitente firma una declaración que hace referencia al hash de alquiler y
    la identificación del boleto de almacenamiento.
@@ -179,7 +179,7 @@ auditorías para demostrar qué parámetros estaban vigentes para un blob determ
 ## TelemetríaLos nodos Torii exponen el uso de alquiler a través de las siguientes métricas Prometheus (etiquetas:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-meses citados por `/v1/da/ingest`.
+- `torii_da_rent_gib_months_total` — GiB-meses citados por `/v2/da/ingest`.
 - `torii_da_rent_base_micro_total`: renta base (micro XOR) acumulada en el momento de la ingesta.
 - `torii_da_protocol_reserve_micro_total` — contribuciones de reserva de protocolo.
 - `torii_da_provider_reward_micro_total`: pagos de alquiler por parte del proveedor.
@@ -196,7 +196,7 @@ volumen y pagos.
 
 ## Próximos pasos
 
-- ✅ Los recibos `/v1/da/ingest` ahora incorporan `rent_quote` y las superficies CLI/SDK muestran lo citado
+- ✅ Los recibos `/v2/da/ingest` ahora incorporan `rent_quote` y las superficies CLI/SDK muestran lo citado
   alquiler base, participación de reserva y bonificaciones PDP/PoTR para que los remitentes puedan revisar las obligaciones XOR antes
   comprometer cargas útiles.
 - Integre el libro de alquiler con los próximos feeds de reputación/libro de pedidos de DA

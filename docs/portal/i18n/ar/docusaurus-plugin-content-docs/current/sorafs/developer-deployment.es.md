@@ -29,7 +29,7 @@ Sidebar_label: ملاحظات النشر
 - **سياسة القبول** — قم بمراجعة إعلانات المورِّد الثابتة والأسماء المستعارة للإثباتات اللازمة لـ `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook de pin Registration** — احتفظ بـ `docs/source/sorafs/runbooks/pin_registry_ops.md` يدويًا لسيناريوهات الاسترداد (تدوير الاسم المستعار، فشل النسخ المتماثل).
 
-## تكوين الإعداد- تحتاج البوابات إلى تمكين نقطة نهاية تدفق الأدلة (`POST /v1/sorafs/proof/stream`) حتى يقوم CLI بإصدار نتائج القياس عن بعد.
+## تكوين الإعداد- تحتاج البوابات إلى تمكين نقطة نهاية تدفق الأدلة (`POST /v2/sorafs/proof/stream`) حتى يقوم CLI بإصدار نتائج القياس عن بعد.
 - تكوين السياسة `sorafs_alias_cache` باستخدام القيم المحددة مسبقًا لـ `iroha_config` أو مساعد CLI (`sorafs_cli manifest submit --alias-*`).
 - توزيع الرموز المميزة للتيار (أو بيانات اعتماد Torii) من خلال مدير الأسرار الآمنة.
 - تأهيل مصدري القياس عن بعد (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) وإرسال مكدسك Prometheus/OTel.

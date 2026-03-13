@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Зөвшөөрлийн дараах тохиргооны агшин зураг
 
 Бүх нийтийн санал асуулга эсвэл засаглалын санал хураалт дууссаны дараа `[settlement.repo]`
-өөрчлөлт гарсан тул үе тэнгийн хүн бүрээс `/v1/configuration` агшин зуурын зургийг аваарай.
+өөрчлөлт гарсан тул үе тэнгийн хүн бүрээс `/v2/configuration` агшин зуурын зургийг аваарай.
 Аудиторууд батлагдсан бодлого нь кластер даяар хэрэгжиж байгааг нотолж чадна (харна уу
 `docs/source/finance/repo_ops.md` нотлох баримтын ажлын урсгалын §2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

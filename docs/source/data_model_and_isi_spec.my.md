@@ -200,7 +200,7 @@ Execution ကို `iroha_core::smartcontracts::isi` တွင် `Execute for 
 - နာမည်များ + အကောင့်အစိတ်အပိုင်းများမှ Mint
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - canonical aid ကို alias များကို ဖြေရှင်းပါ
-  - JSON `{ "alias": "pkr#ubl@sbp" }` ဖြင့် `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }` ဖြင့် `POST /v2/assets/aliases/resolve`
 
 ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` စာသားပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် ID များသည် ပထမထုတ်ဝေမှုတွင် ရည်ရွယ်ချက်ရှိရှိ ပံ့ပိုးမထားပါ။

@@ -41,7 +41,7 @@ slug: /sorafs/node-operations-ru
   ```
 
 - Убедитесь, что процесс Torii имеет доступ для чтения/записи к `data_dir`.
-- Убедитесь, что узел объявляет ожидаемую мощность через `GET /v1/sorafs/capacity/state` после записи объявления.
+- Убедитесь, что узел объявляет ожидаемую мощность через `GET /v2/sorafs/capacity/state` после записи объявления.
 - Если сглаживание включено, на информационных панелях отображаются как необработанные, так и сглаженные счетчики ГиБ·час/PoR, чтобы выделить тенденции без дрожания наряду с спотовыми значениями.
 
 ### Пробный прогон CLI (необязательно)
@@ -66,8 +66,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 Как только Torii станет активным, вы сможете получить те же артефакты через HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Обе конечные точки обслуживаются встроенным обработчиком хранилища, поэтому дымовые тесты CLI и зонды шлюза остаются синхронизированными.
@@ -78,7 +78,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Отправьте манифест в кодировке Base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -87,7 +87,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Получите закрепленные данные:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -103,7 +103,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. Закрепите хотя бы один манифест, как указано выше.
 2. Перезапустите процесс Torii (или весь узел).
 3. Повторно отправьте запрос на получение. Полезные данные по-прежнему должны быть доступны для извлечения, а возвращаемый дайджест должен соответствовать значению перед перезапуском.
-4. Проверьте `GET /v1/sorafs/storage/state`, чтобы убедиться, что `bytes_used` отражает сохраненные манифесты после перезагрузки.
+4. Проверьте `GET /v2/sorafs/storage/state`, чтобы убедиться, что `bytes_used` отражает сохраненные манифесты после перезагрузки.
 
 ## 4. Тест отклонения квоты
 
@@ -118,7 +118,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Запросите образец PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -139,7 +139,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Панели мониторинга должны отслеживать:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` и `torii_sorafs_storage_fetch_inflight`
-  - Счетчики успехов/неуспехов PoR отображаются через `/v1/sorafs/capacity/state`.
+  - Счетчики успехов/неуспехов PoR отображаются через `/v2/sorafs/capacity/state`.
   - Попытки публикации расчетов через `sorafs_node_deal_publish_total{result=success|failure}`.
 
 Выполнение этих упражнений гарантирует, что работник встроенного хранилища сможет принимать данные, выдерживать перезапуски, соблюдать настроенные квоты и генерировать детерминированные доказательства PoR, прежде чем узел объявит емкость более широкой сети.

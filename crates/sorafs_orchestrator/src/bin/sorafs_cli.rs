@@ -5149,7 +5149,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         .post(endpoint.clone())
         .header(CONTENT_TYPE, "application/json")
         .header("Accept", "application/x-ndjson")
-        .header("Sora-Stream-Client", "sorafs_cli/stream/v1");
+        .header("Sora-Stream-Client", "sorafs_cli/stream/v2");
 
     if let Some(token) = stream_token.as_ref() {
         builder = builder.header("Sora-Stream-Token", token);
@@ -5643,7 +5643,7 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
     let mut bundle = Map::new();
     bundle.insert(
         "schema_version".into(),
-        Value::from("sorafs-cli-manifest-sign/v1"),
+        Value::from("sorafs-cli-manifest-sign/v2"),
     );
     bundle.insert("issued_at_unix".into(), Value::from(issued_at));
 

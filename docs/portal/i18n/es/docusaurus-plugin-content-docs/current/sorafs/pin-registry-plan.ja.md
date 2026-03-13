@@ -84,7 +84,7 @@ Pruebas:
 
 | Componente | Tarea | Responsable(s) |
 |-----------|-------|----------------|
-| Servicio Torii | Exponer `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Proveer paginacion + filtrado. | Networking TL / Core Infra |
+| Servicio Torii | Exponer `/v2/sorafs/pin` (submit), `/v2/sorafs/pin/{cid}` (lookup), `/v2/sorafs/aliases` (list/bind), `/v2/sorafs/replication` (orders/receipts). Proveer paginacion + filtrado. | Networking TL / Core Infra |
 | Atestacion | Incluir altura/hash del registry en respuestas; agregar estructura de atestacion Norito consumida por los SDKs. | Core Infra |
 | CLI | Extender `sorafs_manifest_stub` o un nuevo CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Generar bindings de cliente (Rust/Go/TS) desde el esquema Norito; agregar tests de integracion. | SDK Teams |
@@ -141,10 +141,10 @@ Dashboards:
 Cada checklist de SF-4 debe referenciar este plan cuando se marque progreso.
 La fachada REST ahora entrega endpoints de listado con atestacion:
 
-- `GET /v1/sorafs/pin` y `GET /v1/sorafs/pin/{digest}` devuelven manifests con
+- `GET /v2/sorafs/pin` y `GET /v2/sorafs/pin/{digest}` devuelven manifests con
   bindings de alias, ordenes de replicacion y un objeto de atestacion derivado del
   hash del ultimo bloque.
-- `GET /v1/sorafs/aliases` y `GET /v1/sorafs/replication` exponen el catalogo de
+- `GET /v2/sorafs/aliases` y `GET /v2/sorafs/replication` exponen el catalogo de
   alias activo y el backlog de ordenes de replicacion con paginacion consistente y
   filtros de estado.
 

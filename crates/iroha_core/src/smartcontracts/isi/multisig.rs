@@ -24,7 +24,6 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigApprove, MultisigInstructionBox, MultisigProposalValue, MultisigPropose,
     MultisigRegister, MultisigSpec,
 };
-use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use mv::storage::StorageReadOnly;
 
 use crate::{
@@ -1138,22 +1137,6 @@ fn execute_register(
     } = instruction;
     validate_registration(state_transaction, &multisig_account_id, &spec)?;
     let domain_owner = domain_owner(state_transaction, &home_domain)?;
-    let resolved_authority = resolve_signatory_account(state_transaction, authority)?;
-    let authority_is_domain_owner = resolved_authority.subject_id() == domain_owner.subject_id();
-    let authority_can_register = state_transaction
-        .world
-        .account_contains_inherent_permission(
-            &resolved_authority,
-            &CanRegisterAccount {
-                domain: home_domain.clone(),
-            }
-            .into(),
-        );
-    if !(authority_is_domain_owner || authority_can_register) {
-        return Err(ValidationFail::NotPermitted(
-            "not qualified to register multisig".to_owned(),
-        ));
-    }
 
     if account_exists(state_transaction, &multisig_account_id)? {
         return Err(ValidationFail::NotPermitted(format!(
@@ -1977,7 +1960,7 @@ mod tests {
         account::AccountId,
         block::BlockHeader,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
-        prelude::{Domain, Grant, InstructionBox, Register},
+        prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec,
@@ -2022,6 +2005,7 @@ mod tests {
         let multisig_id = new_account_id(&multisig_key);
         let mut metadata = Metadata::default();
         metadata.insert(spec_key(), Json::new(spec.clone()));
+        metadata.insert((*MULTISIG_HOME_DOMAIN_KEY).clone(), Json::new(domain_id.clone()));
         Register::account(
             iroha_data_model::account::NewAccount::new_in_domain(
                 multisig_id.clone(),
@@ -2193,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    fn register_rejects_non_owner_without_permission() {
+    fn register_allows_non_owner_without_permission() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
@@ -2237,78 +2221,12 @@ mod tests {
         };
         let multisig_seed = new_account_id(&KeyPair::random());
 
-        let err = execute_register(
-            &mut state_transaction,
-            &registrar_id,
-            MultisigRegister::with_account(multisig_seed, domain_id.clone(), spec),
-        )
-        .expect_err("registrar without permission should be rejected");
-        assert!(
-            matches!(err, ValidationFail::NotPermitted(ref msg) if msg.contains("not qualified")),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn register_allows_non_owner_with_permission() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(
-            World::new(),
-            kura,
-            query_handle,
-            ChainId::from("multisig-register-authority-grant"),
-        );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
-
-        let owner = KeyPair::random();
-        let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
-        register_account_in_domain(
-            &mut state_transaction,
-            &owner_id,
-            &domain_id,
-            &owner_id,
-            "register owner",
-        );
-
-        let registrar = KeyPair::random();
-        let registrar_id = new_account_id(&registrar);
-        register_account_in_domain(
-            &mut state_transaction,
-            &owner_id,
-            &domain_id,
-            &registrar_id,
-            "register registrar",
-        );
-
-        Grant::account_permission(
-            CanRegisterAccount {
-                domain: domain_id.clone(),
-            },
-            registrar_id.clone(),
-        )
-        .execute(&owner_id, &mut state_transaction)
-        .expect("grant register-account permission");
-
-        let spec = MultisigSpec {
-            signatories: BTreeMap::from([(owner_id.clone(), 1)]),
-            quorum: NonZeroU16::new(1).unwrap(),
-            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
-        };
-        let multisig_seed = new_account_id(&KeyPair::random());
-
         execute_register(
             &mut state_transaction,
             &registrar_id,
             MultisigRegister::with_account(multisig_seed, domain_id.clone(), spec),
         )
-        .expect("registrar with grant should register multisig");
+        .expect("registrar without permission should register multisig");
     }
 
     #[test]

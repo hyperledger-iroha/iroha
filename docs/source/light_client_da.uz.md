@@ -21,7 +21,7 @@ butun yukni olish.
 ## Oxirgi nuqta
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 Yakuniy nuqta sozlanganlardan biriga mos keladigan `X-API-Token` sarlavhasini talab qiladi.

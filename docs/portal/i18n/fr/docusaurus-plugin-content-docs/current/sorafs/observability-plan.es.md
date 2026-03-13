@@ -84,7 +84,7 @@ lorsque l’application PoR/PoTR s’intensifie.
 | `sorafs_node_por_failure_total` | Compteur | `provider_id` | Contador monotonico de muestras PoR fallidas. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Jauge | `provider` | Jauges Prometheus existent pour les octets utilisés, profondeur de cola, conteos PoR en vuelo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Jauge | `provider` | Données de capacité/disponibilité fournies par le fournisseur dans le tableau de bord de capacité. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | L'arriéré est plus important que les contadores accumulés de chutes exportées chaque fois que vous consultez `/v1/sorafs/por/ingestion/{manifest}`, en alimentant le panneau/alerte "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | L'arriéré est plus important que les contadores accumulés de chutes exportées chaque fois que vous consultez `/v2/sorafs/por/ingestion/{manifest}`, en alimentant le panneau/alerte "PoR Stalls". |
 
 ### Test de récupération d'opportunité (PoTR) et SLA de morceaux
 

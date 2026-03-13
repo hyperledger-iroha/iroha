@@ -80,7 +80,7 @@ Tooling support:
 Gateways deterministic HTTP requests accept کرتے ہیں جو advert metadata کو mirror
 کرتی ہیں۔
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Requirement | Details |
 |-------------|---------|
@@ -88,7 +88,7 @@ Gateways deterministic HTTP requests accept کرتے ہیں جو advert metadata
 | **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` جو served window کو بیان کرتا ہے، `X-Sora-Chunk-Range` metadata، اور chunker/token headers کا echo۔ |
 | **Failure modes** | misaligned ranges پر `416`, missing/invalid tokens پر `401`, اور stream/byte budgets exceed ہونے پر `429`۔ |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Single-chunk fetch انہی headers کے ساتھ plus deterministic chunk digest۔ retries
 یا forensic downloads کے لیے مفید جب CAR slices غیر ضروری ہوں۔
@@ -139,11 +139,11 @@ Operators/SDKs کو ملنے والی عام errors:
 - `iroha app sorafs pin list|show`, `alias list`, اور `replication list` pin-registry
   REST endpoints wrap کرتے ہیں اور audit evidence کے لیے attestation blocks کے ساتھ
   raw Norito JSON print کرتے ہیں۔
-- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` Norito یا JSON
+- `iroha app sorafs storage pin` اور `torii /v2/sorafs/pin/register` Norito یا JSON
   manifests کے ساتھ optional alias proofs اور successors accept کرتے ہیں؛ malformed
   proofs پر `400`, stale proofs پر `503` مع `Warning: 110`, اور hard-expired proofs
   پر `412`۔
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- REST endpoints (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   attestation structures شامل کرتے ہیں تاکہ clients latest block headers کے
   خلاف data verify کر سکیں۔
 

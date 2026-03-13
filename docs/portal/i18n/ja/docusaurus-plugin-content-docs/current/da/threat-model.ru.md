@@ -220,7 +220,7 @@ DA バックフィル или клиентов; **中程度** снижает ка
 
 - リプレイ キャッシュ、永続カーソルが DA-2 に到達しました。 Реализация в
   `crates/iroha_core/src/da/replay_cache.rs` (キャッシュ ロジック) と Torii
-  `crates/iroha_torii/src/da/ingest.rs`、指紋チェックは `/v1/da/ingest` で行われます。
+  `crates/iroha_torii/src/da/ingest.rs`、指紋チェックは `/v2/da/ingest` で行われます。
 - PDP/PoTR ストリーミング シミュレーションのプルーフ ストリーム ハーネス
   `crates/sorafs_car/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローおよび
   失敗シナリオについて説明します。

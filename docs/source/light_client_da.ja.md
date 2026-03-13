@@ -15,7 +15,7 @@ Light Client Sampling API を利用すると、認証済みのオペレータが
 ## エンドポイント
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 このエンドポイントは設定済み Torii API トークンのいずれかと一致する `X-API-Token` ヘッダを必須とします。さらにレート制限と呼び出し元ごとの日次バイト予算が適用され、いずれかを超過すると HTTP 429 が返されます。

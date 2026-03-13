@@ -34,7 +34,7 @@ operatorlar gaz debetlarini Nexus to'lov modeliga solishtirishlari mumkin.
   XOR darhol to'lanadi, XOR soch kesilganidan keyin kutilgan, amalga oshirilgan
   dispersiya (`xor_variance_micro`) va blok vaqt tamg'asi millisekundlarda.
 - Blok ijrosi har bir qator/ma'lumotlar maydoni bo'yicha tushumlarni jamlaydi va ularni nashr etadi
-  `lane_settlement_commitments` orqali `/v1/sumeragi/status` da.  Jami
+  `lane_settlement_commitments` orqali `/v2/sumeragi/status` da.  Jami
   `total_local_micro`, `total_xor_due_micro` va
   `total_xor_after_haircut_micro` tungi blokda yakunlandi
   muvofiqlashtirish eksporti.

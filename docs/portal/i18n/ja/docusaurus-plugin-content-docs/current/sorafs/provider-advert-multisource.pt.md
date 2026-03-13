@@ -66,7 +66,7 @@ dos ランブック SoraFS。
 ## ツーリングと治具
 
 - 広告や証明された開発者のペイロードにはメタデータ `range_capability` が含まれます。
-  `stream_budget` と `transport_hints`。 `/v1/sorafs/providers` の返信経由で有効
+  `stream_budget` と `transport_hints`。 `/v2/sorafs/providers` の返信経由で有効
   e 入場設備。 JSON 開発には、解析機能、ストリーム機能が含まれています
   予算とテレメトリの取り込みに関するヒントの配列。
 - `cargo xtask sorafs-admission-fixtures` mostra ストリーム バジェットとトランスポート ヒント dentro
@@ -78,7 +78,7 @@ dos ランブック SoraFS。
 
 ## Integracao com オーケストレーター e Torii
 
-- Torii `/v1/sorafs/providers` 範囲解析メタデータ ジュント コム
+- Torii `/v2/sorafs/providers` 範囲解析メタデータ ジュント コム
   `stream_budget` と `transport_hints`。ダウングレードの不均衡を回避するための手段
   証明は nova メタデータを省略し、エンドポイントの範囲はゲートウェイ アプリケーションとして実行されます。
   クライアントのディレトスを管理します。

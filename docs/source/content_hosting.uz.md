@@ -28,7 +28,7 @@ individual fayllar to'g'ridan-to'g'ri Torii dan.
   `sponsor:<uaid>`), saqlash siyosati to'ldiruvchisi va MIME bekor qiladi.
 - **Deduping**: smolaning foydali yuklari qismlarga bo'linadi (standart 64KiB) va har bir marta saqlanadi
   mos yozuvlar soni bilan xesh; bir to'plamni pensiyaga chiqarish bo'laklarni kamaytiradi va olxo'ri kesadi.
-- **Xizmat ko'rsatish**: Torii `GET /v1/content/{bundle}/{path}`ni ko'rsatadi. Javoblar oqimi
+- **Xizmat ko'rsatish**: Torii `GET /v2/content/{bundle}/{path}`ni ko'rsatadi. Javoblar oqimi
   to'g'ridan-to'g'ri parcha do'konidan `ETag` = fayl xeshi, `Accept-Ranges: bytes`,
   Manifestdan olingan diapazonni qo'llab-quvvatlash va kesh-nazorat. hurmat bilan o'qiydi
   manifest auth rejimi: rolga va homiyga bog'langan javoblar kanonik talablarni talab qiladi

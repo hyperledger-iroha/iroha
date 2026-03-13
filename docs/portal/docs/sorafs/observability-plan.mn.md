@@ -87,7 +87,7 @@ PoR/PoTR-ийн хэрэгжилт хурцдах бүрд.
 | `sorafs_node_por_failure_total` | Тоолуур | `provider_id` | Амжилтгүй PoR дээжийн монотон тоолуур. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | хэмжигч | `provider` | Одоо байгаа Prometheus хэмжигч ашигласан байт, дарааллын гүн, PoR нислэгийн тоо. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | хэмжигч | `provider` | Хүчин чадлын хяналтын самбарт үйлчилгээ үзүүлэгчийн хүчин чадал/ажиллах хугацааны амжилтын өгөгдөл гарч ирэв. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | хэмжигч | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}`-г санал асуулга авах бүрд экспортын хуримтлагдсан алдааны тоолуур дээр нэмээд "PoR лангуу" самбар/сануулгыг тэжээдэг. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | хэмжигч | `provider`, `manifest` | `/v2/sorafs/por/ingestion/{manifest}`-г санал асуулга авах бүрд экспортын хуримтлагдсан алдааны тоолуур дээр нэмээд "PoR лангуу" самбар/сануулгыг тэжээдэг. |
 
 ### Засвар ба SLA
 

@@ -22,7 +22,7 @@ use Norito codecs; no serde/JSON fallbacks are permitted.
 ## API Surface (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -40,7 +40,7 @@ Payload is a Norito-encoded `DaIngestRequest`. Responses use
 | 500 Internal Error | Unexpected failure (logged + alert). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -56,7 +56,7 @@ bundle hash. Commitment list/prove endpoints carry the same bundle so SDKs
 don’t need an extra round-trip to bind a proof to the active policy set.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -236,7 +236,7 @@ hashing, chunking, and verifying optional manifests.
 - `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
   `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
   `--plan`, `--manifest-id`) **or** simply pass a Torii storage ticket via `--storage-ticket`. When the
-  ticket path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle
+  ticket path is used the CLI pulls the manifest from `/v2/da/manifests/<ticket>`, persists the bundle
   under `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the **manifest
   hash** for `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider`
   list. Payload verification still relies on the embedded CAR/`blob_hash` digest while the gateway id is
@@ -245,7 +245,7 @@ hashing, chunking, and verifying optional manifests.
   overrides, scoreboard export, and `--output` paths), and the manifest endpoint can be overridden via
   `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live entirely under the
   `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v2/da/manifests/{storage_ticket}`.
   The command now labels artefacts with the manifest hash (blob id), writing
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, and `chunk_plan_{manifest_hash}.json`
   under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
@@ -257,7 +257,7 @@ hashing, chunking, and verifying optional manifests.
   and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI, and Swift
   clients can additionally call `fetchDaPayloadViaGateway(...)` to pipe those bundles through the native
   SoraFS orchestrator wrapper.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
+- `/v2/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway`, and the Swift/JS gateway wrappers) treat this digest as the
   canonical manifest identifier while continuing to verify payloads against the embedded CAR/blob hash.
 - `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
@@ -275,7 +275,7 @@ hashing, chunking, and verifying optional manifests.
 - Pin registry parity now extends to SDKs: `ToriiClient.registerSorafsPinManifest(...)` in the
   JavaScript SDK builds the exact payload used by `iroha app sorafs pin register`, enforcing canonical
   chunker metadata, pin policies, alias proofs, and successor digests before POSTing to
-  `/v1/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
+  `/v2/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
   recording manifest registrations, and the helper ships with TypeScript/README coverage so DA-8’s
   “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
@@ -335,7 +335,7 @@ All previously blocked ingest TODOs have been implemented and verified:
   unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
   beside manifests so DA-5 schedulers can launch sampling challenges from canonical data; the
-  `Sora-PDP-Commitment` header now ships with both `/v1/da/ingest` and `/v1/da/manifests/{ticket}`
+  `Sora-PDP-Commitment` header now ships with both `/v2/da/ingest` and `/v2/da/manifests/{ticket}`
   responses so SDKs immediately learn the signed commitment that future probes will reference.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
 - **Shard cursor journal** — lane metadata may specify `da_shard_id` (defaulting to `lane_id`), and
   Sumeragi now persists the highest `(epoch, sequence)` per `(shard_id, lane_id)` into
@@ -361,7 +361,7 @@ All previously blocked ingest TODOs have been implemented and verified:
 
 ## Implementation Notes
 
-- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
+- Torii’s `/v2/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
   deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, and drops the encoded payload
   into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
   handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
@@ -374,7 +374,7 @@ All previously blocked ingest TODOs have been implemented and verified:
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` cover Rust, the Python `ToriiClient`
   now exports `decode_pdp_commitment_header`, and `IrohaSwift` ships matching helpers so mobile
   clients can stash the encoded sampling schedule immediately.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
+- Torii also exposes `GET /v2/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
   (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, plus the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
@@ -394,7 +394,7 @@ All previously blocked ingest TODOs have been implemented and verified:
 ### Large Payload Streaming Flow
 
 Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
+streaming session by calling `POST /v2/da/ingest/chunk/start`. Torii responds with a
 `ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
 Each subsequent `DaIngestChunk` request carries:
 
@@ -409,7 +409,7 @@ Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunk
 records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
 reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
 computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
+`POST /v2/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
 are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
 Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
 unchanged.

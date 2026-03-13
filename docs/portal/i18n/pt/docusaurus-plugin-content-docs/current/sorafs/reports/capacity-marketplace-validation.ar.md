@@ -28,7 +28,7 @@ Isso pode ser feito por meio de uma chave de fenda. Isso significa que o teste (
 
 | الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| يقبل registro إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v1/sorafs/capacity/declare` na API do aplicativo, مع التحقق من معالجة التواقيع, metadados de dados, وتسليمها إلى registro العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
+| يقبل registro إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v2/sorafs/capacity/declare` na API do aplicativo, مع التحقق من معالجة التواقيع, metadados de dados, وتسليمها إلى registro العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
 | Construir contratos inteligentes e cargas úteis | Você pode usar o GiB para obter mais informações sobre o GiB. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Artefactos CLI Ferramentas de construção | O chicote CLI é usado para viagens de ida e volta Norito/JSON/Base64 e viagens de ida e volta. الإعلانات offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | يلتقط دليل المشغلين سير قبول الانضمام e حواجز الحوكمة | Você pode definir os padrões de política e os padrões de política. | `../storage-capacity-marketplace.md` |

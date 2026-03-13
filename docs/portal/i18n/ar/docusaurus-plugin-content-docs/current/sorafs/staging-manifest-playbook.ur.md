@@ -74,11 +74,11 @@ Sidebar_label: SoraFS دليل التشغيل لبيان التدريج
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```2. اكتشف استعلام نقطة النهاية وتأكد من كتابة الأسماء المستعارة الأساسية التي ينظر إليها على النحو التالي:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    هذا هو الإدخال الأول الذي يشمل `profile_aliases` `"sorafs.sf1@1.0.0"` وهو شامل تمامًا.

@@ -95,7 +95,7 @@ npm run start
 以下組件從 `docusaurus.config.js` 讀取這些值：
 
 - **Swagger UI** — 在 `/reference/torii-swagger` 處渲染；預授權
-- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v2/mcp` agent workflows.
   持有者方案當存在令牌時，用 `X-TryIt-Client` 標記請求，
   注入 `X-TryIt-Auth`，並在以下情況下通過代理重寫調用
   `TRYIT_PROXY_PUBLIC_URL` 已設置。
@@ -180,7 +180,7 @@ NRPC 規範中描述的預編碼 Norito 有效負載
 1. 選擇一個夾具，例如 `fixtures/norito_rpc/transfer_asset.norito`。這些
    文件是原始 Norito 信封； **不要**對它們進行 base64 編碼。
 2. 在 Swagger 或 RapiDoc 中，找到 NRPC 端點（例如
-   `POST /v1/pipeline/submit`）並將 **Content-Type** 選擇器切換為
+   `POST /v2/pipeline/submit`）並將 **Content-Type** 選擇器切換為
    `application/x-norito`。
 3. 將請求正文編輯器切換為 **binary**（Swagger 的“文件”模式或
    RapiDoc 的“二進制/文件”選擇器）並上傳 `.norito` 文件。小部件
@@ -208,13 +208,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v1/pipeline/submit"
+  "${TORII}/v2/pipeline/submit"
 ```
 
 將夾具替換為 `transaction_fixtures.manifest.json` 中列出的任何條目
 或者使用 `cargo xtask norito-rpc-fixtures` 編碼您自己的有效負載。當 Torii
 處於金絲雀模式，您可以將 `curl` 指向 try-it 代理
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) 進行同樣的練習
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) 進行同樣的練習
 門戶小部件使用的基礎設施。
 
 ## 可觀察性和操作每個請求都會記錄一次，其中包括方法、路徑、來源、上游狀態和
@@ -230,7 +230,7 @@ curl \
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
 npm run probe:tryit-proxy
 ```
 

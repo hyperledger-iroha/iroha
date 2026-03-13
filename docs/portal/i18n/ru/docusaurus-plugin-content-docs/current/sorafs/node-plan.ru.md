@@ -60,7 +60,7 @@ SF-3 представляет первый исполняемый ящик `sora
 - Используйте Axum стек Torii с полезными нагрузками `norito::json`.
 - Добавить Norito схемы ответов (`PinResultV1`, `FetchErrorV1`, структуры телеметрии).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает невыполненную работу, самую старую эпоху/крайний срок и последние временные метки успеха/неудачи по каждому провайдеру, за счет `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` для дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:188 3】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает невыполненную работу, самую старую эпоху/крайний срок и последние временные метки успеха/неудачи по каждому провайдеру, за счет `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` для дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:188 3】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Планировщик и приложение квот
 

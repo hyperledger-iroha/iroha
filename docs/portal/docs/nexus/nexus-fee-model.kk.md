@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   XOR дереу төленеді, XOR шаш қиюдан кейін күтіледі, орындалды
   дисперсия (`xor_variance_micro`) және миллисекундтағы блок уақыт белгісі.
 - Орындауды блоктау әр жолақ/деректер кеңістігі бойынша түбіртектерді біріктіреді және оларды жариялайды
-  `lane_settlement_commitments` арқылы `/v1/sumeragi/status`.  Қорытындылар
+  `lane_settlement_commitments` арқылы `/v2/sumeragi/status`.  Қорытындылар
   `total_local_micro`, `total_xor_due_micro` және
   `total_xor_after_haircut_micro` түнгі блок бойынша қорытындыланды
   салыстыру экспорты.

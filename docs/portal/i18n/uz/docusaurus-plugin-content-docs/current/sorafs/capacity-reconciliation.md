@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 “Yo‘l xaritasi” bandi **SF-2c** g‘aznachilik sig‘im to‘lovi daftarini tasdiqlashni talab qiladi.
 har kecha bajariladigan XOR transferlariga mos keladi. dan foydalaning
 solishtirish uchun `scripts/telemetry/capacity_reconcile.py` yordamchisi
-`/v1/sorafs/capacity/state` bajarilgan transfer to'plamiga qarshi surat va
+`/v2/sorafs/capacity/state` bajarilgan transfer to'plamiga qarshi surat va
 Alertmanager uchun Prometheus matn fayli ko'rsatkichlarini chiqaradi.
 
 ## Old shartlar

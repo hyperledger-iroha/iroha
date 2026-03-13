@@ -76,7 +76,7 @@ Rust Norito 模式和支持这些记录的验证助手。验证
 
 |组件|任务|所有者 |
 |------------|------|----------|
-| Torii 服务 |公开 `/v1/sorafs/pin`（提交）、`/v1/sorafs/pin/{cid}`（查找）、`/v1/sorafs/aliases`（列表/绑定）、`/v1/sorafs/replication`（订单/收据）。提供分页+过滤。 |网络 TL/核心基础设施 |
+| Torii 服务 |公开 `/v2/sorafs/pin`（提交）、`/v2/sorafs/pin/{cid}`（查找）、`/v2/sorafs/aliases`（列表/绑定）、`/v2/sorafs/replication`（订单/收据）。提供分页+过滤。 |网络 TL/核心基础设施 |
 |认证|在响应中包含注册表高度/哈希值；添加 SDK 使用的 Norito 证明结构。 |核心基础设施|
 |命令行|使用 `pin submit`、`alias bind`、`order issue`、`registry export` 扩展 `sorafs_manifest_stub` 或新的 `sorafs_pin` CLI。 |工具工作组 |
 | SDK |从 Norito 模式生成客户端绑定 (Rust/Go/TS)；添加集成测试。 | SDK 团队 |
@@ -133,10 +133,10 @@ Rust Norito 模式和支持这些记录的验证助手。验证
 SF-4 下的每个路线图清单项目在取得进展时都应参考该计划。
 REST 外观现在附带经过验证的列表端点：
 
-- `GET /v1/sorafs/pin` 和 `GET /v1/sorafs/pin/{digest}` 返回清单
+- `GET /v2/sorafs/pin` 和 `GET /v2/sorafs/pin/{digest}` 返回清单
   别名绑定、复制顺序和从派生的证明对象
   最新的块哈希。
-- `GET /v1/sorafs/aliases` 和 `GET /v1/sorafs/replication` 暴露活动
+- `GET /v2/sorafs/aliases` 和 `GET /v2/sorafs/replication` 暴露活动
   别名目录和复制订单积压具有一致的分页和
   状态过滤器。
 

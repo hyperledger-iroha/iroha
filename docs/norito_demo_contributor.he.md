@@ -23,7 +23,7 @@ translator: manual
 5. העתיקו את `examples/ios/NoritoDemoXcode/Configs/demo.env.example` ל-`.env` ועדכנו את הערכים לסביבה שלכם. האפליקציה קוראת את המשתנים הבאים בעת ההפעלה:
    - `TORII_NODE_URL` — כתובת הבסיס של REST (ה-WebSocket נגזר ממנה).
    - `CONNECT_SESSION_ID` — מזהה סשן בגודל 32 בתים (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — האסימונים שמוחזרים מ-`/v1/connect/session`.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — האסימונים שמוחזרים מ-`/v2/connect/session`.
    - `CONNECT_CHAIN_ID` — מזהה השרשרת שנשלח במסגרת בקרת Connect.
    - `CONNECT_ROLE` — התפקיד שמופיע כברירת מחדל בממשק (`app` או `wallet`).
    - עזרים אופציונליים לבדיקות: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -66,7 +66,7 @@ translator: manual
 1. בנו את ה-XCFramework לפי `docs/norito_bridge_release.md` והוסיפו ל-root של הפרויקט (`NoritoBridge.xcframework`).
 2. פתחו את `NoritoDemoXcode` ב-Xcode.
 3. בחרו סכימה `NoritoDemo` והפעילו סימולטור או מכשיר.
-4. ודאו שהקובץ `.env` נטען דרך הגדרות הסביבה בסכמה, ומלאו את ערכי `CONNECT_*` שנוצרו על ידי `/v1/connect/session` כדי שהטפסים ימולאו אוטומטית בעת ההפעלה.
+4. ודאו שהקובץ `.env` נטען דרך הגדרות הסביבה בסכמה, ומלאו את ערכי `CONNECT_*` שנוצרו על ידי `/v2/connect/session` כדי שהטפסים ימולאו אוטומטית בעת ההפעלה.
 5. בדקו את הגדרות ההאצה: `App.swift` קורא `DemoAccelerationConfig.load().apply()`
    כך שהדמו יחיל אוטומטית את הקובץ שמוגדר ב-`NORITO_ACCEL_CONFIG_PATH` או את הקבצים
    `acceleration.{json,toml}`/`client.{json,toml}` שנמצאים בחבילה. ניתן להסיר/להחליף קבצים

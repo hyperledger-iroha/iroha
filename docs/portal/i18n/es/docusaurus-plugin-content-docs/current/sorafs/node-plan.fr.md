@@ -55,7 +55,7 @@ El tiempo de ejecución de la bomba depende de las interacciones PoR a través d
 Notas de implementación:
 
 - Utilice la pila Axum de Torii con las cargas útiles `norito::json`.
-- Agregar esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de televisión).- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` expone el mantenimiento de la profundidad del trabajo pendiente además de la época/échéance la más antigua y las marcas de tiempo de éxito/échec les plus récents por el proveedor, a través de `sorafs_node::NodeHandle::por_ingestion_status`, y Torii registra los calibres `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para archivos paneles.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- Agregar esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de televisión).- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` expone el mantenimiento de la profundidad del trabajo pendiente además de la época/échéance la más antigua y las marcas de tiempo de éxito/échec les plus récents por el proveedor, a través de `sorafs_node::NodeHandle::por_ingestion_status`, y Torii registra los calibres `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para archivos paneles.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Programador y aplicación de cuotas
 

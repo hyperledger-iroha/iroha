@@ -92,7 +92,7 @@ handles, and signature handling.
 # Fetch PoR samples from a gateway and emit aggregated metrics
 sorafs_cli proof stream \
   --manifest artifacts/site.manifest.to \
-  --gateway-url https://gateway.local/v1/sorafs/proof/stream \
+  --gateway-url https://gateway.local/v2/sorafs/proof/stream \
   --provider-id provider::alpha \
   --samples 64 \
   --stream-token "$(cat stream.token)" \

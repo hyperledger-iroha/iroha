@@ -35,7 +35,7 @@ directory (the repository ignores non-`.sample.json` files).
 |-------|------|-------|
 | `generated_at` | string (ISO 8601) | Timestamp when the snapshot was produced. |
 | `fixtures` | object | Outstanding Norito parity diffs and oldest age. |
-| `pipeline` | object | `/v1/pipeline` integration status (last run, failures). |
+| `pipeline` | object | `/v2/pipeline` integration status (last run, failures). |
 | `pipeline.metadata` | object (optional) | Shared job/test timing data (`job_name`, `duration_seconds`, `tests[]`) emitted via `MOBILE_PARITY_PIPELINE_METADATA`; `metadata_source` records the path/URL for audit trails. |
 | `regen_sla` | object | Fixture regeneration SLA streak. |
 | `alerts` | array | Optional free-form alert entries. |
@@ -129,7 +129,7 @@ highlight trend regressions.
   and `swift_parity_failure_total` counters backed by a JSON state file (defaults to
   `artifacts/swift_status_metrics_state.json`, override with `--metrics-state …`).
 - `swift_parity_success_total` increments whenever the latest parity snapshot has
-  zero outstanding diffs, no regen breach, and no failing `/v1/pipeline` tests.
+  zero outstanding diffs, no regen breach, and no failing `/v2/pipeline` tests.
 - The textfile also exposes gauges for the current status flag (`swift_parity_status`),
   outstanding diff count, oldest diff age, and hours since the last successful regen so
   textfile collectors and on-call dashboards can alert on stale fixtures.

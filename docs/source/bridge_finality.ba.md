@@ -60,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0
 ММР түбәләренә һулдан уңға заказ бирелә. Ҡабаттан `mmr_root` ҡапҡасы пиктары ярҙамында
 уңдан һулға: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Тикшеренеүҙең төп дәлиле менән аналоглы: `block_hash` ҡабаттан иҫәпләү.
 баш, раҫлау өсөн коммит-сертификат ҡултамғалар, һәм тикшерергә йөкләмә
@@ -103,10 +103,10 @@ API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 ## API өҫтө
 
-- `GET /v1/bridge/finality/{height}` – ҡайтарыу `BridgeFinalityProof` өсөн .
+- `GET /v2/bridge/finality/{height}` – ҡайтарыу `BridgeFinalityProof` өсөн .
   тип һораған блок бейеклеге. Йөкмәтке һөйләшеүҙәр аша `Accept` ярҙам итә Norito йәки .
   ЙСОН.
-- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ҡайтарыуҙар
+- `GET /v2/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ҡайтарыуҙар
   (эшләү + аҡлау + баш/сертификат) өсөн һоралған бейеклек.
 
 ## Иҫкәрмәләр һәм эйәреп.

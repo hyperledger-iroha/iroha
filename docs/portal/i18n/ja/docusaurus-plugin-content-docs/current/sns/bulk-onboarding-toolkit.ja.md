@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -143,9 +143,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- ヘルパーは各リクエストに対して `POST /v1/sns/registrations` を送信し、
+- ヘルパーは各リクエストに対して `POST /v2/sns/registrations` を送信し、
   最初の HTTP エラーで停止します。レスポンスは NDJSON としてログに追記。
-- `--poll-status` は送信後に `/v1/sns/registrations/{selector}` を再照会
+- `--poll-status` は送信後に `/v2/sns/registrations/{selector}` を再照会
   (最大 `--poll-attempts`, 既定 5) して可視性を確認します。`suffix_id` から
   `"suffix"` への JSON を `--suffix-map` で渡すと `{label}.{suffix}` を
   生成してポーリングできます。

@@ -21,7 +21,7 @@ payload တစ်ခုလုံးကို ရယူခြင်း။
 ## အဆုံးမှတ်
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 အဆုံးမှတ်သည် ပြင်ဆင်သတ်မှတ်ထားသော တစ်ခုနှင့် ကိုက်ညီသော `X-API-Token` ခေါင်းစီး လိုအပ်သည်

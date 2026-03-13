@@ -81,7 +81,7 @@ fixtures и операционные требования.
 
 | Компонент | Задача | Ответственные |
 |-----------|--------|---------------|
-| Сервис Torii | Экспонировать `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Обеспечить пагинацию + фильтрацию. | Networking TL / Core Infra |
+| Сервис Torii | Экспонировать `/v2/sorafs/pin` (submit), `/v2/sorafs/pin/{cid}` (lookup), `/v2/sorafs/aliases` (list/bind), `/v2/sorafs/replication` (orders/receipts). Обеспечить пагинацию + фильтрацию. | Networking TL / Core Infra |
 | Аттестация | Включать высоту/хэш registry в ответы; добавить структуру аттестации Norito, потребляемую SDK. | Core Infra |
 | CLI | Расширить `sorafs_manifest_stub` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Сгенерировать клиентские bindings (Rust/Go/TS) из схемы Norito; добавить интеграционные тесты. | SDK Teams |
@@ -138,10 +138,10 @@ fixtures и операционные требования.
 Каждый пункт чеклиста SF-4 должен ссылаться на этот план при фиксации прогресса.
 REST фасад теперь поставляется с аттестованными endpoints списка:
 
-- `GET /v1/sorafs/pin` и `GET /v1/sorafs/pin/{digest}` возвращают manifests с
+- `GET /v2/sorafs/pin` и `GET /v2/sorafs/pin/{digest}` возвращают manifests с
   alias bindings, orders репликации и объектом аттестации, производным от
   хэша последнего блока.
-- `GET /v1/sorafs/aliases` и `GET /v1/sorafs/replication` публикуют активный
+- `GET /v2/sorafs/aliases` и `GET /v2/sorafs/replication` публикуют активный
   каталог alias и backlog заказов репликации с консистентной пагинацией и
   фильтрами статуса.
 

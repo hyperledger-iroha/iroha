@@ -177,7 +177,7 @@ mualliflar, SDK egalari va sharhlovchilar CI foydalanadigan aniq baytlarni takro
 1. `fixtures/norito_rpc/transfer_asset.norito` kabi moslamani tanlang. Bular
    fayllar xom Norito konvertlari; **base64-ularni kodlamang.
 2. Swagger yoki RapiDoc-da NRPC oxirgi nuqtasini toping (masalan
-   `POST /v1/pipeline/submit`) va **Content-Type** selektorini
+   `POST /v2/pipeline/submit`) va **Content-Type** selektorini
    `application/x-norito`.
 3. Soʻrovning asosiy muharririni **ikliklik** ga almashtiring (Swaggerning “Fayl” rejimi yoki
    RapiDoc-ning "Ikkilik/Fayl" selektori) va `.norito` faylini yuklang. Vidjet
@@ -205,13 +205,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v1/pipeline/submit"
+  "${TORII}/v2/pipeline/submit"
 ```
 
 Armaturani `transaction_fixtures.manifest.json` ro'yxatidagi har qanday yozuvga almashtiring
 yoki o'zingizning foydali yukingizni `cargo xtask norito-rpc-fixtures` bilan kodlang. Qachon Torii
 kanareyka rejimida siz `curl`-ni sinab ko'ring proksi-serverda ko'rsatishingiz mumkin
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) xuddi shunday mashq qilish
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) xuddi shunday mashq qilish
 portal vidjetlari foydalanadigan infratuzilma.
 
 ## Kuzatish va operatsiyalarHar bir so'rov bir marta usul, yo'l, kelib chiqishi, yuqori oqim holati va
@@ -227,7 +227,7 @@ O'rnatish paytida yoki jadval bo'yicha birlashtirilgan tekshiruvni ishga tushiri
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
 npm run probe:tryit-proxy
 ```
 

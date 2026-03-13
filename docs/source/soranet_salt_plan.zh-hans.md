@@ -30,7 +30,7 @@ teams whenever a rotation or recovery drill is executed.
 ## Roles & Responsibilities
 - **Salt Council (3-of-5 Dilithium3 multisig):** Draft and sign the daily `SaltAnnouncementV1`, coordinate emergency rotations, and maintain the key custody log.
 - **Directory Authority:** Attach the Ed25519 witness signature, push announcements into IPNS/SoraNS, and archive signed payloads.
-- **Torii Operators:** Publish the announcement through `/v1/soranet/salt/*`, monitor request success, and expose the latest digest to observability.
+- **Torii Operators:** Publish the announcement through `/v2/soranet/salt/*`, monitor request success, and expose the latest digest to observability.
 - **Relay Operators:** Consume the announcement within the grace window, rotate caches, evict stale circuits, and surface skew metrics.
 - **Client & SDK Owners:** Ensure applications fetch updates, respect recovery windows, and provide user-facing error handling for `SaltMismatch`.
 - **Observability & SRE:** Watch `soranet_salt_*` telemetry, trigger incident response when the publication SLA is missed, and verify alert coverage quarterly.
@@ -64,7 +64,7 @@ teams whenever a rotation or recovery drill is executed.
 - **Distribution pipeline:**
   1. Salt Council prepares the announcement, signs it, and submits to Torii.
   2. The announcement is stored in the governance DAG and exposed via IPNS (`/ipns/salt.sora.net/<epoch_id>`). The SoraNS resolver mirrors the pointer.
-  3. Torii exposes `GET /v1/soranet/salt/latest` and `GET /v1/soranet/salt/history` responses signed with the same Norito envelope. CLI helpers emit structured Norito JSON for SDK parity.
+  3. Torii exposes `GET /v2/soranet/salt/latest` and `GET /v2/soranet/salt/history` responses signed with the same Norito envelope. CLI helpers emit structured Norito JSON for SDK parity.
   4. Relays cache the latest two epochs. Clients store the latest `epoch_id` and salt for circuit operations.
 - **Header broadcast:** Control-plane channel (`/soranet/control/salt`) pushes announcement digests allowing clients to detect new epochs without polling.
 
@@ -115,13 +115,13 @@ invoked (e.g., delayed rotation due to governance directives).
    ```bash
    ipfs name publish --key salt-gov /ipfs/<dag-cid>
    ```
-3. Trigger the Torii ingestion hook (`POST /v1/soranet/salt/publish`) pointing at the new record.
+3. Trigger the Torii ingestion hook (`POST /v2/soranet/salt/publish`) pointing at the new record.
 4. Notify relay operators via the `#soranet-ops` channel with the epoch number, hash digest, and rollout window.
 
 ### T+5 Minutes - Propagation Validation
 1. Fetch the announcement via Torii and IPNS; compare digests:
    ```bash
-   curl -s https://torii.sora.net/v1/soranet/salt/latest | jq '.announcement.epoch_id'
+   curl -s https://torii.sora.net/v2/soranet/salt/latest | jq '.announcement.epoch_id'
    ipfs cat /ipns/salt.sora.net/<epoch_id> | jq '.announcement.epoch_id'
    ```
 2. Verify relays adopted the epoch by checking `soranet_salt_skew_gauge` (target 0) and the relay audit log.
@@ -135,7 +135,7 @@ invoked (e.g., delayed rotation due to governance directives).
 ## Failure Scenarios & Recovery
 
 - **Missed epoch (client offline):**
-  1. Client compares local `epoch_id` with `/latest`. If the delta is greater than one, it requests `GET /v1/soranet/salt/history?from=<last>&to=<current>`.
+  1. Client compares local `epoch_id` with `/latest`. If the delta is greater than one, it requests `GET /v2/soranet/salt/history?from=<last>&to=<current>`.
   2. Client verifies all signatures, ensures strict monotonicity, and repopulates the cache prior to re-opening circuits.
   3. Circuit attempts using stale salts must surface `SaltMismatch` including `latest_epoch_id` and guidance to refetch history.
 - **Relay lag:** Relay instances that fall behind are expected to refuse new circuits until cache parity is restored. Operators restart the fetch job, run `salt-verify` against the cached file, and only rejoin the rotation once telemetry reports skew <= 1.

@@ -51,7 +51,7 @@ struct Args {
     /// Optional path for a JSON file containing the time/CID index keys.
     #[arg(long, value_name = "PATH")]
     indexes_out: Option<PathBuf>,
-    /// Optional path for the ingest metadata JSON map consumed by `/v1/da/ingest`.
+    /// Optional path for the ingest metadata JSON map consumed by `/v2/da/ingest`.
     #[arg(long, value_name = "PATH")]
     ingest_metadata_out: Option<PathBuf>,
     /// Optional path for a JSON summary describing the bundle outputs.

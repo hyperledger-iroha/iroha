@@ -41,7 +41,7 @@ dashboard theme once the service ships.
   helper; export buttons attach the JSON result to the download manifest for
   audit reuse.
 - **Billing & audit:** statement table with period selector, meter drill-down,
-  and an audit tail pane that streams the `/v1/audit/events` feed with
+  and an audit tail pane that streams the `/v2/audit/events` feed with
   download/export actions matching the RBAC catalogue.
 
 ## Accessibility & Determinism

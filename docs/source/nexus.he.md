@@ -62,7 +62,7 @@ Gossip מודע dataspace
 
 Manifests של capabilities ו-UAID
 - חשבונות אוניברסליים: לכל משתתף מוקצה UAID דטרמיניסטי (`UniversalAccountId` ב-`crates/iroha_data_model/src/nexus/manifest.rs`) שחוצה את כל ה-dataspaces. manifests של capabilities (`AssetPermissionManifest`) קושרים UAID ל-dataspace ספציפי, epochs של הפעלה/תוקף, ורשימה מסודרת של כללי allow/deny `ManifestEntry` שמגבילים `dataspace`, `program_id`, `method`, `asset` ותפקידי AMX אופציונליים. כללי deny תמיד גוברים; evaluator מחזיר `ManifestVerdict::Denied` עם סיבת ביקורת או grant `Allowed` עם metadata של ההרשאה.
-- Snapshots של פורטפוליו UAID נחשפים דרך `GET /v1/accounts/{uaid}/portfolio` (ראו `docs/source/torii/portfolio_api.md`), מגובים באגרגטור דטרמיניסטי ב-`iroha_core::nexus::portfolio`.
+- Snapshots של פורטפוליו UAID נחשפים דרך `GET /v2/accounts/{uaid}/portfolio` (ראו `docs/source/torii/portfolio_api.md`), מגובים באגרגטור דטרמיניסטי ב-`iroha_core::nexus::portfolio`.
 - Allowances: לכל allow יש buckets דטרמיניסטיים `AllowanceWindow` (`PerSlot`, `PerMinute`, `PerDay`) ועוד `max_amount` אופציונלי. Hosts ו-SDKs צורכים אותו Norito payload כך שהאכיפה זהה בין חומרות ו-SDKs.
 - טלמטריית ביקורת: Space Directory משדר `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) בכל שינוי מצב. `SpaceDirectoryEventFilter` מאפשר למנויי Torii/data-event לעקוב אחרי עדכונים, ביטולים והחלטות deny-wins בלי plumbing ידני.
 
@@ -123,16 +123,16 @@ Manifests של capabilities ו-UAID
 
 מפעילים ו-SDKs יכולים לבצע את אותן פעולות דרך HTTPS. Torii אוכף את אותן הרשאות וחותם על טרנזקציות עבור הסמכות שסופקה (מפתחות פרטיים נשארים בזיכרון בתוך handler מאובטח של Torii):
 
-- `GET /v1/space-directory/uaids/{uaid}` — לפתור binding נוכחי של dataspace ל-UAID (כתובות מנורמלות, ids של dataspace, program bindings). הוסיפו `canonical I105 output` לפלט Sora Name Service (I105 מועדף; I105 הוא אפשרות שנייה ל‑Sora בלבד).
-- `GET /v1/accounts/{uaid}/portfolio` — אגרגטור Norito שממפה ל-`ToriiClient.getUaidPortfolio` כדי שארנקים יציגו נכסים אוניברסליים בלי גרידת מצב לכל dataspace. אפשר להעביר `asset_id=<asset#definition::owner>` כדי לסנן את התמונה לנכס אחד.
-- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — להביא JSON של המניפסט, metadata של מחזור חיים וה-hash לביקורת.
-- `POST /v1/space-directory/manifests` — לשלוח מניפסט חדש או מחליף מ-JSON (`authority`, `private_key`, `manifest`, `reason` אופציונלי). Torii מחזיר `202 Accepted` כשהטרנזקציה בתור.
-- `POST /v1/space-directory/manifests/revoke` — לשגר ביטולי חירום עם UAID, dataspace id, epoch אפקטיבי ו-reason אופציונלי (משקף CLI).
+- `GET /v2/space-directory/uaids/{uaid}` — לפתור binding נוכחי של dataspace ל-UAID (כתובות מנורמלות, ids של dataspace, program bindings). הוסיפו `canonical I105 output` לפלט Sora Name Service (I105 מועדף; I105 הוא אפשרות שנייה ל‑Sora בלבד).
+- `GET /v2/accounts/{uaid}/portfolio` — אגרגטור Norito שממפה ל-`ToriiClient.getUaidPortfolio` כדי שארנקים יציגו נכסים אוניברסליים בלי גרידת מצב לכל dataspace. אפשר להעביר `asset_id=<asset#definition::owner>` כדי לסנן את התמונה לנכס אחד.
+- `GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}` — להביא JSON של המניפסט, metadata של מחזור חיים וה-hash לביקורת.
+- `POST /v2/space-directory/manifests` — לשלוח מניפסט חדש או מחליף מ-JSON (`authority`, `private_key`, `manifest`, `reason` אופציונלי). Torii מחזיר `202 Accepted` כשהטרנזקציה בתור.
+- `POST /v2/space-directory/manifests/revoke` — לשגר ביטולי חירום עם UAID, dataspace id, epoch אפקטיבי ו-reason אופציונלי (משקף CLI).
 
 SDK JS (`javascript/iroha_js/src/toriiClient.js`) כבר עוטף את ממשקי הקריאה הללו דרך `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, ו-`.getUaidManifests`; גרסאות Swift/Python עתידיות ישתמשו באותם payloads. עיינו ב-`docs/source/torii/portfolio_api.md` לסכמות request/response וב-`docs/space-directory.md` ל-playbook המלא.
 
 עדכוני SDK/AMX אחרונים
-- **NX-11 (אימות relay cross-lane):** עוזרי SDK מאמתים כעת את lane relay envelopes מ-`/v1/sumeragi/status`. לקוח Rust מספק `iroha::nexus` helpers לבניה/אימות relay proofs ולדחיית כפילויות `(lane_id, dataspace_id, height)`, ה-binding של Python חושף `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, ו-SDK JS מספק `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` כדי שהאופרטורים יוודאו הוכחות cross-lane לפני העברה.
+- **NX-11 (אימות relay cross-lane):** עוזרי SDK מאמתים כעת את lane relay envelopes מ-`/v2/sumeragi/status`. לקוח Rust מספק `iroha::nexus` helpers לבניה/אימות relay proofs ולדחיית כפילויות `(lane_id, dataspace_id, height)`, ה-binding של Python חושף `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, ו-SDK JS מספק `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` כדי שהאופרטורים יוודאו הוכחות cross-lane לפני העברה.
   【crates/iroha/src/nexus.rs:1】【python/iroha_python/iroha_python_rs/src/lib.rs:666】【crates/iroha_js_host/src/lib.rs:640】【javascript/iroha_js/src/nexus.js:1】
 - **NX-17 (guardrails לתקציב AMX):** `ivm::analysis::enforce_amx_budget` מעריך עלות ביצוע לפי dataspace וקבוצה באמצעות דוח ניתוח סטטי ומאכף תקציבי 30 ms / 140 ms. ה-helper מדווח הפרות בצורה ברורה ומכוסה בבדיקות יחידה, מה שהופך את תקציב הסלוט ל-דטרמיניסטי עבור scheduler של Nexus וכלי SDK.
   【crates/ivm/src/analysis.rs:142】【crates/ivm/src/analysis.rs:241】
@@ -319,7 +319,7 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Admin endpoint:** `POST /v1/nexus/lifecycle` עם `additions` ו-`retire` לעדכון lanes ללא restart.
+- **Admin endpoint:** `POST /v2/nexus/lifecycle` עם `additions` ו-`retire` לעדכון lanes ללא restart.
 - **Behaviour:** עדכון WSV/Kura, rebuild של queue, תשובה `{ ok: true, lane_count: <u32> }`.
 - **Safety:** שימוש ב-lock משותף למניעת מרוצים.
 - **Propagation:** ניתוב/מגבלות התור ומניפסטי ה-lane נבנים מחדש מתוך הקטלוג המעודכן, ועובדי consensus/DA/RBC קוראים את תצורת ה-lane דרך snapshots של state כך שה-scheduling ובחירת הוולידטורים מתעדכנים ללא אתחול (עבודה בתהליך מסיימת לפי ההגדרה הקודמת).

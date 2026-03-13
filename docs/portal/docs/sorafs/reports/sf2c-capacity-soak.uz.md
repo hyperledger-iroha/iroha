@@ -48,7 +48,7 @@ tashqi moslamalar.
 Torii endi provayderning kredit lavhalarini to'lovlar daftarlari bilan birga ko'rsatadi, shuning uchun asboblar paneli
 past balanslar va penaltilar bo'lishi mumkin:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` yozuvlarini qaytaradi
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` yozuvlarini qaytaradi
   ho'llash testida tasdiqlangan daftar maydonlarini aks ettiring. Qarang
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` chizmalar

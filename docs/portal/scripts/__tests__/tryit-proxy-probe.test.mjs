@@ -59,7 +59,7 @@ test('runProbe succeeds when health and sample endpoints return 200', async () =
 
   await runProbe({
     proxyUrl: 'https://proxy.test',
-    samplePath: '/v1/status',
+    samplePath: '/v2/status',
     method: 'GET',
     timeoutMs: 1_000,
     token: '',
@@ -68,7 +68,7 @@ test('runProbe succeeds when health and sample endpoints return 200', async () =
 
   assert.equal(calls.length, 2);
   assert.ok(calls[0].url.endsWith('/healthz'));
-  assert.ok(calls[1].url.endsWith('/proxy/v1/status'));
+  assert.ok(calls[1].url.endsWith('/proxy/v2/status'));
 });
 
 test('runProbe throws ProbeError when the sample request fails', async () => {
@@ -83,7 +83,7 @@ test('runProbe throws ProbeError when the sample request fails', async () => {
     () =>
       runProbe({
         proxyUrl: 'https://proxy.test',
-        samplePath: '/v1/status',
+        samplePath: '/v2/status',
         method: 'POST',
         timeoutMs: 1_000,
         token: '',

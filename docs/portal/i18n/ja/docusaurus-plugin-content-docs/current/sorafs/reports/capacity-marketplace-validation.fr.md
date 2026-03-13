@@ -28,7 +28,7 @@ La checklist ci-dessous doit etre review avant d'activer le Marche pour des Oper
 
 |チェック |検証 |証拠 |
 |------|-----------|----------|
-|レジストリは、canoniques de capacite の宣言を受け入れます。アプリ API 経由で `/v1/sorafs/capacity/declare` の統合テストを実行し、署名の検証、メタデータのキャプチャ、ハンドオフとレジストリの確認を行います。 | `crates/iroha_torii/src/routing.rs:7654` |
+|レジストリは、canoniques de capacite の宣言を受け入れます。アプリ API 経由で `/v2/sorafs/capacity/declare` の統合テストを実行し、署名の検証、メタデータのキャプチャ、ハンドオフとレジストリの確認を行います。 | `crates/iroha_torii/src/routing.rs:7654` |
 |ペイロードの一貫性がないスマート コントラクトの拒否 | GiB は、プロバイダーおよびチャンピオンの ID を保証するためのテストを行い、宣言署名者と前衛的な永続性を備えた特派員を派遣します。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Le CLI emet des artefacts d'onboarding canonique | CLI の安全性 Norito/JSON/Base64 は、オフラインでの宣言の作成者とのラウンドトリップを決定および有効にします。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |入学および行政管理のワークフローを管理するガイド |宣言スキーマのドキュメント、ポリシーのデフォルト、評議会のレビューの作成などのドキュメントが含まれています。 | `../storage-capacity-marketplace.md` |

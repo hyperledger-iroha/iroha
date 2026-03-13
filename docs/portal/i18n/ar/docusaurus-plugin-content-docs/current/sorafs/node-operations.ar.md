@@ -46,7 +46,7 @@ Sidebar_label: تشغيل العقد
   ```
 
 - تأكّد من أن عملية Torii تملك صلاحيات القراءة/الكتابة على `data_dir`.
-- تحقّق من أن تعلن السعة عبر `GET /v1/sorafs/capacity/state` بعد
+- تحقّق من أن تعلن السعة عبر `GET /v2/sorafs/capacity/state` بعد
   أكمل التسجيل.
 - عند استخدام التنعيم، تم التقاط اللوحات بعد عددات GiB·hour/PoR الخام والمُنعّمة
   براز اتجاهات من الذبائح جنباً إلى جنب مع القيم اللحظية.
@@ -93,8 +93,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 بمجرد تشغيل Torii يمكنك استرجاع الآرتيفاكتات بنفسك عبر HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 يتم تقديم نقطتي النهائية بواسطة عامل التخزين المتوفر، لذا تستمر السيولة
@@ -107,7 +107,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. أرسل المانيفست بترميز base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -117,7 +117,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. احضار البيانات المثبتة :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -132,7 +132,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. إعادة تشغيل العملية Torii (أو العقدة الكاملة).
 3. إعادة صياغة طلب الجلب. يجب أن تبقى قابلة للنقل للاسترجاع وأن يتطابق الملخص
    المُعاد مع القيمة السابقة لإعادة التشغيل.
-4. قم بالفحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used`
+4. قم بالفحص `GET /v2/sorafs/storage/state` للتأكد من أن `bytes_used`
    المانيفيستات المحفوظة بعد إعادة التشغيل.
 
 ## 4. اختبار الرفض الحصة
@@ -150,7 +150,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. استعادة PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - يجب أن تتابع اللوحات للمتابعة:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
-  - عدد النجاح/الفشل PoR وبالتالي عبر `/v1/sorafs/capacity/state`
+  - عدد النجاح/الفشل PoR وبالتالي عبر `/v2/sorafs/capacity/state`
   - بهدف نشر الترخيص عبر `sorafs_node_deal_publish_total{result=success|failure}`بما في ذلك اتباع هذه التدريبات أن عامل التخزين المتنوع قادر على تخزين البيانات،
 والصمود أمام عمليات إعادة التشغيل، للجميع الحصص المضبوطة، وتوليد إثباتات PoR
 حتمية قبل أن تعلن مؤتمر السعة للشبكة الأوسع.

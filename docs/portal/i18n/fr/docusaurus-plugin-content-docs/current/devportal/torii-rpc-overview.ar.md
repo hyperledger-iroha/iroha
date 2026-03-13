@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # نظرة عامة على Norito-RPC
 
-Norito-RPC et Torii. Vous pouvez utiliser HTTP pour `/v1/pipeline` et utiliser les hachages Norito. للمخطط et sommes de contrôle. Il s'agit d'une solution de gestion de pipeline JSON pour le pipeline زجاجة.
+Norito-RPC et Torii. Vous pouvez utiliser HTTP pour `/v2/pipeline` et utiliser les hachages Norito. للمخطط et sommes de contrôle. Il s'agit d'une solution de gestion de pipeline JSON pour le pipeline زجاجة.
 
 ## لماذا ننتقل؟
 - L'utilisation du CRC64 et des hachages est également possible.
@@ -20,7 +20,7 @@ Norito-RPC et Torii. Vous pouvez utiliser HTTP pour `/v1/pipeline` et utiliser l
 ## تنفيذ طلب
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Utilisez le codec Norito (`iroha_client`, SDK et `norito::to_bytes`).
@@ -37,7 +37,7 @@ Utilisation du SDK :
 ## مثال وحدة Essayez-le
 
 يوفر بوابة المطورين وكيل Try It كي يتمكن المراجعون من اعادة تشغيل حمولات Norito دون كتابة نصوص مخصصة.1. [ابدأ الوكيل](./try-it.md#start-the-proxy-locally) et `TRYIT_PROXY_PUBLIC_URL` حتى تعرف الادوات المصغرة اين ترسل الحركة.
-2. Essayez **Essayez-le** en utilisant `/reference/torii-swagger` et `POST /v1/pipeline/submit`.
+2. Essayez **Essayez-le** en utilisant `/reference/torii-swagger` et `POST /v2/pipeline/submit`.
 3. Utilisez **Content-Type** pour `application/x-norito`, pour utiliser **Binary**, pour `fixtures/norito_rpc/transfer_asset.norito` (ou pour `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Le jeton du porteur contient le code de périphérique OAuth et le code de périphérique (`X-TryIt-Auth` ou `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Mettre en œuvre le Torii et le `schema_hash` `fixtures/norito_rpc/schema_hashes.json`. تطابق القيم يؤكد ان راس Norito نجا من قفزة المتصفح/الوكيل.

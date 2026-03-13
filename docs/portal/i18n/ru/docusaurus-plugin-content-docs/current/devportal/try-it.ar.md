@@ -153,7 +153,7 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 1. Установите приспособление типа `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
    Сообщение Norito خام؛ **لا** Вы можете использовать base64.
 2. В Swagger в RapiDoc используется конечная точка NRPC (
-   `POST /v1/pipeline/submit`) وغيّر محدد **Content-Type** الى
+   `POST /v2/pipeline/submit`) وغيّر محدد **Content-Type** الى
    `application/x-norito`.
 3. Создайте файл **binary** (от «File» в Swagger и «Binary/File» в RapiDoc)
    Код: `.norito`. Он выступил с речью в газете "Борнес-Турнир".
@@ -174,12 +174,12 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 Приспособление установлено на `transaction_fixtures.manifest.json` в соответствии с полезной нагрузкой خاص بك عبر
 `cargo xtask norito-rpc-fixtures`. عندما يكوون Torii и Canary يمكنك توجيه `curl` الى
-пробный прокси (`https://docs.sora.example/proxy/v1/pipeline/submit`)
+пробный прокси (`https://docs.sora.example/proxy/v2/pipeline/submit`)
 التي تخدمها عناصر البوابة.
 
 ## المراقبة والعمليات
@@ -194,7 +194,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Видео по теме:

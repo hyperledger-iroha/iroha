@@ -46,7 +46,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Сделайте памятную заметку о приспособлении, установленном на `fixtures/confidential/encrypted_payload_v1.json`. Загрузите конверт конверта v1 и скачайте его с помощью SDK. اثبات تطابق التحليل. Модель данных Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) и Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) Добавление приспособления для кодирования Norito Он был создан для того, чтобы покончить с собой.
 
-Для Swift SDKs Поддержка Shield и Glue JSON Формат: `ShieldRequest` в примечании к обязательству Дата: 32 сентября. полезные данные и дебетовые метаданные, а также данные `IrohaSDK.submit(shield:keypair:)` (`submitAndWait`). `/v1/pipeline/transactions`. Для выполнения обязательств по выполнению обязательств необходимо использовать `ConfidentialEncryptedPayload` и кодировщик Norito, макет макета. `zk::Shield` был создан для работы с Rust.## Обязательства и ограничения
+Для Swift SDKs Поддержка Shield и Glue JSON Формат: `ShieldRequest` в примечании к обязательству Дата: 32 сентября. полезные данные и дебетовые метаданные, а также данные `IrohaSDK.submit(shield:keypair:)` (`submitAndWait`). `/v2/pipeline/transactions`. Для выполнения обязательств по выполнению обязательств необходимо использовать `ConfidentialEncryptedPayload` и кодировщик Norito, макет макета. `zk::Shield` был создан для работы с Rust.## Обязательства и ограничения
 - تكشف رؤوس الكتل `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; Дайджест хеш-кода был опубликован в 2017 году в 1990-х годах.
 - Написано на сайте `next_conf_features` на `activation_height`. Он написал книгу "Дайджест новостей".
 - Для этого необходимо установить `confidential.enabled = true` и `assume_valid = false`. Он сказал, что хочет, чтобы он сказал, что он хочет сделать это. `conf_features`.
@@ -73,7 +73,7 @@ SPDX-License-Identifier: Apache-2.0
 - В Genesis реализован интерфейс командной строки, обеспечивающий возможность изменения настроек. При поступлении в школу он поступил в школу в Сан-Франциско.
 - В разделе «Последовательность миграции» вы можете найти информацию о Milestone M0.
 
-#### مراقبة الانتقالات عبر ToriiУстановите флажок `GET /v1/confidential/assets/{definition_id}/transitions` для `AssetConfidentialPolicy`. Загрузка полезной нагрузки в формате JSON с идентификатором актива, а также отображение данных в формате `current_mode`. Он был создан с помощью приложения `Convertible`, в котором он находится. معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. Он сказал, что он сказал:
+#### مراقبة الانتقالات عبر ToriiУстановите флажок `GET /v2/confidential/assets/{definition_id}/transitions` для `AssetConfidentialPolicy`. Загрузка полезной нагрузки в формате JSON с идентификатором актива, а также отображение данных в формате `current_mode`. Он был создан с помощью приложения `Convertible`, в котором он находится. معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. Он сказал, что он сказал:
 
 - `transition_id` — дескриптор аудита, связанный с `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -117,7 +117,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Последовательность миграции1. **Подготовка реестров:** используйте проверенный проверяющий орган, который находится в режиме ожидания. Создан `conf_features`, где есть сверстники, работающие в США.
 2. **Этап перехода:** قدّم `ScheduleConfidentialPolicyTransition` مع `effective_height` يراعي `policy_transition_delay_blocks`. Был установлен `ShieldedOnly`, установленный в системе (`window ≥ policy_transition_window_blocks`).
-3. **Опубликовать руководство для оператора:** سجّل `transition_id` для включения и выключения Runbook. Установите флажок `/v1/confidential/assets/{id}/transitions` для проверки работоспособности.
+3. **Опубликовать руководство для оператора:** سجّل `transition_id` для включения и выключения Runbook. Установите флажок `/v2/confidential/assets/{id}/transitions` для проверки работоспособности.
 4. **Принудительное управление окнами:** Выполните настройку среды выполнения `Convertible`, установите `PolicyTransitionWindowOpened { transition_id }`. В конце концов, это произошло.
 5. **Финализация или прерывание:** вызовите `effective_height` и запустите среду выполнения в режиме ожидания (когда вы хотите завершить работу). سحب طارئ، الخ). النجاح يقلب السياسة للوضع المطلوب؛ Он был создан `PolicyTransitionPrerequisiteFailed`, и был создан в 2007 году в США.
 6. **Обновления схемы:** Выполните обновление схемы для обновления (например, `asset_definition.v2`). В CLI отображается `confidential_policy` и отображается манифест. توجه وثائق ترقية Genesis المشغلين لاضافة اعدادات السياسة وبصمات Registration قبل اعادة تشغيل المدققين.
@@ -227,7 +227,7 @@ SPDX-License-Identifier: Apache-2.0
 - Сообщение от автора:
   - `sk_spend` → `nk` (ключ обнулителя), `ivk` (входящий ключ просмотра), `ovk` (исходящий ключ просмотра), `fvk`.
 - Примечания о полезной нагрузке в AEAD и ECDH; Если вы используете ключи просмотра аудитора, выводятся выходные данные.
-- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, загрузка заметок и заметок. `iroha app zk envelope` Конверты для конвертов/бумаги Norito دون اتصال. Torii используется для ввода данных `POST /v1/confidential/derive-keyset` для шестнадцатеричного формата в формате Base64. Он был убит Биллом Хейлзом Бёрнером.
+- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, загрузка заметок и заметок. `iroha app zk envelope` Конверты для конвертов/бумаги Norito دون اتصال. Torii используется для ввода данных `POST /v2/confidential/derive-keyset` для шестнадцатеричного формата в формате Base64. Он был убит Биллом Хейлзом Бёрнером.
 
 ## Защита от DoS
 - Газовый режим:

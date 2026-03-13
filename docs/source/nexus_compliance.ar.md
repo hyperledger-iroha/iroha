@@ -95,9 +95,9 @@ LaneCompliancePolicy {
 
 يوفر Torii:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — جلب مرجع السياسة الاحدث.
-- `POST /v1/lane-compliance/policies` — endpoint خاص بالحوكمة يعكس ISI proposal helpers.
-- `GET /v1/lane-compliance/decisions` — سجل تدقيق分页 مع مرشحات لـ `lane_id`, `decision`, `jurisdiction`, و `reason_code`.
+- `GET /v2/lane-compliance/policies/{lane_id}` — جلب مرجع السياسة الاحدث.
+- `POST /v2/lane-compliance/policies` — endpoint خاص بالحوكمة يعكس ISI proposal helpers.
+- `GET /v2/lane-compliance/decisions` — سجل تدقيق分页 مع مرشحات لـ `lane_id`, `decision`, `jurisdiction`, و `reason_code`.
 
 تغلف اوامر CLI/SDK هذه الاسطح HTTP ليتمكن المشغلون من اتمتة المراجعات وجلب artefacts
 ( policy blob موقع + reviewer attestations).
@@ -106,7 +106,7 @@ LaneCompliancePolicy {
 
 1. **القبول (Torii)**
    - يقوم `Torii` بتنزيل السياسة النشطة عند تغيير lane manifest او عند انتهاء توقيع الكاش.
-   - يتم وسم كل معاملة تدخل طابور `/v1/pipeline` بـ `LaneComplianceContext`
+   - يتم وسم كل معاملة تدخل طابور `/v2/pipeline` بـ `LaneComplianceContext`
      (ids المشاركين، UAID، بيانات manifest للـ dataspace، policy id، واحدث snapshot لـ `LanePrivacyRegistry` الموصوف في `crates/iroha_core/src/interlane/mod.rs`).
    - يجب على السلطات الحاملة لـ UAID امتلاك manifest نشط في Space Directory للـ dataspace الموجه؛
      يرفض Torii المعاملات عندما لا يكون UAID مرتبطا بذلك dataspace قبل تقييم اي قواعد سياسة.
