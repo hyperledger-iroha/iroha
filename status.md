@@ -1,6 +1,133 @@
 # Status
 
-Last updated: 2026-03-12
+Last updated: 2026-03-13
+
+## 2026-03-13 Follow-up: candidate-ID narrowing + account-definition range scans
+- Tightened account/asset lookup paths:
+  - `crates/iroha_core/src/state.rs` now exposes `AssetByAccountDefinitionBounds` +
+    `AsAssetIdAccountDefinitionCompare` and `assets_in_account_by_definition_iter(...)`.
+  - `WorldTransaction::untrack_asset_holder_if_empty` now checks remaining partitions with the
+    account+definition range instead of scanning all account assets.
+  - `assets_by_definition_iter` now uses the account+definition range per holder.
+  - `FindAccountsWithAsset` non-zero checks now use `assets_in_account_by_definition_iter(...)`.
+- Refined account query filtering in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - added candidate-ID extraction from JSON predicates (`equals`/`in` on `id|account|account_id`).
+  - `FindAccounts` and `FindAccountsWithAsset` now narrow work to candidate IDs when available.
+  - added strict `id`-only short-circuit in candidate paths to avoid redundant predicate evaluation.
+- Added/validated regression coverage:
+  - `state::tests::asset_account_definition_range_includes_all_scopes`.
+  - `smartcontracts::isi::account::query::tests::find_accounts_applies_id_in_literal_predicate`.
+  - `smartcontracts::isi::account::query::tests::find_accounts_with_asset_applies_id_in_literal_predicate`.
+  - mixed predicate checks:
+    `find_accounts_applies_mixed_id_and_metadata_predicate` and
+    `find_accounts_with_asset_applies_mixed_id_and_metadata_predicate`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib state::tests::asset_account_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib state::tests::asset_definition_holder_index_waits_for_last_partition_removal -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+  - `cargo bench -p iroha_core --bench queries -- find_accounts_with_asset_id_literal_10k --noplot`
+    (`[22.403 µs 22.574 µs 22.749 µs]`, improved from immediate prior regression run)
+
+## 2026-03-13 Follow-up: `FindAccountsWithAsset` ID fast-path
+- Extended account query optimization in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - `FindAccountsWithAsset` now applies the same simple-ID fast path used by `FindAccounts`.
+  - for `equals`/`in` filters on `id|account|account_id`, execution now intersects requested IDs with `asset_definition_holders` and performs keyed account lookup instead of scanning all holders.
+  - non-fast-path behavior remains unchanged (holder traversal + alias/full-predicate evaluation).
+- Added regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_with_asset_applies_id_literal_predicate`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+  - `cargo bench -p iroha_core --bench queries -- find_accounts_with_asset_id_literal_10k --noplot` (`[21.586 µs 21.647 µs 21.709 µs]`)
+
+## 2026-03-13 Follow-up: `FindAssets` subject-index plan for account predicates
+- Optimized `FindAssets` planning/execution in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - added `AssetQueryPlan::Subjects` for predicates that constrain account subjects (`account|account_id|owner`/`id` extraction).
+  - account-constrained asset queries now traverse only `assets_in_account_iter(subject)` and then apply optional domain/definition narrowing.
+  - removed prior fallback that could hit `Full` scan even when account subjects were known.
+- Added mixed-predicate regression coverage:
+  - `smartcontracts::isi::asset::query::tests::find_assets_filters_by_account_and_domain_predicate`.
+- Updated benchmark harness to measure query-level account filtering directly:
+  - `crates/iroha_core/benches/queries.rs`:
+    - replaced manual post-filter benchmark with `find_assets_filter_account_literal` using `CompoundPredicate::<Asset>::build(|p| p.equals("account", ...))`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_account_literal --noplot` (`[25.555 µs 25.640 µs 25.724 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_iter_10k --noplot` (`[480.25 µs 482.57 µs 484.82 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_definition_literal --noplot` (`[7.7347 ms 7.7673 ms 7.8015 ms]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_domain_literal --noplot` (`[12.885 ms 12.941 ms 12.995 ms]`)
+
+## 2026-03-13 Follow-up: `FindAccounts` ID fast-path + holder-index regression coverage
+- Optimized `FindAccounts` in `crates/iroha_core/src/smartcontracts/isi/account.rs` for simple ID predicates:
+  - added a direct keyed lookup fast path for `equals`/`in` filters on `id|account|account_id`.
+  - preserves existing alias/fallback semantics for complex predicates.
+- Added account query regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_applies_id_literal_predicate`.
+- Added holder-index edge coverage and multisig rekey migration coverage:
+  - `state::tests::asset_definition_holder_index_waits_for_last_partition_removal`.
+  - `smartcontracts::isi::multisig::tests::rekey_account_id_moves_asset_holder_index_to_new_account`.
+- Stabilized domain unregister fixture in `crates/iroha_core/src/smartcontracts/isi/domain.rs`:
+  - set valid test literals for `nexus.fees.fee_sink_account_id`,
+    `nexus.staking.stake_escrow_account_id`,
+    `nexus.staking.slash_sink_account_id`
+    in `unregister_account_removes_owned_nfts_and_asset_metadata`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_holder_index_waits_for_last_partition_removal -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::multisig::tests::rekey_account_id_moves_asset_holder_index_to_new_account -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::domain::tests::unregister_account_removes_owned_nfts_and_asset_metadata -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_accounts_iter_10k --noplot` (`[308.94 µs 309.58 µs 310.26 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_accounts_filter_id_literal_10k --noplot` (`[20.502 µs 20.538 µs 20.572 µs]`, improved from earlier ~`[22.250 ms 22.286 ms 22.322 ms]`)
+
+## 2026-03-13 Follow-up: `FindAssets` domain/definition index traversal
+- Refined `FindAssets` plan execution in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `Domains + Definitions` now traverses selected definitions via `assets_by_definition_iter` instead of global `assets_iter()` scanning.
+  - `Domains` (without explicit definitions) now expands definitions per domain via `asset_definitions_in_domain_iter` and then traverses definition holders/assets.
+  - `Definitions` plan now traverses via `assets_by_definition_iter` rather than filtering all assets.
+- Preserved `domain` predicate semantics as asset-definition domain (not account-domain links).
+- Validation (follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+
+## 2026-03-12 Account/domain performance pass (domain links + holder index)
+- Added `StorageReadOnly::get_key_value` in `crates/mv/src/storage.rs` for keyed lookups that return stable key/value refs.
+- Extended world state indexing in `crates/iroha_core/src/state.rs`:
+  - added `asset_definition_holders` storage wiring across `World`, `WorldBlock`, `WorldTransaction`, and `WorldView`.
+  - threaded the index through block/transaction/view builders, read-only trait accessors, commit/apply paths, constructors, and world JSON rebuild.
+  - added holder index rebuild logic from stored assets.
+  - added holder tracking helpers (`track_asset_holder`, `untrack_asset_holder_if_empty`) and integrated them into asset insert/remove helper paths.
+  - optimized domain traversal methods to use domain-subject index iteration (`accounts_in_domain_iter`, `assets_in_domain_iter`) and moved definition traversal to holder-index-backed `assets_by_definition_iter`.
+- Optimized account queries in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - added alias-field predicate short-circuiting (`id`, `account`, `account_id`, `uaid`) before full JSON predicate fallback.
+  - updated `FindAccountsWithAsset` to iterate holder candidates from `asset_definition_holders` before balance checks and predicate evaluation.
+- Synced direct asset-move/seed call sites that bypass `asset_or_insert` to keep holder index consistent:
+  - `crates/iroha_core/src/smartcontracts/isi/multisig.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `crates/iroha_core/src/nexus/portfolio.rs`
+  - `crates/iroha_core/src/sumeragi/penalties.rs`
+- Benchmark updates:
+  - registered `queries` benchmark target in `crates/iroha_core/Cargo.toml`.
+  - added `find_accounts_filter_id_literal_10k` in `crates/iroha_core/benches/queries.rs`.
+- Added regression test in `crates/iroha_core/src/state.rs`:
+  - `state::tests::asset_definition_holder_index_tracks_asset_lifecycle`.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p mv` (pass)
+  - `cargo test -p iroha_core find_accounts_with_asset_ignores_zero_holdings -- --nocapture` (pass)
+  - `cargo test -p iroha_core asset_definition_holder_index_tracks_asset_lifecycle -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing warnings in unrelated test modules)
 
 ## 2026-03-12 aid/name/alias gap closure (constructor hard-cut + targeted docs refresh)
 - Completed the asset-definition constructor hard-cut in `crates/iroha_data_model/src/asset/definition.rs`:

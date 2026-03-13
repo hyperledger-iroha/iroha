@@ -11903,6 +11903,7 @@ pub mod isi {
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world.track_asset_holder(&asset_id);
 
             let mut metadata = Metadata::default();
             let key: iroha_data_model::name::Name = "tag".parse().unwrap();
@@ -11998,6 +11999,7 @@ pub mod isi {
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world.track_asset_holder(&asset_id);
             stx.world
                 .asset_metadata
                 .insert(asset_id.clone(), Metadata::default());

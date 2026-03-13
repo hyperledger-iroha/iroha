@@ -3267,6 +3267,7 @@ mod tests {
         let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
+        tx.world.track_asset_holder(&asset_id);
 
         let key: Name = "tag".parse().unwrap();
         let value = Json::from(norito::json!("owned"));
@@ -3282,6 +3283,10 @@ mod tests {
         };
         let (nft_id, nft_value) = nft.into_key_value();
         tx.world.nfts.insert(nft_id.clone(), nft_value);
+
+        tx.nexus.fees.fee_sink_account_id = authority.to_string();
+        tx.nexus.staking.stake_escrow_account_id = authority.to_string();
+        tx.nexus.staking.slash_sink_account_id = authority.to_string();
 
         Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
