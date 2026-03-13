@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii اب فیس لیجرز کے ساتھ کریڈٹ فراہم کرنے والوں کے سنیپ شاٹس دکھاتا ہے
 ڈیش بورڈز کم بیلنس اور جرمانے کے حملوں پر گیٹ ہوسکتے ہیں:
 
-- باقی: `GET /v1/sorafs/capacity/state` ریکارڈز `credit_ledger[*]` ،
+- باقی: `GET /v2/sorafs/capacity/state` ریکارڈز `credit_ledger[*]` ،
   جو SAAK ٹیسٹ میں آزمائے گئے لیجر فیلڈز کی عکاسی کرتے ہیں۔ دیکھو
   `crates/iroha_torii/src/sorafs/registry.rs`۔
 - Grafana درآمد کریں: `dashboards/grafana/sorafs_capacity_penalties.json` بلڈز

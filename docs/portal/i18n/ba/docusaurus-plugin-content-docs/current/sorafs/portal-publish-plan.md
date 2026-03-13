@@ -69,7 +69,7 @@ SBOMs) аша ағым I18NT000000000004X манифест торбаһы һәм
 
 Ҡулланыу I18NI000000026X өсөн этәрергә манифесттар I18NT000000005X һәм псевдонимдарҙы бәйләү.
 I18NI000000027X комплекты һуңғы консенсус эпохаһына (1000).
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` йәки һеҙҙең приборҙар таҡтаһы).
+`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` йәки һеҙҙең приборҙар таҡтаһы).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -77,7 +77,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

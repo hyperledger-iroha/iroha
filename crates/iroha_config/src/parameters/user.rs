@@ -5086,7 +5086,7 @@ pub struct Gas {
         default = "defaults::pipeline::GAS_TECH_ACCOUNT_ID.to_string()"
     )]
     pub tech_account_id: String,
-    /// Allowlist of accepted gas assets (Asset IDs strings, e.g., "asset:gas/G_exit@ivm.core/v1").
+    /// Allowlist of accepted gas assets (Asset IDs strings, e.g., "asset:gas/G_exit@ivm.core/v2").
     #[config(default)]
     pub accepted_assets: Vec<String>,
     /// Deterministic conversion: minimal asset units per one gas unit for each accepted asset.
@@ -13710,7 +13710,7 @@ pub struct Torii {
     pub zk_prover_allowed_circuits: Vec<String>,
     /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
     ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    /// Applies to the non-consensus helper endpoint `POST /v2/zk/ivm/prove`.
     #[config(
         env = "TORII_ZK_IVM_PROVE_MAX_INFLIGHT",
         default = "defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT"
@@ -13718,19 +13718,19 @@ pub struct Torii {
     pub zk_ivm_prove_max_inflight: usize,
     /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
     ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    /// Applies to the non-consensus helper endpoint `POST /v2/zk/ivm/prove`.
     #[config(
         env = "TORII_ZK_IVM_PROVE_MAX_QUEUE",
         default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
     )]
     pub zk_ivm_prove_max_queue: usize,
-    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
+    /// TTL (seconds) for `/v2/zk/ivm/prove` job status entries.
     #[config(
         env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS"
     )]
     pub zk_ivm_prove_job_ttl_secs: u64,
-    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
+    /// Maximum number of `/v2/zk/ivm/prove` job status entries retained in memory.
     ///
     /// Set to 0 to disable the cap (not recommended).
     #[config(
@@ -13835,7 +13835,7 @@ mod torii_peer_geo_tests {
 /// Guard rails for SoraNet privacy ingestion endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiSoranetPrivacyIngest {
-    /// Master enable switch for the `/v1/soranet/privacy/*` endpoints.
+    /// Master enable switch for the `/v2/soranet/privacy/*` endpoints.
     #[config(default = "defaults::torii::soranet_privacy_ingest::ENABLED")]
     pub enabled: bool,
     /// Require a token header before accepting telemetry.
@@ -14531,7 +14531,7 @@ impl Default for ToriiNoritoRpcTransport {
 /// Native MCP endpoint configuration parameters.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiMcp {
-    /// Master enable switch for native `/v1/mcp`.
+    /// Master enable switch for native `/v2/mcp`.
     #[config(default = "defaults::torii::mcp::ENABLED")]
     pub enabled: bool,
     /// Maximum accepted request payload size in bytes.
@@ -15465,7 +15465,7 @@ impl SorafsStorage {
     }
 }
 
-/// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
+/// Authentication and abuse controls for `/v2/sorafs/storage/pin`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize, Default)]
 pub struct SorafsStoragePin {
     /// Whether a bearer token is required to submit a pin request.

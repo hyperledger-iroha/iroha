@@ -18,11 +18,11 @@ ID: torii-app-api-parity
 مالکان: Torii پلیٹ فارم ، SDK پروگرام لیڈ  
 روڈ میپ لنک: torii-app-1-پیریٹی آڈٹ `app_api`
 
-یہ صفحہ `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) کے داخلی آڈٹ کی عکاسی کرتا ہے تاکہ مونورپوزٹری سے باہر کے قارئین دیکھ سکیں کہ کون سے `/v1/*` کی سطحیں منسلک ، جانچ اور دستاویزی دستاویزات ہیں۔ آڈٹ `Torii::add_app_api_routes` ، `add_contracts_and_vk_routes` ، اور `add_connect_routes` کے ذریعے دوبارہ برآمد کردہ راستوں پر نظر رکھتا ہے۔
+یہ صفحہ `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) کے داخلی آڈٹ کی عکاسی کرتا ہے تاکہ مونورپوزٹری سے باہر کے قارئین دیکھ سکیں کہ کون سے `/v2/*` کی سطحیں منسلک ، جانچ اور دستاویزی دستاویزات ہیں۔ آڈٹ `Torii::add_app_api_routes` ، `add_contracts_and_vk_routes` ، اور `add_connect_routes` کے ذریعے دوبارہ برآمد کردہ راستوں پر نظر رکھتا ہے۔
 
 ## دائرہ کار اور طریقہ
 
-آڈٹ `crates/iroha_torii/src/lib.rs:256-522` میں عوامی دوبارہ برآمدات کی جانچ پڑتال کرتا ہے اور فیچر گیٹنگ کے ساتھ روٹ بلڈرز۔ روڈ میپ میں ہر سطح `/v1/*` کے لئے ہم نے چیک کیا:
+آڈٹ `crates/iroha_torii/src/lib.rs:256-522` میں عوامی دوبارہ برآمدات کی جانچ پڑتال کرتا ہے اور فیچر گیٹنگ کے ساتھ روٹ بلڈرز۔ روڈ میپ میں ہر سطح `/v2/*` کے لئے ہم نے چیک کیا:
 
 - `crates/iroha_torii/src/routing.rs` میں ہینڈلر اور ڈی ٹی او تعریفوں کا نفاذ۔
 - گروپس میں روٹر کی رجسٹریشن میں `app_api` یا `connect` کی خصوصیت ہے۔
@@ -40,25 +40,25 @@ ID: torii-app-api-parity
 - مثالیں:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## اختتامی انوینٹری
 
-### اکاؤنٹ کی اجازت (`/v1/accounts/{id}/permissions`) - احاطہ کرتا ہے
+### اکاؤنٹ کی اجازت (`/v2/accounts/{id}/permissions`) - احاطہ کرتا ہے
 - ہینڈلر: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)۔
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)۔
 - روٹر بائنڈنگ: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)۔
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - مالک: Torii پلیٹ فارم۔
 - نوٹ: اس کا جواب Norito JSON کے ساتھ `items`/`total` ہے ، جو SDK صفحہ بندی کے مددگاروں کی طرح ہے۔
 
-### OPRF تشخیص عرف (`POST /v1/aliases/voprf/evaluate`) - احاطہ کرتا ہے
+### OPRF تشخیص عرف (`POST /v2/aliases/voprf/evaluate`) - احاطہ کرتا ہے
 - ہینڈلر: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)۔
 - DTO: `AliasVoprfEvaluateRequestDto` ، `AliasVoprfEvaluateResponseDto` ، `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`)۔
@@ -74,7 +74,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - ٹیسٹ: ان لائن ٹیسٹ ہینڈلر (`crates/iroha_torii/src/lib.rs:9945-9986`) پلس SDK کوریج
   (`javascript/iroha_js/test/toriiClient.test.js:72`)۔
 - مالک: Torii پلیٹ فارم۔
-- نوٹ: ردعمل کی سطح عصبی ہیکس اور بیک اینڈ شناخت کاروں کو نافذ کرتی ہے۔ SDKs DTOS استعمال کرتے ہیں۔### پروف ایس ایس ای واقعات (`GET /v1/events/sse`) - احاطہ کرتا ہے
+- نوٹ: ردعمل کی سطح عصبی ہیکس اور بیک اینڈ شناخت کاروں کو نافذ کرتی ہے۔ SDKs DTOS استعمال کرتے ہیں۔### پروف ایس ایس ای واقعات (`GET /v2/events/sse`) - احاطہ کرتا ہے
 - ہینڈلر: `handle_v1_events_sse` فلٹر سپورٹ (`crates/iroha_torii/src/routing.rs:14008-14133`) کے ساتھ۔
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) پلس فلٹر وائرنگ۔
 - روٹر بائنڈنگ: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)۔
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - مالک: Torii پلیٹ فارم (رن ٹائم) ، انضمام ٹیسٹ WG (فکسچر)۔
 -نوٹ: پروف فلٹر روٹس کا اختتام اختتام سے آخر تک کیا جاتا ہے۔ `docs/source/zk_app_api.md` میں دستاویزات۔
 
-### معاہدہ لائف سائیکل (`/v1/contracts/*`) - احاطہ کرتا ہے
+### معاہدہ لائف سائیکل (`/v2/contracts/*`) - احاطہ کرتا ہے
 - ہینڈلرز: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`) ،
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`) ،
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`) ،
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - مالک: سمارٹ معاہدہ Wg ایک ساتھ Torii پلیٹ فارم کے ساتھ۔
 - نوٹ: اختتامی نقطہ قطار پر دستخط شدہ لین دین اور عام ٹیلی میٹری میٹرکس (`handle_transaction_with_metrics`) کا دوبارہ استعمال کریں۔
 
-### توثیق کلیدی لائف سائیکل (`/v1/zk/vk/*`) - احاطہ کرتا ہے
+### توثیق کلیدی لائف سائیکل (`/v2/zk/vk/*`) - احاطہ کرتا ہے
 - ہینڈلرز: `handle_post_vk_register` ، `handle_post_vk_update` ، `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) اور `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)۔
 - DTO: `ZkVkRegisterDto` ، `ZkVkUpdateDto` ، `ZkVkDeprecateDto` ، `VkListQuery` ، `ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - مالک: Torii پلیٹ فارم کی حمایت کے ساتھ ZK ورکنگ گروپ۔
 - نوٹ: ڈی ٹی او ایس ایس ڈی کے میں حوالہ کردہ Norito اسکیموں کے مطابق ہیں۔ `limits.rs` کے ذریعے نافذ کردہ شرح کو محدود کرنا۔
 
-### Nexus کنیکٹ (`/v1/connect/*`) - احاطہ (خصوصیت `connect`)
+### Nexus کنیکٹ (`/v2/connect/*`) - احاطہ (خصوصیت `connect`)
 - ہینڈلرز: `handle_connect_session` ، `handler_connect_session_delete` ، `handle_connect_ws` ،
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)۔
 - DTO: `ConnectSessionRequest` ، `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`) ،

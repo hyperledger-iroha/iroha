@@ -39,7 +39,7 @@ _Redactado: 2026-02-20 - المسؤول: فريق عمل البروتوكول ا
 ## واجهة برمجة تطبيقات Superficie (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -227,7 +227,7 @@ pub struct DaIngestReceipt {
   ما هي إمكانات `iroha app sorafs fetch`. يمكن للمشغلين أن يصححوا أ
   المصنوعات اليدوية + مخطط القطع (`--manifest`، `--plan`، `--manifest-id`)
   **o** قم بشراء تذكرة تخزين Torii عبر `--storage-ticket`. عندما تكون في الولايات المتحدة
-  مسار التذكرة، CLI باجا البيان من `/v1/da/manifests/<ticket>`،
+  مسار التذكرة، CLI باجا البيان من `/v2/da/manifests/<ticket>`،
   استمرار الحزمة الباجو `artifacts/da/fetch_<timestamp>/` (تجاوز con
   `--manifest-cache-dir`)، مشتق من تجزئة النقطة لـ `--manifest-id`، ومثلها
   قم بتشغيل المشغل باستخدام القائمة `--gateway-provider`. كل شيء
@@ -238,7 +238,7 @@ pub struct DaIngestReceipt {
   ستظل عمليات التحقق من التوفر من البداية إلى النهاية متوقفة تمامًا عن مساحة الاسم
   `da` ليس له منطق مكرر في orquestador.
 - `iroha app da get-blob` يُظهر baja canonicos directo desde Torii عبر
-  `GET /v1/da/manifests/{storage_ticket}`. الكوماندو يكتب
+  `GET /v2/da/manifests/{storage_ticket}`. الكوماندو يكتب
   `manifest_{ticket}.norito`، `manifest_{ticket}.json` ص
   `chunk_plan_{ticket}.json` باجو `artifacts/da/fetch_<timestamp>/` (أو الأمم المتحدة
   `--output-dir` يوفر للمستخدم) أثناء تشغيل الأمر الدقيق

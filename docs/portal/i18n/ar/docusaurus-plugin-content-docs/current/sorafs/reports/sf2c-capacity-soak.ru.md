@@ -44,7 +44,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ## Наблюдаемость
 
 Torii يعرض لقطات سريعة لموفري الائتمان من خلال دفاتر الرسوم، لذلك
-يمكن أن تكون لوحات العدادات بوابة متوازنة وتوازن ضربات الجزاء:-الراحة: `GET /v1/sorafs/capacity/state` تم تسجيلها `credit_ledger[*]`,
+يمكن أن تكون لوحات العدادات بوابة متوازنة وتوازن ضربات الجزاء:-الراحة: `GET /v2/sorafs/capacity/state` تم تسجيلها `credit_ledger[*]`,
   التي يتم تسليمها إلى دفتر الأستاذ، والتي تم اختبارها في نقع الخصية. سم.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - استيراد Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` stroit

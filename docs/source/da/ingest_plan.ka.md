@@ -34,7 +34,7 @@ DA-2 სამუშაო ნაკადი აფართოებს Torii 
 ## API ზედაპირი (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Payload არის Norito-ში კოდირებული `DaIngestReque
 | 500 შიდა შეცდომა | მოულოდნელი მარცხი (რეგისტრირებული + გაფრთხილება). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 არ დაგჭირდებათ დამატებითი ორმხრივი მგზავრობა, რომ დამადასტურებელი საბუთი დააკავშიროთ აქტიურ პოლიტიკას.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ pub struct DaIngestReceipt {
 - `iroha app da get` ამატებს DA-ზე ფოკუსირებულ მეტსახელს მრავალ წყაროს ორკესტრისთვის, რომელიც უკვე მუშაობს
   `iroha app sorafs fetch`. ოპერატორებს შეუძლიათ მიუთითონ მანიფესტზე + ბლოკ-გეგმის არტეფაქტებზე (`--manifest`,
   `--plan`, `--manifest-id`) **ან** უბრალოდ გაიარეთ Torii შენახვის ბილეთი `--storage-ticket`-ის მეშვეობით. როცა
-  ბილეთის ბილიკი გამოიყენება, CLI ამოიღებს მანიფესტს `/v1/da/manifests/<ticket>`-დან, აგრძელებს პაკეტს
+  ბილეთის ბილიკი გამოიყენება, CLI ამოიღებს მანიფესტს `/v2/da/manifests/<ticket>`-დან, აგრძელებს პაკეტს
   `artifacts/da/fetch_<timestamp>/` ქვეშ (გადალახვა `--manifest-cache-dir`-ით), გამოდის **მანიფესტი
   ჰაში** `--manifest-id`-ისთვის და შემდეგ მართავს ორკესტრატორს მოწოდებული `--gateway-provider`-ით
   სია. დატვირთვის დადასტურება კვლავ ეყრდნობა ჩაშენებულ CAR/`blob_hash` დაიჯესტს, სანამ კარიბჭის ID არის
@@ -248,7 +248,7 @@ pub struct DaIngestReceipt {
   უგულებელყოფს, ქულების ექსპორტს და `--output` ბილიკებს) და მანიფესტის საბოლოო წერტილის გადაფარვა შესაძლებელია მეშვეობით
   `--manifest-endpoint` მორგებული Torii ჰოსტებისთვის, ამიტომ ხელმისაწვდომობის ხელმისაწვდომობის შემოწმებები მთლიანად მოქმედებს
   `da` სახელთა სივრცე ორკესტრის ლოგიკის დუბლირების გარეშე.
-- `iroha app da get-blob` გამოაქვს კანონიკური მანიფესტები პირდაპირ Torii-დან `GET /v1/da/manifests/{storage_ticket}`-ის მეშვეობით.
+- `iroha app da get-blob` გამოაქვს კანონიკური მანიფესტები პირდაპირ Torii-დან `GET /v2/da/manifests/{storage_ticket}`-ის მეშვეობით.
   ბრძანება ახლა ასახელებს არტეფაქტებს მანიფესტის ჰეშით (blob id), წერით
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` და `chunk_plan_{manifest_hash}.json`
   `artifacts/da/fetch_<timestamp>/`-ის ქვეშ (ან მომხმარებლის მიერ მოწოდებული `--output-dir`) ზუსტი ექოს დროს
@@ -259,7 +259,7 @@ pub struct DaIngestReceipt {
   `ToriiClient.getDaManifestBundle(...)`. ორივე აბრუნებს გაშიფრულ Norito ბაიტს, მანიფესტის JSON, მანიფესტის ჰეშს,და ბლოკის გეგმა ისე, რომ SDK აბონენტებმა შეძლონ ორკესტრის სესიების დატენიანება CLI-სა და Swift-ზე გადარიცხვის გარეშე
   კლიენტებს შეუძლიათ დამატებით დარეკონ `fetchDaPayloadViaGateway(...)` ამ პაკეტების გადასატანად მშობლიურში
   SoraFS ორკესტრის შეფუთვა.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` პასუხები ახლა გამოჩნდება `manifest_hash` და ორივე CLI + SDK დამხმარე (`iroha app da get`,
+- `/v2/da/manifests` პასუხები ახლა გამოჩნდება `manifest_hash` და ორივე CLI + SDK დამხმარე (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway` და Swift/JS კარიბჭის შეფუთვა) ამ დაიჯესტს განიხილავს, როგორც
   კანონიკური მანიფესტის იდენტიფიკატორი, როდესაც აგრძელებთ დატვირთვის გადამოწმებას ჩაშენებული CAR/blob ჰეშის მიხედვით.
 - `iroha app da rent-quote` ითვლის დეტერმინისტულ ქირაობას და სტიმულირებას მოწოდებული შენახვის ზომისთვის
@@ -277,7 +277,7 @@ pub struct DaIngestReceipt {
 - პინის რეესტრის პარიტეტი ახლა ვრცელდება SDK-ებზე: `ToriiClient.registerSorafsPinManifest(...)`
   JavaScript SDK აშენებს `iroha app sorafs pin register`-ის მიერ გამოყენებულ ზუსტ დატვირთვას, ახორციელებს კანონიკურ
   chunker-ის მეტამონაცემები, პინის წესები, ალიასის მტკიცებულებები და შემდგომი დაიჯესტები POST-ში
-  `/v1/sorafs/pin/register`. ეს აფერხებს CI ბოტებს და ავტომატიზაციას CLI-ზე დაბომბვისგან
+  `/v2/sorafs/pin/register`. ეს აფერხებს CI ბოტებს და ავტომატიზაციას CLI-ზე დაბომბვისგან
   ჩაწერს მანიფესტის რეგისტრაციებს და დამხმარე იგზავნება TypeScript/README დაფარვით, ასე რომ DA-8
   "submit/get/prove" ხელსაწყოების პარიტეტი სრულად დაკმაყოფილებულია JS-ზე Rust/Swift-თან ერთად.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788
 - `iroha app da prove-availability` აკავშირებს ყველა ჩამოთვლილს: იღებს შენახვის ბილეთს, ჩამოტვირთავს
@@ -334,7 +334,7 @@ pub struct DaIngestReceipt {
   უცნობი ვერსიები, გარანტირებულია დეტერმინისტული განახლებები, როდესაც ახალი მანიფესტის განლაგება გაიგზავნება.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR კაკვები** — PDP-ის ვალდებულებები უშუალოდ მომდინარეობს ნაჭრების შენახვისგან და შენარჩუნებულია
   მანიფესტების გარდა, რათა DA-5 განრიგებმა შეძლონ შერჩევის გამოწვევების გაშვება კანონიკური მონაცემებიდან; The
-  `Sora-PDP-Commitment` სათაური ახლა მიეწოდება `/v1/da/ingest` და `/v1/da/manifests/{ticket}`
+  `Sora-PDP-Commitment` სათაური ახლა მიეწოდება `/v2/da/ingest` და `/v2/da/manifests/{ticket}`
   პასუხები, ასე რომ SDK-ებმა დაუყოვნებლივ გაიგეს ხელმოწერილი ვალდებულება, რომელსაც მომავალი ზონდები მიუთითებენ.
 - **Shard კურსორის ჟურნალი** — ხაზის მეტამონაცემებმა შეიძლება მიუთითოს `da_shard_id` (ნაგულისხმევად `lane_id`) და
   Sumeragi ახლა ინარჩუნებს უმაღლეს `(epoch, sequence)` `(shard_id, lane_id)`-ზე
@@ -357,7 +357,7 @@ pub struct DaIngestReceipt {
   დატვირთვის ბაიტების გამოვლენა. ქვითრები ატენიანდება Kura-დან გამეორების დროს, ასე რომ, ვალიდატორები იმავეს აღადგენენ
   კონფიდენციალურობის მეტამონაცემების შემდეგ გადაიტვირთება.
 
-## განხორციელების შენიშვნები- Torii-ის `/v1/da/ingest` ბოლო წერტილი ახლა ახდენს დატვირთვის შეკუმშვის ნორმალიზებას, ახორციელებს განმეორებითი ქეშის,
+## განხორციელების შენიშვნები- Torii-ის `/v2/da/ingest` ბოლო წერტილი ახლა ახდენს დატვირთვის შეკუმშვის ნორმალიზებას, ახორციელებს განმეორებითი ქეშის,
   დეტერმინისტულად ანაწილებს კანონიკურ ბაიტებს, აღადგენს `DaManifestV1`-ს და ჩამოაგდებს კოდირებულ დატვირთვას
   `config.da_ingest.manifest_store_dir`-ში SoraFS ორკესტრირებისთვის ქვითრის გაცემამდე; The
   დამმუშავებელი ასევე ანიჭებს `Sora-PDP-Commitment` სათაურს, რათა კლიენტებმა შეძლონ დაშიფრული ვალდებულების აღება
@@ -370,7 +370,7 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` საფარი Rust, Python `ToriiClient`
   ახლა ექსპორტს ახორციელებს `decode_pdp_commitment_header` და `IrohaSwift` აგზავნის შესაბამის დამხმარეებს ასე მობილურზე
   კლიენტებს შეუძლიათ დაუყონებლივ შეინახონ შერჩევის კოდირებული განრიგი.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1
-- Torii ასევე ამჟღავნებს `GET /v1/da/manifests/{storage_ticket}`-ს, რათა SDK-ებმა და ოპერატორებმა შეძლონ მანიფესტების მიღება
+- Torii ასევე ამჟღავნებს `GET /v2/da/manifests/{storage_ticket}`-ს, რათა SDK-ებმა და ოპერატორებმა შეძლონ მანიფესტების მიღება
   და ბლოკის გეგმები კვანძის კოჭის დირექტორიაში შეხების გარეშე. პასუხი აბრუნებს Norito ბაიტს
   (base64), გამოსახულია მანიფესტი JSON, `chunk_plan` JSON blob მზად `sorafs fetch`-ისთვის, პლუს შესაბამისი
   ექვსკუთხედი დაიჯესტები (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) ასე რომ, ქვემო დინების ინსტრუმენტები შეიძლება
@@ -388,7 +388,7 @@ pub struct DaIngestReceipt {
   `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### დიდი დატვირთვის ნაკადის ნაკადიკლიენტები, რომლებსაც სჭირდებათ კონფიგურირებული მოთხოვნის ლიმიტზე მეტი აქტივების მიღება, იწყებენ ა
-სტრიმინგის სესიის დარეკვით `POST /v1/da/ingest/chunk/start`. Torii პასუხობს a
+სტრიმინგის სესიის დარეკვით `POST /v2/da/ingest/chunk/start`. Torii პასუხობს a
 `ChunkSessionId` (BLAKE3-მომდინარეობს მოთხოვნილი blob მეტამონაცემებიდან) და შეთანხმებული ნაწილის ზომა.
 ყოველი მომდევნო `DaIngestChunk` მოთხოვნა შეიცავს:
 
@@ -403,7 +403,7 @@ Torii აგრძელებს დადასტურებულ ნაწ
 ჩანაწერს პროგრესს განმეორებითი ქეშის შიგნით, რათა პატივი სცეს იმპოტენციას. როდესაც საბოლოო ნაჭერი ჩამოდის, Torii
 ხელახლა აწყობს დატვირთვას დისკზე (გადის განყოფილების დირექტორიაში, რათა თავიდან აიცილოს მეხსიერების მწვერვალები),
 ითვლის კანონიკურ მანიფესტს/მიღებს ზუსტად ისე, როგორც ერთჯერადი ატვირთვისას და ბოლოს პასუხობს
-`POST /v1/da/ingest` დადგმული არტეფაქტის მოხმარებით. წარუმატებელი სესიები შეიძლება შეწყდეს აშკარად ან
+`POST /v2/da/ingest` დადგმული არტეფაქტის მოხმარებით. წარუმატებელი სესიები შეიძლება შეწყდეს აშკარად ან
 ნაგავი გროვდება `config.da_ingest.replay_cache_ttl`-ის შემდეგ. ეს დიზაინი ინარჩუნებს ქსელის ფორმატს
 Norito-მეგობრული, თავს არიდებს კლიენტის სპეციფიკურ განახლების პროტოკოლებს და ხელახლა იყენებს არსებულ manifest მილსადენს
 უცვლელი.

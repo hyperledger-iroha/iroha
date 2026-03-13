@@ -9,7 +9,7 @@ fetching the entire payload.
 ## Endpoint
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 The endpoint requires an `X-API-Token` header matching one of the configured

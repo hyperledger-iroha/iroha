@@ -72,7 +72,7 @@ bu addımların ətraflı təsviri.
    `torii.sorafs.discovery.admission.envelopes_dir` tərəfindən istinad edilən kataloq.
 3. Provayder reklamlarının kəşf API vasitəsilə yayıldığını yoxlayın:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. İdarəetmə başlıqları ilə manifest/planın son nöqtələrini həyata keçirin:
    ```bash

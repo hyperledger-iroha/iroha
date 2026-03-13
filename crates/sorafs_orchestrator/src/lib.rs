@@ -9747,7 +9747,7 @@ mod tests {
         let mut map = HashMap::new();
         for spec in plan.chunk_fetch_specs() {
             let digest_hex = to_hex(&spec.digest);
-            let path = format!("/v1/sorafs/storage/chunk/{manifest_id_hex}/{digest_hex}");
+            let path = format!("/v2/sorafs/storage/chunk/{manifest_id_hex}/{digest_hex}");
             let start = spec.offset as usize;
             let end = start + spec.length as usize;
             map.insert(path, payload[start..end].to_vec());

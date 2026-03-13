@@ -47,7 +47,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii назад были показаны снимки кредитов поставщиков и реестры комиссий для панелей мониторинга.
 Поссам Фацер Гейт в Сальдос Байшос и пенальти:
 
-- ОСТАЛЬНОЕ: `GET /v1/sorafs/capacity/state` возвращает `credit_ledger[*]` que
+- ОСТАЛЬНОЕ: `GET /v2/sorafs/capacity/state` возвращает `credit_ledger[*]` que
   refletem os Campos do Ledger Verificados без проверки. Вежа
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Импортируемая операционная система Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`

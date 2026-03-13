@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/evidence/count
+//! Router-level test for GET /v2/sumeragi/evidence/count
 #![cfg(feature = "telemetry")]
 
 use std::sync::Arc;
@@ -64,7 +64,7 @@ async fn evidence_count_endpoint_reports_increase() {
     {
         let app = Router::new()
             .route(
-                "/v1/sumeragi/evidence/count",
+                "/v2/sumeragi/evidence/count",
                 get(|state: State<Arc<CoreState>>| async move {
                     handle_v1_sumeragi_evidence_count(state, None).await
                 }),
@@ -73,7 +73,7 @@ async fn evidence_count_endpoint_reports_increase() {
 
         let req0 = http::Request::builder()
             .method("GET")
-            .uri("/v1/sumeragi/evidence/count")
+            .uri("/v2/sumeragi/evidence/count")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp0 = app.clone().oneshot(req0).await.unwrap();
@@ -107,7 +107,7 @@ async fn evidence_count_endpoint_reports_increase() {
 
     let app = Router::new()
         .route(
-            "/v1/sumeragi/evidence/count",
+            "/v2/sumeragi/evidence/count",
             get(|state: State<Arc<CoreState>>| async move {
                 handle_v1_sumeragi_evidence_count(state, None).await
             }),
@@ -116,7 +116,7 @@ async fn evidence_count_endpoint_reports_increase() {
 
     let req1 = http::Request::builder()
         .method("GET")
-        .uri("/v1/sumeragi/evidence/count")
+        .uri("/v2/sumeragi/evidence/count")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp1 = app.clone().oneshot(req1).await.unwrap();

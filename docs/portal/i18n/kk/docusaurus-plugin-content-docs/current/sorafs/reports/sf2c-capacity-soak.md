@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii енді бақылау тақталары үшін төлем журналдарымен бірге провайдердің несиелік суреттерін көрсетеді
 төмен теңгерім мен айыппұл соққыларына қарсы тұра алады:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` жазбаларын қайтарады
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` жазбаларын қайтарады
   жібіту сынағында тексерілген кітап өрістерін айналаңыз. Қараңыз
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana импорт: `dashboards/grafana/sorafs_capacity_penalties.json`

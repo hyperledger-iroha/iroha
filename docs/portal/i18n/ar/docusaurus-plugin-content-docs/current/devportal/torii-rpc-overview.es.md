@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # السيرة الذاتية لـ Norito-RPC
 
-Norito-RPC هو النقل الثنائي لواجهات برمجة التطبيقات الخاصة بـ Torii. أعد استخدام نفس مسار HTTP الذي `/v1/pipeline` ولكنه يحتوي على شحنات متداخلة مرسوم عليها Norito تتضمن تجزئات الترميز والمجاميع الاختبارية. يتم الاستخدام عندما تتطلب الإجابات المحددة والتحقق من الصحة عندما تكون استجابات JSON لخط الأنابيب بمثابة زجاجة من الزجاجة.
+Norito-RPC هو النقل الثنائي لواجهات برمجة التطبيقات الخاصة بـ Torii. أعد استخدام نفس مسار HTTP الذي `/v2/pipeline` ولكنه يحتوي على شحنات متداخلة مرسوم عليها Norito تتضمن تجزئات الترميز والمجاميع الاختبارية. يتم الاستخدام عندما تتطلب الإجابات المحددة والتحقق من الصحة عندما تكون استجابات JSON لخط الأنابيب بمثابة زجاجة من الزجاجة.
 
 ## لماذا تتغير؟
 - التحديد المحدد مع CRC64 وعلامات التجزئة تقلل من أخطاء فك التشفير.
@@ -20,7 +20,7 @@ Norito-RPC هو النقل الثنائي لواجهات برمجة التطبي
 ## لنطلب منك طلبًا
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. قم بتسلسل الحمولة باستخدام برنامج الترميز Norito (`iroha_client`، مساعدي SDK أو `norito::to_bytes`).
@@ -39,7 +39,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 تشتمل بوابة المطورين على وكيل Try It حتى يتمكن المراجعون من إعادة إنتاج الحمولات النافعة Norito بدون كتابة البرامج النصية عبر الإنترنت.
 
 1. [بدء الوكيل](./try-it.md#start-the-proxy-locally) وتحديد `TRYIT_PROXY_PUBLIC_URL` حتى تتمكن الأدوات من إرسال المرور.
-2. افتح البطاقة **Try it** في هذه الصفحة أو اللوحة `/reference/torii-swagger` واختر نقطة نهاية مثل `POST /v1/pipeline/submit`.
+2. افتح البطاقة **Try it** في هذه الصفحة أو اللوحة `/reference/torii-swagger` واختر نقطة نهاية مثل `POST /v2/pipeline/submit`.
 3. قم بتغيير **Content-Type** إلى `application/x-norito`، ثم قم باختيار المحرر **Binary** والفرعي `fixtures/norito_rpc/transfer_asset.norito` (أي قائمة حمولة أخرى في `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. قم بتوفير رمز مميز لحامله عبر كود جهاز OAuth أو نطاق الرمز المميز (يقبل الوكيل `X-TryIt-Auth` عندما يتم تكوينه مع `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. أرسل طلبًا وتحقق مما إذا كان Torii يشير إلى `schema_hash` المدرجة في `fixtures/norito_rpc/schema_hashes.json`. تؤكد التجزئات المتزامنة أن Norito يغطي المتصفح/الوكيل.

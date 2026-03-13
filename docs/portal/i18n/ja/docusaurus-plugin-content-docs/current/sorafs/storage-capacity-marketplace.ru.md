@@ -63,15 +63,15 @@ SF-2c のロードマップ、市場、プロバイダーの決定
 - `ReplicationOrderV1` マニフェストは、ガバナンス、ガバナンス、SLA および割り当てをマニフェストします。チャンカー、プロバイダー、期限を指定して、Torii レジストリを処理します。順番です。【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` описывает スナップショット эпох (заявленные vs использованные GiB、счетчики репликации、проценты uptime/PoR)、которые手数料がかかります。 Проверки границ удерживают использование внутри деклараций, а проценты - в пределах 0-100%。【crates/sorafs_manifest/src/capacity.rs:476】
 - ヘルパー (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/割り当て/SLA) をサポートするヘルパーовибок、которые могут переиспользовать CI およびダウンストリーム ツール。【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` オンチェーン スナップショット через `/v1/sorafs/capacity/state`、プロバイダーと料金台帳を表示します。 Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` オンチェーン スナップショット через `/v2/sorafs/capacity/state`、プロバイダーと料金台帳を表示します。 Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - ハンドル、ハンドル、レーン、ガードрепликации и проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- オペレーター ツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` の仕様と Norito ペイロード、base64 BLOB および JSON サマリー、説明могли подготовить フィクスチャ `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` およびレプリケーション順序フィクスチャ с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 リファレンスフィクスチャーは `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) と `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` です。
+- オペレーター ツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` の仕様と Norito ペイロード、base64 BLOB および JSON サマリー、説明могли подготовить フィクスチャ `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry` およびレプリケーション順序フィクスチャ с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 リファレンスフィクスチャーは `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) と `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` です。
 
 ### 2. コントロール プレーン
 
 | Задача |所有者 | Примечания |
 |------|----------|------|
-| Torii `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、`/v1/sorafs/capacity/orders`、Norito JSON ペイロード。 | Torii チーム | Зеркалировать логику валидации; Norito JSON ヘルパー。 |
+| Torii `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry`、`/v2/sorafs/capacity/orders`、Norito JSON ペイロード。 | Torii チーム | Зеркалировать логику валидации; Norito JSON ヘルパー。 |
 |スナップショット `CapacityDeclarationV1` とメタデータ スコアボード オーケストレーターとフェッチ ゲートウェイをサポートします。 |ツーリング WG / オーケストレーター チーム | `provider_metadata` の容量、レーンのスコアを表示します。 |
 |レプリケーションの順序、クライアントのオーケストレーター/ゲートウェイ、割り当て、フェイルオーバーのヒントを確認します。 |ネットワーキング TL / ゲートウェイ チーム |スコアボード ビルダーは、ガバナンスのレプリケーション順序を制御します。 |
 | CLI ツール: `sorafs_cli` と `capacity declare`、`capacity telemetry`、`capacity orders import`。 |ツーリングWG | Предоставить детерминированный JSON + スコアボードを出力します。 |
@@ -92,7 +92,7 @@ SF-2c のロードマップ、市場、プロバイダーの決定
 |パイプライン決済: 支払いと支払い、XOR とガバナンス対応の要約、元帳の計算。 |財務/保管チーム | Подключить к ディールエンジン/財務省輸出。 |
 |ダッシュボード/アラートとメータリング (バックログの取り込み、計算) を提供します。 |可観測性 | Grafana、SF-6/SF-7 に対応しています。 |
 
-- Torii теперь публикует `/v1/sorafs/capacity/telemetry` и `/v1/sorafs/capacity/state` (JSON + Norito)、テレメトリスナップショットの記録 - 記録簿の記録 аудита или упаковки доказательств.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii теперь публикует `/v2/sorafs/capacity/telemetry` и `/v2/sorafs/capacity/state` (JSON + Norito)、テレメトリスナップショットの記録 - 記録簿の記録 аудита или упаковки доказательств.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - Интеграция `PinProviderRegistry` гарантирует、エンドポイントのレプリケーション順序。ヘルパー CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) による自動化は、ハッシュ化とエイリアスを使用して実行されます。
 - メータリング スナップショット、`CapacityTelemetrySnapshot`、スナップショット `metering`、Prometheus のエクスポートGrafana ボードと `docs/source/grafana_sorafs_metering.json`、時間、GiB 時間、nano-SORA 手数料、 SLA を参照してください。【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - メータリング スムージング、スナップショット `smoothed_gib_hours` および `smoothed_por_success_bps`、EMA の表示支払いに関するガバナンスに関する情報。[crates/sorafs_node/src/metering.rs:401]
@@ -166,8 +166,8 @@ SF-2c のロードマップ、市場、プロバイダーの決定
 ### Смоук-тесты онбординга および выхода プロバイダー
 - Регенерируйте アーティファクト деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
   CLI テストは (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) をテストします。
-- Отправляйте через Torii (`/v1/sorafs/capacity/declare`), затем фиксируйте
-  `/v1/sorafs/capacity/state` は Grafana です。 Следуйте flow выхода в
+- Отправляйте через Torii (`/v2/sorafs/capacity/declare`), затем фиксируйте
+  `/v2/sorafs/capacity/state` は Grafana です。 Следуйте flow выхода в
   `docs/source/sorafs/capacity_onboarding_runbook.md`。
 - アーティファクトと調整出力を表示します。
   `docs/examples/sorafs_capacity_marketplace_validation/`。

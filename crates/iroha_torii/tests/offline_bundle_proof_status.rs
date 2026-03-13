@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/bundle/proof_status` endpoint.
+//! Integration tests for the `/v2/offline/bundle/proof_status` endpoint.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -81,7 +81,7 @@ struct ExpectedSummary {
 async fn offline_bundle_proof_status_reports_match() {
     let harness = build_harness(true);
     let uri = format!(
-        "/v1/offline/bundle/proof_status?bundle_id_hex={}",
+        "/v2/offline/bundle/proof_status?bundle_id_hex={}",
         harness.fixtures.bundle_hex
     );
 
@@ -145,7 +145,7 @@ async fn offline_bundle_proof_status_reports_match() {
 async fn offline_bundle_proof_status_reports_missing() {
     let harness = build_harness(false);
     let uri = format!(
-        "/v1/offline/bundle/proof_status?bundle_id_hex={}",
+        "/v2/offline/bundle/proof_status?bundle_id_hex={}",
         harness.fixtures.bundle_hex
     );
 

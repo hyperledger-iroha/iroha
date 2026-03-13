@@ -101,10 +101,10 @@ telemetry exports offline.
 
 Torii/Explorer endpoints emit I105 literals by default and accept the optional
 canonical `i105` literals only (no format-override fields) on both query strings
-(`GET /v1/accounts`, `/v1/kaigi/relays`, `/v1/repo/agreements`, explorer routes,
+(`GET /v2/accounts`, `/v2/kaigi/relays`, `/v2/repo/agreements`, explorer routes,
 asset-holder endpoints, etc.) and JSON envelopes
-(`POST /v1/accounts/{id}/transactions/query`, `/v1/repo/agreements/query`,
-`/v1/assets/{definition}/holders/query`). Because format overrides are removed, the response
+(`POST /v2/accounts/{id}/transactions/query`, `/v2/repo/agreements/query`,
+`/v2/assets/{definition}/holders/query`). Because format overrides are removed, the response
 body renders every account literal (initiator/counterparty/custodian,
 transaction participants, account summaries, telemetry DTOs) using the
 `i105` representation while preserving I105 canonicalisation for the
@@ -116,10 +116,10 @@ Canonical I105 strings remain the wire format for manifests, telemetry, and QR
 payloads, so use `canonical I105 output` only for rendered output where the
 Sora alphabet offers material ergonomic wins.
 
-Offline reporting endpoints reuse the same contract. `/v1/offline/allowances{,/query}`,
-`/v1/offline/certificates{,/query}`, `/v1/offline/transfers{,/query}`,
-`/v1/offline/settlements{,/query}`, `/v1/offline/receipts{,/query}`, and
-`/v1/offline/summaries{,/query}` now
+Offline reporting endpoints reuse the same contract. `/v2/offline/allowances{,/query}`,
+`/v2/offline/certificates{,/query}`, `/v2/offline/transfers{,/query}`,
+`/v2/offline/settlements{,/query}`, `/v2/offline/receipts{,/query}`, and
+`/v2/offline/summaries{,/query}` now
 canonicalize `controller_id`, `receiver_id`, and `deposit_account_id` filter literals, so GET and
 POST filters accept canonical I105 `AccountId` selectors (including `in`/`nin`
 arrays) without forcing operators to hand-normalize values ahead of time.
@@ -137,7 +137,7 @@ implicit default-domain reconstruction.
   `aria-describedby` on the address container (for example, “Domain context: wonderland”).
   Keep domain context separate from the canonical account literal instead of showing `@domain`
   suffixes or implicit-default-domain captions.
-- **QR metadata.** The `/v1/explorer/accounts/{id}/qr` endpoint returns both the literal and SVG
+- **QR metadata.** The `/v2/explorer/accounts/{id}/qr` endpoint returns both the literal and SVG
   payload. Wrap the SVG with `<figure role="img" aria-label="I105 QR for snx…">` so assistive tech
   can reference the literal field when announcing the image. If QR rendering fails, surface a
   live-region alert that quotes the I105 literal instead of leaving a blank canvas.
@@ -208,10 +208,10 @@ Legacy (decode-only) selector-bearing examples:
 
 ## Torii response knobs
 
-- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical I105 literals in `items[*].id`.
-- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical I105 in `items[*].authority`.
-- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical I105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
-- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical I105 `items[*].account_id` values consistently.
+- Explorers consuming Torii via `/v2/accounts` and `/v2/accounts/query` always receive canonical I105 literals in `items[*].id`.
+- `GET /v2/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical I105 in `items[*].authority`.
+- `GET /v2/explorer/accounts/{account_id}/qr` returns canonical I105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
+- Asset-holder listings (`GET /v2/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical I105 `items[*].account_id` values consistently.
 
 ## Local selector cutover toolkit (ADDR-5c)
 

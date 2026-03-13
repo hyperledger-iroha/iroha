@@ -200,7 +200,7 @@ translator: machine-google-reviewed
 - Бүркеншік атпен жалбыз + тіркелгі құрамдастары:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Канондық көмекке бүркеншік аттарды шешіңіз:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` бар `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }` бар `POST /v2/assets/aliases/resolve`
 
 Көшіру жазбасы:
 - `name#domain` мәтіндік актив анықтамасының идентификаторларына бірінші шығарылымда әдейі қолдау көрсетілмейді.

@@ -157,7 +157,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON ያንጸባርቃል
+`ExplorerAccountQrSnapshot` `/v2/explorer/accounts/{id}/qr` JSON ያንጸባርቃል
 ላዩን፡ እሱ የቀኖናዊ መለያ መታወቂያን፣ ቀጥተኛውን ከ. ጋር ያካትታል
 መደበኛ I105 literal፣ የአውታረ መረብ ቅድመ ቅጥያ/ስህተት ማስተካከያ ዲበ ውሂብ፣ የQR ልኬቶች፣ እና
 የኪስ ቦርሳ/አሳሾች በቀጥታ ሊከተቱት የሚችሉት የውስጠ-መስመር SVG ጭነት።

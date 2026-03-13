@@ -25,12 +25,12 @@ translator: machine-google-reviewed
 
 ## Torii API 表面
 
-- `GET /v1/zk/proofs` 和 `GET /v1/zk/proofs/count` 接受橋接感知過濾器：
+- `GET /v2/zk/proofs` 和 `GET /v2/zk/proofs/count` 接受橋接感知過濾器：
   - `bridge_only=true` 僅返回橋接證明。
   - `bridge_pinned_only=true` 縮小為固定橋校樣。
   - `bridge_start_from_height` / `bridge_end_until_height` 夾緊橋範圍窗口。
-- `GET /v1/zk/proof/{backend}/{hash}` 返回橋元數據（範圍、清單哈希、有效負載摘要）以及證明 id/狀態/VK 綁定。
-- 完整的 Norito 證明記錄（包括有效負載字節）仍然可以通過 `GET /v1/proofs/{proof_id}` 供離線驗證者使用。
+- `GET /v2/zk/proof/{backend}/{hash}` 返回橋元數據（範圍、清單哈希、有效負載摘要）以及證明 id/狀態/VK 綁定。
+- 完整的 Norito 證明記錄（包括有效負載字節）仍然可以通過 `GET /v2/proofs/{proof_id}` 供離線驗證者使用。
 
 ## 橋接接收事件
 

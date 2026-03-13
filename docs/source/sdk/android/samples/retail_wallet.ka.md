@@ -27,7 +27,7 @@ Key scenarios:
 
 - Prepare and sign transfer/mint/burn instructions offline using StrongBox or the configured secure element.
 - Stage envelopes for device-to-device handoff (QR/NFC) with replay protection and Gosper-coded chunking for large payloads.
-- Sync queued envelopes with the Torii `/v1/pipeline` endpoint once connectivity resumes, detecting conflicts and displaying receipts.
+- Sync queued envelopes with the Torii `/v2/pipeline` endpoint once connectivity resumes, detecting conflicts and displaying receipts.
 - Run recovery/rotation workflows (seed + device binding) with deterministic logging for compliance checks.
 
 ## 2. Feature Breakdown

@@ -68,7 +68,7 @@ dillər və platformalar.
 Iroha qovşağı bir neçə əməkdaşlıq xidmətlərini idarə edir:
 
 - **Torii (`iroha_torii`)** əməliyyatlar, sorğular, axın hadisələri üçün HTTP/WebSocket API-lərini ifşa edir və
-  telemetriya (`/v1/...` son nöqtələri).
+  telemetriya (`/v2/...` son nöqtələri).
 - **Core (`iroha_core`)** doğrulama, konsensus, icra, idarəetmə və dövlət idarəçiliyini əlaqələndirir.
 - **Sumeragi (`iroha_core::sumeragi`)** görünüş dəyişiklikləri ilə NPoS-ə hazır konsensus boru kəmərini tətbiq edir,
   etibarlı yayım məlumatının mövcudluğu və sertifikatlar. baxın

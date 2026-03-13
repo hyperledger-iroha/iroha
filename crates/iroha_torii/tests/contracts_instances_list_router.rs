@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for /v1/contracts/instances/{ns}
+//! Router-level test for /v2/contracts/instances/{ns}
 #![cfg(feature = "app_api")]
 
 use std::sync::Arc;
@@ -31,7 +31,7 @@ async fn contracts_instances_list_returns_instances() {
     let state = Arc::new(state);
 
     let app = Router::new().route(
-        "/v1/contracts/instances/{ns}",
+        "/v2/contracts/instances/{ns}",
         get({
             let state = state.clone();
             move |_headers: axum::http::HeaderMap,
@@ -45,7 +45,7 @@ async fn contracts_instances_list_returns_instances() {
 
     let req = http::Request::builder()
         .method("GET")
-        .uri("/v1/contracts/instances/apps")
+        .uri("/v2/contracts/instances/apps")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

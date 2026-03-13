@@ -51,7 +51,7 @@ provas de governanca sem sair do preview do portal.
 | `taikai_ingest_segment_latency_ms` | Histograma de latencia de ingest CMAF por cluster/stream (alvo: p95 < 750 ms, p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Drift de live-edge entre encoder e workers de ancoragem (pagina se p99 > 1.5 s por 10 min). |
 | `taikai_ingest_segment_errors_total{reason}` | Contadores de erro por razao (`decode`, `manifest_mismatch`, `lineage_replay`, ...). Qualquer aumento dispara `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Incrementa sempre que `/v1/da/ingest` aceita um novo TRM para um alias; use `rate()` para validar a cadencia de rotacao. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Incrementa sempre que `/v2/da/ingest` aceita um novo TRM para um alias; use `rate()` para validar a cadencia de rotacao. |
 | `/status → telemetry.taikai_alias_rotations[]` | Snapshot JSON com `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` e timestamps para bundles de evidencia. |
 | `taikai_viewer_*` (rebuffer, idade de rotacao CEK, saude PQ, alertas) | KPIs do viewer para garantir que rotacao CEK + circuitos PQ permanecem saudaveis durante os anchors. |
 

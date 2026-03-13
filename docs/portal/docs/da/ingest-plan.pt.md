@@ -40,7 +40,7 @@ serde/JSON.
 ## Superficie API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -229,7 +229,7 @@ chunking e verificacao de manifests opcionais.
   que ja alimenta `iroha app sorafs fetch`. Operadores podem apontar para artefatos
   de manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou**
   passar um storage ticket Torii via `--storage-ticket`. Quando o caminho do
-  ticket e usado, a CLI baixa o manifest de `/v1/da/manifests/<ticket>`,
+  ticket e usado, a CLI baixa o manifest de `/v2/da/manifests/<ticket>`,
   persiste o bundle sob `artifacts/da/fetch_<timestamp>/` (override com
   `--manifest-cache-dir`), deriva o hash do blob para `--manifest-id`, e entao
   executa o orquestrador com a lista `--gateway-provider` fornecida. Todos os
@@ -240,7 +240,7 @@ chunking e verificacao de manifests opcionais.
   end-to-end de availability vivem totalmente sob o namespace `da` sem duplicar
   logica do orquestrador.
 - `iroha app da get-blob` baixa manifests canonicos direto de Torii via
-  `GET /v1/da/manifests/{storage_ticket}`. O comando escreve
+  `GET /v2/da/manifests/{storage_ticket}`. O comando escreve
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` e
   `chunk_plan_{ticket}.json` sob `artifacts/da/fetch_<timestamp>/` (ou um
   `--output-dir` fornecido pelo usuario) enquanto imprime o comando exato de

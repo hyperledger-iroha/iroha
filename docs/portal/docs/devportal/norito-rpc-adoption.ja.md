@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-01
 
 | フェーズ | 期間 | 範囲 | 完了条件 |
 |----------|------|------|----------|
-| **P0 - ラボパリティ** | Q2 2025 | Rust CLI + Python の smoke スイートが CI で `/v1/norito-rpc` を実行し、JS ヘルパーが単体テストを通過し、Android の mock harness が二重トランスポートを検証する。 | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` と `javascript/iroha_js/test/noritoRpcClient.test.js` が CI で green、Android harness が `./gradlew test` に接続されている。 |
+| **P0 - ラボパリティ** | Q2 2025 | Rust CLI + Python の smoke スイートが CI で `/v2/norito-rpc` を実行し、JS ヘルパーが単体テストを通過し、Android の mock harness が二重トランスポートを検証する。 | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` と `javascript/iroha_js/test/noritoRpcClient.test.js` が CI で green、Android harness が `./gradlew test` に接続されている。 |
 | **P1 - SDK プレビュー** | Q3 2025 | 共有 fixture バンドルがチェックインされ、`scripts/run_norito_rpc_fixtures.sh --sdk <label>` が `artifacts/norito_rpc/` にログ + JSON を記録し、SDK サンプルで Norito トランスポートのオプションフラグが公開される。 | fixture マニフェストに署名、README 更新で opt-in 利用を明示、Swift のプレビュー API が IOS2 フラグの背後で利用可能。 |
 | **P2 - Staging / AND4 プレビュー** | Q1 2026 | staging の Torii プールは Norito を優先し、Android AND4 preview クライアントと Swift IOS2 パリティスイートはバイナリトランスポートを既定にし、テレメトリーダッシュボード `dashboards/grafana/torii_norito_rpc_observability.json` が埋まる。 | `docs/source/torii/norito_rpc_stage_reports.md` が canary を記録し、`scripts/telemetry/test_torii_norito_rpc_alerts.sh` が通過し、Android mock harness のリプレイが成功/失敗ケースを捕捉する。 |
 | **P3 - 本番 GA** | Q4 2026 | Norito が全 SDK の既定トランスポートになる。JSON は brownout の fallback のまま。リリースジョブは各タグでパリティ成果物をアーカイブする。 | リリースチェックリストが Rust/JS/Python/Swift/Android の Norito smoke 出力を束ねる。Norito vs JSON のエラーレート SLO のアラート閾値が適用され、`status.md` とリリースノートが GA 証拠を引用する。 |

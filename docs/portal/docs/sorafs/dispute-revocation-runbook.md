@@ -15,7 +15,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
 ## 1. Assess the Incident
 
 - **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
+- **Confirm telemetry:** capture `/v2/sorafs/capacity/state` and `/v2/sorafs/capacity/telemetry` snapshots for the provider.
 - **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
 
 ## 2. Prepare Evidence Bundle
@@ -63,7 +63,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    ```
 
 3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+4. Submit the request JSON to Torii `/v2/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
 
 ## 4. Evacuation & Revocation
 

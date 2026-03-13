@@ -1,7 +1,7 @@
 # Runtime ABI — Canonical Hash (Torii)
 
 Endpoint
-- `GET /v1/runtime/abi/hash`
+- `GET /v2/runtime/abi/hash`
 
 Response (first release; single policy V1)
 ```json

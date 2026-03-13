@@ -56,9 +56,9 @@ translator: manual
 - `Topology::role_at(index)` מספק את תפקיד העמית, ו-`is_validator(idx)` מאשר חברות לגובה הנוכחי.
 
 ### ממשק API
-- `iroha_cli --output-format text ops sumeragi status` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
-- `iroha_cli --output-format text ops sumeragi params` / `GET /v1/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
-- `iroha_cli ops sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
+- `iroha_cli --output-format text ops sumeragi status` / `GET /v2/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
+- `iroha_cli --output-format text ops sumeragi params` / `GET /v2/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
+- `iroha_cli ops sumeragi status` / `GET /v2/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
 
 ### עיקרי המימוש
 - `sumeragi::main_loop` הוא הלולאה המרכזית שמנהלת עדכוני commit certificate, טיפוס הצעות וקומיט.
@@ -85,7 +85,7 @@ translator: manual
 
 ### ממשל והחלפת מצבים
 - `ConsensusMode` מאפשר בחירה בין מסלול מרושת למסלול NPoS (כאשר זה האחרון זמין).
-- שינוי מצב מתבצע דרך `SetSumeragiMode`, מצריך בחירת גובה עתידי בטוח ומאומת דרך `/v1/sumeragi/params`.
+- שינוי מצב מתבצע דרך `SetSumeragiMode`, מצריך בחירת גובה עתידי בטוח ומאומת דרך `/v2/sumeragi/params`.
 - מעבר אופרטיבי: לברר את הגובה, לשדר בקשת שינוי, לעקוב אחר התחייבות ולוודא שהמצב החדש מופעל בגובה שנקבע.
 
 ### דפוסי הפעלה למודים
@@ -95,9 +95,9 @@ translator: manual
 - `iroha_cli --output-format text ops sumeragi params` – בדיקת טיימרים ופרמטרים.
 - `iroha_cli --output-format text ops sumeragi status` – צילום מצב קצר עם locked/highest view, תור RBC, תור פייסמייקר.
 - `iroha_cli ops sumeragi status` – פלט Norito מלא.
-- `GET /v1/sumeragi/status/summary` – גרסת JSON/ Norito.
-- `GET /v1/sumeragi/status` – נתוני מצב מלאים כולל בלוקים ממתינים ואינדיקטורים לא evidence.
-- `GET /v1/sumeragi/params` – פרמטרים פעילים.
+- `GET /v2/sumeragi/status/summary` – גרסת JSON/ Norito.
+- `GET /v2/sumeragi/status` – נתוני מצב מלאים כולל בלוקים ממתינים ואינדיקטורים לא evidence.
+- `GET /v2/sumeragi/params` – פרמטרים פעילים.
 
 ### מדדי טלמטריה
 - Counters: ‏`sumeragi_view_change_total`, ‏`sumeragi_backpressure_deferrals_total`, ‏`sumeragi_da_gate_block_total{reason="missing_local_data"}`, ‏`sumeragi_evidence_total`.
@@ -162,9 +162,9 @@ translator: manual
 - `sumeragi_phase_latency_ms{phase="collect_da"}` ו-`{phase="collect_precommit"}` (P95 על פני 5 דק') — זמן לאיסוף קולות זמינות ו-precommit QCs.
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — פיזור אספנים; קשרו ל-`sumeragi_gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`.
 - `sumeragi_phase_latency_ema_ms{phase=…}` — ממוצע נע (EMA) לכל פאזת צינור. סטייה בין EMA למדידות גולמיות תחייב בדיקה.
-- `/v1/sumeragi/telemetry` / `iroha_cli --output-format text ops sumeragi status` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
-- `/v1/sumeragi/status/sse` — זרם SSE בקצב ≈1 שנייה לתצוגות חיות.
-- `/v1/sumeragi/phases` / `iroha_cli --output-format text ops sumeragi phases` — `{propose_ms,…,commit_ms,pipeline_total_ms}` ו-`ema_ms`.
+- `/v2/sumeragi/telemetry` / `iroha_cli --output-format text ops sumeragi status` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
+- `/v2/sumeragi/status/sse` — זרם SSE בקצב ≈1 שנייה לתצוגות חיות.
+- `/v2/sumeragi/phases` / `iroha_cli --output-format text ops sumeragi phases` — `{propose_ms,…,commit_ms,pipeline_total_ms}` ו-`ema_ms`.
 - `docs/source/grafana_sumeragi_overview.json` — דשבורד Grafana מוכן המציג סטיות בגובה commit certificate, מוני דרופ ונתוני VRF.
 
 **ספי התרעה**
@@ -177,9 +177,9 @@ translator: manual
 
 **תהליך תחקור**
 1. בדקו עם `iroha_cli --output-format text ops sumeragi collectors` שהאספן התקוע עדיין מוקצה.
-2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `sumeragi.collectors.redundant_send_r`.
+2. נתחו `/v2/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `sumeragi.collectors.redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
-4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
+4. בעיות FASTPQ/prover: עיינו ב-`/v2/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
 5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli --output-format text ops sumeragi status` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
 6. לאחר התאוששות, תעדו את האירוע והשיבו פרמטרים לערכי הבסיס.
 
@@ -191,7 +191,7 @@ translator: manual
 2. **Reveal** (`vrf_reveal_deadline_offset`) — הוולידטורים חושפים `VrfReveal`; המערכת מאמתת מול הקומיט ומעדכנת ב-WSV.
 
 הזרימה:
-- Torii מקבל `POST /v1/sumeragi/vrf/commit` / `/reveal` (Norito JSON עם `epoch`, `signer`, `*_hex`), מאמת ושולח ל-`SumeragiHandle`.
+- Torii מקבל `POST /v2/sumeragi/vrf/commit` / `/reveal` (Norito JSON עם `epoch`, `signer`, `*_hex`), מאמת ושולח ל-`SumeragiHandle`.
 - `handle_vrf_commit`/`reveal` מאמתות חלונות ותנאים, ומעודכנות נשמרות ב-`world.vrf_epochs`.
 - ה-seed של האפוק נשאר קבוע; הסנאפשוטים מעדכנים רק השתתפות ולא משנים בחירת לידר/אספנים עד מעבר אפוק.
 
@@ -200,7 +200,7 @@ translator: manual
 2. ערבוב גילויים חוקיים ל-seed הבא `S_e`.
 3. התמדת `VrfEpochRecord` והפקת דו"חות/טלמטריה.
 
-הזרע מזין את `deterministic_collectors`, ו-`/v1/sumeragi/collectors` מציג את התכנון עם `(height, view)`.
+הזרע מזין את `deterministic_collectors`, ו-`/v2/sumeragi/collectors` מציג את התכנון עם `(height, view)`.
 
 #### CLI ותפעול
 - `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים; הסרת `--output-format text` תחזיר JSON מלא.
@@ -209,15 +209,15 @@ translator: manual
 - לשליחות ידניות:
 
   ```bash
-  curl -X POST "$TORII/v1/sumeragi/vrf/commit" \
+  curl -X POST "$TORII/v2/sumeragi/vrf/commit" \
     -H "Content-Type: application/json" \
     -d '{"epoch":42,"signer":1,"commitment_hex":"0x..."}'
-  curl -X POST "$TORII/v1/sumeragi/vrf/reveal" \
+  curl -X POST "$TORII/v2/sumeragi/vrf/reveal" \
     -H "Content-Type: application/json" \
     -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
   ```
 
-  `/v1/sumeragi/collectors` ו-`/v1/sumeragi/status` מאפשרים לאמת `collectors[*].peer_id`, ‏`prf_epoch_seed`, ‏`vrf_late_reveals_total`.
+  `/v2/sumeragi/collectors` ו-`/v2/sumeragi/status` מאפשרים לאמת `collectors[*].peer_id`, ‏`prf_epoch_seed`, ‏`vrf_late_reveals_total`.
 
 **רשימת בדיקה**
 - בדקו את `iroha_cli --output-format text ops sumeragi status`; אם `vrf_penalty_epoch` או `committed_no_reveal` עולים – הריצו `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>`.
@@ -225,7 +225,7 @@ translator: manual
 - לפני הדד-ליין לגילוי עקבו אחרי `vrf.reveals_total` ו-`vrf_late_reveals_total`; אם חסר – פנו לוולידטור או פרסמו ידנית.
 - ודאו שה-offsetים המתועדים תואמים לתקנון; חריגות מעידות על סטייה.
 - במקרה של גילוי מאוחר: בדקו ש-`vrf.late_reveals` עודכן וש-`prf.epoch_seed` לא השתנה.
-- במעבר אפוק ודאו שהקנסות אופסו (`vrf_committed_no_reveal_total` עבור הסיינר ירד ל-0) ושהסנאפשוט (`/v1/sumeragi/vrf/epoch/{n}`) מסמן `finalized: true`.
+- במעבר אפוק ודאו שהקנסות אופסו (`vrf_committed_no_reveal_total` עבור הסיינר ירד ל-0) ושהסנאפשוט (`/v2/sumeragi/vrf/epoch/{n}`) מסמן `finalized: true`.
 - הקפידו על תקציבי RBC כפי שמוגדרים ב-CI (`sumeragi_rbc_deliver_broadcasts_total` מתקדם, `sumeragi_bg_post_queue_depth` ≤16).
 
 בדיקות `npos_rbc_store_backpressure_records_metrics` ו-`npos_rbc_chunk_loss_fault_reports_backlog` מאמתות את טלמטריית ה-RBC ע״פ `integration_tests/tests/sumeragi_npos_performance.rs`.
@@ -235,9 +235,9 @@ translator: manual
 - `sumeragi_vrf_non_reveal_total` / `sumeragi_vrf_no_participation_total` — קנסות אפוק.
 - `sumeragi_prf_epoch_seed` — ה-seed המשויך (מוצג בהקס בסטטוס).
 - `sumeragi_prf_context_height` / `_view` — `(height, view)` שנבחרו לסידור.
-- `/v1/sumeragi/vrf/epoch/{epoch}` — כולל `seed_hex`, טבלאות השתתפות וקנסות; `iroha_cli --output-format text ops sumeragi vrf-epoch` מציג שורה בודדת.
-- `/v1/sumeragi/telemetry` מחזיר את השדה `vrf` עם `{found, epoch, finalized, seed_hex, roster_len, participants_total, commitments_total, reveals_total, late_reveals_total, committed_no_reveal[], no_participation[], late_reveals[]}`.
-- `/v1/sumeragi/status` מספק `vrf_penalty_epoch`, `vrf_committed_no_reveal_total`, `vrf_no_participation_total`, `vrf_late_reveals_total`; גילויים מאוחרים נרשמים ב-`sumeragi_vrf_reveals_late_total` וב-`world.vrf_epochs[*].late_reveals` אך לא משנים את ה-seed.
+- `/v2/sumeragi/vrf/epoch/{epoch}` — כולל `seed_hex`, טבלאות השתתפות וקנסות; `iroha_cli --output-format text ops sumeragi vrf-epoch` מציג שורה בודדת.
+- `/v2/sumeragi/telemetry` מחזיר את השדה `vrf` עם `{found, epoch, finalized, seed_hex, roster_len, participants_total, commitments_total, reveals_total, late_reveals_total, committed_no_reveal[], no_participation[], late_reveals[]}`.
+- `/v2/sumeragi/status` מספק `vrf_penalty_epoch`, `vrf_committed_no_reveal_total`, `vrf_no_participation_total`, `vrf_late_reveals_total`; גילויים מאוחרים נרשמים ב-`sumeragi_vrf_reveals_late_total` וב-`world.vrf_epochs[*].late_reveals` אך לא משנים את ה-seed.
 
 #### ספי התראה ל-VRF
 - `increase(sumeragi_vrf_no_participation_total[1h]) > 0` או `increase(sumeragi_vrf_non_reveal_total[1h]) > 0` — יש לפתוח קריאה.

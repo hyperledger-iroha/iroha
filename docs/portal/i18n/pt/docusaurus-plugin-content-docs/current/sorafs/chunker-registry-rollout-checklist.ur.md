@@ -73,7 +73,7 @@ ratificar ہو چکا ہو۔
    جسے `torii.sorafs.discovery.admission.envelopes_dir` consulte کرتا ہے۔
 3. API de descoberta کے ذریعے anúncios do provedor کی verificação de propagação کریں:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. cabeçalhos de governança کے ساتھ exercício de endpoints de manifesto/plano کریں:
    ```bash

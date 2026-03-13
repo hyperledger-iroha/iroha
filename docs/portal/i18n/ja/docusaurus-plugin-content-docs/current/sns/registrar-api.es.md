@@ -29,7 +29,7 @@ Esta pagina refleja `docs/source/sns/registrar_api.md` y ahora sirve como la
 
 |レクシト |デタル |
 |----------|----------|
-|プロトコル | REST バジョ `/v1/sns/*` およびサービス gRPC `sns.v1.Registrar`。アンボス アセプタン Norito-JSON (`application/json`) および Norito-RPC ビナリオ (`application/x-norito`)。 |
+|プロトコル | REST バジョ `/v2/sns/*` およびサービス gRPC `sns.v1.Registrar`。アンボス アセプタン Norito-JSON (`application/json`) および Norito-RPC ビナリオ (`application/x-norito`)。 |
 |認証 |トークン `Authorization: Bearer` o 証明書 mTLS 発行、サフィックス スチュワード。エンドポイントは、`scope=sns.admin` を必要とする gobernanza (凍結/凍結解除、予約の割り当て) を考慮しています。 |
 |タサの限界 |レジストラは、サフィックス `sns.register`、`sns.renew`、`sns.controller`、`sns.freeze` の呼び出し元の JSON 制限値をバケット `torii.preauth_scheme_limits` に分割します。 |
 |テレメトリア | Torii expone `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` 登録者用パラ ハンドラー (フィルター `scheme="norito_rpc"`)。 API タンビエン インクリメント `sns_registrar_status_total{result, suffix_id}`。 |
@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |エンドポイント |メトド |ペイロード |説明 |
 |----------|----------|----------|-------------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けません。貴重な情報を再取得し、パゴ/ゴベルナンザのプルエバスを検証し、登録イベントを発行します。 |
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |終点を延長します。 Aplica ventanas de gracia/redencion segun la politica. |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` |必要な管理を変更します。 |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` | Reemplaza el set deコントローラー;会社の方向を確認します。 |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |フリーズdeガーディアン/カウンシル。保護者と政府の参照用チケットが必要です。 |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |トラス修復を解凍します。アセグラは議会登録を無効にします。 |
-| `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理者/評議会の任命保護区の割り当て。 |
-| `/v1/sns/policies/{suffix_id}` |入手 | -- | Obtiene `SuffixPolicyV1` 実際（キャッシュ可能）。 |
-| `/v1/sns/registrations/{selector}` |入手 | -- | Devuelve `NameRecordV1` 実際 + 効果 (アクティブ、グレースなど)。 |
+| `/v2/sns/registrations` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けません。貴重な情報を再取得し、パゴ/ゴベルナンザのプルエバスを検証し、登録イベントを発行します。 |
+| `/v2/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |終点を延長します。 Aplica ventanas de gracia/redencion segun la politica. |
+| `/v2/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` |必要な管理を変更します。 |
+| `/v2/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` | Reemplaza el set deコントローラー;会社の方向を確認します。 |
+| `/v2/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |フリーズdeガーディアン/カウンシル。保護者と政府の参照用チケットが必要です。 |
+| `/v2/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |トラス修復を解凍します。アセグラは議会登録を無効にします。 |
+| `/v2/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理者/評議会の任命保護区の割り当て。 |
+| `/v2/sns/policies/{suffix_id}` |入手 | -- | Obtiene `SuffixPolicyV1` 実際（キャッシュ可能）。 |
+| `/v2/sns/registrations/{selector}` |入手 | -- | Devuelve `NameRecordV1` 実際 + 効果 (アクティブ、グレースなど)。 |
 
 **セレクターのコード:** セグメント `{selector}` アセプタ I105、16 進カノニコ セグン ADDR-5 を含む。 Torii は `NameSelectorV1` 経由で正規化されます。
 
@@ -177,7 +177,7 @@ iroha sns freeze \
 iroha sns unfreeze \
   --selector makoto.sora \
   --governance-json /path/to/unfreeze_hook.json
-````--governance-json` 登録されたコンテナー `GovernanceHookV1` 有効 (提案 ID、投票ハッシュ、管理者/保護者)。エンドポイント `/v1/sns/registrations/{selector}/...` は、ベータ版のオペラドールの正確な内容に対応しており、Torii は SDK を参照しています。
+````--governance-json` 登録されたコンテナー `GovernanceHookV1` 有効 (提案 ID、投票ハッシュ、管理者/保護者)。エンドポイント `/v2/sns/registrations/{selector}/...` は、ベータ版のオペラドールの正確な内容に対応しており、Torii は SDK を参照しています。
 
 ## 4. gRPC のサービス
 
@@ -212,7 +212,7 @@ service Registrar {
 
 Torii 検証ラス プルエバス コンプロバンド:
 
-1. 提案 ID は政府元帳 (`/v1/governance/proposals/{id}`) に存在し、ステータスは `Approved` です。
+1. 提案 ID は政府元帳 (`/v2/governance/proposals/{id}`) に存在し、ステータスは `Approved` です。
 2. ハッシュはレジストラドの保存に一致します。
 3. Firmas de Steward/Guardian Referencian las claves publicas esperadas de `SuffixPolicyV1`。
 
@@ -222,7 +222,7 @@ Torii 検証ラス プルエバス コンプロバンド:
 
 ### 6.1 レジストロ基準
 
-1. 顧客は、`/v1/sns/policies/{suffix_id}` の優先事項、恩恵を受ける条件を参照してください。
+1. 顧客は、`/v2/sns/policies/{suffix_id}` の優先事項、恩恵を受ける条件を参照してください。
 2. クライアント アルマ `RegisterNameRequestV1`:
    - `selector` ラベル I105 (プレフェリド) またはコンプリミド (セグンダ メジャー オプション) のデリバド。
    - `term_years` 政治の限界。
@@ -249,7 +249,7 @@ Torii 検証ラス プルエバス コンプロバンド:
 
 1. Guardian envia `FreezeNameRequestV1` con ticket que Referencia id de Incidente。
 2. Torii は `NameStatus::Frozen` を登録し、`NameFrozen` を発行します。
-3. トラス修復、エルカウンシルエミットオーバーライド。エル オペラドール envia DELETE `/v1/sns/registrations/{selector}/freeze` と `GovernanceHookV1`。
+3. トラス修復、エルカウンシルエミットオーバーライド。エル オペラドール envia DELETE `/v2/sns/registrations/{selector}/freeze` と `GovernanceHookV1`。
 4. Torii 有効オーバーライド、`NameUnfrozen` を発行します。
 
 ## 7. エラーコードの検証
@@ -267,7 +267,7 @@ Torii 検証ラス プルエバス コンプロバンド:
 ## 8. 実装上の注意事項
 
 - Torii は、`NameRecordV1.auction` で保護されたサブバスを保留し、`PendingAuction` で登録を管理する意図を確認します。
-- ラス プルエバス デ パゴ レウティリザン レシボス デル レジャー Norito; tesoreria のサービス証明 API ヘルパー (`/v1/finance/sns/payments`)。
+- ラス プルエバス デ パゴ レウティリザン レシボス デル レジャー Norito; tesoreria のサービス証明 API ヘルパー (`/v2/finance/sns/payments`)。
 - SDK のデベンエンボルバー、エストスエンドポイント、ヘルパー、ウォレット、エラー、エラー (`ERR_SNS_RESERVED` など) を失います。
 
 ## 9. プロキシモスパソス

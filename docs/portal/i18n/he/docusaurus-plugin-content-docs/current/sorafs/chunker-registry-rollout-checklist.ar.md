@@ -73,7 +73,7 @@ description: خطة إطلاق خطوة بخطوة لتحديثات سجل chunk
    `torii.sorafs.discovery.admission.envelopes_dir`.
 3. تحقق من انتشار إعلانات المزوّد عبر واجهة discovery:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. اختبر نقاط manifest/plan مع رؤوس الحوكمة:
    ```bash

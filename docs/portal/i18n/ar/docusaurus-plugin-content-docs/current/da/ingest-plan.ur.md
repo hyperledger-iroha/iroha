@@ -38,7 +38,7 @@ _مسودہ: 2026-02-20 -- مالک: Core Protocol WG / Storage Team / DA WG_
 ## سطح واجهة برمجة التطبيقات (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -207,14 +207,14 @@ pub struct DaIngestReceipt {
   و يعمل تكافؤ SDK على إلغاء الحظر ہوتا ہے۔
 - `iroha app da get` الاسم المستعار الذي يركز على DA فراہم کرتا ہے جو منسق متعدد المصادر کو استخدام کرتا ہے جو پہلے ہی
   `iroha app sorafs fetch` چلاتا ہے۔ بيان المشغلين + عناصر مخطط القطع (`--manifest`، `--plan`، `--manifest-id`)
-  **أو** تذكرة تخزين Torii عبر `--storage-ticket`. مسار التذكرة پر CLI `/v1/da/manifests/<ticket>` سے
+  **أو** تذكرة تخزين Torii عبر `--storage-ticket`. مسار التذكرة پر CLI `/v2/da/manifests/<ticket>` سے
   تنزيل البيان حزمة واحدة `artifacts/da/fetch_<timestamp>/` محفوظات البطاقة (تجاوز عبر
   `--manifest-cache-dir`)، `--manifest-id` اشتقاق تجزئة blob للبطاقة، وإطار قائمة `--gateway-provider`
   لقد قام المنسق بتشغيل الكرت. SoraFS جلب المقابض المتقدمة لجلب البيانات (مظاريف البيان،
   تسميات العميل، وذاكرة التخزين المؤقت للحراسة، وتجاوزات نقل إخفاء الهوية، وتصدير لوحة النتائج، ومسارات `--output`) اور
   `--manifest-endpoint` تجاوز نقطة النهاية الواضحة، وهو أمر ضروري للتحقق من التوفر الشامل
   مكتمل لمساحة الاسم `da`، هناك تكرار لمنطق المنسق.
-- `iroha app da get-blob` Torii سے `GET /v1/da/manifests/{storage_ticket}` ذریعے البيانات القانونية الأساسية.
+- `iroha app da get-blob` Torii سے `GET /v2/da/manifests/{storage_ticket}` ذریعے البيانات القانونية الأساسية.
   التحكم `manifest_{ticket}.norito` و`manifest_{ticket}.json` و`chunk_plan_{ticket}.json`
   `artifacts/da/fetch_<timestamp>/` موجود أيضًا (أو `--output-dir` الذي يوفره المستخدم) و`iroha app da get`
   استدعاء (بشمول `--manifest-id`) صدى كرتي وهو منسق متابعة الجلب كل درکار ہے. مشغلي اس سے

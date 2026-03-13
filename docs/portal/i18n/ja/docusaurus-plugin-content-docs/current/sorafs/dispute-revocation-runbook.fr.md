@@ -30,7 +30,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## 1. インシデントの評価
 
 - **トリガー条件:** SLA 違反 (稼働率/PoR 失敗)、複製不足、または請求の不一致の検知。
-- **テレメトリの確認:** プロバイダーの `/v1/sorafs/capacity/state` と `/v1/sorafs/capacity/telemetry` のスナップショットを取得します。
+- **テレメトリの確認:** プロバイダーの `/v2/sorafs/capacity/state` と `/v2/sorafs/capacity/telemetry` のスナップショットを取得します。
 - **ステークホルダー通知:** Storage Team (プロバイダー運用)、Governance Council (意思決定機関)、Observability (ダッシュボード更新)。
 
 ## 2. 証拠バンドルの準備
@@ -78,7 +78,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
 
 3. `dispute_summary.json` を確認します (種別、証拠 digest、タイムスタンプ)。
-4. ガバナンス取引キュー経由で Torii `/v1/sorafs/capacity/dispute` にリクエスト JSON を送信します。応答の `dispute_id_hex` を記録してください。これは後続の失効アクションと監査レポートのアンカーとなります。
+4. ガバナンス取引キュー経由で Torii `/v2/sorafs/capacity/dispute` にリクエスト JSON を送信します。応答の `dispute_id_hex` を記録してください。これは後続の失効アクションと監査レポートのアンカーとなります。
 
 ## 4. 退避と失効
 

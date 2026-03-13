@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Norito-RPC шолу
 
 Norito-RPC — Torii API интерфейстері үшін екілік тасымалдау. Ол бірдей HTTP жолдарын қайта пайдаланады
-`/v1/pipeline` ретінде, бірақ схемасы бар Norito кадрлы пайдалы жүктемелерді ауыстырады
+`/v2/pipeline` ретінде, бірақ схемасы бар Norito кадрлы пайдалы жүктемелерді ауыстырады
 хэштер мен бақылау сомасы. Оны сізге детерминирленген, расталған жауаптар қажет болғанда пайдаланыңыз немесе
 құбырдың JSON жауаптары тығырықтан шыққан кезде.
 
@@ -30,7 +30,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Пайдалы жүктемені Norito кодекімен сериялаңыз (`iroha_client`, SDK көмекшілері немесе
@@ -56,7 +56,7 @@ SDK-арнайы нұсқаулық:
 1. [Проксиді іске қосыңыз](./try-it.md#start-the-proxy-locally) және орнатыңыз
    `TRYIT_PROXY_PUBLIC_URL`, сондықтан виджеттер трафикті қайда жіберу керектігін біледі.
 2. Осы бетте **Байқап көру** картасын немесе `/reference/torii-swagger` ашыңыз.
-   панелін таңдап, `POST /v1/pipeline/submit` сияқты соңғы нүктені таңдаңыз.
+   панелін таңдап, `POST /v2/pipeline/submit` сияқты соңғы нүктені таңдаңыз.
 3. **Content-Type** параметрін `application/x-norito` күйіне ауыстырыңыз, **Екілік** параметрін таңдаңыз.
    өңдегішін орнатыңыз және `fixtures/norito_rpc/transfer_asset.norito` жүктеңіз
    (немесе тізімде көрсетілген кез келген пайдалы жүк

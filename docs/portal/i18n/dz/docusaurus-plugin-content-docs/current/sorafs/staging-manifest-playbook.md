@@ -53,13 +53,13 @@ translation_last_reviewed: 2026-02-07
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. གསར་རྙེད་ཀྱི་མཇུག་སྣོད་འདི་འདྲི་དཔྱད་འབད་དེ་ ཁྱབ་བསྒྲགས་འདི་ ཀེ་ནོ་ནིག་མིང་གཞན་ཚུ་དང་གཅིག་ཁར་ འབྱུངམ་ཨིན་ ངེས་གཏན་བཟོ།
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    I18NI000000018X ནང་ འཛུལ་ཞུགས་འགོ་དང་པ་སྦེ་ `"sorafs.sf1@1.0.0"` ཚུ་ཚུདཔ་ཨིན།

@@ -34,7 +34,7 @@ Norito kodeklərindən istifadə edin; heç bir serde/JSON geri qaytarılmasına
 ## API Səthi (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Yük yükü Norito kodlu `DaIngestRequest`-dir. Cavablardan istifadə
 | 500 Daxili xəta | Gözlənilməz uğursuzluq (daxil edilmiş + xəbərdarlıq). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ paket hash. Öhdəlik siyahısı/sübut son nöqtələri SDK-lar üçün eyni pa
 sübutu aktiv siyasət dəstinə bağlamaq üçün əlavə gediş-gəlişə ehtiyac yoxdur.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
 - `iroha app da get` artıq səlahiyyət verən çoxmənbəli orkestrator üçün DA-yönümlü ləqəb əlavə edir
   `iroha app sorafs fetch`. Operatorlar onu manifest + yığın plan artefaktlarında göstərə bilər (`--manifest`,
   `--plan`, `--manifest-id`) **və ya** sadəcə `--storage-ticket` vasitəsilə Torii yaddaş biletini keçin. Zaman
-  bilet yolundan istifadə olunur CLI manifestini `/v1/da/manifests/<ticket>`-dən çıxarır, paketi davam etdirir
+  bilet yolundan istifadə olunur CLI manifestini `/v2/da/manifests/<ticket>`-dən çıxarır, paketi davam etdirir
   `artifacts/da/fetch_<timestamp>/` altında (`--manifest-cache-dir` ilə əvəzlənir), **manifest əldə edir
   `--manifest-id` üçün hash** və sonra təchiz edilmiş `--gateway-provider` ilə orkestratoru idarə edir
   siyahı. Şlüz identifikatoru olduğu halda faydalı yükün yoxlanılması hələ də daxil edilmiş CAR/`blob_hash` həzminə əsaslanır.
@@ -248,7 +248,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   ləğvetmələr, tablonun ixracı və `--output` yolları) və manifest son nöqtəsi vasitəsilə ləğv edilə bilər
   Fərdi Torii hostları üçün `--manifest-endpoint`, beləliklə, başdan sona mövcudluq yoxlamaları tamamilə
   Orkestr məntiqini təkrarlamadan `da` ad sahəsi.
-- `iroha app da get-blob` `GET /v1/da/manifests/{storage_ticket}` vasitəsilə kanonik manifestləri birbaşa Torii-dən çıxarır.
+- `iroha app da get-blob` `GET /v2/da/manifests/{storage_ticket}` vasitəsilə kanonik manifestləri birbaşa Torii-dən çıxarır.
   Komanda indi artefaktları manifest hash (blob id), yazı ilə etiketləyir
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` və `chunk_plan_{manifest_hash}.json`
   `artifacts/da/fetch_<timestamp>/` altında (və ya istifadəçi tərəfindən təchiz edilmiş `--output-dir`) dəqiq əks-səda verir
@@ -259,7 +259,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   `ToriiClient.getDaManifestBundle(...)`. Hər ikisi deşifrə edilmiş Norito baytını, JSON manifestini, manifest hashını,və SDK-ya zəng edənlərin CLI və Swift-ə müdaxilə etmədən orkestr seanslarını nəmləndirə bilməsi üçün yığın planı
   müştərilər əlavə olaraq `fetchDaPayloadViaGateway(...)`-ə zəng edərək həmin paketləri yerli şəbəkədən keçirə bilərlər.
   SoraFS orkestr sarğı.【IrohaSwift/Mənbələr/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` cavabları indi `manifest_hash` və hər iki CLI + SDK köməkçiləri (`iroha app da get`,
+- `/v2/da/manifests` cavabları indi `manifest_hash` və hər iki CLI + SDK köməkçiləri (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway` və Swift/JS şlüz sarğıları) bu həzmi
   yerləşdirilmiş CAR/blob heşinə qarşı faydalı yükləri yoxlamağa davam edərkən kanonik manifest identifikatoru.
 - `iroha app da rent-quote` təchiz edilmiş saxlama ölçüsü üçün deterministik icarə və həvəsləndirici qəzaları hesablayır
@@ -277,7 +277,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
 - Pin reyestrinin pariteti indi SDK-lara yayılır: `ToriiClient.registerSorafsPinManifest(...)`
   JavaScript SDK `iroha app sorafs pin register` tərəfindən istifadə olunan dəqiq yükü qurur və kanonik standartları tətbiq edir.
   POST-a göndərməzdən əvvəl chunker metadata, pin siyasətləri, ləqəb sübutları və davamçı həzmlər
-  `/v1/sorafs/pin/register`. Bu, CI botlarını və avtomatlaşdırmanı zaman CLI-yə atmaqdan qoruyur
+  `/v2/sorafs/pin/register`. Bu, CI botlarını və avtomatlaşdırmanı zaman CLI-yə atmaqdan qoruyur
   manifest qeydiyyatlarını qeyd edir və köməkçi TypeScript/README əhatə dairəsi ilə göndərilir ki, DA-8
   Rust/Swift ilə yanaşı JS-də “submit/get/prove” alət pariteti tam təmin edilir.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】
 - `iroha app da prove-availability` yuxarıda göstərilənlərin hamısını zəncirləyir: saxlama bileti alır,
@@ -334,7 +334,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   yeni manifest tərtibatları göndərildikdə deterministik təkmilləşdirmələrə zəmanət verən naməlum versiyalar.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR qarmaqları** — PDP öhdəlikləri birbaşa yığın mağazasından alınır və davamlıdır
   manifestlərdən əlavə, beləliklə DA-5 planlaşdırıcıları kanonik məlumatlardan seçmə problemləri başlaya bilər; the
-  `Sora-PDP-Commitment` başlığı indi həm `/v1/da/ingest`, həm də `/v1/da/manifests/{ticket}` ilə göndərilir
+  `Sora-PDP-Commitment` başlığı indi həm `/v2/da/ingest`, həm də `/v2/da/manifests/{ticket}` ilə göndərilir
   cavablar belə ki, SDK-lar gələcək tədqiqatların istinad edəcəyi imzalanmış öhdəliyi dərhal öyrənsinlər.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da:4/76rs.
 - **Kəskin kursor jurnalı** — zolaqlı metadata `da_shard_id` (defolt olaraq `lane_id`) təyin edə bilər və
   Sumeragi indi `(shard_id, lane_id)` üçün ən yüksək `(epoch, sequence)` olaraq qalır.
@@ -357,7 +357,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   faydalı yük baytlarını ifşa edir. Qəbzlər təkrar oynatma zamanı Kürdən hidratlanır, beləliklə, validatorlar eyni şeyi bərpa edirlər
   sonra məxfilik metadata yenidən başladır.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_config/src/states.
 
-## İcra Qeydləri- Torii-in `/v1/da/ingest` son nöqtəsi indi faydalı yükün sıxılmasını normallaşdırır, təkrar oynatma keşini tətbiq edir,
+## İcra Qeydləri- Torii-in `/v2/da/ingest` son nöqtəsi indi faydalı yükün sıxılmasını normallaşdırır, təkrar oynatma keşini tətbiq edir,
   kanonik baytları deterministik olaraq parçalayır, `DaManifestV1`-i yenidən qurur və kodlaşdırılmış faydalı yükü azaldır
   qəbzi verməzdən əvvəl SoraFS orkestrasiyası üçün `config.da_ingest.manifest_store_dir`-ə; the
   işləyici həmçinin `Sora-PDP-Commitment` başlığını əlavə edir ki, müştərilər kodlaşdırılmış öhdəliyi əldə edə bilsinlər
@@ -370,7 +370,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` Rust örtüyü, Python `ToriiClient`
   indi `decode_pdp_commitment_header` ixrac edir və `IrohaSwift` uyğun gələn köməkçiləri o qədər mobil göndərir
   müştərilər dərhal kodlaşdırılmış seçmə cədvəlini saxlaya bilərlər.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii həmçinin `GET /v1/da/manifests/{storage_ticket}`-i ifşa edir ki, SDK və operatorlar manifestləri əldə edə bilsinlər
+- Torii həmçinin `GET /v2/da/manifests/{storage_ticket}`-i ifşa edir ki, SDK və operatorlar manifestləri əldə edə bilsinlər
   və qovşağın makara kataloquna toxunmadan yığın planları. Cavab Norito baytını qaytarır
   (base64), göstərilən manifest JSON, `chunk_plan` üçün hazır olan `chunk_plan` JSON blobu, üstəgəl müvafiq
   hex həzmlər (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) belə aşağı axın alətləri
@@ -388,7 +388,7 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   `--block-hash` ləğv edin.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### Böyük faydalı yük axını axınıKonfiqurasiya edilmiş tək sorğu limitindən daha böyük aktivləri qəbul etməli olan müştərilər
-`POST /v1/da/ingest/chunk/start`-ə zəng edərək axın sessiyası. Torii a ilə cavab verir
+`POST /v2/da/ingest/chunk/start`-ə zəng edərək axın sessiyası. Torii a ilə cavab verir
 `ChunkSessionId` (BLAKE3-tələb olunan blob metadatasından əldə edilib) və razılaşdırılmış yığın ölçüsü.
 Hər bir sonrakı `DaIngestChunk` sorğusu aşağıdakıları ehtiva edir:
 
@@ -403,7 +403,7 @@ Torii təsdiqlənmiş dilimləri `config.da_ingest.manifest_store_dir/chunks/<se
 qeyri-mümkünlüyünə hörmət etmək üçün təkrar oynatma keşində irəliləyişi qeyd edir. Son dilim yerə düşəndə Torii
 diskdəki faydalı yükü yenidən yığır (yaddaş sıçrayışlarının qarşısını almaq üçün yığın kataloqu vasitəsilə axın),
 kanonik manifest/qəbzi birdəfəlik yükləmələrdə olduğu kimi hesablayır və nəhayət cavab verir
-`POST /v1/da/ingest` mərhələli artefaktı istehlak edərək. Uğursuz seanslar açıq şəkildə dayandırıla bilər və ya
+`POST /v2/da/ingest` mərhələli artefaktı istehlak edərək. Uğursuz seanslar açıq şəkildə dayandırıla bilər və ya
 `config.da_ingest.replay_cache_ttl`-dən sonra zibil yığılır. Bu dizayn şəbəkə formatını saxlayır
 Norito dostudur, müştəriyə xas bərpa edilə bilən protokollardan qaçır və mövcud manifest boru kəmərindən yenidən istifadə edir
 dəyişməz.

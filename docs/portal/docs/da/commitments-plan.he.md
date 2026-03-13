@@ -31,7 +31,7 @@ hooks של צנרת הבלוקים, הוכחות לקוח קל, ומשטחי Tor
   מחוץ ללדג'ר.
 - לספק הוכחות membership דטרמיניסטיות כך שלקוחות קלים יאמתו ש-manifest hash
   הושלם בבלוק נתון.
-- לחשוף שאילתות Torii (`/v1/da/commitments/*`) והוכחות שמאפשרות ל-relays,
+- לחשוף שאילתות Torii (`/v2/da/commitments/*`) והוכחות שמאפשרות ל-relays,
   SDKs ואוטומציה של ממשל לבצע audit ל-availability בלי לשחזר כל בלוק.
 - לשמור על המעטפת הקנונית `SignedBlockWire` על ידי השחלת המבנים החדשים דרך
   כותרת metadata של Norito וגזירת ה-hash של הבלוק.
@@ -45,7 +45,7 @@ hooks של צנרת הבלוקים, הוכחות לקוח קל, ומשטחי Tor
 3. **Persistence/indexes** כדי שה-WSV יענה במהירות לשאילתות התחייבות
    (`iroha_core/src/wsv/mod.rs`).
 4. **תוספות RPC ב-Torii** עבור endpoints של list/query/prove תחת
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **בדיקות אינטגרציה + fixtures** המאמתות את wire layout ואת זרימת ה-proof
    ב-`integration_tests/tests/da/commitments.rs`.
 
@@ -134,9 +134,9 @@ Torii חושף שלושה endpoints:
 
 | Route | Method | Payload | Notes |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (סינון טווח לפי lane/epoch/sequence, pagination) | מחזיר `DaCommitmentPage` עם סכום כולל, commitments ו-hash בלוק. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash או tuple `(epoch, sequence)`). | מחזיר `DaCommitmentProof` (record + Merkle path + hash בלוק). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | helper stateless שמחשב מחדש את hash הבלוק ומוודא inclusion; משמש SDKs שלא יכולים לקשר ישירות ל-`iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (סינון טווח לפי lane/epoch/sequence, pagination) | מחזיר `DaCommitmentPage` עם סכום כולל, commitments ו-hash בלוק. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash או tuple `(epoch, sequence)`). | מחזיר `DaCommitmentProof` (record + Merkle path + hash בלוק). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | helper stateless שמחשב מחדש את hash הבלוק ומוודא inclusion; משמש SDKs שלא יכולים לקשר ישירות ל-`iroha_crypto`. |
 
 כל ה-payloads נמצאים תחת `iroha_data_model::da::commitment`. הנתבים של Torii
 מרכיבים את ה-handlers לצד endpoints ingest הקיימים כדי למחזר מדיניות token/mTLS.

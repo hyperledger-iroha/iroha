@@ -111,9 +111,9 @@ LaneCompliancePolicy {
 
 Torii предоставляет:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — получить актуальную policy reference.
-- `POST /v1/lane-compliance/policies` — endpoint только для governance, отражающий ISI proposal helpers.
-- `GET /v1/lane-compliance/decisions` — пагинированный аудит-лог с фильтрами по
+- `GET /v2/lane-compliance/policies/{lane_id}` — получить актуальную policy reference.
+- `POST /v2/lane-compliance/policies` — endpoint только для governance, отражающий ISI proposal helpers.
+- `GET /v2/lane-compliance/decisions` — пагинированный аудит-лог с фильтрами по
   `lane_id`, `decision`, `jurisdiction` и `reason_code`.
 
 Команды CLI/SDK оборачивают эти HTTP поверхности, чтобы операторы могли скриптовать ревью
@@ -123,7 +123,7 @@ Torii предоставляет:
 
 1. **Admission (Torii)**
    - `Torii` загружает активную политику при изменении lane manifest или истечении cache signature.
-   - Каждая транзакция, входящая в очередь `/v1/pipeline`, помечается `LaneComplianceContext`
+   - Каждая транзакция, входящая в очередь `/v2/pipeline`, помечается `LaneComplianceContext`
      (ids участников, UAID, метаданные manifest dataspace, policy id и актуальный snapshot
      `LanePrivacyRegistry`, описанный в `crates/iroha_core/src/interlane/mod.rs`).
    - Авторитеты с UAID должны иметь активный manifest Space Directory для маршрутизируемого dataspace;

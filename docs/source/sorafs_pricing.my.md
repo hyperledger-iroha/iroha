@@ -118,7 +118,7 @@ PDP/PoTR violations can be enforced even when capacity/uptime remain healthy.
 Whenever an instant quarantine is triggered the ledger now emits
 `SorafsGatewayEvent::ProofHealth`, exposing the provider identifier, telemetry window, PDP/PoTR
 counts, configured thresholds, strike bookkeeping, cooldown status, and the exact slashed amount (if
-any). Consumers of Torii’s `/v1/events/sse` feed can subscribe to the `Sorafs` channel to export the
+any). Consumers of Torii’s `/v2/events/sse` feed can subscribe to the `Sorafs` channel to export the
 alerts into governance evidence stores or realtime telemetry dashboards without scraping ledger
 state.
 

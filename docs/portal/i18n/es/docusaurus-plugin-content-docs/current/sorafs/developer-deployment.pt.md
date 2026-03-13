@@ -29,7 +29,7 @@ El flujo de trabajo de empaquetado de SoraFS fortalece el determinismo, entre el
 - **Política de admisión** - revisar los anuncios de proveedores assinados y alias pruebas necesarias para `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook do pin registro** - mantenha `docs/source/sorafs/runbooks/pin_registry_ops.md` por perto para escenarios de recuperación (rotacao de alias, falhas de replicacao).
 
-## Configuración del ambiente- Las puertas de enlace deben habilitar el punto final de transmisión de prueba (`POST /v1/sorafs/proof/stream`) para que la CLI emita resúmenes de telemetría.
+## Configuración del ambiente- Las puertas de enlace deben habilitar el punto final de transmisión de prueba (`POST /v2/sorafs/proof/stream`) para que la CLI emita resúmenes de telemetría.
 - Configure una política `sorafs_alias_cache` usando los padroes en `iroha_config` o el ayudante de CLI (`sorafs_cli manifest submit --alias-*`).
 - Tokens de flujo Forneca (o credenciales Torii) a través de un administrador secreto seguro.
 - Habilite los exportadores de telemetría (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) y envie para su pila Prometheus/OTel.

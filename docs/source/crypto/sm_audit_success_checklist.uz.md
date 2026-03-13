@@ -36,7 +36,7 @@ ishlab chiqarish validatorlari uchun SM imzolashni yoqishdan oldin shartlar.
 - [ ] Oxirgi deterministik test natijalari olingan:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` va
       Norito qaytib kelish moslamalari.
-- [ ] Torii `/v1/node/capabilities` reklamasi (`iroha runtime capabilities` orqali), `crypto.sm` manifest maydonlari va tezlashtirish siyosati suratini tasdiqlovchi yozib olingan.
+- [ ] Torii `/v2/node/capabilities` reklamasi (`iroha runtime capabilities` orqali), `crypto.sm` manifest maydonlari va tezlashtirish siyosati suratini tasdiqlovchi yozib olingan.
 
 # Mashg'ulotni bajarish
 

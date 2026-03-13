@@ -60,12 +60,12 @@ le carry-over de crédit avec les résultats de règlement.
 Torii expose des endpoints dédiés pour que les fournisseurs signalent l'usage et pilotent
 le cycle de vie des accords sans wiring spécifique :
 
-- `POST /v1/sorafs/deal/usage` accepte la télémétrie `DealUsageReport` et renvoie
+- `POST /v2/sorafs/deal/usage` accepte la télémétrie `DealUsageReport` et renvoie
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalise la fenêtre courante, en streamant le
+- `POST /v2/sorafs/deal/settle` finalise la fenêtre courante, en streamant le
   `DealSettlementRecord` résultant avec un `DealSettlementV1` encodé en base64
   prêt pour publication dans le DAG de gouvernance.
-- Le feed `/v1/events/sse` de Torii diffuse désormais des enregistrements
+- Le feed `/v2/events/sse` de Torii diffuse désormais des enregistrements
   `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (epoch, GiB-heures mesurés,
   compteurs de tickets, charges déterministes), des enregistrements
   `SorafsGatewayEvent::DealSettlement` qui incluent le snapshot canonique du ledger de règlement

@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-02-07
 
 - العقدة 18.18+ مع `npm` أو `pnpm`.
 - `sorafs_cli` عبر `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- عنوان URL Torii الذي يعرض `/v1/sorafs/*` بالإضافة إلى حساب/cle خاص بأداة التفويض التي يمكن أن تكون كذلك
+- عنوان URL Torii الذي يعرض `/v2/sorafs/*` بالإضافة إلى حساب/cle خاص بأداة التفويض التي يمكن أن تكون كذلك
   البيانات والاسم المستعار.
 - Emmeteur OIDC (GitHub Actions، GitLab، هوية عبء العمل، وما إلى ذلك) من أجل الحصول على `SIGSTORE_ID_TOKEN`.
 - الخيار: `examples/sorafs_cli_quickstart.sh` من أجل التشغيل الجاف وآخرون
@@ -868,7 +868,7 @@ agraffent des profes frais:
 
 | الاسم | لكن |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | المضيف Torii الذي كشف `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | المضيف Torii الذي كشف `/v2/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف العصر المسجل مع عمليات الإرسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autorite de التوقيع لبيان التسليم. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | الاسم المستعار Tuple يكمن في البيان عندما يكون `perform_submit` هو `true`. |

@@ -74,13 +74,13 @@ description: Torii کی teste de implantações پر perfil chunker ratificado p
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. consulta de endpoint de descoberta کریں اور confirmar کریں کہ aliases canônicos de anúncio کے ساتھ نظر آتا ہے:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    یقینی بنائیں کہ `profile_aliases` میں `"sorafs.sf1@1.0.0"` پہلی entrada کے طور پر شامل ہو۔

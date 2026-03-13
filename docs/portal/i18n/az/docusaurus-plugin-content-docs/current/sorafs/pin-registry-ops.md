@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Baxış
 
-Bu runbook SoraFS pin reyestrini və onun təkrarlama xidməti səviyyəli razılaşmalarını (SLAs) necə izləmək və yoxlamaq lazım olduğunu sənədləşdirir. Metriklər `iroha_torii`-dən yaranır və `torii_sorafs_*` ad məkanı altında Prometheus vasitəsilə ixrac edilir. Torii reyestr vəziyyətini fonda 30 saniyəlik intervalda nümunə götürür, beləliklə, heç bir operator `/v1/sorafs/pin/*` son nöqtələrini sorğulamasa belə, tablosuna cari qalır. Aşağıdakı bölmələrə birbaşa xəritələnən istifadəyə hazır Grafana düzümü üçün seçilmiş idarə panelini (`docs/source/grafana_sorafs_pin_registry.json`) idxal edin.
+Bu runbook SoraFS pin reyestrini və onun təkrarlama xidməti səviyyəli razılaşmalarını (SLAs) necə izləmək və yoxlamaq lazım olduğunu sənədləşdirir. Metriklər `iroha_torii`-dən yaranır və `torii_sorafs_*` ad məkanı altında Prometheus vasitəsilə ixrac edilir. Torii reyestr vəziyyətini fonda 30 saniyəlik intervalda nümunə götürür, beləliklə, heç bir operator `/v2/sorafs/pin/*` son nöqtələrini sorğulamasa belə, tablosuna cari qalır. Aşağıdakı bölmələrə birbaşa xəritələnən istifadəyə hazır Grafana düzümü üçün seçilmiş idarə panelini (`docs/source/grafana_sorafs_pin_registry.json`) idxal edin.
 
 ## Metrik Referans
 
@@ -118,7 +118,7 @@ groups:
 
 1. **Səbəbi müəyyən edin**
    - Əgər gecikmə az qalarkən SLA artımı əldən verirsə, provayderin performansına diqqət yetirin (PoR uğursuzluqları, gec tamamlamalar).
-   - Əgər geridə qalma sabit itkilərlə artırsa, şuranın təsdiqini gözləyən manifestləri təsdiqləmək üçün qəbulu (`/v1/sorafs/pin/*`) yoxlayın.
+   - Əgər geridə qalma sabit itkilərlə artırsa, şuranın təsdiqini gözləyən manifestləri təsdiqləmək üçün qəbulu (`/v2/sorafs/pin/*`) yoxlayın.
 2. **Provayder statusunu doğrulayın**
    - `iroha app sorafs providers list`-i işə salın və reklam edilən imkanların replikasiya tələblərinə uyğunluğunu yoxlayın.
    - Təmin edilmiş GiB və PoR müvəffəqiyyətini təsdiqləmək üçün `torii_sorafs_capacity_*` ölçü cihazlarını yoxlayın.
@@ -139,7 +139,7 @@ groups:
 2. **Təhsildə quru qaçış**
    - Konfiqurasiya dəyişikliyini istehsal topologiyasını əks etdirən bir quruluş klasterinə yerləşdirin.
    - `cargo xtask sorafs-pin-fixtures`-i işə salın, kanonik ləqəb qurğularının hələ də deşifrəni və gediş-gəlişini təsdiqləmək; hər hansı uyğunsuzluq ilk növbədə həll edilməli olan yuxarıya doğru açıq sürüşməni nəzərdə tutur.
-   - `/v1/sorafs/pin/{digest}` və `/v1/sorafs/aliases` son nöqtələrini təzə, təzələmə pəncərəsi, vaxtı keçmiş və müddəti bitmiş halları əhatə edən sintetik sübutlarla istifadə edin. HTTP status kodlarını, başlıqları (`Sora-Proof-Status`, `Retry-After`, `Warning`) və JSON əsas sahələrini bu runbook ilə təsdiqləyin.
+   - `/v2/sorafs/pin/{digest}` və `/v2/sorafs/aliases` son nöqtələrini təzə, təzələmə pəncərəsi, vaxtı keçmiş və müddəti bitmiş halları əhatə edən sintetik sübutlarla istifadə edin. HTTP status kodlarını, başlıqları (`Sora-Proof-Status`, `Retry-After`, `Warning`) və JSON əsas sahələrini bu runbook ilə təsdiqləyin.
 3. **İstehsalda aktivləşdirin**
    - Standart dəyişiklik pəncərəsi vasitəsilə yeni konfiqurasiyanı işə salın. Əvvəlcə onu Torii-ə tətbiq edin, sonra qovşaq qeydlərdə yeni siyasəti təsdiqlədikdən sonra şlüzləri/SDK xidmətlərini yenidən başladın.
    - `docs/source/grafana_sorafs_pin_registry.json`-i Grafana-ə idxal edin (və ya mövcud tablosunu yeniləyin) və ləqəbli keş yeniləmə panellərini NOC iş sahəsinə yapışdırın.

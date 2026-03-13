@@ -1465,7 +1465,7 @@ pub struct ProverListQuery {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/zk/prover/reports — list prover reports with optional filters.
+/// GET /v2/zk/prover/reports — list prover reports with optional filters.
 pub async fn handle_list_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
@@ -1558,7 +1558,7 @@ pub async fn handle_list_reports(
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/zk/prover/reports/count — return number of matching prover reports.
+/// GET /v2/zk/prover/reports/count — return number of matching prover reports.
 pub async fn handle_count_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
@@ -1592,7 +1592,7 @@ pub async fn handle_count_reports(
 }
 
 #[cfg(feature = "app_api")]
-/// DELETE /v1/zk/prover/reports — bulk delete reports matching filters.
+/// DELETE /v2/zk/prover/reports — bulk delete reports matching filters.
 pub async fn handle_delete_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
 ) -> impl IntoResponse {
@@ -1636,7 +1636,7 @@ pub async fn handle_delete_reports(
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/zk/prover/reports/{id} — get a single report by id.
+/// GET /v2/zk/prover/reports/{id} — get a single report by id.
 pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     let Some(clean) = sanitize_report_id(&id) else {
         return (
@@ -1658,7 +1658,7 @@ pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoRespo
 }
 
 #[cfg(feature = "app_api")]
-/// DELETE /v1/zk/prover/reports/{id} — delete a single report by id.
+/// DELETE /v2/zk/prover/reports/{id} — delete a single report by id.
 pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     let Some(clean) = sanitize_report_id(&id) else {
         return (

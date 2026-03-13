@@ -168,7 +168,7 @@ struct AdversarialPerceptualVariantV1 {
   - каталог `models/` с хэшированными ONNX‑весами;
   - входную точку `run_moderation.py` (или эквивалент на Rust), которая отдаёт HTTP/gRPC API.
 - Публиковать артефакты в `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Бинарь раннера поставляется как часть crate `sorafs_ai_runner`. Пайплайн сборки вшивает хэш манифеста в бинарь (доступен через `/v1/info`).
+- Бинарь раннера поставляется как часть crate `sorafs_ai_runner`. Пайплайн сборки вшивает хэш манифеста в бинарь (доступен через `/v2/info`).
 
 ## 8. Телеметрия и наблюдаемость
 - Метрики Prometheus:

@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Norito-RPC ici
 
-Norito-RPC Torii API en cours de développement `/v1/pipeline` et les charges utiles HTTP pour les charges utiles Norito Il y a des hachages de schéma et des sommes de contrôle Il s'agit d'un pipeline de pipeline JSON جوابات بوتل نیک بن جائیں۔
+Norito-RPC Torii API en cours de développement `/v2/pipeline` et les charges utiles HTTP pour les charges utiles Norito Il y a des hachages de schéma et des sommes de contrôle Il s'agit d'un pipeline de pipeline JSON جوابات بوتل نیک بن جائیں۔
 
 ## کیوں تبدیل کریں؟
 - CRC64 et les hachages de schéma sont utilisés pour le cadrage et les hachages de schéma.
@@ -20,7 +20,7 @@ Norito-RPC Torii API en cours de développement `/v1/pipeline` et les charges ut
 ## درخواست بھیجنا
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Charge utile et codec Norito (`iroha_client`, aides SDK et `norito::to_bytes`) et codec
@@ -37,7 +37,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 Essayez-le maintenant et essayez-le maintenant. Charges utiles Norito pour les charges utiles
 
 1. [پراکسی شروع کریں](./try-it.md#start-the-proxy-locally) اور `TRYIT_PROXY_PUBLIC_URL` سیٹ کریں تاکہ widgets جان سکیں کہ ٹریفک کہاں بھیجنی ہے۔
-2. Voici comment **Essayez-le** avec `/reference/torii-swagger` pour le point final et avec `POST /v1/pipeline/submit`.
+2. Voici comment **Essayez-le** avec `/reference/torii-swagger` pour le point final et avec `POST /v2/pipeline/submit`.
 3. **Content-Type** comme `application/x-norito` pour le fichier **Binaire** pour le fichier `fixtures/norito_rpc/transfer_asset.norito` pour le fichier `application/x-norito`. (`fixtures/norito_rpc/transaction_fixtures.manifest.json` est une charge utile)
 4. Widget de code de périphérique OAuth pour un jeton de porteur de jeton de porteur (par `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` pour un jeton de code de périphérique OAuth) `X-TryIt-Auth` remplace قبول کرتا ہے)۔
 5. Mettre en place une solution pour Torii `fixtures/norito_rpc/schema_hashes.json` et `schema_hash` et `schema_hash` ہے۔ Les hachages sont utilisés pour les hachages et les sauts d'en-tête Norito.Essayez-le maintenant avec `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. یہ اسکرپٹ `cargo xtask norito-rpc-verify` کو ریپ کرتا ہے، JSON خلاصہ `artifacts/norito_rpc/<timestamp>/` میں لکھتا ہے، اور وہی luminaires کرتا ہے جو پورٹل نے استعمال کئے تھے۔

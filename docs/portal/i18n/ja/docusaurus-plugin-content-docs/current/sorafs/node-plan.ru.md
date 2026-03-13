@@ -62,7 +62,7 @@ SF-3 はクレート `sorafs-node`、クレートは Iroha/Torii です。 SoraF
 - Axum は Torii と `norito::json` ペイロードを確認します。
 - Norito を参照 (`PinResultV1`、`FetchErrorV1`、テレメトリ構造体)。
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` バックログ、エポック/期限、成功/失敗のタイムスタンプ、バックログ、成功/失敗のタイムスタンプ`sorafs_node::NodeHandle::por_ingestion_status`、Torii と `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` 日дабордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` バックログ、エポック/期限、成功/失敗のタイムスタンプ、バックログ、成功/失敗のタイムスタンプ`sorafs_node::NodeHandle::por_ingestion_status`、Torii と `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` 日дабордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. スケジューラと機能| Задача |ださい |
 |------|----------|

@@ -167,9 +167,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Torii 网关现在公开由相同支持的只读帮助程序
 > `NodeHandle`：
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 返回存储的
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — 返回存储的
 > Norito 清单（base64）和摘要/元数据。【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — 返回确定性
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — 返回确定性
 > 用于下游工具的块计划 JSON (`chunk_fetch_specs`)。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > 这些端点镜像 CLI 输出，以便管道可以从本地切换
@@ -212,19 +212,19 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      治理模式已达成一致；目前，该设计假设有严格的配额，并且
      操作员发起的取消固定操作。
 
-### 容量声明和调度集成- Torii 现在从 `/v1/sorafs/capacity/declare` 中继 `CapacityDeclarationRecord` 更新
+### 容量声明和调度集成- Torii 现在从 `/v2/sorafs/capacity/declare` 中继 `CapacityDeclarationRecord` 更新
   到嵌入式 `CapacityManager`，因此每个节点都会构建其自身的内存视图
   已提交的分块器和车道分配。管理器公开只读快照
-  用于遥测 (`GET /v1/sorafs/capacity/state`) 并强制按配置文件或按通道
+  用于遥测 (`GET /v2/sorafs/capacity/state`) 并强制按配置文件或按通道
   接受新订单前的预约。【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` 端点接受治理颁发的 `ReplicationOrderV1`
+- `/v2/sorafs/capacity/schedule` 端点接受治理颁发的 `ReplicationOrderV1`
   有效负载。当订单针对本地提供商时，经理会检查
   重复调度，验证分块器/通道容量，保留切片，以及
   返回 `ReplicationPlan` 描述剩余容量，以便编排工具
   可以继续摄入。其他供应商的订单均通过
   `ignored` 响应以简化多操作员工作流程。【crates/iroha_torii/src/routing.rs:4845】
 - 完成挂钩（例如，在摄取成功后触发）命中
-  `POST /v1/sorafs/capacity/complete` 通过以下方式释放预订
+  `POST /v2/sorafs/capacity/complete` 通过以下方式释放预订
   `CapacityManager::complete_order`。响应包括 `ReplicationRelease`
   快照（剩余总数、分块器/通道残差），因此编排工具可以
   无需轮询即可对下一个订单进行排队。后续工作会将其连接到块中

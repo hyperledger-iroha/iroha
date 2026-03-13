@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | የተበላሸ ውቅር ይገለጣል | `ClientConfig` ከማመልከትዎ በፊት ማኒፌክቶችን (hash + schema) ያረጋግጣል እና በ`android.telemetry.config.reload` በኩል ዳግም መጫንን መዝግቧል። | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | የመፈረሚያ ቁልፎች ስምምነት | በስትሮንግቦክስ የሚፈለጉ ፖሊሲዎች፣ የማረጋገጫ ማሰሪያዎች እና የመሣሪያ-ማትሪክስ ኦዲቶች ተንሸራታችነትን ይለያሉ፤ በእያንዳንዱ ክስተት የተመዘገበውን ይሽራል። | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | በቴሌሜትሪ ውስጥ PII መፍሰስ | Blake2b-hashed ባለሥልጣኖች፣ በባልኬት የታሸጉ የመሣሪያ መገለጫዎች፣ የአገልግሎት አቅራቢዎች መቅረት፣ መግባትን መሻር። | `docs/source/sdk/android/telemetry_redaction.md`; Playbook §8ን ይደግፉ። |
-| በ Torii RPC ላይ እንደገና ያጫውቱ ወይም ይቀንሱ | `/v1/pipeline` ጥያቄ ገንቢ TLS መሰካትን፣ የጩኸት ሰርጥ ፖሊሲን ያስፈጽማል እና በጀቶችን በሃሽድ ባለስልጣን አውድ እንደገና ይሞክሩ። | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (የታቀደ)። |
+| በ Torii RPC ላይ እንደገና ያጫውቱ ወይም ይቀንሱ | `/v2/pipeline` ጥያቄ ገንቢ TLS መሰካትን፣ የጩኸት ሰርጥ ፖሊሲን ያስፈጽማል እና በጀቶችን በሃሽድ ባለስልጣን አውድ እንደገና ይሞክሩ። | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (የታቀደ)። |
 | ያልተፈረሙ ወይም የማይባዙ ልቀቶች | CycloneDX SBOM + Sigstore ማረጋገጫዎች በ AND6 የማረጋገጫ ዝርዝር; የሚለቀቁ RFCs በ`docs/source/release/provenance/android/` ውስጥ ማስረጃ ያስፈልጋቸዋል። | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | ያልተሟላ ክስተት አያያዝ | Runbook + playbook መሻርን፣ ትርምስ ልምምዶችን እና የማሳደግ ዛፍን ይገልፃል። ቴሌሜትሪ መሻር የተፈረመ Norito ጥያቄዎችን ይፈልጋል። | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 የመዳረሻ መቆጣጠሪያ | StrongBox ፖሊሲዎች + የተፈረሙ Norito ቅርሶችን የሚፈልግ የስራ ፍሰት ይሽራል። |
 | 7.5 ምስጠራ መቆጣጠሪያዎች | ቁልፍ ማመንጨት፣ ማከማቻ እና የምስክርነት መስፈርቶች ከ AND2 (ቁልፍ አስተዳደር መመሪያ)። |
 | 7.6 ክወናዎች ደህንነት | ቴሌሜትሪ ሃሽንግ፣ ትርምስ ልምምዶች፣ የክስተቶች ምላሽ እና የማስረጃ መልቀቅ። |
-| 7.7 የመገናኛ ደህንነት | `/v1/pipeline` TLS ፖሊሲ + ሃሽድ ባለስልጣናት (የቴሌሜትሪ ማሻሻያ ሰነድ)። |
+| 7.7 የመገናኛ ደህንነት | `/v2/pipeline` TLS ፖሊሲ + ሃሽድ ባለስልጣናት (የቴሌሜትሪ ማሻሻያ ሰነድ)። |
 | 7.8 የስርዓት ማግኛ / ልማት | በAND5/AND6 ዕቅዶች ውስጥ ሊባዙ የሚችሉ የግራድል ግንባታዎች፣ SBOMs እና የፕሮቬንሽን በሮች። |
 | 7.9 የአቅራቢዎች ግንኙነት | Buildkite + Sigstore ማረጋገጫዎች ከሶስተኛ ወገን ጥገኝነት SBoms ጋር ተመዝግበዋል። |
 | 7.10 ክስተት አስተዳደር | Runbook/Playbook ማሳደግ፣ ምዝግብ ማስታወሻን መሻር፣ ቴሌሜትሪ አለመሳካት ቆጣሪዎች። |

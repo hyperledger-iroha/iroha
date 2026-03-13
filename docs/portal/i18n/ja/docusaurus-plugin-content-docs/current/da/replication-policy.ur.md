@@ -32,7 +32,7 @@ DA 取り込みパイプライン `roadmap.md` (ワークストリーム DA-4) B
 | _デフォルト (他のすべてのクラス)_ | 6時間 | 30日 | 3 | `warm` | `da.default` |
 
 یہ اقدار `torii.da_ingest.replication_policy` میں 埋め込み ہیں اور تمام
-`/v1/da/ingest` の投稿数 پر لاگو ہوتی ہیں۔ Torii 強制保存プロファイル
+`/v2/da/ingest` の投稿数 پر لاگو ہوتی ہیں۔ Torii 強制保存プロファイル
 呼び出し元の値が一致しません فراہم کرتے ہیں マニフェストが表示されます。
 警告: オペレータの SDK が古いです。
 
@@ -150,5 +150,5 @@ governance_tag = "da.taikai.archive"
    説明 SRE ダイジェスト PDP 証拠参照 説明 説明
 
 回帰カバレッジ `integration_tests/tests/da/replication_policy.rs` میں ہے؛
-スイート `/v1/da/ingest` 保持ポリシーが一致しません。検証してください。
+スイート `/v2/da/ingest` 保持ポリシーが一致しません。検証してください。
 呼び出し元のマニフェストの意図を取得する プロファイルを強制的に公開する

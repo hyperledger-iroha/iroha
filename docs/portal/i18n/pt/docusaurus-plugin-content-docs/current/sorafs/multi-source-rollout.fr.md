@@ -33,7 +33,7 @@ Suponho que a pilha de orquestração liberada sob SF-6 esteja implantada (`sora
 ## 1. Validação pré-implantação
 
 1. **Confirme as entradas de governo.**
-   - Todos os fornecedores candidatos devem publicar os envelopes `ProviderAdvertV1` com cargas úteis de capacidade de plage e orçamentos de fluxo. Validade via `/v1/sorafs/providers` e compare os níveis de capacidade atendidos.
+   - Todos os fornecedores candidatos devem publicar os envelopes `ProviderAdvertV1` com cargas úteis de capacidade de plage e orçamentos de fluxo. Validade via `/v2/sorafs/providers` e compare os níveis de capacidade atendidos.
    - Os instantâneos de télémétrie fornecem a taxa de latência/échec deve ser datada de menos de 15 minutos antes de cada execução canary.
 2. **Prepare a configuração.**
    - Mantenha a configuração JSON do orquestrador na árvore `iroha_config` em sofás:

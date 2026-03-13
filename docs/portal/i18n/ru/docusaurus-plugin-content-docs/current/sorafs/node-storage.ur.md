@@ -117,8 +117,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > Шлюз Torii с помощниками только для чтения предоставляет доступ к `NodeHandle` на основе:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — сохраненный дайджест/метаданные манифеста Norito (base64) или метаданные в формате crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — детерминированный план фрагментов JSON (`chunk_fetch_specs`) последующих инструментов کے لیے کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — сохраненный дайджест/метаданные манифеста Norito (base64) или метаданные в формате crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — детерминированный план фрагментов JSON (`chunk_fetch_specs`) последующих инструментов کے لیے کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Конечные точки вывода CLI, зеркало, конвейеры, локальные скрипты, HTTP-зонды, анализатор и т. д. سکیں۔【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -142,9 +142,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 6. **Выселение/исполнение квот**:
    - Емкость узла по умолчанию, когда контакты отклоняются. Дополнительные политики вытеснения операторов (TTL, LRU) настройка модели управления или модели управления. Для разработки строгих квот и операций открепления, инициируемых оператором.
 
-### Декларация мощности и интеграция планирования- Torii вместе с `/v1/sorafs/capacity/declare` и `CapacityDeclarationRecord` обновляет встроенные `CapacityManager` для реле, обеспечивающего распределение узлов/полос. Режим просмотра в памяти Телеметрия диспетчера Снимки только для чтения (`GET /v1/sorafs/capacity/state`) предоставляют доступ к заказам и резервированию по каждому профилю. ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` Полезные нагрузки `/v1/sorafs/capacity/schedule`, выданные управлением конечной точки. `ReplicationOrderV1`. Заказ у местного провайдера, цель, дублирование планирования менеджера, проверка емкости чанка/линии, проверка резерва фрагмента, `ReplicationPlan` Доступ к оставшейся емкости и доступ к инструментам оркестрации. Поставщики, заказы, ответ `ignored`, подтверждение, подтверждение, рабочие процессы с несколькими операторами. ہوں۔【crates/iroha_torii/src/routing.rs:4845】
-- Крючки завершения (захват или проглатывание) `POST /v1/sorafs/capacity/complete` для удара по `CapacityManager::complete_order` для Выпуск резервирования ذریعے ہوں۔ Ответ Моментальный снимок `ReplicationRelease` (оставшиеся суммы, остатки блоков/дорожек) Конвейер хранилища чанков, провод, логика приема, земля. جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+### Декларация мощности и интеграция планирования- Torii вместе с `/v2/sorafs/capacity/declare` и `CapacityDeclarationRecord` обновляет встроенные `CapacityManager` для реле, обеспечивающего распределение узлов/полос. Режим просмотра в памяти Телеметрия диспетчера Снимки только для чтения (`GET /v2/sorafs/capacity/state`) предоставляют доступ к заказам и резервированию по каждому профилю. ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v2/sorafs/capacity/schedule` Полезные нагрузки `/v2/sorafs/capacity/schedule`, выданные управлением конечной точки. `ReplicationOrderV1`. Заказ у местного провайдера, цель, дублирование планирования менеджера, проверка емкости чанка/линии, проверка резерва фрагмента, `ReplicationPlan` Доступ к оставшейся емкости и доступ к инструментам оркестрации. Поставщики, заказы, ответ `ignored`, подтверждение, подтверждение, рабочие процессы с несколькими операторами. ہوں۔【crates/iroha_torii/src/routing.rs:4845】
+- Крючки завершения (захват или проглатывание) `POST /v2/sorafs/capacity/complete` для удара по `CapacityManager::complete_order` для Выпуск резервирования ذریعے ہوں۔ Ответ Моментальный снимок `ReplicationRelease` (оставшиеся суммы, остатки блоков/дорожек) Конвейер хранилища чанков, провод, логика приема, земля. جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - Встроенное `TelemetryAccumulator` или `NodeHandle::update_telemetry` позволяет выполнять мутацию или использовать фоновые рабочие образцы PoR/uptime записи. Получение канонических полезных нагрузок `CapacityTelemetryV1` для внутренних элементов планировщика چھیڑے۔【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### Интеграции и будущая работа

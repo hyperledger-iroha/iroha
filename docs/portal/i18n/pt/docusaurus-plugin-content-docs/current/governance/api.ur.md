@@ -19,11 +19,11 @@ translation_last_reviewed: 2026-02-07
 - Cobertura SDK:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` `GovernanceProposalResult` واپس کرتا ہے (campos de status/tipo کو normalizar کرتا ہے), `ToriiClient.get_governance_referendum_typed` `GovernanceReferendumResult` واپس کرتا ہے, `ToriiClient.get_governance_tally_typed` `GovernanceTally` واپس کرتا ہے, `ToriiClient.get_governance_locks_typed` `GovernanceLocksResult` واپس کرتا ہے، `ToriiClient.get_governance_unlock_stats_typed` `GovernanceUnlockStats` واپس کرتا ہے, اور `ToriiClient.list_governance_instances_typed` `GovernanceInstancesPage` واپس کرتا ہے, جس سے پورے superfície de governança پر acesso digitado ملتا ہے اور README میں exemplos de uso دیے گئے ہیں۔
 - Cliente leve Python (`iroha_torii_client`): `ToriiClient.finalize_referendum` e `ToriiClient.enact_proposal` digitado pacotes `GovernanceInstructionDraft` واپس کرتے ہیں (Torii کی Esqueleto `tx_instructions` کو wrap کرتے ہوئے), تاکہ scripts Finalizar/Aprovar fluxos بناتے وقت análise JSON manual سے بچ سکیں۔
-- JavaScript (`@iroha/iroha-js`): propostas `ToriiClient`, referendos, contagens, bloqueios, estatísticas de desbloqueio کے لئے ajudantes digitados دیتا ہے, اور اب `listGovernanceInstances(namespace, options)` کے ساتھ endpoints do conselho (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) Você pode usar clientes Node.js `/v1/gov/instances/{ns}` para paginar سکیں اور fluxos de trabalho apoiados por VRF کو موجودہ listagem de instâncias de contrato
+- JavaScript (`@iroha/iroha-js`): propostas `ToriiClient`, referendos, contagens, bloqueios, estatísticas de desbloqueio کے لئے ajudantes digitados دیتا ہے, اور اب `listGovernanceInstances(namespace, options)` کے ساتھ endpoints do conselho (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) Você pode usar clientes Node.js `/v2/gov/instances/{ns}` para paginar سکیں اور fluxos de trabalho apoiados por VRF کو موجودہ listagem de instâncias de contrato
 
 Pontos finais
 
--POSTO `/v1/gov/proposals/deploy-contract`
+-POSTO `/v2/gov/proposals/deploy-contract`
   - Solicitação (JSON):
     {
       "namespace": "aplicativos",
@@ -40,28 +40,28 @@ Pontos finais
   - Validação: nós فراہم کردہ `abi_version` کے لئے `abi_hash` کو canonizar کرتے ہیں اور incompatibilidade پر rejeitar کرتے ہیں۔ `abi_version = "v1"` کے لئے متوقع valor `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ہے۔
 
 API de contratos (implantação)
--POSTO `/v1/contracts/deploy`
+-POSTO `/v2/contracts/deploy`
   - Solicitação: { "autoridade": "i105...", "private_key": "...", "code_b64": "..." }
   - Behavior: IVM پروگرام باڈی سے `code_hash` اور header `abi_version` سے `abi_hash` نکالتا ہے، پھر `RegisterSmartContractCode` (manifesto) e `RegisterSmartContractBytes` (مکمل `.to` bytes) `authority` کی طرف سے سبمٹ کرتا ہے۔
   - Resposta: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Relacionado:
-    - GET `/v1/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
--POSTO `/v1/contracts/instance`
+    - GET `/v2/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
+    - GET `/v2/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
+-POSTO `/v2/contracts/instance`
   - Solicitação: { "autoridade": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportamento: فراہم کردہ bytecode deploy کرتا ہے اور `ActivateContractInstance` کے ذریعے Mapeamento `(namespace, contract_id)` فوراً فعال کرتا ہے۔
   - Resposta: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Serviço de alias
--POSTO `/v1/aliases/voprf/evaluate`
+-POSTO `/v2/aliases/voprf/evaluate`
   - Solicitação: { "blinded_element_hex": "..." }
   - Resposta: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - Implementação do avaliador `backend` کو ظاہر کرتا ہے۔ Valor do valor: `blake2b512-mock`۔
   - Notas: avaliador simulado determinístico جو Blake2b512 کو separação de domínio `iroha.alias.voprf.mock.v1` کے ساتھ aplicar کرتا ہے۔ یہ ferramentas de teste کے لئے ہے جب تک pipeline VOPRF de produção Iroha میں fio نہ ہو جائے۔
   - Erros: entrada hexadecimal malformada پر HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` envelope اور mensagem de erro do decodificador واپس کرتا ہے۔
--POSTO `/v1/aliases/resolve`
+-POSTO `/v2/aliases/resolve`
   - Solicitação: { "alias": "GB82 WEST 1234 5698 7654 32" }
   - Resposta: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notas: teste de tempo de execução da ponte ISO درکار ہے (`[iso_bridge.account_aliases]` em `iroha_config`)۔ Torii espaço em branco ہٹا کر اور maiúsculo بنا کر pesquisa کرتا ہے۔ alias نہ ہو تو 404 Tempo de execução da ponte ISO بند ہو تو 503 دیتا ہے۔
--POSTO `/v1/aliases/resolve_index`
+-POSTO `/v2/aliases/resolve_index`
   - Solicitação: { "índice": 0 }
   - Resposta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notas: ordem de configuração dos índices de alias کے مطابق determinístico طریقے سے atribuir ہوتے ہیں (baseado em 0)۔ کلائنٹس cache offline کر کے eventos de atestado de alias کے trilhas de auditoria بنا سکتے ہیں۔
@@ -72,7 +72,7 @@ Limite de tamanho do código
   - Padrão: 16 MiB۔ جب imagem `.to` حد سے بڑی ہو تو nós `RegisterSmartContractBytes` کو erro de violação invariante کے ساتھ rejeitar کرتے ہیں۔
   - Operadores `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور carga útil numérica دے کر ایڈجسٹ کر سکتے ہیں۔
 
--POSTO `/v1/gov/ballots/zk`
+-POSTO `/v2/gov/ballots/zk`
   - Solicitação: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas:
@@ -80,36 +80,36 @@ Limite de tamanho do código
     - ZK re-votos جو valor یا expiração کم کرنے کی کوشش کریں diagnóstico `BallotRejected` do lado do servidor کے ساتھ rejeitar ہوتے ہیں۔
     - Execução de contrato کو `SubmitBallot` enfileiramento کرنے سے پہلے `ZK_VOTE_VERIFY_BALLOT` کال کرنا لازم ہے؛ hospeda a trava one-shot impor کرتے ہیں۔
 
--POSTO `/v1/gov/ballots/plain`
+-POSTO `/v2/gov/ballots/plain`
   - Solicitação: { "autoridade": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Sim|Não|Abstenção" }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
   - Notas: revotações estendidas apenas ہیں - نیا cédula موجودہ bloqueio کا valor یا expiração کم نہیں کر سکتا۔ `owner` کو autoridade de transação کے برابر ہونا چاہئے۔ کم از کم مدت `conviction_step_blocks` ہے۔
 
--POSTO `/v1/gov/finalize`
+-POSTO `/v2/gov/finalize`
   - Solicitação: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efeito na cadeia (andaime atual): منظور شدہ proposta de implantação کو promulgar کرنے سے `code_hash` com chave mínima `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposta promulgada ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` e manifesto پہلے سے ہو تو rejeição de promulgação ہوتا ہے۔
   - Notas:
     - Eleições ZK کے لئے caminhos de contrato کو `FinalizeElection` سے پہلے `ZK_VOTE_VERIFY_TALLY` کال کرنا لازمی ہے؛ hospeda a trava one-shot impor کرتے ہیں۔ `FinalizeReferendum` Referendos ZK کو اس وقت تک rejeitar کرتا ہے جب تک contagem eleitoral finalizada نہ ہو جائے۔
     - Fechamento automático `h_end` پر صرف Referendos simples کے لئے Emissão aprovada/rejeitada کرتا ہے؛ Referendos ZK Fechados رہتے ہیں جب تک envio de contagem finalizado نہ ہو اور `FinalizeReferendum` executar نہ ہو۔
-    - Verificações de participação صرف aprovar + rejeitar استعمال کرتی ہیں؛ abster-se de comparecer میں شمار نہیں ہوتا۔-POSTO `/v1/gov/enact`
+    - Verificações de participação صرف aprovar + rejeitar استعمال کرتی ہیں؛ abster-se de comparecer میں شمار نہیں ہوتا۔-POSTO `/v2/gov/enact`
   - Solicitação: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Resposta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas: جب `authority`/`private_key` فراہم ہوں تو Torii transação assinada سبمٹ کرتا ہے؛ Um esqueleto e um esqueleto são um esqueleto que pode ser construído pré-imagem
 
-- OBTER `/v1/gov/proposals/{id}`
+- OBTER `/v2/gov/proposals/{id}`
   - Caminho `{id}`: ID da proposta hexadecimal (64 caracteres)
   - Resposta: { "encontrado": bool, "proposta": { ... }? }
 
-- OBTER `/v1/gov/locks/{rid}`
+- OBTER `/v2/gov/locks/{rid}`
   - Caminho `{rid}`: string de identificação do referendo
   - Resposta: { "encontrado": bool, "referendum_id": "rid", "locks": { ... }? }
 
-- OBTER `/v1/gov/council/current`
+- OBTER `/v2/gov/council/current`
   - Resposta: { "época": N, "membros": [{ "account_id": "..." }, ...] }
   - Notas: Conselho موجودہ موجود ہو تو واپس کرتا ہے، ورنہ ativo de aposta configurado اور limites استعمال کر کے derivação determinística de fallback کرتا ہے (especificações VRF کو اس وقت تک refletir کرتا ہے جب تک provas VRF ao vivo na cadeia persistem نہ ہوں)۔
 
-- POST `/v1/gov/council/derive-vrf` (recurso: gov_vrf)
+- POST `/v2/gov/council/derive-vrf` (recurso: gov_vrf)
   - Solicitação: { "committee_size": 21, "época": 123? , "candidatos": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - Comportamento: ہر امیدوار کا Prova VRF `chain_id`, `epoch` اور تازہ ترین bloco hash beacon سے مشتق entrada canônica کے خلاف verificar کرتا ہے؛ bytes de saída کو desc ترتیب میں desempates کے ساتھ sort کرتا ہے؛ principais membros `committee_size` واپس کرتا ہے۔ Persistir
   - Resposta: { "época": N, "membros": [{ "account_id": "..." } ...], "total_candidates": M, "verificado": K }
@@ -182,7 +182,7 @@ Namespaces protegidos
 - Hook کی تسکین کرنے والی ٹرانزیکشنز کو metadados `gov_upgrade_id=<value>` (یا chave definida pelo manifesto) شامل کرنا ہوگا, ساتھ ہی quorum de manifesto کے مطابق validadores کی aprovações بھی درکار ہیں۔
 
 Ponto final de conveniência
-- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` کو براہ راست node پر apply کرتا ہے۔
+- POST `/v2/gov/protected-namespaces` - `gov_protected_namespaces` کو براہ راست node پر apply کرتا ہے۔
   - Solicitação: { "namespaces": ["apps", "system"] }
   - Resposta: { "ok": verdadeiro, "aplicado": 1 }
   - Notas: admin/testes کے لئے ہے؛ Configurar e configurar token de API produção کے لئے `SetParameter(Custom)` کے ساتھ transação assinada ترجیح دیں۔
@@ -191,7 +191,7 @@ Ajudantes CLI
 -`iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - namespace کے instâncias de contrato busca کرتا ہے اور verificação cruzada کرتا ہے کہ:
     - Torii ہر `code_hash` کے لئے bytecode ذخیرہ کرتا ہے، اور اس کا Blake2b-32 digest `code_hash` سے match کرتا ہے۔
-    - `/v1/contracts/code/{code_hash}` میں موجود manifesto correspondente `code_hash` e `abi_hash` valores رپورٹ کرتا ہے۔
+    - `/v2/contracts/code/{code_hash}` میں موجود manifesto correspondente `code_hash` e `abi_hash` valores رپورٹ کرتا ہے۔
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے proposta de governança promulgada موجود ہے جو اسی hashing de id de proposta سے deriva ہوتا ہے جو nó استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (problemas, manifesto/código/resumos de propostas) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ ہو)۔
   - Namespaces protegidos کے auditoria یا fluxos de trabalho de implantação controlados por governança کی تصدیق کے لئے مفید۔
@@ -208,7 +208,7 @@ Ajudantes CLI
   - Saída de resumo `vote --mode zk` کی طرح impressão digital de instrução codificada e campos de votação legíveis (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے assinatura سے پہلے فوری تصدیق ہو جاتی ہے۔
 
 Listagem de Instâncias
-- GET `/v1/gov/instances/{ns}` - namespace کے لئے instâncias de contrato ativas کی فہرست۔
+- GET `/v2/gov/instances/{ns}` - namespace کے لئے instâncias de contrato ativas کی فہرست۔
   - Parâmetros de consulta:
     - `contains`: `contract_id` کی substring کے مطابق filtro (diferencia maiúsculas de minúsculas)
     - `hash_prefix`: `code_hash_hex` کے prefixo hexadecimal کے مطابق filtro (minúsculas)
@@ -216,10 +216,10 @@ Listagem de Instâncias
     - `order`: `cid_asc` (padrão), `cid_desc`, `hash_asc`, `hash_desc`
   - Resposta: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
   - Auxiliar SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) ou `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)۔Desbloquear varredura (operador/auditoria)
-- OBTER `/v1/gov/unlocks/stats`
+- OBTER `/v2/gov/unlocks/stats`
   - Resposta: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - Notas: `last_sweep_height` سب سے حالیہ altura do bloco دکھاتا ہے جہاں varredura de bloqueios expirados اور persist کئے گئے۔ `expired_locks_now` ان lock records کو scan کر کے نکلتا ہے جن میں `expiry_height <= height_current` ہو۔
--POSTO `/v1/gov/ballots/zk-v1`
+-POSTO `/v2/gov/ballots/zk-v1`
   - Solicitação (DTO estilo v1):
     {
       "autoridade": "i105...",
@@ -234,7 +234,7 @@ Listagem de Instâncias
     }
   - Resposta: { "ok": verdadeiro, "aceito": verdadeiro, "tx_instructions": [{...}] }
 
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (recurso: `zk-ballot`)
+- POST `/v2/gov/ballots/zk-v1/ballot-proof` (recurso: `zk-ballot`)
   - `BallotProof` JSON براہ راست قبول کر کے Esqueleto `CastZkBallot` واپس کرتا ہے۔
   - Solicitação:
     {
@@ -302,7 +302,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 Operadores e cargas úteis de ferramentas inspecionam e retransmitem o seguinte:
 
-- Torii: `GET /v1/sumeragi/evidence` ou `GET /v1/sumeragi/evidence/count`.
+- Torii: `GET /v2/sumeragi/evidence` ou `GET /v2/sumeragi/evidence/count`.
 - CLI: `iroha ops sumeragi evidence list`, `... count`, ou `... submit --evidence-hex <payload>`.
 
 Governança کو bytes de evidência کو prova canônica کے طور پر tratar کرنا چاہئے:
@@ -310,7 +310,7 @@ Governança کو bytes de evidência کو prova canônica کے طور پر trata
 1. **Carga útil جمع کریں** اس کے expirar ہونے سے پہلے۔ bytes brutos Norito کو metadados de altura/visualização کے ساتھ arquivo کریں۔
 2. **Estágio de penalidade کریں** carga útil کو referendo یا instrução sudo میں incorporar کر کے (مثلا `Unregister::peer`)۔ Carga útil de execução کو دوبارہ validar کرتا ہے؛ malformado یا evidência obsoleta rejeitada deterministicamente ہوتی ہے۔
 3. **Cronograma de topologia de acompanhamento کریں** تاکہ validador ofensivo فوراً واپس نہ آ سکے۔ Os fluxos são `SetParameter(Sumeragi::NextMode)` e `SetParameter(Sumeragi::ModeActivationHeight)` lista atualizada کے ساتھ fila کئے جاتے ہیں۔
-4. **نتائج auditoria کریں** `/v1/sumeragi/evidence` e `/v1/sumeragi/status` کے ذریعے تاکہ contador de evidências بڑھے اور governança نے remoção نافذ کیا ہو۔
+4. **نتائج auditoria کریں** `/v2/sumeragi/evidence` e `/v2/sumeragi/status` کے ذریعے تاکہ contador de evidências بڑھے اور governança نے remoção نافذ کیا ہو۔
 
 ### Sequenciamento de consenso conjunto
 
@@ -325,11 +325,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Tempo de execução اور Parâmetros de estágio CLI کو `/v1/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے ظاہر کرتے ہیں, تاکہ alturas de ativação de operadores اور listas de validadores کی تصدیق کر سکیں۔
+- Tempo de execução اور Parâmetros de estágio CLI کو `/v2/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے ظاہر کرتے ہیں, تاکہ alturas de ativação de operadores اور listas de validadores کی تصدیق کر سکیں۔
 - Automação de governança کو ہمیشہ:
   1. evidência پر مبنی remoção (یا reintegração) فیصلہ finalizar کرنا چاہیے۔
   2. `mode_activation_height = h_current + activation_lag_blocks` کے ساتھ fila de reconfiguração de acompanhamento کرنا چاہیے۔
-  3. `/v1/sumeragi/status` کی نگرانی کرنی چاہیے جب تک `effective_consensus_mode` متوقع interruptor de altura پر نہ ہو جائے۔
+  3. `/v2/sumeragi/status` کی نگرانی کرنی چاہیے جب تک `effective_consensus_mode` متوقع interruptor de altura پر نہ ہو جائے۔
 
 جو بھی validadores de script giram کرے یا slashing apply کرے اسے **ativação com atraso zero** یا parâmetros de transferência کو omitem نہیں کرنا چاہیے؛ ایسی transações rejeitadas ہو جاتی ہیں اور نیٹ ورک پچھلے modo میں رہتا ہے۔
 

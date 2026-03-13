@@ -1,13 +1,13 @@
 ---
-title: Swift `/v1/pipeline` Adoption Guide
+title: Swift `/v2/pipeline` Adoption Guide
 summary: Checklist and runbook for enabling the Torii pipeline endpoints inside Swift clients as required by IOS2-WB2.
 ---
 
 # 1. Scope & Status
 
-- **Prerequisites:** `IrohaSwift` 0.9+ (supports `PipelineEndpointMode`, offline queues, and telemetry hooks); Torii nodes exposing `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and `/v1/pipeline/recovery/{height}`; Norito encoders wired through `SwiftTransactionEncoder`.
+- **Prerequisites:** `IrohaSwift` 0.9+ (supports `PipelineEndpointMode`, offline queues, and telemetry hooks); Torii nodes exposing `/v2/pipeline/transactions`, `/v2/pipeline/transactions/status`, and `/v2/pipeline/recovery/{height}`; Norito encoders wired through `SwiftTransactionEncoder`.
 - **References:** `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `docs/source/sdk/swift/index.md` (landing page).
-- **Server validation:** Torii owners record `/v1/pipeline` staging evidence with the runbook in [`docs/source/torii/pipeline_staging_validation.md`](../../torii/pipeline_staging_validation.md) so SDK proofs reference the same artefacts.
+- **Server validation:** Torii owners record `/v2/pipeline` staging evidence with the runbook in [`docs/source/torii/pipeline_staging_validation.md`](../../torii/pipeline_staging_validation.md) so SDK proofs reference the same artefacts.
 
 # 2. Endpoint Selection & Rollback Guardrails
 
@@ -15,7 +15,7 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 
 | Mode | Submit path | Status path | When to use |
 |------|-------------|-------------|-------------|
-| `.pipeline` (default) | `/v1/pipeline/transactions` | `/v1/pipeline/transactions/status` | All production/staging Torii clusters. Required for IOS2 readiness. |
+| `.pipeline` (default) | `/v2/pipeline/transactions` | `/v2/pipeline/transactions/status` | All production/staging Torii clusters. Required for IOS2 readiness. |
 
 
 ✅ Acceptance criteria: every shipping build must leave the mode at `.pipeline`, log any temporary downgrades, and restore the default immediately after Torii recovers.
@@ -66,10 +66,10 @@ let status = try await sdk.submitAndWait(
 )
 ```
 
-- When a transaction never reaches a terminal state within the configured attempts, the SDK throws `PipelineStatusError.timeout(hash:attempts:)` so callers can surface the stalled hash and capture `/v1/pipeline/recovery` evidence.
+- When a transaction never reaches a terminal state within the configured attempts, the SDK throws `PipelineStatusError.timeout(hash:attempts:)` so callers can surface the stalled hash and capture `/v2/pipeline/recovery` evidence.
 - Failures (e.g., `Rejected`) yield `PipelineStatusError.failure` with the final `ToriiPipelineTransactionStatus` payload for logging and telemetry.
 - Use `ToriiClient.getTransactionStatus(hashHex:mode:)` when monitoring a hash submitted by other SDKs or CLI automation.
-- A `404` from `/v1/pipeline/transactions/status` indicates Torii has no cached status yet (for example after a restart), so the Swift SDK treats it as "pending" and continues polling.
+- A `404` from `/v2/pipeline/transactions/status` indicates Torii has no cached status yet (for example after a restart), so the Swift SDK treats it as "pending" and continues polling.
 
 # 5. Offline Queueing & Recovery Evidence
 
@@ -84,7 +84,7 @@ sdk.pendingTransactionQueue = try FilePendingTransactionQueue(fileURL: queueURL)
 ```
 
 - Envelopes replayed from the queue reuse the same `PipelineSubmitOptions`, idempotency key, and polling classification, guaranteeing that retries match the live submission semantics.
-- Before paging Torii, capture the context from `/v1/pipeline/recovery/{height}` via `ToriiClient.getPipelineRecovery(height:)` and export the JSON artifact with the incident report. IOS2 requires these snapshots so governance can prove that Swift clients observe the new recovery diagnostics.
+- Before paging Torii, capture the context from `/v2/pipeline/recovery/{height}` via `ToriiClient.getPipelineRecovery(height:)` and export the JSON artifact with the incident report. IOS2 requires these snapshots so governance can prove that Swift clients observe the new recovery diagnostics.
 - Pair the recovery evidence with `ToriiClient.getTimeStatus()`/`getSumeragiStatus()` samples to show that queue drains align with the cluster state.
 
 # 6. Observability & Reporting
@@ -94,6 +94,6 @@ To satisfy IOS2 reporting gates:
 1. Log `pipelineEndpointMode`, `pipelineSubmitOptions`, and `pipelinePollOptions` at startup. Include the configuration in weekly digests and attach them to the `swift_parity_*` telemetry bundle exported by `scripts/swift_status_export.py`.
 2. When downgrades occur, annotate the Buildkite `ci/xcode-swift-parity` run and update `status.md` with the affected build numbers and hashes.
 3. Track `swift.torii.http.retry`/`swift.pipeline.queue.persisted`/`swift.pipeline.queue.replayed` events (see `docs/source/sdk/swift/telemetry_redaction.md`) to prove retry parity across shadow traffic.
-4. Store `submitAndWait` traces together with the Torii `/v1/pipeline/transactions/status` responses—auditors must be able to associate every operator-facing alert with the hash, final status, and recovery evidence mentioned above.
+4. Store `submitAndWait` traces together with the Torii `/v2/pipeline/transactions/status` responses—auditors must be able to associate every operator-facing alert with the hash, final status, and recovery evidence mentioned above.
 
 Once the above artefacts are captured, update the roadmap entry for IOS2-WB2 and the Swift section of `status.md` so reviewers can trace the adoption across docs, code, and telemetry.

@@ -250,7 +250,7 @@ whitelist de providers maliciosos, ou suprime alertas.
 - O replay cache e a persistencia de cursores aterrissaram em DA-2. Veja a
   implementacao em `crates/iroha_core/src/da/replay_cache.rs` (logica do cache)
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia checks de
-  fingerprint via `/v1/da/ingest`.
+  fingerprint via `/v2/da/ingest`.
 - As simulacoes de streaming PDP/PoTR sao exercitadas via o harness proof-stream
   em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR e cenarios de falha animados no modelo de ameacas.

@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 |ああ |ああ |意味 |
 |------|-----------|----------|
-|レジストリ إعلانات السعة القياسية | `/v1/sorafs/capacity/declare` アプリ API とメタデータレジストリを確認してください。 | `crates/iroha_torii/src/routing.rs:7654` |
+|レジストリ إعلانات السعة القياسية | `/v2/sorafs/capacity/declare` アプリ API とメタデータレジストリを確認してください。 | `crates/iroha_torii/src/routing.rs:7654` |
 |スマート コントラクト ペイロード ペイロード | スマート コントラクト ペイロードضمن اختبار وحدات أن معرفات المزود وحقول GiB الملتزم بها تطابق الإعلان الموقع قبل الحفظ。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI アーティファクト セキュリティ | CLI ハーネス Norito/JSON/Base64 の往復数の計算オフラインです。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |ログイン して翻訳を追加するポリシーのデフォルト設定を確認してください。 | `../storage-capacity-marketplace.md` |

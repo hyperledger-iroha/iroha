@@ -1019,11 +1019,133 @@ pub mod query {
             .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
 
+    enum AssetSimplePath {
+        Definitions(Vec<AssetDefinitionId>),
+        Domains(Vec<DomainId>),
+        Ids(Vec<AssetId>),
+    }
+
+    fn parse_asset_simple_values(field: &str, values: &[Value]) -> Option<AssetSimplePath> {
+        match field {
+            "account" | "account_id" | "owner" | "id.account" => None,
+            "definition"
+            | "asset_definition"
+            | "asset_definition_id"
+            | "definition_id"
+            | "id.definition" => {
+                let definitions = values
+                    .iter()
+                    .filter_map(|value| {
+                        let Value::String(raw) = value else {
+                            return None;
+                        };
+                        raw.parse::<AssetDefinitionId>().ok()
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some(AssetSimplePath::Definitions(definitions))
+            }
+            "domain" | "definition.domain" | "id.definition.domain" => {
+                let domains = values
+                    .iter()
+                    .filter_map(|value| {
+                        let Value::String(raw) = value else {
+                            return None;
+                        };
+                        raw.parse::<DomainId>().ok()
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some(AssetSimplePath::Domains(domains))
+            }
+            "id" => {
+                let ids = values
+                    .iter()
+                    .filter_map(|value| {
+                        let Value::String(raw) = value else {
+                            return None;
+                        };
+                        raw.parse::<AssetId>().ok()
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some(AssetSimplePath::Ids(ids))
+            }
+            _ => None,
+        }
+    }
+
+    fn asset_predicate_simple_path(predicate: &PredicateJson) -> Option<AssetSimplePath> {
+        if !predicate.exists.is_empty() {
+            return None;
+        }
+
+        if predicate.r#in.is_empty() && predicate.equals.len() == 1 {
+            let cond = &predicate.equals[0];
+            return parse_asset_simple_values(&cond.field, std::slice::from_ref(&cond.value));
+        }
+
+        if predicate.equals.is_empty() && predicate.r#in.len() == 1 {
+            let cond = &predicate.r#in[0];
+            return parse_asset_simple_values(&cond.field, &cond.values);
+        }
+
+        None
+    }
+
     fn asset_json_value<'a>(cache: &'a mut Option<Value>, asset: &Asset) -> Option<&'a Value> {
         if cache.is_none() {
             *cache = norito::json::to_value(asset).ok();
         }
         cache.as_ref()
+    }
+
+    fn selected_asset_count_for_definitions(
+        world: &impl WorldReadOnly,
+        definitions: &BTreeSet<AssetDefinitionId>,
+    ) -> usize {
+        definitions
+            .iter()
+            .map(|definition| {
+                world
+                    .asset_definition_assets()
+                    .get(definition)
+                    .map_or(0, BTreeSet::len)
+            })
+            .sum()
+    }
+
+    fn selected_asset_count_for_domains(
+        world: &impl WorldReadOnly,
+        domains: &BTreeSet<DomainId>,
+    ) -> usize {
+        domains
+            .iter()
+            .flat_map(|domain| {
+                world
+                    .domain_asset_definitions()
+                    .get(domain)
+                    .into_iter()
+                    .flat_map(BTreeSet::iter)
+            })
+            .map(|definition| {
+                world
+                    .asset_definition_assets()
+                    .get(definition)
+                    .map_or(0, BTreeSet::len)
+            })
+            .sum()
+    }
+
+    fn should_scan_assets_directly(
+        world: &impl WorldReadOnly,
+        selected_asset_count: usize,
+    ) -> bool {
+        let total_assets = world.assets().len();
+        total_assets != 0 && selected_asset_count.saturating_mul(8) >= total_assets
     }
 
     fn predicate_matches_asset(predicate: &PredicateJson, asset: &Asset) -> bool {
@@ -1105,19 +1227,100 @@ pub mod query {
             filter: CompoundPredicate<Asset>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Asset>, Error> {
-            let predicate_view = AssetPredicateView::from_predicate(&filter);
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str(raw).ok())
-                .and_then(AssetPredicateView::parse_predicate_value);
-            let plan = predicate_view.plan();
-            let world = state_ro.world();
-
             fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
                 Asset {
                     id: entry.id().clone(),
                     value: entry.value().clone().into_inner(),
                 }
+            }
+
+            let world = state_ro.world();
+            let filter_payload = filter.json_payload();
+            if filter_payload.is_none() {
+                let iter: Box<dyn Iterator<Item = Asset> + '_> =
+                    Box::new(world.assets_iter().map(entry_to_asset));
+                return Ok(iter);
+            }
+
+            let predicate_view = AssetPredicateView::from_predicate(&filter);
+            let predicate_json = filter_payload
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(AssetPredicateView::parse_predicate_value);
+            let plan = predicate_view.plan();
+            let simple_path = predicate_json
+                .as_ref()
+                .and_then(asset_predicate_simple_path);
+
+            if let Some(path) = simple_path {
+                let iter: Box<dyn Iterator<Item = Asset> + '_> = match path {
+                    AssetSimplePath::Definitions(definitions) => {
+                        let definitions = definitions.into_iter().collect::<BTreeSet<_>>();
+                        if should_scan_assets_directly(
+                            world,
+                            selected_asset_count_for_definitions(world, &definitions),
+                        ) {
+                            Box::new(
+                                world
+                                    .assets_iter()
+                                    .filter(move |entry| {
+                                        definitions.contains(entry.id().definition())
+                                    })
+                                    .map(entry_to_asset),
+                            )
+                        } else {
+                            Box::new(definitions.into_iter().flat_map(move |definition| {
+                                world
+                                    .assets_by_definition_iter(&definition)
+                                    .collect::<Vec<_>>()
+                            }))
+                        }
+                    }
+                    AssetSimplePath::Domains(domains) => {
+                        let domains = domains.into_iter().collect::<BTreeSet<_>>();
+                        if should_scan_assets_directly(
+                            world,
+                            selected_asset_count_for_domains(world, &domains),
+                        ) {
+                            Box::new(
+                                world
+                                    .assets_iter()
+                                    .filter(move |entry| {
+                                        domains.contains(entry.id().definition().domain())
+                                    })
+                                    .map(entry_to_asset),
+                            )
+                        } else {
+                            let mut definitions = BTreeSet::<AssetDefinitionId>::new();
+                            for domain in &domains {
+                                definitions.extend(
+                                    world
+                                        .domain_asset_definitions()
+                                        .get(domain)
+                                        .into_iter()
+                                        .flat_map(BTreeSet::iter)
+                                        .cloned(),
+                                );
+                            }
+                            Box::new(definitions.into_iter().flat_map(move |definition| {
+                                world
+                                    .assets_by_definition_iter(&definition)
+                                    .collect::<Vec<_>>()
+                            }))
+                        }
+                    }
+                    AssetSimplePath::Ids(asset_ids) => {
+                        Box::new(asset_ids.into_iter().filter_map(move |asset_id| {
+                            world
+                                .assets()
+                                .get_key_value(&asset_id)
+                                .map(|(asset_id, value)| Asset {
+                                    id: asset_id.clone(),
+                                    value: value.clone().into_inner(),
+                                })
+                        }))
+                    }
+                };
+                return Ok(iter);
             }
 
             let iter: Box<dyn Iterator<Item = Asset> + '_> = match plan {
@@ -1186,34 +1389,37 @@ pub mod query {
                             .collect(),
                         None => {
                             let mut definitions = BTreeSet::<AssetDefinitionId>::new();
-                            for domain in domains {
+                            for domain in &domains {
                                 definitions.extend(
                                     world
-                                        .asset_definitions_in_domain_iter(&domain)
-                                        .map(|ad| ad.id().clone()),
+                                        .domain_asset_definitions()
+                                        .get(domain)
+                                        .into_iter()
+                                        .flat_map(BTreeSet::iter)
+                                        .cloned(),
                                 );
                             }
                             definitions
                         }
                     };
-                    let mut assets = Vec::new();
-                    for definition in definitions {
-                        assets.extend(world.assets_by_definition_iter(&definition));
-                    }
-                    Box::new(assets.into_iter())
+                    Box::new(definitions.into_iter().flat_map(move |definition| {
+                        world
+                            .assets_by_definition_iter(&definition)
+                            .collect::<Vec<_>>()
+                    }))
                 }
                 AssetQueryPlan::Definitions(definitions) => {
                     let definitions: BTreeSet<_> = definitions.into_iter().collect();
-                    let mut assets = Vec::new();
-                    for definition in definitions {
-                        assets.extend(world.assets_by_definition_iter(&definition));
-                    }
-                    Box::new(assets.into_iter())
+                    Box::new(definitions.into_iter().flat_map(move |definition| {
+                        world
+                            .assets_by_definition_iter(&definition)
+                            .collect::<Vec<_>>()
+                    }))
                 }
                 AssetQueryPlan::Full => Box::new(world.assets_iter().map(entry_to_asset)),
             };
 
-            Ok(iter.filter(move |asset| {
+            let iter: Box<dyn Iterator<Item = Asset> + '_> = Box::new(iter.filter(move |asset| {
                 if !predicate_view.matches(asset) {
                     return false;
                 }
@@ -1221,7 +1427,8 @@ pub mod query {
                     return predicate_matches_asset(predicate, asset);
                 }
                 filter.applies(asset)
-            }))
+            }));
+            Ok(iter)
         }
     }
 

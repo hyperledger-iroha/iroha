@@ -27,7 +27,7 @@ layered on top via the keystore abstraction when running on devices.
   `MultisigSignatures` bundles (made up of `MultisigSignature` entries) when
   the authority uses a multisig controller; set them via
   `SignedTransaction.Builder#setMultisigSignatures(...)` before submission.
-- **Torii clients:** `HttpClientTransport` implements `/v1/pipeline/*`
+- **Torii clients:** `HttpClientTransport` implements `/v2/pipeline/*`
   submission/polling with deterministic retries and pending-queue persistence,
   while `NoritoRpcClient` surfaces `application/x-norito` RPC calls using the
   same configuration (headers, observers, HTTP client). UAID helpers
@@ -87,7 +87,7 @@ transport.submitTransaction(tx).join();
   are rejected by the encoder. Trigger registration instructions also require
   wire-framed nested instructions (`wire_name` + `payload_base64` only).
 - `HttpClientTransport.submitTransaction` returns a `CompletableFuture`; use
-  `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
+  `waitForTransactionStatus` to poll `/v2/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions
   replay deterministically. Torii returns a Norito-encoded submission receipt in
   the response body; `ClientResponse.body()` exposes the raw bytes and
@@ -103,13 +103,13 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 
 - `HttpClientTransport.getUaidPortfolio(String uaid)` returns a
   `CompletableFuture<UaidPortfolioResponse>` with per-dataspace totals and
-  account labels pulled from `/v1/accounts/{uaid}/portfolio`. Use the overload
+  account labels pulled from `/v2/accounts/{uaid}/portfolio`. Use the overload
   that accepts a `UaidPortfolioQuery` when you need to filter by `asset_id`.
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
-  `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
+  `/v2/space-directory/uaids/{uaid}` when only the account bindings are needed.
   Supply a `UaidBindingsQuery` for forward-compatible query options (the endpoint currently returns canonical I105 literals only).
 - `HttpClientTransport.getUaidManifests(String uaid, UaidManifestQuery query)`
-  fetches `/v1/space-directory/uaids/{uaid}/manifests`; the query builder lets
+  fetches `/v2/space-directory/uaids/{uaid}/manifests`; the query builder lets
   you filter by dataspace, status (`active`, `inactive`, `all`), and paging offsets.
 - `UaidLiteral.canonicalize(literal, context)` normalises user input with the
   `uaid:` prefix and 64‑hex (LSB=1) enforcement so controllers can be pasted in any

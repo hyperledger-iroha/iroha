@@ -77,8 +77,8 @@ SNNet-8 の仕様に関する規定の特派員と料金の有効性:
 
 Torii は、中継器や収集装置などの監視対象の HTTP プロトコルの詳細なエンドポイントを公開し、輸送時の監視を行わずに監視します。
 
-- `POST /v1/soranet/privacy/event` ペイロード `RecordSoranetPrivacyEventDto` を受け入れます。 Le corps エンベロープ un `SoranetPrivacyEventV1` と un label `source` オプション。 Torii 有効なプロファイル プロファイルの要求、有効なアクセスの登録、HTTP `202 Accepted` エンベロープの付属 Norito JSON コンテンツ ラ フェネットリレーのモードの計算 (`bucket_start_unix`、`bucket_duration_secs`)。
-- `POST /v1/soranet/privacy/share` はペイロード `RecordSoranetPrivacyShareDto` を受け入れます。 Le corps Transporte un `SoranetPrivacyPrioShareV1` et un indice `forwarded_by` optionnel afin que les opérateurs puissent Auditer les flux de Collecteurs. Les soumissions réussies renvoient HTTP `202 Accepted` avec une enveloppe Norito JSON Resumant le Collecteur、la fenêtre de Bucket et l'indication de抑制。 `Conversion` は、収集者に対する証拠の検証を担当します。 La boucle d'événements de l'orchestrator émet désormais ces は、lorsqu'elle interroge les リレー、gardant l'accumulateur Prio de Torii synchronisé avec lesbucks côté リレーを共有します。
+- `POST /v2/soranet/privacy/event` ペイロード `RecordSoranetPrivacyEventDto` を受け入れます。 Le corps エンベロープ un `SoranetPrivacyEventV1` と un label `source` オプション。 Torii 有効なプロファイル プロファイルの要求、有効なアクセスの登録、HTTP `202 Accepted` エンベロープの付属 Norito JSON コンテンツ ラ フェネットリレーのモードの計算 (`bucket_start_unix`、`bucket_duration_secs`)。
+- `POST /v2/soranet/privacy/share` はペイロード `RecordSoranetPrivacyShareDto` を受け入れます。 Le corps Transporte un `SoranetPrivacyPrioShareV1` et un indice `forwarded_by` optionnel afin que les opérateurs puissent Auditer les flux de Collecteurs. Les soumissions réussies renvoient HTTP `202 Accepted` avec une enveloppe Norito JSON Resumant le Collecteur、la fenêtre de Bucket et l'indication de抑制。 `Conversion` は、収集者に対する証拠の検証を担当します。 La boucle d'événements de l'orchestrator émet désormais ces は、lorsqu'elle interroge les リレー、gardant l'accumulateur Prio de Torii synchronisé avec lesbucks côté リレーを共有します。
 
 プロファイル デ テレメトリに関するエンドポイントの詳細: `503 Service Unavailable` のメトリックに関するテスト。顧客の特​​使 Norito binaires (`application/x.norito`) または Norito JSON (`application/x.norito+json`) ; les extracteurs Torii 標準によるサーバー自動自動ファイル形式。
 
@@ -159,7 +159,7 @@ cargo xtask soranet-privacy-report \
 
 抑制のための予算を尊重するために、最高権力者による実行の自動化が必要です。 L'outil accepte désormais `--max-suppression-ratio <0-1>` afin que la CI ou les opérateurs puissent échouer Rapidement lorsque lesbucks supprimés dépassent la fenêtre autorisée (10 % par défaut) ou lorsqu'aucun Bucket n'est encore présent。推奨フラックス:
 
-1. NDJSON のエンドポイント管理者であるエクスポータ、リレーとル フラックス `/v1/soranet/privacy/event|share` およびオーケストレータ バージョン `artifacts/sorafs_privacy/<relay>.ndjson`。
+1. NDJSON のエンドポイント管理者であるエクスポータ、リレーとル フラックス `/v2/soranet/privacy/event|share` およびオーケストレータ バージョン `artifacts/sorafs_privacy/<relay>.ndjson`。
 2. 政治予算の執行者:
 
    ```bash

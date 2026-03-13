@@ -47,7 +47,7 @@ Las pruebas Completen en menos de un segundo en un portátil estándar y no requ
 Torii теперь отображает снимки кредитов поставщиков вместе с регистрами комиссий для информационных панелей
 Пуэдан ворота собре сальдос бахос и пенальти:
 
-- ОСТАЛЬНОЕ: `GET /v1/sorafs/capacity/state` развить входы `credit_ledger[*]` que
+- ОСТАЛЬНОЕ: `GET /v2/sorafs/capacity/state` развить входы `credit_ledger[*]` que
   Отобразить проверенные кампос-дель-леджер в проверке замачивания. Вер
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` графический

@@ -123,14 +123,14 @@ y `forced_flush_window_elapsed` テレメトリアの診断機能。ラ・ラゾ
 Torii ahora expone dos エンドポイント HTTP コン テレメトリア ゲートダ パラ ケ リレー y
 コレクターは、ビスポークの輸送機関を観察します:
 
-- `POST /v1/soranet/privacy/event` ペイロードの受け入れ
+- `POST /v2/soranet/privacy/event` ペイロードの受け入れ
   `RecordSoranetPrivacyEventDto`。 El ボディ envuelve un `SoranetPrivacyEventV1`
   マス ウナ エチケット オプション `source`。 Torii 対案の有効性
   テレメトリ アクティビティの実行、HTTP に応答するレジストラ イベント
   `202 Accepted` ジュントコンアンエンベロープ Norito JSON que contiene la ventana
   バケットの計算 (`bucket_start_unix`、`bucket_duration_secs`) y el
   モドデルリレー。
-- `POST /v1/soranet/privacy/share` ペイロード `RecordSoranetPrivacyShareDto` を受け入れます。
+- `POST /v2/soranet/privacy/share` ペイロード `RecordSoranetPrivacyShareDto` を受け入れます。
   ボディ lleva un `SoranetPrivacyPrioShareV1` y unヒント オプション `forwarded_by`
   パラ・ケ・ロス・オペラドールはコレクターのフルホスを監査します。ラス・エントレガス・イグトーサス
   デブエルベン HTTP `202 Accepted` コンアンエンベロープ Norito JSON キュー履歴書
@@ -266,7 +266,7 @@ SNNet-8 siga siendo 監査可能。
 お勧め:
 
 1. NDJSON のエンドポイント管理、リレー、ストリームのエクスポート
-   `/v1/soranet/privacy/event|share` オーケストレーター ハシア
+   `/v2/soranet/privacy/event|share` オーケストレーター ハシア
    `artifacts/sorafs_privacy/<relay>.ndjson`。
 2. 政策を支援するための政策:
 

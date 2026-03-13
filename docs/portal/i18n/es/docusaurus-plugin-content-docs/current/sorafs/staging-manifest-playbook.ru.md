@@ -74,11 +74,11 @@ Este bloque de descripción del perfil de fragmentación, el parlamento actualiz
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```2. Prosiga el descubrimiento de puntos finales y siga los anuncios que aparecen con alias canónicos:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Tenga en cuenta que `profile_aliases` contiene `"sorafs.sf1@1.0.0"` sin ningún elemento.

@@ -78,7 +78,7 @@ Después de 15 minutos, aparece una advertencia `SorafsProofHealthCooldown`, o
 | `sorafs_node_por_failure_total` | Mostrador | `provider_id` | Монотонный счетчик неуспешных PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Calibre | `provider` | Medidor de calibre Prometheus para байтов, глубины очереди, PoR en vuelo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Calibre | `provider` | Debido a la falta de capacidad/tiempo de actividad, se eliminan las emisiones del tablero. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | La cartera de trabajos pendientes de Глубина más накопленные счетчики ошибок, экспортируемые при каждом опросе `/v1/sorafs/por/ingestion/{manifest}`, питают панель/алерт "PoR Puestos". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | La cartera de trabajos pendientes de Глубина más накопленные счетчики ошибок, экспортируемые при каждом опросе `/v2/sorafs/por/ingestion/{manifest}`, питают панель/алерт "PoR Puestos". |
 
 ### Prueba de recuperación oportuna (PoTR) y SLA por fragmentos| Métrica | Consejo | Metálicas | Производитель | Примечания |
 |---------|-----|-------|---------------|------------|

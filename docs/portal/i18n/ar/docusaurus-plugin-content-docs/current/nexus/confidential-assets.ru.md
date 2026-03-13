@@ -46,7 +46,7 @@ SPDX-License-Identifier: Apache-2.0
 
 يتم تحويل تحويلات المذكرات السرية إلى ملف قانوني في `fixtures/confidential/encrypted_payload_v1.json`. تشتمل أنواع البيانات على تحويل v1 مفيد وأشياء سلبية سلبية تمكن SDK من التحقق من التكافؤ تحليل. توفر اختبارات نماذج بيانات الصدأ (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) وSwift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) نصوصًا أصلية تضمن ترميز Norito، تتميز الحماية الفائقة والحماية الانحدارية بالتوافق مع مجرد تطورات الكود.
 
-يمكن الآن لـ Swift SDKs الاطلاع على تعليمات الدرع بدون غراء JSON المفصل: التحقق من `ShieldRequest` مع ملاحظات التزام مكونة من 32 بايت، والحمولة الصافية والبيانات الوصفية للخصم، ثم قم باختيار `IrohaSDK.submit(shield:keypair:)` (أو `submitAndWait`)، لتتمكن من تقديم المعاملة وتنفيذها من خلال `/v1/pipeline/transactions`. المساعدة في التحقق من التزامات الخطوط، ونشر `ConfidentialEncryptedPayload` من خلال برنامج التشفير Norito وتخطيط التخطيط `zk::Shield`، الموضح أدناه تم إيقاف المزامنة مع الصدأ.
+يمكن الآن لـ Swift SDKs الاطلاع على تعليمات الدرع بدون غراء JSON المفصل: التحقق من `ShieldRequest` مع ملاحظات التزام مكونة من 32 بايت، والحمولة الصافية والبيانات الوصفية للخصم، ثم قم باختيار `IrohaSDK.submit(shield:keypair:)` (أو `submitAndWait`)، لتتمكن من تقديم المعاملة وتنفيذها من خلال `/v2/pipeline/transactions`. المساعدة في التحقق من التزامات الخطوط، ونشر `ConfidentialEncryptedPayload` من خلال برنامج التشفير Norito وتخطيط التخطيط `zk::Shield`، الموضح أدناه تم إيقاف المزامنة مع الصدأ.
 
 ## التوافق على الالتزامات وإمكانية النفاذ
 - Заголовки блоков раскrывают `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; يسعد الملخص بهذا التوافق ويرتبط بالتكلفة مع التسجيل المحلي المسبق لكتلة الملكية.
@@ -77,7 +77,7 @@ SPDX-License-Identifier: Apache-2.0
 
 #### فترة المراقبة من خلال Torii
 
-يقوم المراجعون ومدققو الحسابات بتصحيح `GET /v1/confidential/assets/{definition_id}/transitions` للتحقق من النشاط `AssetConfidentialPolicy`. تشتمل حمولة JSON أيضًا على معرف الأصل الأساسي وكتلة الوصول التالية و`current_mode` سياسة ونظام وفعال هذا هو الارتفاع (تنتهي المحادثة حاليًا من `Convertible`)، بالإضافة إلى معلمات المعرفات `vk_set_hash`/Poseidon/Pedersen. عندما تبدأ الإدارة في الالتزام، يشمل الرد أيضًا:
+يقوم المراجعون ومدققو الحسابات بتصحيح `GET /v2/confidential/assets/{definition_id}/transitions` للتحقق من النشاط `AssetConfidentialPolicy`. تشتمل حمولة JSON أيضًا على معرف الأصل الأساسي وكتلة الوصول التالية و`current_mode` سياسة ونظام وفعال هذا هو الارتفاع (تنتهي المحادثة حاليًا من `Convertible`)، بالإضافة إلى معلمات المعرفات `vk_set_hash`/Poseidon/Pedersen. عندما تبدأ الإدارة في الالتزام، يشمل الرد أيضًا:
 
 - `transition_id` — مقبض التدقيق، возвращенный `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -123,7 +123,7 @@ SPDX-License-Identifier: Apache-2.0
 
 1. **إدخال السجلات:** تنشيط كافة السجلات والمعلمات التي تحتاجها السياسة العامة. تم التحقق من الحصول على `conf_features` حتى يتمكن أقرانهم من التحقق من ذكاءهم.
 2. **تخطيط مسبق:** قم بتصحيح `ScheduleConfidentialPolicyTransition` باستخدام `effective_height`، معلم `policy_transition_delay_blocks`. من خلال الاتصال بـ `ShieldedOnly`، قم بفتح المحادثة الثانية (`window ≥ policy_transition_window_blocks`).
-3. **نشر التعليمات للمشغلين:** قم بتثبيت `transition_id` الصحيح وقم بتثبيت دليل التشغيل/الإيقاف. يشير المدققون ومدققو الحسابات إلى `/v1/confidential/assets/{id}/transitions` ليتمكنوا من فتح الفتح جيدًا.
+3. **نشر التعليمات للمشغلين:** قم بتثبيت `transition_id` الصحيح وقم بتثبيت دليل التشغيل/الإيقاف. يشير المدققون ومدققو الحسابات إلى `/v2/confidential/assets/{id}/transitions` ليتمكنوا من فتح الفتح جيدًا.
 4. **التطبيق مرة واحدة:** عندما يتم اكتشاف الساعة، يتم إيقاف تشغيل السياسة في `Convertible`، ويحذف `PolicyTransitionWindowOpened { transition_id }`، ويبدأ منع تضارب الحوكمة.
 5. **الانتهاء أو الحذف:** في وقت التشغيل `effective_height`، تحقق من الاقتراحات المسبقة (اقتراح جديد، استجابة لحالات الطوارئ) عمليات السحب وما إلى ذلك). لقد انتهيت جميعًا من السياسة في نظام متدهور ؛ إن الرسالة الفخرية `PolicyTransitionPrerequisiteFailed`، تراقب المرحلة الانتقالية المعلقة وتتخلى عن السياسة دون تغيير.
 6. **أنظمة الإنشاء:** بعد نجاح الإدارة، يتم إنشاء أنظمة الإصدارات النشطة (على سبيل المثال، `asset_definition.v2`)، يجب استخدام أدوات واجهة سطر الأوامر (CLI) `confidential_policy` عند تسلسل البيانات. تضيف المستندات الواردة في Genesis Instructirut Operator إلى السياسات السياسية والتسجيل المسبق قبل التحقق من التحقق.
@@ -239,7 +239,7 @@ SPDX-License-Identifier: Apache-2.0
 - اشتقاق المفاتيح الأساسية للحساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم ملاحظات الحمولات الصافية EAAD مع المفاتيح المشتركة المشتقة من ECDH؛ يمكن لمفاتيح عرض المدقق الاختيارية أن تكون قابلة للتنفيذ من خلال المخرجات ذات الصلة بالنشاط السياسي.
-- إضافة CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق للمذكرة والمساعد `iroha app zk envelope` التأسيس/التفتيش Norito مغلفات المذكرات دون اتصال بالإنترنت. يوفر Torii اشتقاق التدفق من خلال `POST /v1/confidential/derive-keyset`، ونماذج سداسي عشرية متجددة وbase64 يمكن الحصول عليها من خلال البرنامج الكلمات المفتاحية.
+- إضافة CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق للمذكرة والمساعد `iroha app zk envelope` التأسيس/التفتيش Norito مغلفات المذكرات دون اتصال بالإنترنت. يوفر Torii اشتقاق التدفق من خلال `POST /v2/confidential/derive-keyset`، ونماذج سداسي عشرية متجددة وbase64 يمكن الحصول عليها من خلال البرنامج الكلمات المفتاحية.
 
 ## التحكم في الغاز والحدود وDoS
 - تحديد جدول الغاز:

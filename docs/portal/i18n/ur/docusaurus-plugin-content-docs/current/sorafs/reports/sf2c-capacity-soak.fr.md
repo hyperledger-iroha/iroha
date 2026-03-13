@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii اب فیس لیجرز کے ساتھ ساتھ کریڈٹ فراہم کرنے والے سنیپ شاٹس کو بے نقاب کرتا ہے تاکہ ڈیش بورڈز
 کم بیلنس اور جرمانے کے حملوں پر گیٹ کر سکتے ہیں:
 
-- باقی: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` اندراجات واپس کرتا ہے
+- باقی: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` اندراجات واپس کرتا ہے
   سوک ٹیسٹ میں چیک کیے گئے لیجر فیلڈز کی عکاسی کریں۔ دیکھو
   `crates/iroha_torii/src/sorafs/registry.rs`۔
 - Grafana درآمد کریں: `dashboards/grafana/sorafs_capacity_penalties.json` کا سراغ لگائیں

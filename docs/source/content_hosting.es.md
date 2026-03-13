@@ -28,7 +28,7 @@ archivos individuales directamente desde Torii.
   `sponsor:<uaid>`), marcador de posición de política de retención y anulaciones de MIME.
 - **Deduplicación**: las cargas útiles de tar se fragmentan (64 KB por defecto) y se almacenan una vez por
   hash con recuentos de referencias; Retirar un paquete disminuye y poda trozos.
-- **Servir**: Torii expone `GET /v1/content/{bundle}/{path}`. Flujo de respuestas
+- **Servir**: Torii expone `GET /v2/content/{bundle}/{path}`. Flujo de respuestas
   directamente desde el almacén de fragmentos con `ETag` = hash de archivo, `Accept-Ranges: bytes`,
   Soporte de rango y control de caché derivado del manifiesto. Lee honrar el
   modo de autenticación manifiesta: las respuestas controladas por roles y patrocinadores requieren canónicas

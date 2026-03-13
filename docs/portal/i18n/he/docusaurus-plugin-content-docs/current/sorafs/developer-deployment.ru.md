@@ -30,7 +30,7 @@ sidebar_label: Заметки по развертыванию
 
 ## Конфигурация окружения
 
-- Gateways должны включить הזרמת נקודות קצה (`POST /v1/sorafs/proof/stream`), чтобы CLI мог выпускать телеметрические сводки.
+- Gateways должны включить הזרמת נקודות קצה (`POST /v2/sorafs/proof/stream`), чтобы CLI мог выпускать телеметрические сводки.
 - תקשורת `sorafs_alias_cache` עם מוצר זמין עבור `iroha_config` או CLI עוזר (Prometheus).
 - הפק אסימוני זרמים (אולי אחרים Torii) הם מנהל סודי ללא תשלום.
 - יצואנים Включите телеметрические (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) ו- отправляйте их в ваш стек Prometheus.

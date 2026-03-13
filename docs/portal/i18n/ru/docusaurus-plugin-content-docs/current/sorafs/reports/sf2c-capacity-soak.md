@@ -44,7 +44,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii теперь показывает snapshots кредитов providers вместе с fee ledgers, чтобы
 dashboards могли gate по низким балансам и penalty strikes:
 
-- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+- REST: `GET /v2/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
   которые отражают поля ledger, проверенные в soak тесте. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит

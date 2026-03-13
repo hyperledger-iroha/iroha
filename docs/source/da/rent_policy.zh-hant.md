@@ -15,7 +15,7 @@ translator: machine-google-reviewed
 _狀態：起草 — 所有者：經濟工作組/財務/存儲團隊_
 
 路線圖項目 **DA-7** 為每個 blob 引入了明確的以 XOR 計價的租金
-提交至 `/v1/da/ingest`，加上獎勵 PDP/PoTR 執行的獎金和
+提交至 `/v2/da/ingest`，加上獎勵 PDP/PoTR 執行的獎金和
 出口用於獲取客戶端。該文件定義了初始參數，
 它們的數據模型表示，以及 Torii 使用的計算工作流程，
 SDK 和財務儀表板。
@@ -161,7 +161,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## 操作流程
 
-1. **攝取：** `/v1/da/ingest`加載活躍的`DaRentPolicyV1`，報價租金
+1. **攝取：** `/v2/da/ingest`加載活躍的`DaRentPolicyV1`，報價租金
    基於 blob 大小和保留，並將報價嵌入到 Norito 中
    明顯。提交者簽署一份引用租金哈希的聲明，並
    存儲票證 ID。
@@ -179,7 +179,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ## 遙測Torii 節點通過以下 Prometheus 指標公開租金使用情況（標籤：
 `cluster`、`storage_class`）：
 
-- `torii_da_rent_gib_months_total` — `/v1/da/ingest` 引用的 GiB 月。
+- `torii_da_rent_gib_months_total` — `/v2/da/ingest` 引用的 GiB 月。
 - `torii_da_rent_base_micro_total` — 攝取時應計的基本租金（微異或）。
 - `torii_da_protocol_reserve_micro_total` — 協議儲備金貢獻。
 - `torii_da_provider_reward_micro_total` — 提供商方租金支付。
@@ -196,7 +196,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## 後續步驟
 
-- ✅ `/v1/da/ingest` 收據現在嵌入 `rent_quote` 並且 CLI/SDK 界面顯示報價
+- ✅ `/v2/da/ingest` 收據現在嵌入 `rent_quote` 並且 CLI/SDK 界面顯示報價
   基本租金、儲備份額和 PDP/PoTR 獎金，以便提交者可以在之前審查 XOR 義務
   提交有效負載。
 - 將租金分類賬與即將推出的 DA 聲譽/訂單簿源集成

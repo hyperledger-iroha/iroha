@@ -17,8 +17,8 @@ translation_last_reviewed: 2026-01-01
 - ✅ Вынести типы Norito `Proposal`/`Vote`/`Qc` в `BlockMessage` и прогнать round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ Закрыть старые фреймы `BlockSigned/BlockCommitted`; переключатель миграции был выставлен в `false` до вывода из эксплуатации.
 - ✅ Удалить миграционный knob, переключавший старые сообщения блоков; режим Vote/commit certificate теперь единственный wire-путь.
-- ✅ Обновить роутеры Torii, команды CLI и потребителей телеметрии, чтобы предпочитать JSON-снимки `/v1/sumeragi/*` старым фреймам блоков.
-- ✅ Интеграционное покрытие упражняет эндпоинты `/v1/sumeragi/*` исключительно через пайплайн Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ Обновить роутеры Torii, команды CLI и потребителей телеметрии, чтобы предпочитать JSON-снимки `/v2/sumeragi/*` старым фреймам блоков.
+- ✅ Интеграционное покрытие упражняет эндпоинты `/v2/sumeragi/*` исключительно через пайплайн Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ Удалить старые фреймы после достижения функционального паритета и тестов совместимости.
 
 ### План удаления фреймов
@@ -59,6 +59,6 @@ translation_last_reviewed: 2026-01-01
 ### Ближайшие шаги
 1. ✅ Bounded-jitter harness упражняет метрики jitter pacemaker (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. ✅ Усилить assertions deferral RBC в `npos_queue_backpressure_triggers_metrics`, подавая детерминированное давление на store RBC (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ Расширить soak `/v1/sumeragi/telemetry`, чтобы покрыть длинные epochs и adversarial collectors, сравнивая snapshots с счетчиками Prometheus по нескольким heights. Покрыто `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
+3. ✅ Расширить soak `/v2/sumeragi/telemetry`, чтобы покрыть длинные epochs и adversarial collectors, сравнивая snapshots с счетчиками Prometheus по нескольким heights. Покрыто `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 
 Ведение этого списка здесь позволяет держать `roadmap.md` сфокусированным на вехах и при этом дает команде живой чеклист. Обновляйте пункты (и отмечайте завершение) по мере выхода изменений.

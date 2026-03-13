@@ -13,7 +13,7 @@
 | ID | Task | Owner(s) | Dependencies | Exit Criteria |
 |----|------|----------|--------------|---------------|
 | M1.1 | Finalise Swift encrypted-payload bindings (`ShieldRequest`, Norito bridge, TxBuilder helpers) and ensure parity tests cover success + failure paths. | Swift Lead / Confidential Assets WG | Shared fixtures (`fixtures/confidential/encrypted_payload_v1.json`) | `swift test` parity suite green; doc snippets match API surface. |
-| M1.2 | Extend `iroha_cli` and docs with encrypted-payload ergonomics (build helpers, failure diagnostics) and add CLI smoke test. | CLI Maintainer / Docs | Torii `/v1/confidential/...` endpoints | CLI walkthrough + smoke test merged; docs updated. |
+| M1.2 | Extend `iroha_cli` and docs with encrypted-payload ergonomics (build helpers, failure diagnostics) and add CLI smoke test. | CLI Maintainer / Docs | Torii `/v2/confidential/...` endpoints | CLI walkthrough + smoke test merged; docs updated. |
 | M1.3 | Regenerate deterministic wallet fixture bundles (shield/transfer/unshield flows) and add CI drift alert. | SDK Council / DevRel | Fixture generator, Norito encoder | Fixtures consumed by Rust/Swift/JS tests; CI alerts on drift. |
 | M1.4 | Secure SDK Council approval for payload v1 rollout (decision memo + rollback plan) and record in `status.md`. | SDK Council Chair | Completion of M1.1–M1.3 | Signed decision logged; production flag flipped. |
 

@@ -82,8 +82,12 @@ fn register_assets(client: &Client) -> Result<()> {
 
     let register: Vec<_> = ('a'..='j')
         .map(|c| c.to_string())
-        .map(|name| (name + "#wonderland").parse().expect("Valid"))
-        .map(|asset_definition_id| {
+        .map(|name| {
+            (name + "#wonderland")
+                .parse::<AssetDefinitionId>()
+                .expect("Valid")
+        })
+        .map(|asset_definition_id: AssetDefinitionId| {
             Register::asset_definition({
                 let __asset_definition_id = asset_definition_id;
                 AssetDefinition::numeric(__asset_definition_id.clone())

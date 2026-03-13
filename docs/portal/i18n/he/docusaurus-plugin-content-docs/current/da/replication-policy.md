@@ -30,7 +30,7 @@ _סטטוס: בתהליך -- בעלי ענין: Core Protocol WG / Storage Team 
 | _Default (כל שאר המחלקות)_ | 6 שעות | 30 ימים | 3 | `warm` | `da.default` |
 
 ערכים אלה מוטמעים ב-`torii.da_ingest.replication_policy` ומוחלים על כל
-השליחות `/v1/da/ingest`. Torii משכתב manifests עם פרופיל השימור האכוף ומפיק
+השליחות `/v2/da/ingest`. Torii משכתב manifests עם פרופיל השימור האכוף ומפיק
 אזהרה כאשר callers מספקים ערכים לא תואמים כדי שמפעילים יזהו SDKs מיושנים.
 
 ### מחלקות זמינות Taikai
@@ -145,5 +145,5 @@ re-replicate ל-blobs לא תואמים אוטומטית.
    `iroha app da prove-availability` כדי ש-SREs יוכלו להתייחס לאותו digest ולעדות PDP.
 
 כיסוי רגרסיה נמצא ב-`integration_tests/tests/da/replication_policy.rs`; הסוויטה
-שולחת מדיניות שימור לא תואמת ל-`/v1/da/ingest` ומוודאת שה-manifest המוחזר חושף
+שולחת מדיניות שימור לא תואמת ל-`/v2/da/ingest` ומוודאת שה-manifest המוחזר חושף
 את הפרופיל האכוף במקום כוונת ה-caller.

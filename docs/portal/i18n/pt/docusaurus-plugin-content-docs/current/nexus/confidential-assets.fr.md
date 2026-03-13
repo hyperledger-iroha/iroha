@@ -49,7 +49,7 @@ Os envelopes de memorandos confidenciais livres são desormados em um dispositiv
 Os SDKs Swift podem manter o emetre de instruções escudo sem cola JSON sob medida: construir um
 `ShieldRequest` com comprometimento de 32 bytes, carga útil chiffre e metadados de débito,
 então ligue para `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) para assinar e retransmitir
-transação via `/v1/pipeline/transactions`. Le helper valide les longueurs de compromisso,
+transação via `/v2/pipeline/transactions`. Le helper valide les longueurs de compromisso,
 Insira `ConfidentialEncryptedPayload` no codificador Norito e reflita o layout `zk::Shield`
 ci-dessous afin que as carteiras restantes são sincronizadas com Rust.## Compromissos de consenso e controle de capacidade
 - Os cabeçalhos dos blocos expostos `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; o resumo participa do hash de consenso e iguala o local do registro para aceitar um bloco.
@@ -78,7 +78,7 @@ ci-dessous afin que as carteiras restantes são sincronizadas com Rust.## Compro
 - Genesis manifesta e flui CLI expõe políticas correntes e pendentes. A lógica de admissão acendeu a política no momento da execução para confirmar que cada instrução confidencial está autorizada.
 - Checklist de migração - veja "Sequenciamento de migração" ci-dessous para o plano de atualização nas etapas seguintes do Milestone M0.
 
-#### Monitoramento de transições via ToriiCarteiras e auditores interrogadores `GET /v1/confidential/assets/{definition_id}/transitions` para inspecionar l `AssetConfidentialPolicy` ativo. A carga útil JSON inclui sempre o id de ativo canônico, o último alto nível de bloco observado, o `current_mode` da política, o modo efetivo para este alto nível (as janelas de conversão relatadas temporariamente `Convertible`) e os identificadores presentes em `vk_set_hash`/Poseidon/Pedersen. Quando uma transição de governança está atenta à resposta incorporada também:
+#### Monitoramento de transições via ToriiCarteiras e auditores interrogadores `GET /v2/confidential/assets/{definition_id}/transitions` para inspecionar l `AssetConfidentialPolicy` ativo. A carga útil JSON inclui sempre o id de ativo canônico, o último alto nível de bloco observado, o `current_mode` da política, o modo efetivo para este alto nível (as janelas de conversão relatadas temporariamente `Convertible`) e os identificadores presentes em `vk_set_hash`/Poseidon/Pedersen. Quando uma transição de governança está atenta à resposta incorporada também:
 
 - `transition_id` - manipula d reenvio de auditoria par `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -124,7 +124,7 @@ As transições não listadas ci-dessus são rejeitadas pela governança da subm
 
 ### Sequenciamento de migração1. **Preparar os registros:** ativa todas as entradas, verificador e parâmetros referenciados pela política cível. As noeus anunciaram o `conf_features` resultante para que os pares verificassem a coerência.
 2. **Planificador de transição:** adicionado `ScheduleConfidentialPolicyTransition` com um `effective_height` correspondente a `policy_transition_delay_blocks`. Na versão `ShieldedOnly`, é preciso uma janela de conversão (`window >= policy_transition_window_blocks`).
-3. **Publique o operador de orientação:** registre o retorno `transition_id` e o difusor em um runbook on/off-ramp. Carteiras e auditores estão abonnent a `/v1/confidential/assets/{id}/transitions` para conhecer a altivez da ouverture de fenetre.
+3. **Publique o operador de orientação:** registre o retorno `transition_id` e o difusor em um runbook on/off-ramp. Carteiras e auditores estão abonnent a `/v2/confidential/assets/{id}/transitions` para conhecer a altivez da ouverture de fenetre.
 4. **Aplicação da janela:** na abertura, o tempo de execução bascula a política em `Convertible`, emet `PolicyTransitionWindowOpened { transition_id }`, e começa a rejeitar as demandas de governança em conflito.
 5. **Finalizar ou cancelar:** em `effective_height`, o tempo de execução verifica os pré-requisitos (fornecer zero transparente, passo de retorno de urgência, etc.). Com sucesso, a política passa ao modo exigido; em echec, `PolicyTransitionPrerequisiteFailed` é emis, a transição pendente é líquida e a política restante é alterada.
 6. **Atualizações de esquema:** após uma transição rápida, a governança aumenta a versão do esquema do ativo (par ex `asset_definition.v2`) e a CLI de ferramentas exige `confidential_policy` durante a serialização dos manifestos. Os documentos de atualização genesis instruem os operadores a adicionar configurações políticas e empreintes de registro antes de redefinir os validadores.
@@ -237,7 +237,7 @@ Documente as substituições locais nas operações do runbook; As políticas de
 - Hierarquia de derivação por conta:
   - `sk_spend` -> `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - As cargas úteis de notas chiffre são utilizadas AEAD com chaves compartilhadas derivadas de ECDH; des view keys d auditeur optionnelles podem ser adidos aux outputs de acordo com a política do ativo.
-- Adiciona CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor de ferramentas para deschiffrer memos, e o ajudante `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expõe o fluxo de derivação do meme via `POST /v1/confidential/derive-keyset`, retornando as formas hexadecimais e base64 para que as carteiras possam recuperar as hierarquias de sua programação.
+- Adiciona CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor de ferramentas para deschiffrer memos, e o ajudante `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expõe o fluxo de derivação do meme via `POST /v2/confidential/derive-keyset`, retornando as formas hexadecimais e base64 para que as carteiras possam recuperar as hierarquias de sua programação.
 
 ## Gás, limites e controles DoS
 - Cronograma de gás determinado:

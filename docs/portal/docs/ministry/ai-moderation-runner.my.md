@@ -202,7 +202,7 @@ schema သည် `crates/iroha_data_model/src/sorafs/moderation.rs` တွင်
   - HTTP/gRPC API ကို ဖော်ထုတ်သည့် ဝင်ခွင့်အမှတ် `run_moderation.py` (သို့မဟုတ် သံချေးတက်ခြင်းနှင့် ညီမျှသည်)။
 - ရှေးဟောင်းပစ္စည်းများကို `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` သို့ ထုတ်ဝေပါ။
 - `sorafs_ai_runner` သေတ္တာ၏တစ်စိတ်တစ်ပိုင်းအဖြစ် Runner binary သင်္ဘောများ။ ပိုက်လိုင်းတည်ဆောက်သည်။
-  binary တွင် manifest hash ကို မြှုပ်နှံသည် (`/v1/info` မှတဆင့် ဖော်ထုတ်သည်)။
+  binary တွင် manifest hash ကို မြှုပ်နှံသည် (`/v2/info` မှတဆင့် ဖော်ထုတ်သည်)။
 
 ## 8. Telemetry & Observability
 - Prometheus မက်ထရစ်များ

@@ -26,17 +26,17 @@ e, portanto, corretagem de tokens de admissão ML-DSA em relés de borda existen
 Para definir os endpoints HTTP:
 
 - `GET /healthz` - sonda de vivacidade.
--`GET /v1/puzzle/config` - возвращает эффективные параметры PoW/puzzle,
+-`GET /v2/puzzle/config` - возвращает эффективные параметры PoW/puzzle,
   Selecione o relé JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - выпускает bilhete Argon2; corpo JSON opcional
+- `POST /v2/puzzle/mint` - выпускает bilhete Argon2; corpo JSON opcional
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   запрашивает более короткий TTL (fixado к janela de política), привязывает ticket
   к hash de transcrição e возвращает bilhete assinado por retransmissão + impressão digital de assinatura
   при наличии chaves de assinatura.
-- `GET /v1/token/config` - когда `pow.token.enabled = true`, ativado
+- `GET /v2/token/config` - когда `pow.token.enabled = true`, ativado
   política de token de admissão (impressão digital do emissor, limites de TTL/inclinação do relógio, ID de retransmissão,
   e conjunto de revogação mesclado).
-- `POST /v1/token/mint` - token de admissão выпускает ML-DSA, связанный с fornecido
+- `POST /v2/token/mint` - token de admissão выпускает ML-DSA, связанный с fornecido
   retomar hash; corpo принимает `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Ingressos, serviço de compra, teste integrado
@@ -78,17 +78,17 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` доступен, когда secret управляется ferramentas fora de banda
-gasoduto. Observador de arquivo de revogação держит `/v1/token/config` актуальным;
+gasoduto. Observador de arquivo de revogação держит `/v2/token/config` актуальным;
 coordenação de operação com comando `soranet-admission-token revoke`, чтобы
 избежать отставания estado de revogação.Definindo `pow.signed_ticket_public_key_hex` no relé JSON, isso é obtido
-Chave pública ML-DSA-44 para tíquetes PoW assinados; `/v1/puzzle/config` é
+Chave pública ML-DSA-44 para tíquetes PoW assinados; `/v2/puzzle/config` é
 chave возвращает e impressão digital его BLAKE3 (`signed_ticket_public_key_fingerprint_hex`),
 чтобы clientes могли pin-ить verificador. Bilhetes assinados são fornecidos pelo ID de retransmissão e
 ligações de transcrição e usadas para armazenamento de revogação; Tickets PoW brutos de 74 bytes
 остаются валидными при настроенном verificador de bilhetes assinados. Segredo do signatário Передайте
 verifique `--signed-ticket-secret-hex` ou `--signed-ticket-secret-path` por conta própria
 serviço de quebra-cabeças; старт отклонит несоответствующие pares de chaves, exceto segredo não validado
-protив `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` teste
+protив `pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` teste
 `"signed": true` (e opcional `"transcript_hash_hex"`)
 Ticket assinado codificado em Norito contém bytes brutos de ticket; ответы включают
 `signed_ticket_b64` e `signed_ticket_fingerprint_hex` para reproduzir impressões digitais.
@@ -106,10 +106,10 @@ Depois de `signed = true` aberto, o segredo do signatário não foi encontrado.
 3. **Reiniciar.** Instale a unidade systemd ou o contêiner também, como
    governança объявит transição de rotação. O serviço não pode ser recarregado a quente; para
    Primeiro, o novo descritor commit deve ser reiniciado.
-4. **Provalidirуйте.** Выпустите ticket через `POST /v1/puzzle/mint` e подтвердите,
+4. **Provalidirуйте.** Выпустите ticket через `POST /v2/puzzle/mint` e подтвердите,
    что `difficulty` e `expires_at` definimos uma nova política. Relatório de imersão
    (`docs/source/soranet/reports/pow_resilience.md`) содержит ожидаемые limites de latência
-   para справки. Os tokens de segurança são adquiridos, `/v1/token/config`, usados,
+   para справки. Os tokens de segurança são adquiridos, `/v2/token/config`, usados,
    что impressão digital do emissor anunciada e contagem de revogação соответствуют ожидаемым значениям.
 
 ## Processo de desativação de emergência
@@ -120,7 +120,7 @@ Depois de `signed = true` aberto, o segredo do signatário não foi encontrado.
    descritores пока Argon2 gate offline.
 3. Instale o serviço de relé e quebra-cabeça, esta é uma avaliação preliminar.
 4. Monitor `soranet_handshake_pow_difficulty`, isso é instalado, este é o problema
-   упала ожидаемого hashcash значения, e prover, что `/v1/puzzle/config`
+   упала ожидаемого hashcash значения, e prover, что `/v2/puzzle/config`
    use `puzzle = null`.
 
 ## Monitoramento e alertas- **SLO de latência:** Selecione `soranet_handshake_latency_seconds` e defina P95
@@ -130,16 +130,16 @@ Depois de `signed = true` aberto, o segredo do signatário não foi encontrado.
   para cooldowns `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alinhamento do quebra-cabeça:** `soranet_handshake_pow_difficulty` должен совпадать с
-  dificuldade de `/v1/puzzle/config`. Diversidade usada na configuração de relé obsoleta
+  dificuldade de `/v2/puzzle/config`. Diversidade usada na configuração de relé obsoleta
   ou não será necessário reiniciar.
-- **Prontidão do token:** Alerta, если `/v1/token/config` неожиданно падает до
+- **Prontidão do token:** Alerta, если `/v2/token/config` неожиданно падает до
   `enabled = false` ou `revocation_source` contém carimbos de data/hora obsoletos. Operadores
   должны ротировать Norito arquivo de revogação через CLI при выводе токена, чтобы
   endpoint é definido como.
 - **Saúde do serviço:** Verifique `/healthz` em cadência e alerta de atividade ativos,
-  если `/v1/puzzle/mint` возвращает HTTP 500 (указывает на Argon2 parâmetro incompatibilidade
+  если `/v2/puzzle/mint` возвращает HTTP 500 (указывает на Argon2 parâmetro incompatibilidade
   ou falhas de RNG). A cunhagem de tokens é executada como HTTP 4xx/5xx em
-  `/v1/token/mint`; повторяющиеся сбои следует считать condição de paginação.
+  `/v2/token/mint`; повторяющиеся сбои следует считать condição de paginação.
 
 ## Conformidade e registro de auditoria
 

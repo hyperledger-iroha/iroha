@@ -29,7 +29,7 @@ pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
 
 - Ensure the Torii process has read/write access to `data_dir`.
 - Confirm the node advertises the expected capacity via
-  `GET /v1/sorafs/capacity/state` once a declaration is recorded.
+  `GET /v2/sorafs/capacity/state` once a declaration is recorded.
 - When smoothing is enabled, dashboards expose both the raw and smoothed
   GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
 
@@ -82,8 +82,8 @@ API.
 Once Torii is live you can retrieve the same artefacts via HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Both endpoints are served by the embedded storage worker, so CLI smoke tests and
@@ -107,7 +107,7 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 2. Submit the manifest with base64 encoding:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -117,7 +117,7 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 3. Fetch the pinned data:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -134,7 +134,7 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 2. Restart the Torii process (or the entire node).
 3. Re-submit the fetch request. The payload must still be retrievable and the
    returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the
+4. Inspect `GET /v2/sorafs/storage/state` to confirm `bytes_used` reflects the
    persisted manifests after the reboot.
 
 ## 4. Quota Rejection Test
@@ -174,7 +174,7 @@ production.
 2. Request a PoR sample:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -220,7 +220,7 @@ replayed prior to submission.
 - Dashboards should track:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
+  - PoR success/failure counters surfaced via `/v2/sorafs/capacity/state`
 
 Following these drills ensures the embedded storage worker can ingest data,
 survive restarts, respect configured quotas, and generate deterministic PoR

@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **ལེན་ནེ་ མངོན་གསལ་:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Shechuler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **ལག་ཐོག་ཐ་མག:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` གསལ་སྟོན་སྣོད་ཐོ་ CBDC ཡིག་སྣོད་ཚུ་ལུ་སྟོན་ཞིནམ་ལས་ `/v1/sumeragi/status` ལུ་ཨེབ་སྟེ་ CBDC ལམ་གྱི་དོན་ལུ་ `lane_governance.manifest_ready=true` བདེན་དཔྱད་འབད།
+3. **ལག་ཐོག་ཐ་མག:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` གསལ་སྟོན་སྣོད་ཐོ་ CBDC ཡིག་སྣོད་ཚུ་ལུ་སྟོན་ཞིནམ་ལས་ `/v2/sumeragi/status` ལུ་ཨེབ་སྟེ་ CBDC ལམ་གྱི་དོན་ལུ་ `lane_governance.manifest_ready=true` བདེན་དཔྱད་འབད།
 4. **དཀརཔོ་གི་རིམ་མཐུན་བརྟག་དཔྱད་:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` ལག་ལེན་ཚུ་ `integration_tests/tests/nexus/cbdc_whitelist.rs`, `fixtures/space_directory/profile/cbdc_lane_profile.json` གིས་ `fixtures/space_directory/profile/cbdc_lane_profile.json` དབྱེ་དཔྱད་འབདཝ་ཨིན། `fixtures/space_directory/profile/cbdc_lane_profile.json` གིས་ དཀརཔོ་ཐོ་ཡིག་ཐོ་བཀོད་ཀྱི་ཡུ་ཨེ་ཨའི་ཌི་ གནད་སྡུད་ས་སྟོང་ ཤུགས་ལྡན་བཟོ་བའི་དུས་སྐབས་ཚུ་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ་ནི་དང་ ཆོག་ཐམ་གྱི་ཐོ་ཡིག་འདི་ འོག་ལུ་ Norito གསལ་སྟོན་འབདཝ་ཨིན། `fixtures/space_directory/capability/`. བརྟག་དཔྱད་དྲན་ཐོ་འདི་ NX-6 སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ལུ་མཉམ་སྦྲགས་འབད།
 
 ### ༢.༢ ཀླི་ཨའི་ སྦུང་ཚད།
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - ཨོཔ་སི་ ཌེཀསི་གིས་ ཐག་རིང་རང་བཞིན་རང་བཞིན་གཡོག་བཀོལ་དོ་ཡོད་པ་ཅིན་ ཨེཆ་ཊི་ཊི་པི་བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབད་ནི།
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - ཛ་དྲག་ཆ་མེད་བཟོ་ནི་འདི་ POSTing ལུ་ POSTing ལུ་ ཐག་རིང་ལས་ བཏོན་ཚུགས།
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

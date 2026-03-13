@@ -30,17 +30,17 @@ relay et, lorsque configure, orchestre des tokens d'admission ML-DSA pour les
 relays edge. Il expose cinq endpoints HTTP:
 
 - `GET /healthz` - probe de liveness.
-- `GET /v1/puzzle/config` - retourne les parametres PoW/puzzle effectifs issus
+- `GET /v2/puzzle/config` - retourne les parametres PoW/puzzle effectifs issus
   du JSON relay (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - emet un ticket Argon2; un body JSON optionnel
+- `POST /v2/puzzle/mint` - emet un ticket Argon2; un body JSON optionnel
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   demande un TTL plus court (clamp au window de policy), lie le ticket a un
   transcript hash et renvoie un ticket signe par le relay + l'empreinte de
   signature lorsque des cles de signature sont configurees.
-- `GET /v1/token/config` - quand `pow.token.enabled = true`, retourne la policy
+- `GET /v2/token/config` - quand `pow.token.enabled = true`, retourne la policy
   d'admission-token active (issuer fingerprint, limites TTL/clock-skew, relay ID,
   et l'ensemble de revocation fusionne).
-- `POST /v1/token/mint` - emet un token d'admission ML-DSA lie au resume hash
+- `POST /v2/token/mint` - emet un token d'admission ML-DSA lie au resume hash
   fourni; le body accepte `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Les tickets produits par le service sont verifies dans le test d'integration
@@ -83,12 +83,12 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` est aussi disponible lorsque le secret est gere par un
-pipeline out-of-band. Le watcher du fichier de revocation garde `/v1/token/config`
+pipeline out-of-band. Le watcher du fichier de revocation garde `/v2/token/config`
 a jour; coordonnez les mises a jour avec la commande `soranet-admission-token revoke`
 pour eviter un etat de revocation en retard.
 
 Definissez `pow.signed_ticket_public_key_hex` dans le JSON relay pour annoncer
-la cle publique ML-DSA-44 utilisee pour verifier les PoW tickets signes; `/v1/puzzle/config`
+la cle publique ML-DSA-44 utilisee pour verifier les PoW tickets signes; `/v2/puzzle/config`
 repete la cle et son empreinte BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) afin
 que les clients puissent pinner le verificateur. Les tickets signes sont valides
 contre le relay ID et les transcript bindings et partagent le meme store de
@@ -96,7 +96,7 @@ revocation; les PoW tickets bruts de 74 octets restent valides quand le verifier
 signed-ticket est configure. Passez le secret de signature via `--signed-ticket-secret-hex`
 ou `--signed-ticket-secret-path` au lancement du puzzle service; le demarrage
 rejette les keypairs incoherents si le secret ne valide pas contre
-`pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepte `"signed": true`
+`pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` accepte `"signed": true`
 (et optionnel `"transcript_hash_hex"`) pour renvoyer un ticket signe Norito en
 plus des bytes du ticket brut; les reponses incluent `signed_ticket_b64` et
 `signed_ticket_fingerprint_hex` pour suivre les fingerprints de replay. Les
@@ -117,11 +117,11 @@ configure.
    fois que governance annonce le cutover de rotation. Le service ne supporte
    pas le hot-reload; un redemarrage est requis pour prendre le nouveau descriptor
    commit.
-4. **Valider.** Emettez un ticket via `POST /v1/puzzle/mint` et confirmez que
+4. **Valider.** Emettez un ticket via `POST /v2/puzzle/mint` et confirmez que
    `difficulty` et `expires_at` correspondent a la nouvelle policy. Le rapport
    soak (`docs/source/soranet/reports/pow_resilience.md`) capture des bornes de
    latence attendues pour reference. Lorsque les tokens sont actives, lisez
-   `/v1/token/config` pour verifier que l'issuer fingerprint annonce et le
+   `/v2/token/config` pour verifier que l'issuer fingerprint annonce et le
    compte de revocation correspondent aux valeurs attendues.
 
 ## Procedure de desactivation d'urgence
@@ -134,7 +134,7 @@ configure.
 3. Redemarrez a la fois le relay et le puzzle service pour appliquer le
    changement.
 4. Surveillez `soranet_handshake_pow_difficulty` pour verifier que la difficulte
-   tombe a la valeur hashcash attendue, et validez que `/v1/puzzle/config`
+   tombe a la valeur hashcash attendue, et validez que `/v2/puzzle/config`
    rapporte `puzzle = null`.
 
 ## Monitoring et alerting
@@ -146,16 +146,16 @@ configure.
   metrics relay pour ajuster les cooldowns `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Puzzle alignment:** `soranet_handshake_pow_difficulty` doit correspondre a la
-  difficulte retournee par `/v1/puzzle/config`. Une divergence indique une config
+  difficulte retournee par `/v2/puzzle/config`. Une divergence indique une config
   relay stale ou un redemarrage rate.
-- **Token readiness:** Alertez si `/v1/token/config` chute a `enabled = false`
+- **Token readiness:** Alertez si `/v2/token/config` chute a `enabled = false`
   de maniere inattendue ou si `revocation_source` rapporte des timestamps stale.
   Les operateurs doivent faire tourner le fichier de revocation Norito via le CLI
   des qu'un token est retire pour garder cet endpoint precis.
 - **Service health:** Probez `/healthz` avec la cadence de liveness habituelle et
-  alertez si `/v1/puzzle/mint` renvoie des reponses HTTP 500 (indique un mismatch
+  alertez si `/v2/puzzle/mint` renvoie des reponses HTTP 500 (indique un mismatch
   des parametres Argon2 ou des echecs RNG). Les erreurs de token minting se
-  manifestent via des reponses HTTP 4xx/5xx sur `/v1/token/mint`; traitez les
+  manifestent via des reponses HTTP 4xx/5xx sur `/v2/token/mint`; traitez les
   echecs repetes comme une condition de paging.
 
 ## Compliance et audit logging

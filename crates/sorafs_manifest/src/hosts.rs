@@ -45,7 +45,7 @@ impl<'a> HostMappingInput<'a> {
 
     /// Produce direct-CAR endpoints for the supplied manifest digest.
     ///
-    /// The returned URLs use the pattern `scheme://host/direct/v1/car/{digest}`.
+    /// The returned URLs use the pattern `scheme://host/direct/v2/car/{digest}`.
     ///
     /// # Errors
     ///
@@ -59,11 +59,11 @@ impl<'a> HostMappingInput<'a> {
         let summary = self.to_summary();
         Ok(DirectCarLocator {
             canonical_url: format!(
-                "{scheme}://{}/direct/v1/car/{manifest_digest_hex}",
+                "{scheme}://{}/direct/v2/car/{manifest_digest_hex}",
                 summary.canonical
             ),
             vanity_url: format!(
-                "{scheme}://{}/direct/v1/car/{manifest_digest_hex}",
+                "{scheme}://{}/direct/v2/car/{manifest_digest_hex}",
                 summary.vanity
             ),
         })
@@ -157,11 +157,11 @@ mod tests {
             .expect("locator");
         assert_eq!(
             locator.canonical_url,
-            "https://11111111.devnet.sorafs/direct/v1/car/deadbeef"
+            "https://11111111.devnet.sorafs/direct/v2/car/deadbeef"
         );
         assert_eq!(
             locator.vanity_url,
-            "https://1111.devnet.direct.sorafs/direct/v1/car/deadbeef"
+            "https://1111.devnet.direct.sorafs/direct/v2/car/deadbeef"
         );
     }
 

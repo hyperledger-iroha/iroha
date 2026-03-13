@@ -67,13 +67,13 @@ com.atualizacoes.
 تتطلب البوابات المتطلبات الأساسية لتحديدات HTTP التي تستخدمها في التعرف على التعريفات
 إعلان.
 
-###`GET /v1/sorafs/storage/car/{manifest_id}`| المتطلبات | ديتالز |
+###`GET /v2/sorafs/storage/car/{manifest_id}`| المتطلبات | ديتالز |
 |-----------|----------|
 | **العناوين** | `Range` (ملف واحد فقط لإزاحة القطعة)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري و`X-SoraFS-Stream-Token` base64 obrigatorio. |
 | **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` يتم تنزيله إلى خادم الخدمة، والتوصيفات `X-Sora-Chunk-Range` ورؤوس القطع/الرمز المميز البيئي. |
 | **فلحس** | `416` لنطاقات المياه المحلاة، `401` للرموز المميزة المتاحة/غير الصالحة، `429` عندما تكون ميزانيات البث/البايت أكثر من اللازم. |
 
-###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 قم بإحضار قطعة فريدة من نوعها باستخدام الرؤوس نفسها أو لخص تحديد القطعة.
 يستخدم لإعادة محاولة التنزيلات أو التنزيلات عندما تكون شرائح السيارة ضرورية.
@@ -121,11 +121,11 @@ com.atualizacoes.
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` يشمل نظام التشغيل
   نقاط النهاية REST تقوم بتسجيل الدبوس والطباعة Norito JSON bruto com blocos de
   شهادة لأدلة السمع.
-- `iroha app sorafs storage pin` و `torii /v1/sorafs/pin/register` بيانات الاسيتام
+- `iroha app sorafs storage pin` و `torii /v2/sorafs/pin/register` بيانات الاسيتام
   Norito أو JSON com الأسماء المستعارة للإثباتات والخيارات اللاحقة؛ البراهين المشوهة
   geram `400`، البراهين التي لا معنى لها retornam `503` com `Warning: 110`، البراهين الإلكترونية التي انتهت صلاحيتها
   ريتورنام `412`.
-- نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
+- نقاط النهاية REST (`/v2/sorafs/pin`، `/v2/sorafs/aliases`، `/v2/sorafs/replication`)
   تتضمن استراتيجيات التصديق حتى يتمكن العملاء من التحقق من بياناتهم ضد نظام التشغيل
   آخر رؤوس الكتلة قبل التشغيل.
 

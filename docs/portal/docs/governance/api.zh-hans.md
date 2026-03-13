@@ -22,11 +22,11 @@ translator: machine-google-reviewed
 - SDK覆盖范围：
 - Python（`iroha_python`）：`ToriiClient.get_governance_proposal_typed`返回`GovernanceProposalResult`（标准化状态/种类字段），`ToriiClient.get_governance_referendum_typed`返回`GovernanceReferendumResult`，`ToriiClient.get_governance_tally_typed`返回`GovernanceTally`， `ToriiClient.get_governance_locks_typed` 返回 `GovernanceLocksResult`，`ToriiClient.get_governance_unlock_stats_typed` 返回 `GovernanceUnlockStats`，`ToriiClient.list_governance_instances_typed` 返回 `GovernanceInstancesPage`，通过 README 使用示例在治理表面上强制执行类型化访问。
 - Python 轻量级客户端 (`iroha_torii_client`)：`ToriiClient.finalize_referendum` 和 `ToriiClient.enact_proposal` 返回类型化的 `GovernanceInstructionDraft` 捆绑包（包装 Torii 骨架 `tx_instructions`），避免在脚本组成 Finalize/Enact 流时进行手动 JSON 解析。
-- JavaScript (`@iroha/iroha-js`)：`ToriiClient` 表面键入了提案、公投、统计、锁定、解锁统计数据的帮助程序，现在 `listGovernanceInstances(namespace, options)` 加上理事会端点（`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、`governancePersistCouncil`、 `getGovernanceCouncilAudit`），因此 Node.js 客户端可以对 `/v1/gov/instances/{ns}` 进行分页，并在现有合约实例列表旁边驱动 VRF 支持的工作流程。
+- JavaScript (`@iroha/iroha-js`)：`ToriiClient` 表面键入了提案、公投、统计、锁定、解锁统计数据的帮助程序，现在 `listGovernanceInstances(namespace, options)` 加上理事会端点（`getGovernanceCouncilCurrent`、`governanceDeriveCouncilVrf`、`governancePersistCouncil`、 `getGovernanceCouncilAudit`），因此 Node.js 客户端可以对 `/v2/gov/instances/{ns}` 进行分页，并在现有合约实例列表旁边驱动 VRF 支持的工作流程。
 
 端点
 
-- 后 `/v1/gov/proposals/deploy-contract`
+- 后 `/v2/gov/proposals/deploy-contract`
   - 请求（JSON）：
     {
       “命名空间”：“应用程序”，
@@ -43,30 +43,30 @@ translator: machine-google-reviewed
   - 验证：节点将 `abi_hash` 规范化为提供的 `abi_version` 并拒绝不匹配。对于 `abi_version = "v1"`，预期值为 `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`。
 
 合约 API（部署）
-- 后 `/v1/contracts/deploy`
+- 后 `/v2/contracts/deploy`
   - 请求：{ "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - 行为：从 IVM 程序体计算 `code_hash`，从标头 `abi_version` 计算 `abi_hash`，然后提交 `RegisterSmartContractCode`（清单）和 `RegisterSmartContractBytes`（完整的 `.to`）字节）代表`authority`。
   - 响应：{“ok”：true，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
   - 相关：
-    - GET `/v1/contracts/code/{code_hash}` → 返回存储的清单
-    - 获取 `/v1/contracts/code-bytes/{code_hash}` → 返回 `{ code_b64 }`
-- 后 `/v1/contracts/instance`
+    - GET `/v2/contracts/code/{code_hash}` → 返回存储的清单
+    - 获取 `/v2/contracts/code-bytes/{code_hash}` → 返回 `{ code_b64 }`
+- 后 `/v2/contracts/instance`
   - 请求：{ "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - 行为：部署提供的字节码并立即通过 `ActivateContractInstance` 激活 `(namespace, contract_id)` 映射。
   - 响应：{“ok”：true，“namespace”：“apps”，“contract_id”：“calc.v1”，“code_hash_hex”：“…”，“abi_hash_hex”：“…”}
 
 别名服务
-- 后 `/v1/aliases/voprf/evaluate`
+- 后 `/v2/aliases/voprf/evaluate`
   - 请求：{“blinded_element_hex”：“…”}
   - 响应：{“evaluated_element_hex”：“…128hex”，“后端”：“blake2b512-mock”}
     - `backend` 反映了评估器的实现。当前值：`blake2b512-mock`。
   - 注释：确定性模拟评估器应用带有域分离 `iroha.alias.voprf.mock.v1` 的 Blake2b512。用于测试工具，直到生产 VOPRF 管道通过 Iroha 连接。
   - 错误：十六进制输入格式错误时出现 HTTP `400`。 Torii 返回包含解码器错误消息的 Norito `ValidationFail::QueryFailed::Conversion` 信封。
-- 后 `/v1/aliases/resolve`
+- 后 `/v2/aliases/resolve`
   - 请求: { "alias": "GB82 WEST 1234 5698 7654 32" }
   - 响应: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - 注意：需要 ISO 桥运行时分段（`[iso_bridge.account_aliases]` 中的 `iroha_config`）。 Torii 通过在查找之前去除空格和大写字母来标准化别名。当别名不存在时返回 404，当 ISO 桥接运行时被禁用时返回 503。
-- 后 `/v1/aliases/resolve_index`
+- 后 `/v2/aliases/resolve_index`
   - 请求：{“索引”：0}
   - 响应: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - 注意：别名索引是根据配置顺序（从 0 开始）确定性分配的。客户端可以离线缓存响应，以构建别名证明事件的审计跟踪。
@@ -77,7 +77,7 @@ translator: machine-google-reviewed
   - 默认：16 MiB。当 `.to` 图像长度超过上限并出现不变违规错误时，节点会拒绝 `RegisterSmartContractBytes`。
   - 运营商可以通过提交 `SetParameter(Custom)` 和 `id = "max_contract_code_bytes"` 以及数字有效负载来进行调整。
 
-- 后 `/v1/gov/ballots/zk`
+- 后 `/v2/gov/ballots/zk`
   - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意事项：
@@ -85,12 +85,12 @@ translator: machine-google-reviewed
     - 尝试缩减金额或到期的 ZK 重新投票会被服务器端拒绝，并带有 `BallotRejected` 诊断。
     - 合约执行必须在排队 `SubmitBallot` 之前调用 `ZK_VOTE_VERIFY_BALLOT`；主机强制执行一次性锁存。
 
-- 后 `/v1/gov/ballots/plain`
+- 后 `/v2/gov/ballots/plain`
   - 请求：{ "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}
   - 注意：重新投票只能延长——新的投票不能减少现有锁定的数量或到期时间。 `owner`必须等于交易权限。最短持续时间为 `conviction_step_blocks`。
 
-- 后 `/v1/gov/finalize`
+- 后 `/v2/gov/finalize`
   - 请求：{“referendum_id”：“r1”，“proposal_id”：“…64hex”，“authority”：“i105…？”，“private_key”：“…？” }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - 链上效应（当前脚手架）：制定已批准的部署提案会插入由 `code_hash` 键入的最小 `ContractManifest` 和预期的 `abi_hash`，并将提案标记为已实施。如果 `code_hash` 的清单已存在且具有不同的 `abi_hash`，则颁布将被拒绝。
@@ -99,22 +99,22 @@ translator: machine-google-reviewed
     - 在 `h_end` 处自动关闭仅针对普通公投发出批准/拒绝； ZK 公投保持关闭状态，直到提交最终计票并执行 `FinalizeReferendum`。
     - 投票率检查仅使用批准+拒绝；弃权不计入投票率。
 
-- 后 `/v1/gov/enact`
+- 后 `/v2/gov/enact`
   - 请求：{“proposal_id”：“…64hex”，“preimage_hash”：“…64hex？”，“window”：{“lower”：0，“upper”：0}？，“authority”：“i105…？”，“private_key”：“…？” }
   - 响应：{ "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注：Torii在提供`authority`/`private_key`时提交签名交易；否则，它会返回一个框架供客户签名和提交。原像是可选的并且当前是信息性的。
 
-- 获取 `/v1/gov/proposals/{id}`
+- 获取 `/v2/gov/proposals/{id}`
   - 路径 `{id}`：提案 ID 十六进制（64 个字符）
   - 响应：{“找到”：布尔，“建议”：{…}？ }
 
-- 获取 `/v1/gov/locks/{rid}`
+- 获取 `/v2/gov/locks/{rid}`
   - 路径 `{rid}`：公投 ID 字符串
   - 响应：{“found”：bool，“referendum_id”：“rid”，“locks”：{…}？ }
 
-- 获取 `/v1/gov/council/current`
+- 获取 `/v2/gov/council/current`
   - 响应：{ "epoch": N, "members": [{ "account_id": "..." }, ...] }
-  - 注释：返回存在的持久理事会；否则使用配置的权益资产和阈值得出确定性后备（镜像 VRF 规范，直到实时 VRF 证明保留在链上）。- POST `/v1/gov/council/derive-vrf`（功能：gov_vrf）
+  - 注释：返回存在的持久理事会；否则使用配置的权益资产和阈值得出确定性后备（镜像 VRF 规范，直到实时 VRF 证明保留在链上）。- POST `/v2/gov/council/derive-vrf`（功能：gov_vrf）
   - 请求：{“committee_size”：21，“epoch”：123？ , "candidates": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - 行为：根据源自 `chain_id`、`epoch` 和最新区块哈希信标的规范输入验证每个候选者的 VRF 证明；按输出字节 desc 进行排序；返回顶部 `committee_size` 成员。不坚持。
   - 响应：{“epoch”：N，“members”：[{“account_id”：“…”} …]，“total_candidates”：M，“verified”：K }
@@ -189,7 +189,7 @@ RBAC
 - 满足挂钩的交易必须包含元数据 `gov_upgrade_id=<value>`（或清单定义的密钥）以及清单法定人数所需的任何验证器批准。
 
 便利端点
-- POST `/v1/gov/protected-namespaces` — 直接在节点上应用 `gov_protected_namespaces`。
+- POST `/v2/gov/protected-namespaces` — 直接在节点上应用 `gov_protected_namespaces`。
   - 请求：{“命名空间”：[“应用程序”，“系统”]}
   - 响应：{“ok”：true，“applied”：1}
   - 注释：用于管理/测试；如果已配置，则需要 API 令牌。对于生产，更喜欢提交带有 `SetParameter(Custom)` 的签名交易。
@@ -198,7 +198,7 @@ CLI 助手
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - 获取命名空间的合约实例并交叉检查：
     - Torii 存储每个 `code_hash` 的字节码，并且其 Blake2b-32 摘要与 `code_hash` 匹配。
-    - 存储在 `/v1/contracts/code/{code_hash}` 下的清单报告匹配 `code_hash` 和 `abi_hash` 值。
+    - 存储在 `/v2/contracts/code/{code_hash}` 下的清单报告匹配 `code_hash` 和 `abi_hash` 值。
     - `(namespace, contract_id, code_hash, abi_hash)` 存在已颁布的治理提案，该提案是通过节点使用的相同提案 ID 散列得出的。
   - 输出一份 JSON 报告，其中每个合同包含 `results[]`（问题、清单/代码/提案摘要）以及一行摘要（除非被抑制）（`--no-summary`）。
   - 对于审核受保护的命名空间或验证治理控制的部署工作流程很有用。
@@ -216,7 +216,7 @@ CLI 助手
   - 摘要输出通过包含编码的指令指纹和人类可读的选票字段（`owner`、`amount`、`duration_blocks`、`direction`）来镜像 `vote --mode zk`，在签署框架之前提供快速确认。
 
 实例列表
-- GET `/v1/gov/instances/{ns}` — 列出命名空间的活动合约实例。
+- GET `/v2/gov/instances/{ns}` — 列出命名空间的活动合约实例。
   - 查询参数：
     - `contains`：按 `contract_id` 的子字符串过滤（区分大小写）
     - `hash_prefix`：按 `code_hash_hex`（小写）的十六进制前缀过滤
@@ -226,10 +226,10 @@ CLI 助手
   - SDK 帮助程序：`ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) 或 `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)。
 
 解锁扫码（操作员/审计）
-- 获取 `/v1/gov/unlocks/stats`
+- 获取 `/v2/gov/unlocks/stats`
   - 响应：{ "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - 注：`last_sweep_height` 反映了过期锁被清除和持久化的最新区块高度。 `expired_locks_now` 是通过扫描 `expiry_height <= height_current` 的锁定记录来计算的。
-- 后 `/v1/gov/ballots/zk-v1`
+- 后 `/v2/gov/ballots/zk-v1`
   - 请求（v1 样式 DTO）：
     {
       "权威": "i105...",
@@ -245,7 +245,7 @@ CLI 助手
       "direction": "赞成|反对|弃权？",
       "nullifier": "blake2b32:…64hex？"
     }
-  - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}- POST `/v1/gov/ballots/zk-v1/ballot-proof`（特征：`zk-ballot`）
+  - 响应：{“ok”：true，“accepted”：true，“tx_instructions”：[{…}]}- POST `/v2/gov/ballots/zk-v1/ballot-proof`（特征：`zk-ballot`）
   - 直接接受 `BallotProof` JSON 并返回 `CastZkBallot` 骨架。
   - 要求：
     {
@@ -321,7 +321,7 @@ VRF 处罚在 `activation_lag_blocks` 后自动执行（违法者将被监禁）
 
 操作员和工具可以通过以下方式检查和重新广播有效负载：
 
-- Torii：`GET /v1/sumeragi/evidence` 和 `GET /v1/sumeragi/evidence/count`。
+- Torii：`GET /v2/sumeragi/evidence` 和 `GET /v2/sumeragi/evidence/count`。
 - CLI：`iroha ops sumeragi evidence list`、`… count` 和 `… submit --evidence-hex <payload>`。
 
 治理必须将证据字节视为规范证明：
@@ -330,7 +330,7 @@ VRF 处罚在 `activation_lag_blocks` 后自动执行（违法者将被监禁）
 2. **如果需要取消**，在 `slashing_delay_blocks` 失效之前提交带有证据负载的 `CancelConsensusEvidencePenalty`；该记录标记为 `penalty_cancelled` 和 `penalty_cancelled_at_height`，并且不适用削减。
 3. **通过将有效负载嵌入公投或 sudo 指令（例如 `Unregister::peer`）来实施惩罚**。执行重新验证有效负载；格式错误或过时的证据将被确定性地拒绝。
 4. **安排后续拓扑**，以便有问题的验证者无法立即重新加入。具有更新名册的典型流队列 `SetParameter(Sumeragi::NextMode)` 和 `SetParameter(Sumeragi::ModeActivationHeight)`。
-5. 通过 `/v1/sumeragi/evidence` 和 `/v1/sumeragi/status` **审核结果**，以确保证据反驳取得进展并由治理部门实施删除。
+5. 通过 `/v2/sumeragi/evidence` 和 `/v2/sumeragi/status` **审核结果**，以确保证据反驳取得进展并由治理部门实施删除。
 
 ### 联合共识测序
 
@@ -345,11 +345,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- 运行时和 CLI 通过 `/v1/sumeragi/params` 和 `iroha --output-format text ops sumeragi params` 公开分阶段参数，以便操作员可以确认激活高度和验证器名册。
+- 运行时和 CLI 通过 `/v2/sumeragi/params` 和 `iroha --output-format text ops sumeragi params` 公开分阶段参数，以便操作员可以确认激活高度和验证器名册。
 - 治理自动化应始终：
   1. 最终确定有证据支持的移除（或恢复）决定。
   2. 使用 `mode_activation_height = h_current + activation_lag_blocks` 对后续重新配置进行排队。
-  3. 监视 `/v1/sumeragi/status`，直到 `effective_consensus_mode` 翻转到预期高度。
+  3. 监视 `/v2/sumeragi/status`，直到 `effective_consensus_mode` 翻转到预期高度。
 
 任何轮换验证器或应用削减的脚本**不得**尝试零延迟激活或省略交接参数；此类交易将被拒绝，并使网络保持先前的模式。
 

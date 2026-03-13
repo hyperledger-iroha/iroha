@@ -25,7 +25,7 @@ Quyidagi nazorat ro'yxati tashqi operatorlar uchun bozorni yoqishdan oldin ko'ri
 
 | Tekshiring | Tasdiqlash | Dalil |
 |-------|------------|----------|
-| Registr kanonik sig'im deklaratsiyasini qabul qiladi | Integratsiya testi `/v1/sorafs/capacity/declare` ilova API orqali amalga oshiriladi, imzo bilan ishlov berish, metama'lumotlarni yozib olish va tugun registriga o'tkazishni tekshiradi. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registr kanonik sig'im deklaratsiyasini qabul qiladi | Integratsiya testi `/v2/sorafs/capacity/declare` ilova API orqali amalga oshiriladi, imzo bilan ishlov berish, metama'lumotlarni yozib olish va tugun registriga o'tkazishni tekshiradi. | `crates/iroha_torii/src/routing.rs:7654` |
 | Smart kontrakt mos kelmaydigan foydali yuklarni rad etadi | Birlik testi davom etishdan oldin provayder identifikatorlari va belgilangan GiB maydonlari imzolangan deklaratsiyaga mos kelishini ta'minlaydi. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI kanonik onboarding artefaktlarini chiqaradi | CLI jabduqlari Norito/JSON/Base64 deterministik natijalarini yozadi va operatorlar deklaratsiyalarni oflayn rejimda ko'rsatishi uchun aylanma safarlarni tasdiqlaydi. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Operator qo'llanmasi qabul ish jarayoni va boshqaruv to'siqlarini qamrab oladi | Hujjatlar deklaratsiya sxemasini, siyosat defoltlarini va kengash uchun ko'rib chiqish bosqichlarini sanab o'tadi. | `../storage-capacity-marketplace.md` |

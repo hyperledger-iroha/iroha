@@ -76,7 +76,7 @@ translator: manual
 
 - Core שומר סיידקארים ב-`pipeline/sidecars.norito` עם אינדקס `pipeline/sidecars.index`, וכל רשומה כוללת קבוצות קריאה/כתיבה ו-DAG fingerprint.
 - באתחול נבדקות 16 הגבהים האחרונים; אי התאמה → אזהרה ו-`PipelineEventBox::Warning` עם `dag_fingerprint_mismatch`.
-- ניתן למשוך סיידקאר דרך `GET /v1/pipeline/recovery/:height`.
+- ניתן למשוך סיידקאר דרך `GET /v2/pipeline/recovery/:height`.
 
 ## אירועי Witness להוצאה לפועל
 

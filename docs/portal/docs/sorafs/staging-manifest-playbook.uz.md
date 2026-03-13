@@ -74,13 +74,13 @@ Ushbu qoʻllanma ishlab chiqarishga oʻzgartirish kiritishdan oldin parlament to
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Kashfiyot so'nggi nuqtasini so'rang va reklamaning kanonik taxalluslar bilan paydo bo'lishini tasdiqlang:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    `profile_aliases` birinchi yozuv sifatida `"sorafs.sf1@1.0.0"` ni o'z ichiga olganligiga ishonch hosil qiling.

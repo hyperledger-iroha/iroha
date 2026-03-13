@@ -48,7 +48,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Torii endpoints (feature `app_api`)
 
-- `POST /v1/contracts/deploy`
+- `POST /v2/contracts/deploy`
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
   - Torii decodes the base64 payload, computes both hashes, builds a manifest,
     and submits `RegisterSmartContractCode` plus
@@ -57,19 +57,19 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
   - Errors: invalid base64, unsupported ABI version, missing permission
     (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
-- `POST /v1/contracts/code`
+- `POST /v2/contracts/code`
   - Accepts `RegisterContractCodeDto` (authority, private key, manifest) and submits only
     `RegisterSmartContractCode`. Use when manifests are staged separately from
     bytecode.
-- `POST /v1/contracts/instance`
+- `POST /v2/contracts/instance`
   - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`, optional manifest overrides) and deploys + activates atomically.
-- `POST /v1/contracts/instance/activate`
+- `POST /v2/contracts/instance/activate`
   - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
-- `GET /v1/contracts/code/{code_hash}`
+- `GET /v2/contracts/code/{code_hash}`
   - Returns `{ manifest: { code_hash, abi_hash } }`.
     Additional manifest fields are preserved internally but omitted here for a
     stable API.
-- `GET /v1/contracts/code-bytes/{code_hash}`
+- `GET /v2/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
 All contract lifecycle endpoints share a dedicated deploy limiter configured via
@@ -86,10 +86,10 @@ returns HTTP 429; any handler error increments
 
 - Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
   strings) to enable admission gating. Torii exposes helpers under
-  `/v1/gov/protected-namespaces` and the CLI mirrors them via
+  `/v2/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - Proposals created with `ProposeDeployContract` (or the Torii
-  `/v1/gov/proposals/deploy-contract` endpoint) capture
+  `/v2/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
   admission will accept deployments that carry matching metadata and code.

@@ -29,7 +29,7 @@ summary: Quick validation workflow for chunk-range endpoints and orchestrator in
 
 Use the manifest report from `iroha app sorafs toolkit pack` and the provider id from the
 gateway registry/admission record to mint a scoped token for the gateway under test.
-The CLI wraps Torii’s `/v1/sorafs/storage/token` endpoint and takes care of the
+The CLI wraps Torii’s `/v2/sorafs/storage/token` endpoint and takes care of the
 `X-SoraFS-Client`/`X-SoraFS-Nonce` headers for you:
 
 ```bash

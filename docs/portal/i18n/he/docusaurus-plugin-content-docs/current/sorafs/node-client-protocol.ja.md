@@ -74,7 +74,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 Gateways מקבלים בקשות HTTP דטרמיניסטיות שמראות את מטא-נתוני המודעה.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | דרישה | פרטים |
 |-------|-------|
@@ -82,7 +82,7 @@ Gateways מקבלים בקשות HTTP דטרמיניסטיות שמראות את
 | **Responses** | `206` עם `Content-Type: application/vnd.ipld.car`, `Content-Range` המתאר את החלון שסופק, מטא-נתוני `X-Sora-Chunk-Range`, והדהוד של headers chunker/token. |
 | **Failure modes** | `416` לטווחים לא מיושרים, `401` לטוקנים חסרים/לא תקינים, `429` כאשר חורגים מתקציבי stream/byte. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch של chunk בודד עם אותם headers בתוספת digest דטרמיניסטי של chunk. שימושי
 ל-retries או הורדות forensics כשאין צורך ב-CAR slices.
@@ -132,11 +132,11 @@ SDKs דרך `sorafs_orchestrator`):
 - `iroha app sorafs pin list|show`, `alias list` ו-`replication list` עוטפים את
   נקודות הקצה של pin-registry ומדפיסים Norito JSON גולמי עם בלוקי attestation
   לצורכי ראיות ביקורת.
-- `iroha app sorafs storage pin` ו-`torii /v1/sorafs/pin/register` מקבלים manifests
+- `iroha app sorafs storage pin` ו-`torii /v2/sorafs/pin/register` מקבלים manifests
   של Norito או JSON יחד עם alias proofs אופציונליים ו-successors; proofs פגומים
   מחזירים `400`, proofs ישנים מחזירים `503` עם `Warning: 110`, ו-proofs שפג
   תוקפם מחזירים `412`.
-- נקודות הקצה (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- נקודות הקצה (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   כוללות מבני attestation כדי שהלקוחות יוכלו לאמת נתונים מול ה-headers של הבלוק
   האחרון לפני פעולה.
 

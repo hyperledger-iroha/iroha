@@ -76,7 +76,7 @@ Sidebar_label: Контрольный список развертывания ч
    ссылка на промежуточную версию `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Проверьте, распространяется ли реклама поставщика через API обнаружения:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Проверьте конечные точки манифеста/плана с заголовками управления:
    ```bash

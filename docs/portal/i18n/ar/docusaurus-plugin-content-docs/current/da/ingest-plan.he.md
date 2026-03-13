@@ -45,7 +45,7 @@ _مسودة: 2026-02-20 - المالك: Core Protocol WG / Storage Team / DA WG_
 ## سطح API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -219,7 +219,7 @@ pub struct DaIngestReceipt {
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه الى artefacts manifest + chunk-plan
   (`--manifest`, `--plan`, `--manifest-id`) **او** تمرير storage ticket من Torii
   عبر `--storage-ticket`. عند استخدام مسار ticket، تقوم CLI بجلب manifest من
-  `/v1/da/manifests/<ticket>`، وتخزن الحزمة تحت `artifacts/da/fetch_<timestamp>/`
+  `/v2/da/manifests/<ticket>`، وتخزن الحزمة تحت `artifacts/da/fetch_<timestamp>/`
   (override مع `--manifest-cache-dir`)، وتشتق hash الـ blob لـ `--manifest-id`،
   ثم تشغل orchestrator مع قائمة `--gateway-provider` المعطاة. تبقى جميع knobs
   المتقدمة من جالب SoraFS كما هي (manifest envelopes، تسميات العميل، guard
@@ -228,7 +228,7 @@ pub struct DaIngestReceipt {
   تعيش فحوصات availability من النهاية للنهاية ضمن مساحة `da` دون تكرار منطق
   orchestrator.
 - `iroha app da get-blob` يسحب manifests القياسية مباشرة من Torii عبر
-  `GET /v1/da/manifests/{storage_ticket}`. يكتب الامر
+  `GET /v2/da/manifests/{storage_ticket}`. يكتب الامر
   `manifest_{ticket}.norito` و`manifest_{ticket}.json` و`chunk_plan_{ticket}.json`
   تحت `artifacts/da/fetch_<timestamp>/` (او `--output-dir` يحدده المستخدم) مع
   طباعة امر `iroha app da get` الدقيق (بما في ذلك `--manifest-id`) المطلوب لجلب

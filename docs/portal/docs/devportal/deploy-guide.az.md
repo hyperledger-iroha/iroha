@@ -32,7 +32,7 @@ qabıq ixracından.
 
 - `npm` və ya `pnpm` ilə qovşaq 18.18+.
 - `cargo run -p sorafs_car --features cli --bin sorafs_cli`-dən `sorafs_cli`.
-- Torii URL-i `/v1/sorafs/*` üstəgəl səlahiyyət hesabı/şəxsi açarı ifşa edir
+- Torii URL-i `/v2/sorafs/*` üstəgəl səlahiyyət hesabı/şəxsi açarı ifşa edir
   manifestlər və ləqəblər təqdim edə bilər.
 - OIDC emitenti (GitHub Actions, GitLab, iş yükünün identifikasiyası və s.)
   `SIGSTORE_ID_TOKEN`.
@@ -894,7 +894,7 @@ Boru kəməriniz ən azı:
 
 | Adı | Məqsəd |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | `/v1/sorafs/pin/register`-i ifşa edən Torii host. |
+| `DOCS_SORAFS_TORII_URL` | `/v2/sorafs/pin/register`-i ifşa edən Torii host. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Təqdimatlarla qeydə alınmış dövr identifikatoru. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Manifest təqdim etmək üçün imzalama səlahiyyəti. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` `true` olduqda manifestə bağlanan ləqəb dəsti. |

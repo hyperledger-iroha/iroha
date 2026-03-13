@@ -76,10 +76,10 @@ OAuth dəyişənləri mövcud olduqda, qum qutusu konfiqurasiya edilmiş Auth se
 1. [Norito sürətli başlanğıcda](./quickstart.md) təsvir edilən CLI və ya fraqmentlərlə `.norito` faydalı yük yaradın. Proksi `application/x-norito` gövdələrini dəyişməz yönləndirir, beləliklə siz `curl` ilə göndərəcəyiniz eyni artefaktdan yenidən istifadə edə bilərsiniz.
 2. `/reference/torii-rapidoc` (ikili faydalı yüklər üçün üstünlük verilir) və ya `/reference/torii-swagger` açın.
 3. Açılan menyudan istədiyiniz Torii şəklini seçin. Snapshotlar imzalanır; panel `static/openapi/manifest.json`-də qeydə alınmış manifest həzmini göstərir.
-4. “Sınayın” qovluğunda `application/x-norito` məzmun növünü seçin, **Fayl seçin** üzərinə klikləyin və yükünüzü seçin. Proksi sorğunu `/proxy/v1/pipeline/submit`-ə yenidən yazır və onu `X-TryIt-Client=docs-portal-rapidoc` ilə işarələyir.
+4. “Sınayın” qovluğunda `application/x-norito` məzmun növünü seçin, **Fayl seçin** üzərinə klikləyin və yükünüzü seçin. Proksi sorğunu `/proxy/v2/pipeline/submit`-ə yenidən yazır və onu `X-TryIt-Client=docs-portal-rapidoc` ilə işarələyir.
 5. Norito cavablarını yükləmək üçün `Accept: application/x-norito` seçin. Swagger/RapiDoc eyni qutuda başlıq seçicisini açır və ikili faylı proksi vasitəsilə geri axır.
 
-Yalnız JSON marşrutları üçün daxil edilmiş Sınaq qutusu tez-tez daha sürətli olur: yolu daxil edin (məsələn, `/v1/accounts/i105.../assets`), HTTP metodunu seçin, lazım olduqda JSON gövdəsini yapışdırın və başlıqları, müddəti və faydalı yükləri yoxlamaq üçün **Sorğu göndər** düyməsini basın.
+Yalnız JSON marşrutları üçün daxil edilmiş Sınaq qutusu tez-tez daha sürətli olur: yolu daxil edin (məsələn, `/v2/accounts/i105.../assets`), HTTP metodunu seçin, lazım olduqda JSON gövdəsini yapışdırın və başlıqları, müddəti və faydalı yükləri yoxlamaq üçün **Sorğu göndər** düyməsini basın.
 
 ## Problemlərin aradan qaldırılması
 

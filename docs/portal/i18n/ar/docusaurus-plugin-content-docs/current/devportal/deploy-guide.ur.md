@@ -26,7 +26,7 @@ Sigstore لـ OIDC إسناد. طول مدت راز (`IROHA_PRIVATE_KEY`,
 
 - العقدة 18.18+ ساتھ `npm` أو `pnpm`.
 - `sorafs_cli` جو `cargo run -p sorafs_car --features cli --bin sorafs_cli` حصل على ہو۔
-- Torii URL `/v1/sorafs/*` ظهور الصفحة وأي بطاقة إلكترونية/رائعة موجودة هنا
+- Torii URL `/v2/sorafs/*` ظهور الصفحة وأي بطاقة إلكترونية/رائعة موجودة هنا
   تم جمع شركاتي والأسماء المستعارة.
 - مُصدر OIDC (إجراءات GitHub، GitLab، هوية عبء العمل)
   `SIGSTORE_ID_TOKEN` من هذا القبيل.
@@ -870,7 +870,7 @@ SoraFS تمت المطالبة بجلب أدلة متعددة المصادر (DO
 
 | الاسم | الغرض |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host جو `/v1/sorafs/pin/register` ظہر کرتا ہے۔ |
+| `DOCS_SORAFS_TORII_URL` | Torii host جو `/v2/sorafs/pin/register` ظہر کرتا ہے۔ |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | التقديمات عبارة عن تسجيل مستمر ومعرف العصر. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | التقديم الواضح کے لئے سلطة التوقيع. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | الاسم المستعار Tuple جو `perform_submit` صحيح ہونے پر مانيف سے ربط ہوتا ہے۔ |

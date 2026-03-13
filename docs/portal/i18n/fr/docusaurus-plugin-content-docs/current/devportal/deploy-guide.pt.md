@@ -23,7 +23,7 @@ les exécuteurs locaux peuvent charger des marchandises à partir des exportatio
 
 ## Pré-requis- Nœud 18.18+ avec `npm` ou `pnpm`.
 - `sorafs_cli` à partir de `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL de Torii qui expose `/v1/sorafs/*` mais qui a un contact/une personne privée d'autorisation qui peut envoyer des manifestes et des alias.
+- URL de Torii qui expose `/v2/sorafs/*` mais qui a un contact/une personne privée d'autorisation qui peut envoyer des manifestes et des alias.
 - Émetteur OIDC (Actions GitHub, GitLab, identité de charge de travail, etc.) pour émettre un `SIGSTORE_ID_TOKEN`.
 - Facultatif : `examples/sorafs_cli_quickstart.sh` pour les exécutions et `docs/source/sorafs_ci_templates.md` pour l'échafaudage des workflows de GitHub/GitLab.
 - Configurer comme variables OAuth de Tre it (`DOCS_OAUTH_*`) et exécuter un
@@ -804,7 +804,7 @@ Configurez les suites du référentiel de secrets/variables avant de supprimer l
 
 | Nom | Proposé |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Hôte Torii qui expose `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Hôte Torii qui expose `/v2/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificateur d'époque enregistré avec les soumissions. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autoridad de assinatura para o soumettre del manifeste. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tuple d'alias inscrit dans le manifeste lorsque `perform_submit` est `true`. |

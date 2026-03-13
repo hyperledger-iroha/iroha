@@ -38,7 +38,7 @@ Asume que la pila de orquestación entregada bajo SF-6 ya está desplegada (`sor
 ## 1. Validación previa
 
 1. **Confirmar entradas de gobernanza.**
-   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con payloads de capacidad de rango y presupuestos de stream. Valídalo mediante `/v1/sorafs/providers` y compara con los campos de capacidad esperados.
+   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con payloads de capacidad de rango y presupuestos de stream. Valídalo mediante `/v2/sorafs/providers` y compara con los campos de capacidad esperados.
    - Las instantáneas de telemetría que aportan tasas de latencia/fallo deben tener menos de 15 minutos antes de cada ejecución canaria.
 2. **Preparar la configuración.**
    - Persiste la configuración JSON del orquestador en el árbol `iroha_config` por capas:

@@ -58,12 +58,12 @@ description: نظرة عامة على محرك الصفقات SF-8 وتكامل 
 تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
 دورة حياة الصفقة بدون wiring مخصص:
 
-- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   نتائج محاسبة حتمية (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+- `POST /v2/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
   `DealSettlementRecord` الناتج إلى جانب `DealSettlementV1` مشفّرًا بـ base64
   وجاهزًا للنشر في DAG الحوكمة.
-- يغذي `/v1/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
+- يغذي `/v2/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
   التي تلخص كل إرسال استخدام (epoch، ساعات GiB المقاسة، عدّادات التذاكر،
   الرسوم الحتمية)، وسجلات `SorafsGatewayEvent::DealSettlement`
   التي تتضمن لقطة ledger المعتمدة للتسوية مع digest/الحجم/base64 من BLAKE3

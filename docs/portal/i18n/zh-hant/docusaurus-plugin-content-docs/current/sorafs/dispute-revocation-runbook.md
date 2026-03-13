@@ -22,7 +22,7 @@ translation_last_reviewed: 2026-02-07
 ## 1. 評估事件
 
 - **觸發條件：** 檢測到 SLA 違規（正常運行時間/PoR 故障）、複製不足或計費不一致。
-- **確認遙測：** 為提供商捕獲 `/v1/sorafs/capacity/state` 和 `/v1/sorafs/capacity/telemetry` 快照。
+- **確認遙測：** 為提供商捕獲 `/v2/sorafs/capacity/state` 和 `/v2/sorafs/capacity/telemetry` 快照。
 - **通知利益相關者：** 存儲團隊（提供商運營）、治理委員會（決策機構）、可觀察性（儀表板更新）。
 
 ## 2. 準備證據包
@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-02-07
    ```
 
 3. 審查 `dispute_summary.json`（確認類型、證據摘要、時間戳）。
-4. 通過治理事務隊列向 Torii `/v1/sorafs/capacity/dispute` 提交請求 JSON。捕獲`dispute_id_hex`響應值；它是後續撤銷行動和審計報告的基礎。
+4. 通過治理事務隊列向 Torii `/v2/sorafs/capacity/dispute` 提交請求 JSON。捕獲`dispute_id_hex`響應值；它是後續撤銷行動和審計報告的基礎。
 
 ## 4. 撤消和撤銷
 

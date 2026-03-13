@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- 幫助程序針對每個請求發出一個 `POST /v1/sns/registrations` 併中止
+- 幫助程序針對每個請求發出一個 `POST /v2/sns/registrations` 併中止
   第一個 HTTP 錯誤。響應以 NDJSON 形式附加到日誌路徑
   記錄。
-- `--poll-status` 在每次之後重新查詢 `/v1/sns/registrations/{selector}`
+- `--poll-status` 在每次之後重新查詢 `/v2/sns/registrations/{selector}`
   提交（最多`--poll-attempts`，默認5）以確認該記錄
   可見。提供 `--suffix-map` （`suffix_id` 到 `"suffix"` 值的 JSON）
   該工具可以派生 `{label}.{suffix}` 文字進行輪詢。

@@ -203,7 +203,7 @@ translator: machine-google-reviewed
 - የDA ድጋሚ መሸጎጫ እና የጠቋሚ ጽናት በDA-2 ውስጥ አረፈ። ይመልከቱ
   በ `crates/iroha_core/src/da/replay_cache.rs` (የመሸጎጫ አመክንዮ) እና
   በ `crates/iroha_torii/src/da/ingest.rs` ውስጥ ያለው የ Torii ውህደት
-  የጣት አሻራ በ`/v1/da/ingest` በኩል ይፈትሻል።
+  የጣት አሻራ በ`/v2/da/ingest` በኩል ይፈትሻል።
 - የPDP/PoTR ዥረት ማስመሰያዎች የሚከናወኑት በማረጋገጫ ዥረት መታጠቂያ በኩል ነው።
   `crates/sorafs_car/tests/sorafs_cli.rs`፣ የPoR/PDP/PoTR የጥያቄ ፍሰቶችን ይሸፍናል።
   እና በስጋት ሞዴል ውስጥ የታነሙ የውድቀት ሁኔታዎች።

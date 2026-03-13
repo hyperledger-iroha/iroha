@@ -2026,14 +2026,17 @@ impl Executor {
             None
         };
         if let Some(reg_trg) = reg_trg {
-            // Allow in genesis, or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
+            // Allow in genesis, or if tx authority owns any domain linked to trigger owner,
+            // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
+            let is_domain_owner =
+                authority_owns_any_subject_domain(&state_transaction.world, authority, &trg_owner)?;
 
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &trg_owner);
 
-            if !(is_genesis || has_permission) {
+            if !(is_genesis || is_domain_owner || has_permission) {
                 return Err(ValidationFail::NotPermitted(
                     "Can't register trigger owned by another account".to_owned(),
                 ));
@@ -3476,8 +3479,33 @@ fn can_modify_account_metadata(
     authority_has_permission(world, authority, &required)
 }
 
+fn authority_owns_domain(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    domain_id: &DomainId,
+) -> Result<bool, ValidationFail> {
+    let owner = world
+        .domain(domain_id)
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    Ok(&owner == authority)
+}
+
+fn authority_owns_any_subject_domain(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    subject: &AccountId,
+) -> Result<bool, ValidationFail> {
+    for domain_id in world.domains_for_subject(subject) {
+        if authority_owns_domain(world, authority, &domain_id)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn can_transfer_domain(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
     authority: &AccountId,
     transfer: &Transfer<Account, DomainId, Account>,
 ) -> Result<bool, ValidationFail> {
@@ -3485,11 +3513,15 @@ fn can_transfer_domain(
         return Ok(true);
     }
 
-    Ok(false)
+    if authority_owns_any_subject_domain(world, authority, transfer.source())? {
+        return Ok(true);
+    }
+
+    authority_owns_domain(world, authority, transfer.object())
 }
 
 fn can_transfer_asset_definition(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
     authority: &AccountId,
     transfer: &Transfer<Account, AssetDefinitionId, Account>,
 ) -> Result<bool, ValidationFail> {
@@ -3497,7 +3529,11 @@ fn can_transfer_asset_definition(
         return Ok(true);
     }
 
-    Ok(false)
+    let owner = world
+        .asset_definition(transfer.object())
+        .map(|definition| definition.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    Ok(&owner == authority)
 }
 
 fn can_transfer_nft(
@@ -3506,6 +3542,10 @@ fn can_transfer_nft(
     transfer: &Transfer<Account, iroha_data_model::NftId, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source() == authority {
+        return Ok(true);
+    }
+
+    if authority_owns_domain(world, authority, transfer.object().domain())? {
         return Ok(true);
     }
 
@@ -3522,6 +3562,14 @@ fn can_transfer_asset(
     transfer: &Transfer<Asset, Numeric, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
+        return Ok(true);
+    }
+
+    if authority_owns_domain(world, authority, transfer.source().definition().domain())? {
+        return Ok(true);
+    }
+
+    if authority_owns_any_subject_domain(world, authority, transfer.source().account())? {
         return Ok(true);
     }
 
@@ -3661,13 +3709,32 @@ pub(crate) fn extract_register_asset_definition(
 }
 
 pub(crate) fn ensure_asset_definition_registration_allowed(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _authority: &AccountId,
-    _reg_asset_definition: &Register<AssetDefinition>,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    reg_asset_definition: &Register<AssetDefinition>,
 ) -> Result<(), ValidationFail> {
-    // First-release hard-cut semantics: asset definitions are issuer-owned and not
-    // admission-gated by domain ownership.
-    Ok(())
+    let is_genesis_context = state_transaction._curr_block.is_genesis()
+        && state_transaction.block_hashes.is_empty()
+        && state_transaction
+            .world
+            .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+            .is_ok();
+    if is_genesis_context {
+        return Ok(());
+    }
+
+    let domain_owner = state_transaction
+        .world
+        .domain(reg_asset_definition.object().id().domain())
+        .map(|domain| domain.owned_by().clone())
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if &domain_owner == authority {
+        return Ok(());
+    }
+
+    Err(ValidationFail::NotPermitted(
+        "Can't register asset definition".to_owned(),
+    ))
 }
 
 #[allow(dead_code)]

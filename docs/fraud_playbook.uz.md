@@ -83,7 +83,7 @@ kelgusi ilovalar buxgalteriya kitobiga xavfsiz tarzda ulanishi mumkin.
 Shlyuz endi aniq JSON konvertlarini ochadi, ular birma-bir xaritaga tushadi
 `crates/iroha_data_model::fraud` da joriy qilingan Norito turlari:
 
-- **Riskni qabul qilish** – `POST /v1/fraud/query` `RiskQuery` sxemasini qabul qiladi:
+- **Riskni qabul qilish** – `POST /v2/fraud/query` `RiskQuery` sxemasini qabul qiladi:
   - `query_id` (`[u8; 32]`, olti burchakli kodlangan)
   - `subject` (`AccountId`, kanonik I105 harfi; ixtiyoriy `@<domain>` maslahat yoki taxallus)
   - `operation` (`RiskOperation`ga mos keladigan tegli raqam; JSON `type`
@@ -94,14 +94,14 @@ Shlyuz endi aniq JSON konvertlarini ochadi, ular birma-bir xaritaga tushadi
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; tashuvchisi `tenant_id`, ixtiyoriy `session_id`,
     ixtiyoriy `reason`)
-- **Xavf qarori** – `POST /v1/fraud/assessment` sarflaydi
+- **Xavf qarori** – `POST /v2/fraud/assessment` sarflaydi
   `FraudAssessment` foydali yuk (shuningdek, boshqaruv eksportida aks ettirilgan):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` raqam), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }` massivi)
   - `generated_at_ms`
   - `signature` (ixtiyoriy base64 Norito bilan kodlangan baholashni o'rab oladi)
-- **Boshqaruv eksporti** – `GET /v1/fraud/governance/export` qaytaradi
+- **Boshqaruv eksporti** – `GET /v2/fraud/governance/export` qaytaradi
   `governance` funksiyasi yoqilganda `GovernanceExport` tuzilishi, birlashma
   faol parametrlar, so'nggi qonun, model versiyasi, siyosat dayjesti va
   `DecisionAggregate` gistogrammasi.

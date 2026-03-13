@@ -103,7 +103,7 @@ translation_last_reviewed: 2025-11-14
 один‑к‑одному соответствии с Norito‑типами из
 `crates/iroha_data_model::fraud`:
 
-- **Risk intake** – `POST /v1/fraud/query` принимает payload по схеме
+- **Risk intake** – `POST /v2/fraud/query` принимает payload по схеме
   `RiskQuery`:
   - `query_id` (`[u8; 32]`, hex‑кодировка)
   - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
@@ -115,7 +115,7 @@ translation_last_reviewed: 2025-11-14
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; содержит `tenant_id`, необязательный
     `session_id` и необязательное `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` принимает payload
+- **Risk decision** – `POST /v2/fraud/assessment` принимает payload
   `FraudAssessment` (также используемый в экспортируемых артефактах
   управления):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
@@ -124,7 +124,7 @@ translation_last_reviewed: 2025-11-14
   - `generated_at_ms`
   - `signature` (опциональная base64‑обёртка вокруг оценки `FraudAssessment`,
     закодированной в Norito)
-- **Governance export** – `GET /v1/fraud/governance/export` возвращает
+- **Governance export** – `GET /v2/fraud/governance/export` возвращает
   структуру `GovernanceExport`, когда включена feature `governance`. В ней
   агрегируются активные параметры, последняя enactment‑запись, версия модели,
   policy‑digest и гистограмма `DecisionAggregate`.

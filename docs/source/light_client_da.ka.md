@@ -21,7 +21,7 @@ Merkle-ის მიერ დამოწმებული RBC ბლოკი
 ## დასასრული
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 საბოლოო წერტილი მოითხოვს `X-API-Token` სათაურს, რომელიც შეესაბამება ერთ-ერთ კონფიგურაციას

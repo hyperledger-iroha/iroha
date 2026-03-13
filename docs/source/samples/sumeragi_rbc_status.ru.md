@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-01-30
 # Sumeragi — RBC Status (Torii)
 
 Endpoint
-- `GET /v1/sumeragi/rbc`
+- `GET /v2/sumeragi/rbc`
 
 Response (example)
 ```json
@@ -27,7 +27,7 @@ Response (example)
 }
 ```
 
-Sample session detail (`GET /v1/sumeragi/rbc/sessions`, truncated):
+Sample session detail (`GET /v2/sumeragi/rbc/sessions`, truncated):
 
 ```json
 {

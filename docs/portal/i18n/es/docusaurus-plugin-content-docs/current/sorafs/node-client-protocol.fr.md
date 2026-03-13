@@ -68,7 +68,7 @@ Herramientas de soporte:
 ## Rango de puntos finales de la puerta de enlaceLas puertas de enlace aceptan solicitudes HTTP determinadas que reflejan las
 Metadonnées des Ads.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Exigencia | Detalles |
 |----------|---------|
@@ -76,7 +76,7 @@ Metadonnées des Ads.
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range` decrivant el servicio de ventana, métadonnées `X-Sora-Chunk-Range` y encabezados fragmentados/token renovados. |
 | **Modos de limpieza** | `416` para placas mal alineadas, `401` para tokens manquants/invalides, `429` cuando los presupuestos stream/octet están pasados. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Obtener un solo fragmento con los mismos encabezados, además del resumen determinado por
 trozo. Útil para reintentos o descargas forenses cuando
@@ -127,12 +127,12 @@ Errores corrientes recuperados por los operadores/SDK:
 - Archivos embalsados `iroha app sorafs pin list|show`, `alias list` y `replication list`
   puntos finales REST del registro de pines e impresión del Norito JSON bruto con bloques
   atestación para la auditoría.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` aceptan des
+- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` aceptan des
   manifiesta Norito o JSON, además de las pruebas de alias opcionales y sucesores;
   des pruebas mal formadas renvoient `400`, des pruebas obsolètes exponennt `503` avec
   `Warning: 110`, y las pruebas caducadas se entregan a `412`.
-- Los puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) incluye las estructuras de atestación para que les
+- Los puntos finales REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) incluye las estructuras de atestación para que les
   Los clientes verifican las donaciones con los últimos encabezados de bloque antes de girar.
 
 ## Referencias- Especificación canónica :

@@ -99,7 +99,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    конфигурация снимок өсөн провенанс:
 
    ```bash
-   curl -sS "${TORII_URL}/v1/configuration" \
+   curl -sS "${TORII_URL}/v2/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
@@ -110,7 +110,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    тикшерелгән `RepoGovernance` ҡиммәттәрен тикшергән. JSON яуаптарын һаҡлағыҙ
    `artifacts/finance/repo/<agreement>/agreements_after.json` буйынса; шул ҡиммәттәр
    `[settlement.repo]`-тан алынған, шуға күрә улар икенсел шаһит булып сығыш яһай.
-   Torii’s `/v1/configuration` снимок етерлек түгел.
+   Torii’s `/v2/configuration` снимок етерлек түгел.
 .
    дәлилдәр өйөмө идара итеү тураһында үтенес биргәнсе. Аудиторҙар булырға тейеш, тип
    өҙөк өҙөк, уның хеш раҫлау, һәм уны идара итеү ваҡыты күренеше менән корреляция.
@@ -146,10 +146,10 @@ scripts/regen_repo_proof_fixture.sh
 
 ### 2.4 Torii API өҫтө
 
-- `GET /v1/repo/agreements` опциональ страфия менән әүҙем килешелгәндәрҙе кире ҡайтара, фильтрлау
+- `GET /v2/repo/agreements` опциональ страфия менән әүҙем килешелгәндәрҙе кире ҡайтара, фильтрлау
   (`filter={...}`), сорттарға бүлергә, һәм адрестар форматлау параметрҙары. Был тиҙ аудит өсөн ҡулланыу йәки .
   приборҙар таҡтаһы ҡасан сеймал JSON файҙалы йөктәр етә.
-- `POST /v1/repo/agreements/query` структуралы эҙләү конвертын ҡабул итә (яратыу, сорттарға,
+- `POST /v2/repo/agreements/query` структуралы эҙләү конвертын ҡабул итә (яратыу, сорттарға,
   `FilterExpr`, `fetch_size`) шулай итеп, аҫҡы хеҙмәттәр аша битендә детерминистик рәүештә бит.
 - JavaScript SDK хәҙер `listRepoAgreements`, `queryRepoAgreements` һәм итератор фашлай
   ярҙамсылары шулай браузер/Nod
@@ -199,7 +199,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    `--notes` ялан идара итеү CLI) һәм кәрәкле раҫлауҙарҙы йыйыу
    өсөн F1. Ҡул ҡуйылған раҫлау пакетын өҙөк беркетелгән тотоғоҙ.
 3. Флот буйынса үҙгәреште ролл: `[settlement.repo]`-ны яңыртыу, һәр береһен яңынан эшләтеп ебәрегеҙ
-   төйөн, һуңынан `GET /v1/configuration` снимокты төшөрөп ала (йәки
+   төйөн, һуңынан `GET /v2/configuration` снимокты төшөрөп ала (йәки
    `ToriiClient.getConfiguration`) ҡулланылған ҡиммәттәрҙе иҫбатлау өсөн тиңдәш.
 4. Ҡабаттан йүгерергә `integration_tests/tests/repo.rs` плюс
    `repo_deterministic_lifecycle_proof_matches_fixture` X һәм киләһе журналдарҙы һаҡлау
@@ -218,11 +218,11 @@ Norito/`iroha_config` сантехникаһы хәҙер хәл ителгән 
 ҡулланылған ҡиммәттәре тиҫтере — тәҡдим ителгән ТОМЛ ғына түгел. 1990 йылда был хәлде ҡулға алығыҙ.
 конфигурация һәм уның һәр ролл-ауттан һуң дайджест:
 
-1. Һәр тиҫтерҙән конфигурацияны (`GET /v1/configuration` йәки
+1. Һәр тиҫтерҙән конфигурацияны (`GET /v2/configuration` йәки
    `ToriiClient.getConfiguration`) һәм репо строфаһын изоляциялай:
 
    ```bash
-   curl -s http://<torii-host>/v1/configuration \
+   curl -s http://<torii-host>/v2/configuration \
      | jq -cS '.settlement.repo' \
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
@@ -286,7 +286,7 @@ Norito/`iroha_config` сантехникаһы хәҙер хәл ителгән 
   рационализация.
 
 **Пост-раҫлау таратыуҙар**1. Ҡулланыу раҫланған `[settlement.repo]` конфигурация һәм һәр төйөн яңынан башлау (йәки ролл
-   уны автоматлаштырыу аша). Шунда уҡ шылтыратыу `GET /v1/configuration` һәм архив
+   уны автоматлаштырыу аша). Шунда уҡ шылтыратыу `GET /v2/configuration` һәм архив
    яуап төйөнгә шулай идара итеү өйөм күрһәтә, ниндәй тиҫтерҙәре ҡабул итте
    үҙгәреш.【крат/ироха_тории/срк/либ.р.р.:3225】
 2. Детерминистик репо һынауҙарын яңынан эшләтергә һәм яңы логтар плюс төҙөү беркетергә
@@ -471,13 +471,13 @@ cuctodian’s иҫәп-хисап ваҡытында инициация, һәм 
 `ToriiClient.getConfiguration`, шуға күрә өҫтәл сценарийҙары өсөн эш ағымы эшләй,
 CI, йәки ҡул операторы эшләй.【крат/ироха_тории/срк/либ. 3225】【javascript/iroha_js/scriClienClient.js:2115】【ИрохаСвифт/ИрохаСвифт/ТориКлиент.4681】
 
-1. Шылтыратыу `GET /v1/configuration` (йәки SDK ярҙамсыһы) тиҫтерҙәре менән шунда уҡ 2012 йылдан һуң.
+1. Шылтыратыу `GET /v2/configuration` (йәки SDK ярҙамсыһы) тиҫтерҙәре менән шунда уҡ 2012 йылдан һуң.
    ролл-аут. Тулы JSON-ды 1990 й.
    `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` һәм рекорд
    блок бейеклеге/кластер ваҡыт маркаһы `config/config_snapshot_index.md`.
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
-   curl -fsSL https://peer01.example/v1/configuration \
+   curl -fsSL https://peer01.example/v2/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
@@ -559,7 +559,7 @@ artifacts/finance/repo/<agreement-id>/
   йүгәнде яңынан эшләтмәйенсә.
 - `config/settlement_repo.toml` `[settlement.repo]` өҙөктәре бар.
   (стрижка, алмаштырыу матрицаһы) әүҙем булған, ҡасан репо башҡарылған.
-- `config/peers/*.json` һәр тиҫтере өсөн `/v1/configuration` снимоктарын төшөрә,
+- `config/peers/*.json` һәр тиҫтере өсөн `/v2/configuration` снимоктарын төшөрә,
   ябыу иллюзия араһында сәхнәләштерелгән TOML һәм эшләү ваҡыты ҡиммәттәре тиҫтерҙәре отчет
   өҫтөндә Torii.
 
@@ -715,7 +715,7 @@ Roadmap F1 рецензенттар ҡыҫҡа тикшерелгән исемл
    ҡасаба, ташлау Norito ТОМЛ блогы, тип ҡулланыласаҡ, һәм
    көҙгө тейешле `AccountEvent::Repo(*)` SSE каналына
    `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. ГАР-ҙан һуң
-   үткән, тотоу `/v1/configuration` Xnapshots бер тиңдәш (§2.9) һәм уларҙы һаҡлау
+   үткән, тотоу `/v2/configuration` Xnapshots бер тиңдәш (§2.9) һәм уларҙы һаҡлау
    `config/peers/` буйынса, шулай итеп, идара итеү пакеты иҫбатлай ролл-аут уңышлы.
 4. **Дәлилдәр генерациялау күренә.**
    ```bash

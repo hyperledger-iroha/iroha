@@ -53,7 +53,7 @@ translation_last_reviewed: 2026-02-07
 | `taikai_ingest_segment_latency_ms` | CMAF-ը ներծծում է հետաձգման հիստոգրամ մեկ կլաստերի/հոսքի համար (նպատակը՝ p95<750ms, p99<900ms): |
 | `taikai_ingest_live_edge_drift_ms` | Կոդավորիչի և խարիսխի աշխատողների միջև ուղիղ շեղում (էջեր p99>1,5 վրկ 10 րոպեի համար): |
 | `taikai_ingest_segment_errors_total{reason}` | Սխալները հաշվվում են ըստ պատճառի (`decode`, `manifest_mismatch`, `lineage_replay`,…): Ցանկացած աճ առաջացնում է `TaikaiIngestFailure`: |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Աճում է ամեն անգամ, երբ `/v1/da/ingest`-ն ընդունում է նոր TRM կեղծանունը. օգտագործեք `rate()` ռոտացիայի արագությունը հաստատելու համար: |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Աճում է ամեն անգամ, երբ `/v2/da/ingest`-ն ընդունում է նոր TRM կեղծանունը. օգտագործեք `rate()` ռոտացիայի արագությունը հաստատելու համար: |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON լուսանկար՝ `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` և ապացույցների փաթեթների ժամանակային դրոշմանիշներով: |
 | `taikai_viewer_*` (rebuffer, CEK պտտման տարիք, PQ առողջություն, ահազանգեր) | Դիտողի կողմից KPI-ները՝ ապահովելու համար CEK ռոտացիան + PQ սխեմաները խարիսխների ընթացքում առողջ մնալու համար: |
 

@@ -85,7 +85,7 @@ translation_last_reviewed: 2026-02-07
 | `sorafs_node_por_failure_total` | Հաշվիչ | `provider_id` | Միապաղաղ հաշվիչը ձախողված PoR նմուշների համար: |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Չափիչ | `provider` | Օգտագործված բայթերի համար գոյություն ունեցող Prometheus չափիչներ, հերթի խորություն, PoR թռիչքների քանակ: |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Չափիչ | `provider` | Մատակարարի հզորության/ժամանակի հաջողության տվյալները հայտնվել են հզորության վահանակում: |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Չափիչ | `provider`, `manifest` | Հետագնացության խորությունը գումարած կուտակային ձախողումների հաշվիչները, որոնք արտահանվում են ամեն անգամ, երբ `/v1/sorafs/por/ingestion/{manifest}` հարցում է կատարվում՝ սնուցելով «PoR Stalls» վահանակը/զգուշացումը: |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Չափիչ | `provider`, `manifest` | Հետագնացության խորությունը գումարած կուտակային ձախողումների հաշվիչները, որոնք արտահանվում են ամեն անգամ, երբ `/v2/sorafs/por/ingestion/{manifest}` հարցում է կատարվում՝ սնուցելով «PoR Stalls» վահանակը/զգուշացումը: |
 
 ### Վերանորոգում և SLA
 

@@ -31,7 +31,7 @@ com.goveranca. جميع الحمولات النافعة مرمزة في Norito؛
   توفر منتديات التخزين الاستشارية شبه لدفتر الأستاذ.
 - إثبات حتمية العضوية التي يحتاجها العملاء
   تحقق من أن بيان التجزئة قد تم الانتهاء منه في كتلة.
-- تصدير الاستشارات Torii (`/v1/da/commitments/*`) والتأكد من السماح بالمرحلات،
+- تصدير الاستشارات Torii (`/v2/da/commitments/*`) والتأكد من السماح بالمرحلات،
   تقوم أدوات تطوير البرامج (SDKs) والحوكمة التلقائية بمراجعة التوفر دون إعادة إنتاج كل كتلة.
 - قم بتغيير المغلف `SignedBlockWire` canonico ao enfiar as nova estruturas
   رأس البيانات الوصفية Norito ومشتق تجزئة الكتلة.
@@ -45,7 +45,7 @@ com.goveranca. جميع الحمولات النافعة مرمزة في Norito؛
 3. **الاستمرارية/الفهارس** لكي يستجيب WSV لاستشارات التسوية
    بسرعة (`iroha_core/src/wsv/mod.rs`).
 4. **نصائح RPC في Torii** لنقاط نهاية القائمة/المشورة/التجريب
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **اختبارات التكامل + التركيبات** التحقق من صحة تخطيط الأسلاك وتدفق الإثبات
    م `integration_tests/tests/da/commitments.rs`.
 
@@ -138,9 +138,9 @@ Torii يعرض ثلاث نقاط نهاية:
 
 | روتا | الطريقة | الحمولة | نوتاس |
 |------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (مرشح المدى حسب المسار/العصر/التسلسل، الصفحة) | Retorna `DaCommitmentPage` مع إجمالي وتسويات وتجزئة الكتلة. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + التجزئة الواضحة أو tupla `(epoch, sequence)`). | الرد على com `DaCommitmentProof` (سجل + caminho Merkle + hash de bloco). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية الذي يعيد حساب تجزئة الكتلة والتحقق من صحتها ؛ يتم استخدامه من خلال مجموعات SDK التي لا يمكنها الارتباط مباشرة بـ `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (مرشح المدى حسب المسار/العصر/التسلسل، الصفحة) | Retorna `DaCommitmentPage` مع إجمالي وتسويات وتجزئة الكتلة. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + التجزئة الواضحة أو tupla `(epoch, sequence)`). | الرد على com `DaCommitmentProof` (سجل + caminho Merkle + hash de bloco). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية الذي يعيد حساب تجزئة الكتلة والتحقق من صحتها ؛ يتم استخدامه من خلال مجموعات SDK التي لا يمكنها الارتباط مباشرة بـ `iroha_crypto`. |
 
 جميع حمولات نظام التشغيل vivem sob `iroha_data_model::da::commitment`. أجهزة التوجيه OS دي
 Torii يقوم بمعالجة نظام التشغيل من خلال نقاط النهاية لاستيعاب DA الموجود

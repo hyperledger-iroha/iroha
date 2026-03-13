@@ -31,7 +31,7 @@ description: Чеклист для продвижения пайплайна Sor
 
 ## Конфигурация окружения
 
-- Gateways должны включить endpoint proof streaming (`POST /v1/sorafs/proof/stream`), чтобы CLI мог выпускать телеметрические сводки.
+- Gateways должны включить endpoint proof streaming (`POST /v2/sorafs/proof/stream`), чтобы CLI мог выпускать телеметрические сводки.
 - Настройте политику `sorafs_alias_cache` с помощью значений по умолчанию из `iroha_config` или CLI helper (`sorafs_cli manifest submit --alias-*`).
 - Передавайте stream tokens (или учетные данные Torii) через безопасный secret manager.
 - Включите телеметрические exporters (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) и отправляйте их в ваш стек Prometheus/OTel.

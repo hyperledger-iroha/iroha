@@ -27,7 +27,7 @@ DA-3 מרחיב את פורמט הבלוק Nexus כך שכל נתיב מטמיע
   מצב מבלי להתייעץ עם אחסון מחוץ לפנקס החשבונות.
 - ספק הוכחות חברות דטרמיניסטיות כדי שלקוחות קלים יוכלו לאמת שא
   הגיבוב של מניפסט הושלם בבלוק נתון.
-- חשוף שאילתות Torii (`/v1/da/commitments/*`) והוכחות המאפשרות לממסרים,
+- חשוף שאילתות Torii (`/v2/da/commitments/*`) והוכחות המאפשרות לממסרים,
   ערכות SDK ואוטומציה של ממשל בודקים זמינות מבלי להפעיל מחדש כל
   לחסום.
 - שמור את המעטפה הקיימת `SignedBlockWire` קנונית על ידי השחלה של המעטפה החדשה
@@ -42,7 +42,7 @@ DA-3 מרחיב את פורמט הבלוק Nexus כך שכל נתיב מטמיע
 3. **התמדה/אינדקסים** כך שה-WSV יוכל לענות על שאילתות התחייבות במהירות
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii תוספות RPC** עבור רשימה/שאילתה/הוכחה של נקודות קצה תחת
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **מבחני אינטגרציה + מתקנים** המאמתים את פריסת החוט וזרימת ההוכחה פנימה
    `integration_tests/tests/da/commitments.rs`.
 
@@ -129,7 +129,7 @@ pub struct DaCommitmentBundle {
 הרכבת בלוקים ו-`BlockCreated` מאמתים מחדש כל התחייבות כנגד
 קטלוג הנתיבים: נתיבי מרקל דוחים התחייבויות תועה של KZG, נתיבי KZG דורשים א
 מחויבות לא-אפס KZG ואי-אפס `chunk_root`, ונתיבים לא ידועים הם
-ירד. נקודת הקצה `/v1/da/commitments/verify` של Torii משקפת את אותו מגן,
+ירד. נקודת הקצה `/v2/da/commitments/verify` של Torii משקפת את אותו מגן,
 וצריבה עכשיו משחיל את המחויבות KZG הדטרמיניסטית לכל
 `kzg_bls12_381` מתעד כך שחבילות תואמות מדיניות מגיעות להרכבת בלוקים.
 
@@ -148,9 +148,9 @@ pub struct DaCommitmentBundle {
 
 Torii חושף שלוש נקודות קצה:| מסלול | שיטה | מטען | הערות |
 |-------|--------|--------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח לפי נתיב/תקופה/רצף, עימוד) | מחזירה `DaCommitmentPage` עם ספירה כוללת, התחייבויות ו-hash חסימה. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (נתיב + מניפסט hash או `(epoch, sequence)` tuple). | מגיב עם `DaCommitmentProof` (רשומה + נתיב Merkle + hash בלוק). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר מדינה שמציג מחדש את חישוב הגיבוב של הבלוק ומאמת הכללה; בשימוש על-ידי SDK שאינם יכולים לקשר ישירות ל-`iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח לפי נתיב/תקופה/רצף, עימוד) | מחזירה `DaCommitmentPage` עם ספירה כוללת, התחייבויות ו-hash חסימה. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (נתיב + מניפסט hash או `(epoch, sequence)` tuple). | מגיב עם `DaCommitmentProof` (רשומה + נתיב Merkle + hash בלוק). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר מדינה שמציג מחדש את חישוב הגיבוב של הבלוק ומאמת הכללה; בשימוש על-ידי SDK שאינם יכולים לקשר ישירות ל-`iroha_crypto`. |
 
 כל המטענים חיים מתחת ל-`iroha_data_model::da::commitment`. תושבת נתבים Torii
 המטפלים שליד ה-DA הקיימים בולעים נקודות קצה כדי לעשות שימוש חוזר ב-token/mTLS

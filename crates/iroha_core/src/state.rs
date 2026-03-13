@@ -347,7 +347,9 @@ macro_rules! build_world_block {
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
+            domain_asset_definitions: $state.domain_asset_definitions.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
+            asset_definition_assets: $state.asset_definition_assets.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
@@ -473,7 +475,9 @@ macro_rules! build_world_transaction {
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
+            domain_asset_definitions: $state.domain_asset_definitions.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
+            asset_definition_assets: $state.asset_definition_assets.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
@@ -1248,9 +1252,15 @@ pub struct World {
     #[norito(skip)]
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Asset-definition index keyed by definition domain.
+    #[norito(skip)]
+    pub(crate) domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     #[norito(skip)]
     pub(crate) asset_definition_holders: Storage<AssetDefinitionId, BTreeSet<AccountId>>,
+    /// Asset-id index keyed by asset definition id.
+    #[norito(skip)]
+    pub(crate) asset_definition_assets: Storage<AssetDefinitionId, BTreeSet<AssetId>>,
     /// Registered assets.
     pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -1570,9 +1580,14 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Asset-definition index keyed by definition domain.
+    pub(crate) domain_asset_definitions:
+        StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageBlock<'world, AssetDefinitionId, BTreeSet<AccountId>>,
+    /// Asset-id index keyed by asset definition id.
+    pub(crate) asset_definition_assets: StorageBlock<'world, AssetDefinitionId, BTreeSet<AssetId>>,
     /// Registered assets.
     pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2007,9 +2022,15 @@ pub struct WorldTransaction<'block, 'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Asset-definition index keyed by definition domain.
+    pub(crate) domain_asset_definitions:
+        StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
+    /// Asset-id index keyed by asset definition id.
+    pub(crate) asset_definition_assets:
+        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AssetId>>,
     /// Registered assets.
     pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -2306,6 +2327,36 @@ pub struct WorldTransaction<'block, 'world> {
 }
 
 impl WorldTransaction<'_, '_> {
+    /// Record that the given asset definition belongs to its domain.
+    pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
+        if let Some(definitions) = self
+            .domain_asset_definitions
+            .get_mut(definition_id.domain())
+        {
+            definitions.insert(definition_id.clone());
+        } else {
+            self.domain_asset_definitions.insert(
+                definition_id.domain().clone(),
+                BTreeSet::from([definition_id.clone()]),
+            );
+        }
+    }
+
+    /// Drop the domain linkage when the asset definition no longer exists.
+    pub(crate) fn untrack_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
+        let remove_domain_index_entry = self
+            .domain_asset_definitions
+            .get_mut(definition_id.domain())
+            .is_some_and(|definitions| {
+                definitions.remove(definition_id);
+                definitions.is_empty()
+            });
+        if remove_domain_index_entry {
+            self.domain_asset_definitions
+                .remove(definition_id.domain().clone());
+        }
+    }
+
     /// Record that the given account now holds at least one balance partition of the definition.
     pub(crate) fn track_asset_holder(&mut self, asset_id: &AssetId) {
         if let Some(holders) = self.asset_definition_holders.get_mut(asset_id.definition()) {
@@ -2316,11 +2367,32 @@ impl WorldTransaction<'_, '_> {
                 BTreeSet::from([asset_id.account().clone()]),
             );
         }
+
+        if let Some(asset_ids) = self.asset_definition_assets.get_mut(asset_id.definition()) {
+            asset_ids.insert(asset_id.clone());
+        } else {
+            self.asset_definition_assets.insert(
+                asset_id.definition().clone(),
+                BTreeSet::from([asset_id.clone()]),
+            );
+        }
     }
 
-    /// Drop holder linkage when the account no longer has any balance partition
-    /// for the definition.
+    /// Drop asset-id linkage, then remove the holder linkage when the account no longer has any
+    /// remaining balance partition for the definition.
     pub(crate) fn untrack_asset_holder_if_empty(&mut self, asset_id: &AssetId) {
+        let remove_asset_index_entry = self
+            .asset_definition_assets
+            .get_mut(asset_id.definition())
+            .is_some_and(|asset_ids| {
+                asset_ids.remove(asset_id);
+                asset_ids.is_empty()
+            });
+        if remove_asset_index_entry {
+            self.asset_definition_assets
+                .remove(asset_id.definition().clone());
+        }
+
         let has_remaining_for_definition =
             self.assets
                 .range::<dyn AsAssetIdAccountDefinitionCompare>(
@@ -2489,9 +2561,13 @@ pub struct WorldView<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Asset-definition index keyed by definition domain.
+    pub(crate) domain_asset_definitions: StorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
         StorageView<'world, AssetDefinitionId, BTreeSet<AccountId>>,
+    /// Asset-id index keyed by asset definition id.
+    pub(crate) asset_definition_assets: StorageView<'world, AssetDefinitionId, BTreeSet<AssetId>>,
     /// Registered assets.
     pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
@@ -9307,13 +9383,23 @@ impl World {
             .into_iter()
             .map(|domain| (domain.id().clone(), domain))
             .collect();
-        let mut account_pairs = Vec::new();
+        let mut account_pairs = BTreeMap::<AccountId, AccountValue>::new();
         let mut rekey_pairs = Vec::new();
         for account in accounts {
             if let Some(record) = AccountRekeyRecord::from_account(&account) {
                 rekey_pairs.push((record.label.clone(), record));
             }
-            account_pairs.push(account.into_key_value());
+            let (account_id, account_value) = account.into_key_value();
+            if let Some(previous) = account_pairs.remove(&account_id) {
+                // Preserve the most recent account payload while keeping all linked-domain hints.
+                let mut details = account_value.into_inner();
+                details
+                    .linked_domains
+                    .extend(previous.as_ref().linked_domains().iter().cloned());
+                account_pairs.insert(account_id, AccountValue::new(details));
+            } else {
+                account_pairs.insert(account_id, account_value);
+            }
         }
         let accounts = account_pairs.into_iter().collect();
         let account_rekey_records = rekey_pairs.into_iter().collect();
@@ -9334,7 +9420,9 @@ impl World {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
+            asset_definition_assets: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
@@ -9382,7 +9470,7 @@ impl World {
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
-        world.rebuild_asset_definition_holder_index();
+        world.rebuild_asset_definition_indexes();
         world
             .rebuild_opaque_uaid_index()
             .expect("duplicate opaque id in world constructor");
@@ -9444,34 +9532,53 @@ impl World {
 
     fn rebuild_account_subject_domain_indexes(&mut self) {
         let mut subject_domains = BTreeMap::<AccountId, BTreeSet<DomainId>>::new();
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
         let accounts = self.accounts.view();
         let domains = self.domains.view();
 
         for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            if accounts.get(subject).is_none() {
-                continue;
-            }
-
-            let filtered_domains: BTreeSet<_> = linked_domains
+            let filtered: BTreeSet<_> = linked_domains
                 .iter()
                 .filter(|domain| domains.get(*domain).is_some())
                 .cloned()
                 .collect();
-            for domain in &filtered_domains {
+            subject_domains.insert(subject.clone(), filtered);
+        }
+
+        for (subject, account_value) in accounts.iter() {
+            let entry = subject_domains.entry(subject.clone()).or_default();
+            entry.extend(
+                account_value
+                    .as_ref()
+                    .linked_domains()
+                    .iter()
+                    .filter(|domain| domains.get(*domain).is_some())
+                    .cloned(),
+            );
+            if entry.is_empty() {
+                entry.extend(domains.iter().filter_map(|(domain_id, domain)| {
+                    (domain.owned_by() == subject).then_some(domain_id.clone())
+                }));
+            }
+        }
+
+        self.account_subject_domains = subject_domains.into_iter().collect();
+        self.rebuild_domain_account_subject_index();
+    }
+
+    fn rebuild_domain_account_subject_index(&mut self) {
+        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
+        let domains = self.domains.view();
+        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
+            for domain in linked_domains
+                .iter()
+                .filter(|domain| domains.get(*domain).is_some())
+            {
                 domain_subjects
                     .entry(domain.clone())
                     .or_default()
                     .insert(subject.clone());
             }
-            subject_domains.insert(subject.clone(), filtered_domains);
         }
-
-        for (subject, _) in accounts.iter() {
-            subject_domains.entry(subject.clone()).or_default();
-        }
-
-        self.account_subject_domains = subject_domains.into_iter().collect();
         self.domain_account_subjects = domain_subjects.into_iter().collect();
     }
 
@@ -9553,15 +9660,29 @@ impl World {
         Ok(())
     }
 
-    fn rebuild_asset_definition_holder_index(&mut self) {
+    fn rebuild_asset_definition_indexes(&mut self) {
+        let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
+        for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
+            domain_definitions
+                .entry(definition_id.domain().clone())
+                .or_default()
+                .insert(definition_id.clone());
+        }
         let mut holders = BTreeMap::<AssetDefinitionId, BTreeSet<AccountId>>::new();
+        let mut definition_assets = BTreeMap::<AssetDefinitionId, BTreeSet<AssetId>>::new();
         for (asset_id, _) in self.assets.view().iter() {
             holders
                 .entry(asset_id.definition().clone())
                 .or_default()
                 .insert(asset_id.account().clone());
+            definition_assets
+                .entry(asset_id.definition().clone())
+                .or_default()
+                .insert(asset_id.clone());
         }
+        self.domain_asset_definitions = domain_definitions.into_iter().collect();
         self.asset_definition_holders = holders.into_iter().collect();
+        self.asset_definition_assets = definition_assets.into_iter().collect();
     }
 
     fn rebuild_opaque_uaid_index(&mut self) -> Result<(), String> {
@@ -9694,7 +9815,9 @@ impl World {
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
+            domain_asset_definitions: self.domain_asset_definitions.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
+            asset_definition_assets: self.asset_definition_assets.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
@@ -9850,10 +9973,18 @@ pub trait WorldReadOnly {
     fn asset_definition_alias_bindings(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
+    /// Asset-definition ids grouped by domain.
+    fn domain_asset_definitions(
+        &self,
+    ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>>;
     /// Holder index keyed by asset definition id.
     fn asset_definition_holders(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>>;
+    /// Asset-id index keyed by asset definition id.
+    fn asset_definition_assets(
+        &self,
+    ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>>;
     /// Asset storage (read-only).
     fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
     /// Asset metadata storage (read-only).
@@ -10240,17 +10371,15 @@ pub trait WorldReadOnly {
     }
 
     /// Iterate asset definitions in domain
-    #[allow(clippy::type_complexity)]
     fn asset_definitions_in_domain_iter<'slf>(
         &'slf self,
         id: &DomainId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, AssetDefinitionId, AssetDefinition>,
-        fn((&'slf AssetDefinitionId, &'slf AssetDefinition)) -> &'slf AssetDefinition,
-    > {
-        self.asset_definitions()
-            .range::<dyn AsAssetDefinitionIdDomainCompare>(AssetDefinitionByDomainBounds::new(id))
-            .map(|(_, ad)| ad)
+    ) -> impl Iterator<Item = &'slf AssetDefinition> {
+        self.domain_asset_definitions()
+            .get(id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|definition_id| self.asset_definitions().get(definition_id))
     }
 
     /// Returns reference for asset definitions map
@@ -10274,6 +10403,17 @@ pub trait WorldReadOnly {
         definition_id: &'a AssetDefinitionId,
     ) -> impl Iterator<Item = &'a AccountId> {
         self.asset_definition_holders()
+            .get(definition_id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+    }
+
+    /// Iterate concrete asset identifiers tracked for an asset definition.
+    fn asset_definition_assets_iter<'a>(
+        &'a self,
+        definition_id: &'a AssetDefinitionId,
+    ) -> impl Iterator<Item = &'a AssetId> {
+        self.asset_definition_assets()
             .get(definition_id)
             .into_iter()
             .flat_map(BTreeSet::iter)
@@ -10321,11 +10461,14 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a AssetDefinitionId,
     ) -> impl Iterator<Item = Asset> + 'a {
-        self.asset_definition_holders_iter(id)
-            .flat_map(move |holder| self.assets_in_account_by_definition_iter(holder, id))
-            .map(|entry| Asset {
-                id: entry.id().clone(),
-                value: entry.value().clone().into_inner(),
+        self.asset_definition_assets_iter(id)
+            .filter_map(move |asset_id| {
+                self.assets()
+                    .get_key_value(asset_id)
+                    .map(|(asset_id, value)| Asset {
+                        id: asset_id.clone(),
+                        value: value.clone().into_inner(),
+                    })
             })
     }
 
@@ -10576,10 +10719,20 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
                 &self.asset_definition_alias_bindings
             }
+            fn domain_asset_definitions(
+                &self,
+            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>> {
+                &self.domain_asset_definitions
+            }
             fn asset_definition_holders(
                 &self,
             ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AccountId>> {
                 &self.asset_definition_holders
+            }
+            fn asset_definition_assets(
+                &self,
+            ) -> &impl StorageReadOnly<AssetDefinitionId, BTreeSet<AssetId>> {
+                &self.asset_definition_assets
             }
             fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
@@ -11106,7 +11259,9 @@ impl<'world> WorldBlock<'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            domain_asset_definitions,
             asset_definition_holders,
+            asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
@@ -11313,7 +11468,9 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
+        asset_definition_assets.commit();
         asset_definition_holders.commit();
+        domain_asset_definitions.commit();
         asset_definitions.commit();
         accounts.commit();
         account_subject_domains.commit();
@@ -12086,7 +12243,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            domain_asset_definitions,
             asset_definition_holders,
+            asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
@@ -12269,7 +12428,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definition_alias_bindings.apply();
         asset_definition_aliases.apply();
+        asset_definition_assets.apply();
         asset_definition_holders.apply();
+        domain_asset_definitions.apply();
         asset_definitions.apply();
         accounts.apply();
         account_subject_domains.apply();
@@ -12305,13 +12466,61 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .ok_or_else(|| FindError::Account(id.clone()))
     }
 
+    fn rebuild_domain_account_subject_index(&mut self) {
+        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
+        let domains = self.domains.view();
+        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
+            for domain in linked_domains
+                .iter()
+                .filter(|domain| domains.get(*domain).is_some())
+            {
+                domain_subjects
+                    .entry(domain.clone())
+                    .or_default()
+                    .insert(subject.clone());
+            }
+        }
+        let existing_domains: Vec<_> = self
+            .domain_account_subjects
+            .view()
+            .iter()
+            .map(|(domain, _)| domain.clone())
+            .collect();
+        for domain in existing_domains {
+            self.domain_account_subjects.remove(domain);
+        }
+        for (domain, subjects) in domain_subjects {
+            self.domain_account_subjects.insert(domain, subjects);
+        }
+    }
+
     /// Insert or replace an account and synchronize subject/domain membership indexes.
     pub fn insert_account_with_links(
         &mut self,
         account_id: AccountId,
         account_value: AccountValue,
     ) -> Option<AccountValue> {
-        self.accounts.insert(account_id, account_value)
+        let subject = account_id.subject_id();
+        let replaced = self.accounts.insert(account_id, account_value);
+        let mut linked_domains = self
+            .account_subject_domains
+            .get(&subject)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(details) = self.accounts.get(&subject) {
+            linked_domains.extend(
+                details
+                    .linked_domains()
+                    .iter()
+                    .filter(|domain| self.domains.get(*domain).is_some())
+                    .cloned(),
+            );
+        }
+        self.account_subject_domains
+            .insert(subject.clone(), linked_domains.clone());
+        self.rebuild_domain_account_subject_index();
+
+        replaced
     }
 
     /// Remove an account and synchronize subject/domain membership indexes.
@@ -12319,20 +12528,22 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.accounts.remove(account_id.clone());
         if removed.is_some() {
             let subject = account_id.subject_id();
-            if let Some(domains) = self.account_subject_domains.remove(subject.clone()) {
-                for domain in domains {
-                    let drop_domain_entry = self
-                        .domain_account_subjects
-                        .get_mut(&domain)
-                        .is_some_and(|subjects| {
-                            subjects.remove(&subject);
-                            subjects.is_empty()
-                        });
-                    if drop_domain_entry {
-                        self.domain_account_subjects.remove(domain);
-                    }
+            let mut linked_domains = self
+                .account_subject_domains
+                .get(&subject)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(removed_value) = &removed {
+                for domain in removed_value
+                    .linked_domains()
+                    .iter()
+                    .filter(|domain| self.domains.get(*domain).is_some())
+                {
+                    linked_domains.remove(domain);
                 }
             }
+            self.account_subject_domains.insert(subject, linked_domains);
+            self.rebuild_domain_account_subject_index();
         }
         removed
     }
@@ -12341,41 +12552,28 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn link_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
         let subject = account_id.subject_id();
         let domain = account_id.domain().clone();
-
-        if let Some(domains) = self.account_subject_domains.get_mut(&subject) {
-            domains.insert(domain.clone());
-        } else {
-            self.account_subject_domains
-                .insert(subject.clone(), BTreeSet::from([domain.clone()]));
-        }
-
-        if let Some(subjects) = self.domain_account_subjects.get_mut(&domain) {
-            subjects.insert(subject);
-        } else {
-            self.domain_account_subjects
-                .insert(domain, BTreeSet::from([subject]));
-        }
+        let mut domains = self
+            .account_subject_domains
+            .get(&subject)
+            .cloned()
+            .unwrap_or_default();
+        domains.insert(domain);
+        self.account_subject_domains.insert(subject, domains);
+        self.rebuild_domain_account_subject_index();
     }
 
     /// Unlink a domain-scoped account subject from its domain membership indexes.
     pub fn unlink_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
         let subject = account_id.subject_id();
         let domain = account_id.domain().clone();
-
-        if let Some(domains) = self.account_subject_domains.get_mut(&subject) {
-            domains.remove(&domain);
-        }
-
-        let drop_domain_entry =
-            self.domain_account_subjects
-                .get_mut(&domain)
-                .is_some_and(|subjects| {
-                    subjects.remove(&subject);
-                    subjects.is_empty()
-                });
-        if drop_domain_entry {
-            self.domain_account_subjects.remove(domain);
-        }
+        let mut domains = self
+            .account_subject_domains
+            .get(&subject)
+            .cloned()
+            .unwrap_or_default();
+        domains.remove(&domain);
+        self.account_subject_domains.insert(subject, domains);
+        self.rebuild_domain_account_subject_index();
     }
 
     /// Add [`permission`](Permission) to the [`Account`] if the account does not have this permission yet.
@@ -23727,62 +23925,6 @@ mod range_bounds {
         trait: AsRoleIdByAccount
     }
 
-    /// `DomainId` wrapper for fetching asset definitions beloning to a domain from the global store
-    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
-    pub struct AssetDefinitionIdDomainCompare<'a> {
-        domain_id: &'a DomainId,
-        name: MinMaxExt<&'a Name>,
-    }
-
-    /// Bounds for range quired over asset definitions by domain
-    pub struct AssetDefinitionByDomainBounds<'a> {
-        start: AssetDefinitionIdDomainCompare<'a>,
-        end: AssetDefinitionIdDomainCompare<'a>,
-    }
-
-    impl<'a> AssetDefinitionByDomainBounds<'a> {
-        /// Create range bounds for range quires over asset definitions by domain
-        pub fn new(domain_id: &'a DomainId) -> Self {
-            Self {
-                start: AssetDefinitionIdDomainCompare {
-                    domain_id,
-                    name: MinMaxExt::Min,
-                },
-                end: AssetDefinitionIdDomainCompare {
-                    domain_id,
-                    name: MinMaxExt::Max,
-                },
-            }
-        }
-    }
-
-    impl<'a> RangeBounds<dyn AsAssetDefinitionIdDomainCompare + 'a>
-        for AssetDefinitionByDomainBounds<'a>
-    {
-        fn start_bound(&self) -> Bound<&(dyn AsAssetDefinitionIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.start)
-        }
-
-        fn end_bound(&self) -> Bound<&(dyn AsAssetDefinitionIdDomainCompare + 'a)> {
-            Bound::Excluded(&self.end)
-        }
-    }
-
-    impl AsAssetDefinitionIdDomainCompare for AssetDefinitionId {
-        fn as_key(&self) -> AssetDefinitionIdDomainCompare<'_> {
-            AssetDefinitionIdDomainCompare {
-                domain_id: self.domain(),
-                name: self.name().into(),
-            }
-        }
-    }
-
-    impl_as_dyn_key! {
-        target: AssetDefinitionId,
-        key: AssetDefinitionIdDomainCompare<'_>,
-        trait: AsAssetDefinitionIdDomainCompare
-    }
-
     /// `DomainId` wrapper for fetching NFTs belonging to a domain from the global store
     #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
     pub struct NftIdDomainCompare<'a> {
@@ -24232,7 +24374,9 @@ pub(crate) mod deserialize {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
+            asset_definition_assets: Storage::default(),
             assets,
             asset_metadata,
             nfts,
@@ -24361,7 +24505,7 @@ pub(crate) mod deserialize {
                 field: "asset_definition_aliases".into(),
                 message,
             })?;
-        world.rebuild_asset_definition_holder_index();
+        world.rebuild_asset_definition_indexes();
         world
             .rebuild_opaque_uaid_index()
             .map_err(|message| json::Error::InvalidField {
@@ -34141,6 +34285,17 @@ mod tests {
         })
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
+        let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = other_asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register secondary asset definition");
         stx.world
             .asset_definition_mut(&asset_def_id)
             .expect("definition exists")
@@ -34227,6 +34382,77 @@ mod tests {
     }
 
     #[test]
+    fn asset_definition_domain_index_tracks_exact_membership() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let denoland: DomainId = "denoland".parse().expect("domain id");
+        for domain_id in [&wonderland, &denoland] {
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register domain");
+        }
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        let rose_id = AssetDefinitionId::new(wonderland.clone(), "rose".parse().unwrap());
+        let tulip_id = AssetDefinitionId::new(wonderland.clone(), "tulip".parse().unwrap());
+        let cactus_id = AssetDefinitionId::new(denoland.clone(), "cactus".parse().unwrap());
+        for definition_id in [&rose_id, &tulip_id, &cactus_id] {
+            Register::asset_definition({
+                let __asset_definition_id = definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
+        }
+
+        let wonderland_definitions = stx
+            .world
+            .asset_definitions_in_domain_iter(&wonderland)
+            .map(|definition| definition.id().clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            wonderland_definitions,
+            BTreeSet::from([rose_id.clone(), tulip_id.clone()]),
+            "wonderland should only expose its own definitions"
+        );
+        let denoland_definitions = stx
+            .world
+            .asset_definitions_in_domain_iter(&denoland)
+            .map(|definition| definition.id().clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            denoland_definitions,
+            BTreeSet::from([cactus_id.clone()]),
+            "denoland should only expose its own definitions"
+        );
+
+        Unregister::asset_definition(cactus_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("unregister asset definition");
+        assert!(
+            stx.world
+                .asset_definitions_in_domain_iter(&denoland)
+                .next()
+                .is_none(),
+            "empty domains should not leak definitions from other domains"
+        );
+        assert!(
+            stx.world.domain_asset_definitions.get(&denoland).is_none(),
+            "empty domain index entries should be removed"
+        );
+    }
+
+    #[test]
     fn asset_definition_holder_index_tracks_asset_lifecycle() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -34268,6 +34494,13 @@ mod tests {
                 .is_some_and(|holders| holders.contains(&alice_id)),
             "holder index should include account after insert"
         );
+        assert!(
+            stx.world
+                .asset_definition_assets
+                .get(&asset_def_id)
+                .is_some_and(|asset_ids| asset_ids.contains(&asset_id)),
+            "definition index should include concrete asset id after insert"
+        );
 
         let removed = stx.world.remove_asset_and_metadata(&asset_id);
         assert!(removed.is_some(), "asset removed");
@@ -34277,6 +34510,13 @@ mod tests {
                 .get(&asset_def_id)
                 .is_none(),
             "holder index should remove empty holder set"
+        );
+        assert!(
+            stx.world
+                .asset_definition_assets
+                .get(&asset_def_id)
+                .is_none(),
+            "definition index should remove empty asset-id set"
         );
     }
 
@@ -34341,6 +34581,15 @@ mod tests {
                 .is_some_and(|holders| holders.contains(&ALICE_ID)),
             "holder should remain while another partition exists"
         );
+        assert!(
+            stx.world
+                .asset_definition_assets
+                .get(&asset_def_id)
+                .is_some_and(|asset_ids| {
+                    !asset_ids.contains(&global_asset_id) && asset_ids.contains(&scoped_asset_id)
+                }),
+            "definition index should keep only the surviving partition"
+        );
 
         let removed_scoped = stx.world.remove_asset_and_metadata(&scoped_asset_id);
         assert!(removed_scoped.is_some(), "scoped partition removed");
@@ -34350,6 +34599,93 @@ mod tests {
                 .get(&asset_def_id)
                 .is_none(),
             "holder entry should be removed after last partition disappears"
+        );
+        assert!(
+            stx.world
+                .asset_definition_assets
+                .get(&asset_def_id)
+                .is_none(),
+            "definition index should be removed after last partition disappears"
+        );
+    }
+
+    #[test]
+    fn assets_by_definition_iter_includes_all_tracked_partitions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register asset definition");
+        let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = other_asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register secondary asset definition");
+
+        let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let scoped_asset_id = AssetId::with_scope(
+            asset_def_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(
+                iroha_data_model::nexus::DataSpaceId::new(7),
+            ),
+        );
+        let other_asset_id = AssetId::new(other_asset_def_id, ALICE_ID.clone());
+
+        for asset_id in [
+            global_asset_id.clone(),
+            scoped_asset_id.clone(),
+            other_asset_id,
+        ] {
+            let (_, asset_value) =
+                Asset::new(asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world.track_asset_holder(&asset_id);
+        }
+
+        stx.apply();
+        state_block.commit().expect("commit state block");
+
+        let view = state.view();
+        let world = view.world();
+        let mut assets: Vec<_> = world
+            .assets_by_definition_iter(&asset_def_id)
+            .map(|asset| asset.id)
+            .collect();
+        assets.sort();
+
+        assert_eq!(
+            assets,
+            vec![global_asset_id, scoped_asset_id],
+            "definition iterator should return every tracked partition for the definition"
         );
     }
 

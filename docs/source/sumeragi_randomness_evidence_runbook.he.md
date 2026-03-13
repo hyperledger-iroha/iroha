@@ -131,7 +131,7 @@ iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-נטרו `/v1/events/sse` באמצעות stream מסונן כדי להוכיח שה-SDKs רואים את אותם
+נטרו `/v2/events/sse` באמצעות stream מסונן כדי להוכיח שה-SDKs רואים את אותם
 הנתונים: השתמשו ב-one-liner של Python מ-{doc}`torii/sumeragi_evidence_app_api`
 כדי לבנות את הפילטר וללכוד frames גולמיים של `data:`. ה-payloads של SSE צריכים
 להדהד את סוג ה-evidence ואת ה-signer שהופיע בפלט ה-CLI.
@@ -170,7 +170,7 @@ iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixt
   הרצה חוזרת של הבדיקה.
 - **Evidence ingestion stalls** — כאשר `sumeragi_evidence_records_total` נתקע
   בזמן ש-chaos tests פולטים תקלות, הריצו `iroha ops sumeragi evidence count`
-  על מספר ולידטורים ואשרו ש-`/v1/sumeragi/evidence/count` תואם ל-CLI. כל סטיה
+  על מספר ולידטורים ואשרו ש-`/v2/sumeragi/evidence/count` תואם ל-CLI. כל סטיה
   פירושה שצרכני SSE/webhook עשויים להיות stale, לכן שלחו מחדש fixture מוכר
   והסלימו לצוות Torii אם המונה לא גדל.
 

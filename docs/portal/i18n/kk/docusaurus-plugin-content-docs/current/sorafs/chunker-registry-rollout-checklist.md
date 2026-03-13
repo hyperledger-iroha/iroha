@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    каталогқа сілтеме `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Провайдер жарнамаларының API API арқылы таралатынын тексеріңіз:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Басқару тақырыптары бар манифест/жоспардың соңғы нүктелерін орындаңыз:
    ```bash

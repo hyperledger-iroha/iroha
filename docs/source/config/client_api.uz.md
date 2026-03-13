@@ -46,6 +46,6 @@ Bosqich semantikasi:
 - **ga** — Norito-RPC har bir autentifikatsiya qilingan qo'ng'iroq qiluvchi uchun mavjud (shartga muvofiq)
   odatiy tarif va avtoulovdan oldingi chegaralar).
 
-Operatorlar ushbu qiymatlarni `/v1/config` orqali dinamik ravishda yangilashlari mumkin. Har bir o'zgarish
+Operatorlar ushbu qiymatlarni `/v2/config` orqali dinamik ravishda yangilashlari mumkin. Har bir o'zgarish
 darhol `/rpc/capabilities` da aks ettirilib, SDK va kuzatuvchanlikka imkon beradi
 jonli transport holatini ko'rsatish uchun asboblar paneli.

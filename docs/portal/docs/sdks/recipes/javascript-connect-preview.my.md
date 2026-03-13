@@ -8,7 +8,7 @@ source_hash: 0df3d72cb822e0fef5201d5a5d25b8588378f51e3e3106c73def669d68b1c674
 source_last_modified: "2025-12-29T18:16:35.166929+00:00"
 translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
 translator: machine-google-reviewed
 ---
@@ -19,7 +19,7 @@ translator: machine-google-reviewed
 `ToriiClient.openConnectWebSocket()` ဖြင့် ဖော်ထုတ်ထားသော WebSocket dialer ဇာတ်ညွှန်း
 JS SDK လမ်းပြမြေပုံ၏ ချိတ်ဆက်မှုအပိုင်းကို ထင်ဟပ်စေသည်- ၎င်းသည် အဆုံးအဖြတ်ပိုင်းကို ဦးစားပေးသည်။
 URI များကို အစမ်းကြည့်ရှုခြင်း၊ တန်းစီနေသော အတိမ်အနက် တယ်လီမီတာကို မှတ်တမ်းတင်ပြီး canonical ကိုဖွင့်ပါ။
-`/v1/connect/ws` အဆုံးမှတ်သည် `ws` ပက်ကေ့ဂျ်ကို အသုံးပြု၍ Node.js အက်ပ်များကို လေ့ကျင့်ခန်းလုပ်နိုင်သည်။
+`/v2/connect/ws` အဆုံးမှတ်သည် `ws` ပက်ကေ့ဂျ်ကို အသုံးပြု၍ Node.js အက်ပ်များကို လေ့ကျင့်ခန်းလုပ်နိုင်သည်။
 ဘရောက်ဆာများနှင့် တူညီသော စီးဆင်းမှု။
 
 <နမူနာဒေါင်းလုဒ်လုပ်ပါ။

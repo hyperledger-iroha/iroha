@@ -16,9 +16,9 @@ use iroha_data_model::{
 
 use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 
-const ENDPOINT_DA_PIN_INTENTS: &str = "/v1/da/pin_intents";
-const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v1/da/pin_intents/prove";
-const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin_intents/verify";
+const ENDPOINT_DA_PIN_INTENTS: &str = "/v2/da/pin_intents";
+const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v2/da/pin_intents/prove";
+const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v2/da/pin_intents/verify";
 
 /// Request payload for DA pin intent queries and proof generation.
 #[derive(
@@ -60,7 +60,7 @@ pub struct DaPinIntentVerifyResponse {
     pub valid: bool,
 }
 
-/// HTTP handler for `/v1/da/pin_intents`.
+/// HTTP handler for `/v2/da/pin_intents`.
 pub async fn handler_list_pin_intents(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaPinIntentQueryRequest>,
@@ -72,7 +72,7 @@ pub async fn handler_list_pin_intents(
     Ok(JsonBody(items))
 }
 
-/// HTTP handler for `/v1/da/pin_intents/prove`.
+/// HTTP handler for `/v2/da/pin_intents/prove`.
 pub async fn handler_prove_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaPinIntentQueryRequest>,
@@ -84,7 +84,7 @@ pub async fn handler_prove_pin_intent(
     Ok(JsonBody(proof))
 }
 
-/// HTTP handler for `/v1/da/pin_intents/verify`.
+/// HTTP handler for `/v2/da/pin_intents/verify`.
 pub async fn handler_verify_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaPinIntentWithLocation>,

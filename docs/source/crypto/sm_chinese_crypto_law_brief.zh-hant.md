@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. **文檔**
    - 在 `docs/source/crypto/sm_program.md` 中添加合規性附錄，註明商業密碼狀態、提交期望和聯繫點。
    - 發布 Norito 清單字段（`crypto.sm.enabled=true`、`crypto.sm.approval=l0|l1`），供運營商在準備備案時使用。
-   - 確保 Torii `/v1/node/capabilities` 廣告（以及 `iroha runtime capabilities` CLI 別名）隨每個版本一起提供，以便操作員可以捕獲 `crypto.sm` 清單快照以獲取 MLPS/密評證據。
+   - 確保 Torii `/v2/node/capabilities` 廣告（以及 `iroha runtime capabilities` CLI 別名）隨每個版本一起提供，以便操作員可以捕獲 `crypto.sm` 清單快照以獲取 MLPS/密評證據。
    - 提供雙語（EN/ZH）合規快速入門總結義務。
 2. **釋放文物**
    - 為支持 SM 的構建提供 SBOM/CycloneDX 文件。

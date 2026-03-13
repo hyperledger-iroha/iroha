@@ -119,8 +119,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > Torii ゲートウェイ読み取り専用ヘルパーは、`NodeHandle` ベースのデータを公開します。
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 保存された Norito マニフェスト (base64) ダイジェスト/メタデータ کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — 決定論的チャンク プラン JSON (`chunk_fetch_specs`) ダウンストリーム ツール
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — 保存された Norito マニフェスト (base64) ダイジェスト/メタデータ کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — 決定論的チャンク プラン JSON (`chunk_fetch_specs`) ダウンストリーム ツール
 >
 > エンドポイント CLI 出力 ミラーリング パイプライン ローカル スクリプト HTTP プローブ パーサー パーサーسکیں۔【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -144,9 +144,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 6. **エビクション/クォータの強制**:
    - キャパシティ ノードのデフォルト ピンの拒否オプションのオペレーターエビクションポリシー (TTLLRU) ガバナンスモデルの構成厳格なクォータの設計 オペレータによる固定解除操作の設計
 
-### キャパシティ宣言とスケジュールの統合- Torii `/v1/sorafs/capacity/declare` `CapacityDeclarationRecord` 埋め込まれた更新 `CapacityManager` リレー ノード コミットされたチャンカー/レーン割り当てインメモリビューマネージャー テレメトリ 読み取り専用スナップショット (`GET /v1/sorafs/capacity/state`) の公開 注文 プロファイルごと レーンごとの予約の強制ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` エンドポイント ガバナンスによって発行された `ReplicationOrderV1` ペイロードローカルプロバイダーの注文 ターゲットの管理 マネージャーの重複スケジューリング チャンカー/レーンの容量の確認 スライスリザーブの確認 `ReplicationPlan` の確認残りの容量、オーケストレーション ツールの取り込み、および残りの容量プロバイダー 注文 `ignored` 応答 承認 承認 マルチオペレーター ワークフロー [crates/iroha_torii/src/routing.rs:4845]
-- 完了フック (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v1/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے 予約リリースوں۔応答 `ReplicationRelease` スナップショット (残りの合計、チャンカー/レーンの残差) を表示 オーケストレーション ツールのポーリングを表示 注文キューを表示یہ بعد میں チャンク ストア パイプライン کے ساتھ ワイヤー ہوگا جب インジェスト ロジック ランド ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+### キャパシティ宣言とスケジュールの統合- Torii `/v2/sorafs/capacity/declare` `CapacityDeclarationRecord` 埋め込まれた更新 `CapacityManager` リレー ノード コミットされたチャンカー/レーン割り当てインメモリビューマネージャー テレメトリ 読み取り専用スナップショット (`GET /v2/sorafs/capacity/state`) の公開 注文 プロファイルごと レーンごとの予約の強制ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v2/sorafs/capacity/schedule` エンドポイント ガバナンスによって発行された `ReplicationOrderV1` ペイロードローカルプロバイダーの注文 ターゲットの管理 マネージャーの重複スケジューリング チャンカー/レーンの容量の確認 スライスリザーブの確認 `ReplicationPlan` の確認残りの容量、オーケストレーション ツールの取り込み、および残りの容量プロバイダー 注文 `ignored` 応答 承認 承認 マルチオペレーター ワークフロー [crates/iroha_torii/src/routing.rs:4845]
+- 完了フック (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v2/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے 予約リリースوں۔応答 `ReplicationRelease` スナップショット (残りの合計、チャンカー/レーンの残差) を表示 オーケストレーション ツールのポーリングを表示 注文キューを表示یہ بعد میں チャンク ストア パイプライン کے ساتھ ワイヤー ہوگا جب インジェスト ロジック ランド ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - 埋め込み `TelemetryAccumulator` `NodeHandle::update_telemetry` 突然変異、バックグラウンド ワーカー、PoR/稼働時間サンプルの記録正規の `CapacityTelemetryV1` ペイロードは、スケジューラーの内部構造を派生します。 چھیڑے۔【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### 統合と今後の取り組み

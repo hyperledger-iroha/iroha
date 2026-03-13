@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 Los SDK de Swift ahora pueden emitir instrucciones escudo sin pegamento JSON a medida: construye un
 `ShieldRequest` con el compromiso de 32 bytes, la carga útil encriptada y metadatos de débito,
 luego llama `IrohaSDK.submit(shield:keypair:)` (o `submitAndWait`) para firmar y enviar la
-transacción sobre `/v1/pipeline/transactions`. El ayudante valida longitudes de compromiso,
+transacción sobre `/v2/pipeline/transactions`. El ayudante valida longitudes de compromiso,
 enhebra `ConfidentialEncryptedPayload` en el codificador Norito, y refleja el diseño `zk::Shield`
 Se describe a continuación para que las billeteras se mantengan sincronizadas con Rust.## Compromisos de consenso y capacidad de activación
 - Los encabezados de bloque exponente `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; el digest participa en el hash de consenso y debe igualar la vista local del registro para aceptar el bloque.
@@ -72,7 +72,7 @@ Se describe a continuación para que las billeteras se mantengan sincronizadas c
 
 #### Monitoreo de transiciones vía Torii
 
-Wallets y auditores consultan `GET /v1/confidential/assets/{definition_id}/transitions` para inspeccionar el `AssetConfidentialPolicy` activo. El payload JSON siempre incluye el active id canonico, la última altura de bloque observada, el `current_mode` de la política, el modo efectivo en esa altura (las ventanas de conversión reportan temporalmente `Convertible`), y los identificadores esperados de `vk_set_hash`/Poseidon/Pedersen. Cuando hay una transición pendiente la respuesta también incluye:
+Wallets y auditores consultan `GET /v2/confidential/assets/{definition_id}/transitions` para inspeccionar el `AssetConfidentialPolicy` activo. El payload JSON siempre incluye el active id canonico, la última altura de bloque observada, el `current_mode` de la política, el modo efectivo en esa altura (las ventanas de conversión reportan temporalmente `Convertible`), y los identificadores esperados de `vk_set_hash`/Poseidon/Pedersen. Cuando hay una transición pendiente la respuesta también incluye:
 
 - `transition_id` - manija de auditoria devuelta por `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -114,7 +114,7 @@ Transiciones no listadas arriba se rechazan durante la sumisión de gobernanza. 
 
 ### Secuencia de migración1. **Preparar registros:** activar todas las entradas de verificador y parámetros referenciados por la política objetivo. Los nodos anuncian el `conf_features` resultante para que los pares verifiquen coherencia.
 2. **Programar la transición:** enviar `ScheduleConfidentialPolicyTransition` con un `effective_height` que respeta `policy_transition_delay_blocks`. Al moverse hacia `ShieldedOnly`, especifique una ventana de conversión (`window >= policy_transition_window_blocks`).
-3. **Guía pública para operadores:** registrar el `transition_id` devuelto y circular un runbook de on/off-ramp. Wallets y auditores se suscriben a `/v1/confidential/assets/{id}/transitions` para conocer la altura de apertura de ventana.
+3. **Guía pública para operadores:** registrar el `transition_id` devuelto y circular un runbook de on/off-ramp. Wallets y auditores se suscriben a `/v2/confidential/assets/{id}/transitions` para conocer la altura de apertura de ventana.
 4. **Aplicar ventana:** cuando abre la ventana, el runtime cambia la política a `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }`, y empieza a rechazar solicitudes de gobernanza en conflicto.
 5. **Finalizar o abortar:** en `effective_height`, el runtime verifica los prerrequisitos de transición (supply transparente cero, sin emergencias, etc.). Si pasa, cambia la política al modo solicitado; si falla, emite `PolicyTransitionPrerequisiteFailed`, limpia la transición pendiente y deja la política sin cambios.6. **Actualizaciones de esquema:** después de una transición exitosa, el gobierno sube la versión de esquema del activo (por ejemplo, `asset_definition.v2`) y la herramienta CLI requiere `confidential_policy` para serializar manifiestos. Los documentos de actualización de génesis instruyen a los operadores a agregar configuraciones de política y huellas digitales del registro antes de reiniciar validadores.
 
@@ -207,7 +207,7 @@ La documentación anula las configuraciones regionales en el runbook de operacio
 - Jerarquía de derivación por cuenta:
   - `sk_spend` -> `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Payloads de notas encriptadas usan AEAD con claves compartidas derivadas por ECDH; se pueden adjuntar ver claves de auditores opcionales a salidas según la política del activo.
-- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar memos, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea. Torii exponen el mismo flujo de derivación vía `POST /v1/confidential/derive-keyset`, retornando formas hexadecimal y base64 para que wallets obtengan jerarquias de claves programáticamente.## Gas, límites y controles DoS
+- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar memos, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea. Torii exponen el mismo flujo de derivación vía `POST /v2/confidential/derive-keyset`, retornando formas hexadecimal y base64 para que wallets obtengan jerarquias de claves programáticamente.## Gas, límites y controles DoS
 - Horario determinista de gas:
   - Halo2 (Plonkish): gas base `250_000` + gas `2_000` por entrada del público.
   - `5` gas por byte de prueba, mas cargas por anulador (`300`) y por compromiso (`500`).

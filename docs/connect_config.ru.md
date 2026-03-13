@@ -18,9 +18,9 @@ WalletConnect и минимальный встроенный relay, когда f
 включён (по умолчанию). Поведение в runtime настраивается через конфиг:
 
 - Установите `connect.enabled=false`, чтобы отключить все маршруты Connect
-  (`/v1/connect/*`).
+  (`/v2/connect/*`).
 - Оставьте `true` (по умолчанию), чтобы включить WS‑эндпоинты сессий и
-  `/v1/connect/status`.
+  `/v2/connect/status`.
 
 Переменные окружения (user‑config → actual‑config):
 
@@ -48,9 +48,9 @@ WalletConnect и минимальный встроенный relay, когда f
   терпит `ping_miss_tolerance` подряд пропущенных pong‑ответов, после чего
   закрывает WebSocket и увеличивает метрику `connect.ping_miss_total`.
 - При отключении в runtime (`connect.enabled=false`) маршруты Connect WS и
-  статус‑эндпоинты не регистрируются; запросы к `/v1/connect/ws` и
-  `/v1/connect/status` возвращают 404.
-- Сервер требует клиентский `sid` в `/v1/connect/session` (base64url или hex,
+  статус‑эндпоинты не регистрируются; запросы к `/v2/connect/ws` и
+  `/v2/connect/status` возвращают 404.
+- Сервер требует клиентский `sid` в `/v2/connect/session` (base64url или hex,
   32 байта). Генерация fallback‑`sid` больше не выполняется.
 
 См. также:

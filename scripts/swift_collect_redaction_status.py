@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Override store JSON (managed via swift_status_export.py telemetry-override).",
     )
-    parser.add_argument("--schema-version", default="ios_metrics/v1", help="Schema version identifier.")
+    parser.add_argument("--schema-version", default="ios_metrics/v2", help="Schema version identifier.")
     parser.add_argument("--notes-file", type=Path, help="Plain-text file with note lines to include.")
     parser.add_argument("--note", action="append", default=[], dest="notes", help="Add a single note entry.")
     parser.add_argument(

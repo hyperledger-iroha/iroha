@@ -60,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0
 MMR 峰從左到右排列。通過裝袋峰值重新計算 `mmr_root`
 從右到左：`root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`。
 
-API：`GET /v1/bridge/finality/bundle/{height}`（Norito/JSON）。
+API：`GET /v2/bridge/finality/bundle/{height}`（Norito/JSON）。
 
 驗證類似於基本證明：從
 header，驗證提交證書籤名，並檢查承諾
@@ -103,10 +103,10 @@ header，驗證提交證書籤名，並檢查承諾
 
 ## API 接口
 
-- `GET /v1/bridge/finality/{height}` – 返回 `BridgeFinalityProof`
+- `GET /v2/bridge/finality/{height}` – 返回 `BridgeFinalityProof`
   請求的塊高度。通過 `Accept` 的內容協商支持 Norito 或
   JSON。
-- `GET /v1/bridge/finality/bundle/{height}` – 返回 `BridgeFinalityBundle`
+- `GET /v2/bridge/finality/bundle/{height}` – 返回 `BridgeFinalityBundle`
   （承諾+理由+標頭/證書）所需的高度。
 
 ## 註釋和後續行動

@@ -69,13 +69,13 @@ Soporte de herramientas:
 Los gateways aceptan solicitudes HTTP deterministas que reflejan los metadatos de
 los anuncios.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
 |-----------|----------|
 | **Encabezados** | `Range` (ventana única alineada a offsets de chunks), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` opcional y `X-SoraFS-Stream-Token` base64 obligatorio. |
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range` que describen la ventana servida, metadatos `X-Sora-Chunk-Range` y encabezados de fragmentador/token ecoados. |
 | **Modos de fallo** | `416` para rangos desalineados, `401` para tokens faltantes o inválidos, `429` cuando se exceden presupuestos de stream/bytes. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch de un solo chunk con los mismos headers más el digest determinista del
 trozo. Útil para reintentos o descargas forenses cuando no se necesitan rebanadas
@@ -126,12 +126,12 @@ Errores comunes que llegan a operadores/SDK:
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` envuelven los
   endpoints REST del pin-registry e imprimen Norito JSON crudo con bloques de
   attestation para evidencia de auditoría.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` aceptan manifiestos
+- `iroha app sorafs storage pin` y `torii /v2/sorafs/pin/register` aceptan manifiestos
   Norito o JSON más pruebas de alias opcionales y sucesores; pruebas malformadas
   elevan `400`, pruebas obsoletos exponente `503` con `Warning: 110`, y pruebas
   caducados devuelven `412`.
-- Los puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) incluyen estructuras de atestación para que los
+- Los puntos finales REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) incluyen estructuras de atestación para que los
   clientes verifiquen datos contra los encabezados del último bloque antes de actuar.
 
 ## Referencias- Especificación canónica:

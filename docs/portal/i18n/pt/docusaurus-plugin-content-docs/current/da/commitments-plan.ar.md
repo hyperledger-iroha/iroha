@@ -30,7 +30,7 @@ A solução de problemas Torii/RPC não está disponível para download
   Isso é feito por conta própria.
 - توفير براهين عضوية حتمية لكي يتحقق العملاء الخفيفون من ان manifest hash تم
   تثبيته في كتلة محددة.
-- كشف استعلامات Torii (`/v1/da/commitments/*`) e instalar relés e SDKs
+- كشف استعلامات Torii (`/v2/da/commitments/*`) e instalar relés e SDKs
   وادوات الحوكمة بتدقيق disponibilidade دون اعادة تشغيل كل كتلة.
 - الحفاظ على ظرف `SignedBlockWire` القياسي عبر تمرير البنى الجديدة من خلال
   Você pode usar Norito como hash e hash.
@@ -44,7 +44,7 @@ A solução de problemas Torii/RPC não está disponível para download
    `crates/iroha_core/src/block.rs`).
 3. **Persistência/índices** حتى يتمكن WSV من اجابة استعلامات التعهدات بسرعة
    (`iroha_core/src/wsv/mod.rs`).
-4. **Recurso RPC em Torii** para listar/consultar/provar em `/v1/da/commitments`.
+4. **Recurso RPC em Torii** para listar/consultar/provar em `/v2/da/commitments`.
 5. **Configurações + acessórios** para layout de fio e prova de
    `integration_tests/tests/da/commitments.rs`.
 
@@ -133,9 +133,9 @@ Torii para os endpoints:
 
 | المسار | الطريقة | الحمولة | Produtos |
 |----|---------|---------|---------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (período de faixa/época/sequência, sem paginação) | Use `DaCommitmentPage` para obter informações de valor e hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto e tupla `(epoch, sequence)`). | يعيد `DaCommitmentProof` (registro + مسار Merkle + hash الكتلة). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ Use SDKs para obter informações sobre `iroha_crypto`. |O código de segurança é `iroha_data_model::da::commitment`. Torii Torii
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (período de faixa/época/sequência, sem paginação) | Use `DaCommitmentPage` para obter informações de valor e hash. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto e tupla `(epoch, sequence)`). | يعيد `DaCommitmentProof` (registro + مسار Merkle + hash الكتلة). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ Use SDKs para obter informações sobre `iroha_crypto`. |O código de segurança é `iroha_data_model::da::commitment`. Torii Torii
 manipuladores de endpoints ingerem o token/mTLS.
 
 ## 4. براهين الاشتمال والعملاء الخفيفون

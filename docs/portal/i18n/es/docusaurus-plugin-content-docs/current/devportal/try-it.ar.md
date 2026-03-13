@@ -145,7 +145,7 @@ Descarga Norito-RPC para proxy y plomería OAuth para JSON فهي تضبط
 ### Carga útil Norito Más información Pruébelo1. Aplique el accesorio `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
    Fuente Norito خام؛ **لا** تقم بتحويلها الى base64.
 2. Aquí Swagger y RapiDoc son el punto final NRPC (en
-   `POST /v1/pipeline/submit`) وغيّر محدد **Tipo de contenido** الى
+   `POST /v2/pipeline/submit`) وغيّر محدد **Tipo de contenido** الى
    `application/x-norito`.
 3. Haga clic en **binario** (y en "Archivo" en Swagger y en "Binario/Archivo" en RapiDoc)
    وارفع ملف `.norito`. تقوم الاداة بتمرير البايتات عبر الوكيل بدون تعديل.
@@ -166,12 +166,12 @@ Paquete de instalación de NRPC-4 (log + JSON) y otros archivos de configuració
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 بدل accesorio باي ادخال مدرج في `transaction_fixtures.manifest.json` خاص بك عبر
 `cargo xtask norito-rpc-fixtures`. عندما يكون Torii في وضع canary يمكنك توجيه `curl` الى
-Probar proxy (`https://docs.sora.example/proxy/v1/pipeline/submit`) لاختبار نفس البنية
+Probar proxy (`https://docs.sora.example/proxy/v2/pipeline/submit`) لاختبار نفس البنية
 التي تستخدمها عناصر البوابة.
 
 ## المراقبة والعملياتيتم تسجيل كل طلب مرة واحدة مع método و ruta و origen وحالة aguas arriba ومصدر المصادقة
@@ -184,7 +184,7 @@ Y `X-TryIt-Auth` está conectado a la salida estándar para que funcione correct
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 مفاتيح البيئة:

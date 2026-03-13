@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 - Boshqaruv takliflari quyidagicha amalga oshiriladi: taklifchi → referendum → hisob → kuchga kirish. Referendum oynalari va ishtirok etish/tasdiqlash chegaralari `gov.md` da tavsiflanganidek amalga oshiriladi; qulflar faqat uzaytiriladi va muddati tugashi bilan ochiladi.
 - Parlament tanlovida deterministik tartib va ​​muddat chegaralari bilan VRF asosidagi chizmalardan foydalaniladi; doimiy ro'yxat mavjud bo'lmaganda, Torii `gov.parliament_*` konfiguratsiyasidan foydalangan holda zaxirani oladi. Kengashga kirish va kvorum tekshiruvlari `gov_parliament_bodies` / `gov_pipeline_sla` testlarida amalga oshiriladi.
 - Ovoz berish rejimlari: ZK (standart, ichki baytlar bilan `Active` VK talab qilinadi) va Oddiy (kvadrat og'irlik). Rejimning mos kelmasligi rad etiladi; qulfni yaratish/kengaytirish ZK va oddiy qayta ovoz berish uchun regressiya testlari bilan ikkala rejimda ham monotondir.
-- Tasdiqlovchining noto'g'ri xatti-harakati `NextMode` + `ModeActivationHeight` tomonidan qo'llaniladigan qo'shma konsensus topshirish bilan dalillar quvuri (`/v1/sumeragi/evidence*`, CLI yordamchilari) orqali amalga oshiriladi.
+- Tasdiqlovchining noto'g'ri xatti-harakati `NextMode` + `ModeActivationHeight` tomonidan qo'llaniladigan qo'shma konsensus topshirish bilan dalillar quvuri (`/v2/sumeragi/evidence*`, CLI yordamchilari) orqali amalga oshiriladi.
 - Himoyalangan nom maydonlari, ish vaqtini yangilash ilgaklari va boshqaruv manifestini qabul qilish `governance_api.md` da hujjatlashtirilgan va telemetriya bilan qoplangan (`governance_manifest_*`, `governance_protected_namespace_total`).
 
 # Parvoz / orqada qolish

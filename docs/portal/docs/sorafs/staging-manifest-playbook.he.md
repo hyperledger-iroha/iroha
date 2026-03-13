@@ -76,13 +76,13 @@ description: צ'קליסט להפעלת פרופיל chunker שאושר בפרל
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. שאבו את endpoint ה-discovery וודאו שה-advert מופיע עם aliases קנוניים:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    ודאו ש-`profile_aliases` כולל את `"sorafs.sf1@1.0.0"` כערך הראשון.

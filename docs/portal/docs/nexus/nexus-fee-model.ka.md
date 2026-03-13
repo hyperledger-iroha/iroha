@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   XOR დაუყოვნებლივ, XOR მოსალოდნელია შემდეგ თმის შეჭრა, მიხვდა
   დისპერსიას (`xor_variance_micro`) და ბლოკის დროის ანაბეჭდი მილიწამებში.
 - ბლოკის შესრულება აგროვებს ქვითრებს თითო ზოლზე/მონაცემთა სივრცეში და აქვეყნებს მათ
-  `lane_settlement_commitments`-ის მეშვეობით `/v1/sumeragi/status`-ში.  ჯამები
+  `lane_settlement_commitments`-ის მეშვეობით `/v2/sumeragi/status`-ში.  ჯამები
   გამოაშკარავდეს `total_local_micro`, `total_xor_due_micro` და
   `total_xor_after_haircut_micro` შეჯამებულია ბლოკზე ღამით
   შერიგების ექსპორტი.

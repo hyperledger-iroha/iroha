@@ -27,7 +27,7 @@ description: תהליך ממשל להגשת סכסוכי קיבולת של SoraF
 ## 1. הערכת האירוע
 
 - **תנאי טריגר:** זיהוי הפרת SLA (זמינות/כשל PoR), מחסור ברפליקציה או מחלוקת על חיוב.
-- **אישור טלמטריה:** לכידת snapshots של `/v1/sorafs/capacity/state` ו-`/v1/sorafs/capacity/telemetry` עבור הספק.
+- **אישור טלמטריה:** לכידת snapshots של `/v2/sorafs/capacity/state` ו-`/v2/sorafs/capacity/telemetry` עבור הספק.
 - **הודעה לבעלי עניין:** Storage Team (תפעול ספקים), Governance Council (גוף החלטה), Observability (עדכוני דשבורדים).
 
 ## 2. הכנת חבילת ראיות
@@ -75,7 +75,7 @@ description: תהליך ממשל להגשת סכסוכי קיבולת של SoraF
    ```
 
 3. בדקו את `dispute_summary.json` (אשרו סוג, digest של ראיות וחותמות זמן).
-4. שלחו את ה-JSON של הבקשה ל-Torii `/v1/sorafs/capacity/dispute` דרך תור עסקאות הממשל. תעדו את ערך התגובה `dispute_id_hex`; הוא מעגן פעולות ביטול המשך ודוחות ביקורת.
+4. שלחו את ה-JSON של הבקשה ל-Torii `/v2/sorafs/capacity/dispute` דרך תור עסקאות הממשל. תעדו את ערך התגובה `dispute_id_hex`; הוא מעגן פעולות ביטול המשך ודוחות ביקורת.
 
 ## 4. פינוי וביטול
 

@@ -40,7 +40,7 @@ docs/source/references/ios_metrics.he.md
 |-----|-------|-------|
 | `generated_at` | מחרוזת (ISO 8601) | חותמת זמן ליצירת הסנאפשוט. |
 | `fixtures` | אובייקט | דיפי parity של Norito וגיל הפריט הוותיק ביותר. |
-| `pipeline` | אובייקט | סטטוס אינטגרציה של `/v1/pipeline` (הרצה אחרונה, כשלים). |
+| `pipeline` | אובייקט | סטטוס אינטגרציה של `/v2/pipeline` (הרצה אחרונה, כשלים). |
 | `pipeline.metadata` | אובייקט (אופציונלי) | נתוני טיימינג משותפים של עבודה/בדיקות (`job_name`, ‏`duration_seconds`, ‏`tests[]`) שמוזרמים דרך `MOBILE_PARITY_PIPELINE_METADATA`; השדה `metadata_source` מתעד את הנתיב/ה-URL לצורכי ביקורת. |
 | `regen_sla` | אובייקט | רצף עמידה ב-SLA של רענון פיקסצ'רים. |
 | `alerts` | מערך | ערכי התראה חופשיים (אופציונלי). |
@@ -111,7 +111,7 @@ docs/source/references/ios_metrics.he.md
   היצואן שומר מונים `swift_parity_success_total` ו-`swift_parity_failure_total` באמצעות קובץ מצב JSON (ברירת מחדל
   `artifacts/swift_status_metrics_state.json`, ניתן לעדכן עם `--metrics-state …`).
 - ‏`swift_parity_success_total` יוגדל כאשר בסנאפשוט האחרון אין פערים פתוחים, `regen_sla.breach` שקרי,
-  ואין בדיקות `/v1/pipeline` שנכשלו.
+  ואין בדיקות `/v2/pipeline` שנכשלו.
 - הקובץ כולל גם מדדי gauge עבור מצב עכשווי (`swift_parity_status`), מספר הפערים, גיל הפער הוותיק ביותר ושעות מאז רענון הפיקסלים האחרון,
   כך שאוספי textfile ולוחות הבקרה של המשמרת יוכלו להתריע על סטייה מה-SLA.
 - כאשר בלוק ה-telemetry קיים היצואן מפיק גם:

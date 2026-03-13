@@ -60,7 +60,7 @@ hali ham bir xil xeshni majburiyat yuki orqali tasdiqlang.
 MMR cho'qqilari chapdan o'ngga tartiblangan. Cho'qqilarni yig'ish orqali `mmr_root` ni qayta hisoblang
 o'ngdan chapga: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Tasdiqlash asosiy dalilga o'xshaydi: `block_hash` dan qayta hisoblang.
 sarlavha, majburiyat-sertifikat imzolarini tekshiring va majburiyatni tekshiring
@@ -103,10 +103,10 @@ deterministik xatolar bilan diapazon/etarsiz imzolar.
 
 ## API yuzasi
 
-- `GET /v1/bridge/finality/{height}` - uchun `BridgeFinalityProof` qaytaradi
+- `GET /v2/bridge/finality/{height}` - uchun `BridgeFinalityProof` qaytaradi
   talab qilingan blok balandligi. `Accept` orqali kontent muzokaralari Norito yoki
   JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle`ni qaytaradi
+- `GET /v2/bridge/finality/bundle/{height}` - `BridgeFinalityBundle`ni qaytaradi
   (majburiyat + asoslash + sarlavha/sertifikat) so'ralgan balandlik uchun.
 
 ## Eslatmalar va kuzatuvlar

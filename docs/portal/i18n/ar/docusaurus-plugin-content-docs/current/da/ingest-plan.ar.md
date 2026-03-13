@@ -36,7 +36,7 @@ _مسودة: 2026-02-20 - المالك: Core Protocol WG / Storage Team / DA WG_
 ## سطح API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -210,7 +210,7 @@ pub struct DaIngestReceipt {
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه الى بيان التحف + خطة القطع
   (`--manifest`, `--plan`, `--manifest-id`) **او** تذكرة تخزين من Torii
   عبر `--storage-ticket`. عند استخدام مسار التذكرة، تقوم CLI بجلب البيان من
-  `/v1/da/manifests/<ticket>`، وتخزن الصندوق تحت `artifacts/da/fetch_<timestamp>/`
+  `/v2/da/manifests/<ticket>`، وتخزن الصندوق تحت `artifacts/da/fetch_<timestamp>/`
   (تجاوز مع `--manifest-cache-dir`)، وتشتق hash الـ blob لـ `--manifest-id`،
   ثم تشغل الأوركسترا مع قائمة `--gateway-provider` المعطاة. تبقى جميع المقابض
   المتقدمة من جالب SoraFS كما هي (مظاريف البيان، ملصقات العميل، الحارس
@@ -219,7 +219,7 @@ pub struct DaIngestReceipt {
   تعيش فحوصات التوفر من النهاية للنهاية ضمن مساحة `da` دون شمالي
   منسق.
 - `iroha app da get-blob` يتم سحب البيانات القياسية مباشرة من Torii عبر
-  `GET /v1/da/manifests/{storage_ticket}`. كتب الأمر
+  `GET /v2/da/manifests/{storage_ticket}`. كتب الأمر
   `manifest_{ticket}.norito` و`manifest_{ticket}.json` و`chunk_plan_{ticket}.json`
   تحت `artifacts/da/fetch_<timestamp>/` (او `--output-dir` يحدده المستخدم) مع
   طباعة امرر `iroha app da get` الصباح (بما في ذلك `--manifest-id`) المطلوب لجلب

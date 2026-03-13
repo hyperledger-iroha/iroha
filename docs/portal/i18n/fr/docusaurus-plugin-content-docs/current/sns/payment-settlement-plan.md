@@ -32,7 +32,7 @@ sans feuilles de calcul. Cette page condense la spec pour les publics du portail
 
 | Composant | Objectif | Evidence |
 |-----------|----------|----------|
-| `sns_settlementd` | Applique la politique, signe les bundles, expose `/v1/sns/settlements`. | Bundle JSON + hash. |
+| `sns_settlementd` | Applique la politique, signe les bundles, expose `/v2/sns/settlements`. | Bundle JSON + hash. |
 | Settlement queue & writer | File idempotente + soumissionnaire de ledger pilote par `iroha_cli app sns settlement ledger`. | Manifeste bundle hash <-> tx hash. |
 | Reconciliation job | Diff quotidien + releve mensuel sous `docs/source/sns/reports/`. | Markdown + digest JSON. |
 | Refund desk | Remboursements approuves par la gouvernance via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

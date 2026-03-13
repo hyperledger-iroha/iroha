@@ -14,7 +14,7 @@ translator: manual
 
 בדיקות האינטגרציה [`sumeragi_rbc_da_large_payload_four_peers`] ו־[`sumeragi_rbc_da_large_payload_six_peers`] (בקובץ `integration_tests/tests/sumeragi_da.rs`) מקימות רשתות של ארבעה ושישה פירים עם `sumeragi.da.enabled = true` (DA + RBC). כל בדיקה שולחת הוראת לוג בגודל ≥10 MiB, צופה במסירה של RBC ובקומיט, מאמתת שניתן להרכיב קוורום זמינות למטען, ומדפיסה סיכום מובנה הניתן לצריכה בדשבורדים או בכלי רגרסיה.
 
-לסמפול מונחה קליינט-קל של מטעני RBC ראו [`light_client_da.md`](light_client_da.md), המתעד את נקודת הקצה המאומתת `/v1/sumeragi/rbc/sample` ואת המגבלות/תקציבים הנלווים.
+לסמפול מונחה קליינט-קל של מטעני RBC ראו [`light_client_da.md`](light_client_da.md), המתעד את נקודת הקצה המאומתת `/v2/sumeragi/rbc/sample` ואת המגבלות/תקציבים הנלווים.
 
 ### טיימאאוט DA והתראות
 
@@ -31,7 +31,7 @@ translator: manual
 ## מדדים שנאספים
 
 - גודל המטען (בייט) והספחת הסקת קצב (MiB/s) ברגע שה-RBC מסמן שהמטען נשלח.
-- צילום מצב של סשן RBC (`total_chunks`, ‏`received_chunks`, ‏`ready_count`, ‏`view`, ‏`block_hash`, ‏`recovered`, ‏`lane_backlog`, ‏`dataspace_backlog`) הנשלף מ-`/v1/sumeragi/rbc/sessions`.
+- צילום מצב של סשן RBC (`total_chunks`, ‏`received_chunks`, ‏`ready_count`, ‏`view`, ‏`block_hash`, ‏`recovered`, ‏`lane_backlog`, ‏`dataspace_backlog`) הנשלף מ-`/v2/sumeragi/rbc/sessions`.
 - מוני Prometheus לכל peer: ‏`sumeragi_rbc_payload_bytes_delivered_total`, ‏`sumeragi_rbc_deliver_broadcasts_total`, ‏`sumeragi_rbc_ready_broadcasts_total` מתוך `/metrics`.
 - מדדי עומס לפי נתיב/מרחב-נתונים שניתן לדגום מ-`/metrics`:
   ‏`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}` עם תווית `lane_id`

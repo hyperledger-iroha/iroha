@@ -319,7 +319,7 @@ Quyidagi xulosa muhandislikni chiqarish uchun paydo bo'lgan sarlavhalarni kuzati
 |----------|----------------|-------------|-------|
 | SM2 | GB/T32918 (barcha qismlar) | GM/T0003 | ECC raqamli imzo + kalit almashinuvi; Iroha yadro tugunlarida tekshirishni va SDK-larga deterministik imzolashni ochib beradi. |
 | SM3 | GB/T32905 | GM/T0004 | 256 bitli xesh; skaler va ARMv8 tezlashtirilgan yo'llari bo'ylab deterministik xeshlash. |
-| SM4 | GB/T32907 | GM/T0002 | 128 bitli blokli shifr; Iroha GCM/CCM yordamchilarini taqdim etadi va ilovalar bo'yicha katta-endian paritetini ta'minlaydi. |- **Qobiliyat manifesti:** Torii `/v1/node/capabilities` so‘nggi nuqtasi quyidagi JSON shaklini reklama qiladi, shuning uchun operatorlar va asboblar SM manifestini dasturiy ravishda iste’mol qilishi mumkin:
+| SM4 | GB/T32907 | GM/T0002 | 128 bitli blokli shifr; Iroha GCM/CCM yordamchilarini taqdim etadi va ilovalar bo'yicha katta-endian paritetini ta'minlaydi. |- **Qobiliyat manifesti:** Torii `/v2/node/capabilities` so‘nggi nuqtasi quyidagi JSON shaklini reklama qiladi, shuning uchun operatorlar va asboblar SM manifestini dasturiy ravishda iste’mol qilishi mumkin:
 
 ```json
 {

@@ -19,7 +19,7 @@ Typical usage::
     python3 scripts/sumeragi_backpressure_log_scraper.py - --status status.json
 
 Use ``--json`` for machine-readable output or ``--status`` to include counters
-from a `/v1/sumeragi/status` snapshot. Passing ``-`` reads log lines from
+from a `/v2/sumeragi/status` snapshot. Passing ``-`` reads log lines from
 standard input.
 """
 
@@ -342,7 +342,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("logs", nargs="*", help="Path(s) to log files to analyse.")
     parser.add_argument("--window-before", type=float, default=30.0, help="Seconds before a pacemaker deferral to consider DA/RBC events (default: 30).")
     parser.add_argument("--window-after", type=float, default=10.0, help="Seconds after a pacemaker deferral to consider DA/RBC events (default: 10).")
-    parser.add_argument("--status", type=Path, help="Optional JSON snapshot from /v1/sumeragi/status to include counters.")
+    parser.add_argument("--status", type=Path, help="Optional JSON snapshot from /v2/sumeragi/status to include counters.")
     parser.add_argument("--json", action="store_true", help="Emit JSON summary instead of human-readable text.")
     parser.add_argument("--self-test", action="store_true", help="Run built-in self tests and exit.")
     return parser

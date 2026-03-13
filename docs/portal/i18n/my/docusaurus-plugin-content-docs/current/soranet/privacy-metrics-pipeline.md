@@ -117,14 +117,14 @@ Memory ထဲတွင် ဟောင်းနွမ်းနေသော accum
 Torii သည် ယခုအခါ တယ်လီမက်ထရီဖြင့် တံခါးပိတ်ထားသော HTTP အဆုံးမှတ်နှစ်ခုကို ထုတ်ပြသည်ဖြစ်သောကြောင့် relay များနှင့် စုဆောင်းသူများ
 စိတ်ကြိုက်သယ်ယူပို့ဆောင်ရေးတွင် ထည့်သွင်းခြင်းမပြုဘဲ စောင့်ကြည့်မှုများကို ပေးပို့နိုင်သည်-
 
-- `POST /v1/soranet/privacy/event` လက်ခံသည်။
+- `POST /v2/soranet/privacy/event` လက်ခံသည်။
   `RecordSoranetPrivacyEventDto` payload။ တစ်ကိုယ်လုံးခြုံ
   `SoranetPrivacyEventV1` နှင့် ရွေးချယ်နိုင်သော `source` အညွှန်း။ Torii သည် အတည်ပြုသည်။
   တက်ကြွသော တယ်လီမီတာပရိုဖိုင်ကို ဆန့်ကျင်သည့် တောင်းဆိုချက်၊ ဖြစ်ရပ်ကို မှတ်တမ်းတင်ပြီး တုံ့ပြန်သည်။
   HTTP `202 Accepted` နှင့်အတူ Norito JSON စာအိတ်နှင့်အတူ
   တွက်ချက်ထားသော ပုံးဝင်းဒိုး (`bucket_start_unix`၊ `bucket_duration_secs`) နှင့်
   relay မုဒ်။
-- `POST /v1/soranet/privacy/share` `RecordSoranetPrivacyShareDto` လက်ခံသည်
+- `POST /v2/soranet/privacy/share` `RecordSoranetPrivacyShareDto` လက်ခံသည်
   payload ကိုယ်ထည်သည် `SoranetPrivacyPrioShareV1` နှင့် စိတ်ကြိုက်ရွေးချယ်နိုင်သည်။
   `forwarded_by` အရိပ်အမြွက်ကြောင့် အော်ပရေတာများသည် စုဆောင်းသူစီးဆင်းမှုကို စာရင်းစစ်နိုင်သည်။ အောင်မြင်တယ်။
   တင်ပြချက်များသည် Norito JSON စာအိတ်အကျဉ်းချုပ်ဖြင့် HTTP `202 Accepted` ကို ပြန်ပို့သည်
@@ -254,7 +254,7 @@ cargo xtask soranet-privacy-report \
 ဝင်းဒိုး (မူလ 10%) သို့မဟုတ် ပုံးမရှိသည့်အခါ။ အကြံပြုထားသော စီးဆင်းမှု-
 
 1. NDJSON ကို relay admin endpoint(များ) နှင့် orchestrator မှ ထုတ်ယူပါ။
-   `/v1/soranet/privacy/event|share` ထဲသို့ စီးဝင်သည်။
+   `/v2/soranet/privacy/event|share` ထဲသို့ စီးဝင်သည်။
    `artifacts/sorafs_privacy/<relay>.ndjson`။
 2. အကူအညီပေးသူကို မူဝါဒဘတ်ဂျက်ဖြင့် လုပ်ဆောင်ပါ-
 

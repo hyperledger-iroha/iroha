@@ -56,12 +56,12 @@ OpenTelemetry `sorafs.node.deal_*`
 ## Интеграция Torii
 
 Torii предоставляет выделенные נקודות קצה, чтобы провайдеры могли отправлять שימוש и вести
-жизненный цикл сделок без специального חיווט:- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
+жизненный цикл сделок без специального חיווט:- `POST /v2/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
   детерминированные результаты учета (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает текущий חלון, стримя
+- `POST /v2/sorafs/deal/settle` завершает текущий חלון, стримя
   итоговый `DealSettlementRecord` вместе с base64-кодированным `DealSettlementV1`,
   готовым к публикации в governance DAG.
-- Лента Torii `/v1/events/sse` צור קשר עם `SorafsGatewayEvent::DealUsage`,
+- Лента Torii `/v2/events/sse` צור קשר עם `SorafsGatewayEvent::DealUsage`,
   суммирующие каждую отправку (תקופה, измеренные GiB-hours, счетчики билетов,
   חיובים детерминированные), записи `SorafsGatewayEvent::DealSettlement`,
   включающие канонический פנקס צילום מצב расчетов плюс BLAKE3 digest/size/base64

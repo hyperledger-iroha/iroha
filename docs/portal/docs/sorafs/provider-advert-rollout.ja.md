@@ -48,7 +48,7 @@ title: "SoraFS プロバイダー広告のロールアウトと互換計画"
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` と `max_span` の定義
      - GREASE TLV がある場合 `allow_unknown_capabilities=<true|false>`
-   - `/v1/sorafs/providers` と `sorafs_fetch` で検証する。未知 capabilities の警告は triage する。
+   - `/v2/sorafs/providers` と `sorafs_fetch` で検証する。未知 capabilities の警告は triage する。
 3. **マルチソース readiness の検証。**
    - `sorafs_fetch` を `--provider-advert=<path>` で実行する。CLI は `chunk_range_fetch` が
      ないと失敗し、未知 capabilities の無視警告を出す。JSON レポートを保存して
@@ -182,8 +182,8 @@ groups:
 - **週次ステータスメール。** DevRel が admission メトリクス、未解決 warnings、
   直近の期限を短く共有する。
 - **インシデント対応。** `reject` アラートが発火した場合、on-call は:
-  1. Torii discovery (`/v1/sorafs/providers`) で該当 advert を取得する。
-  2. provider pipeline で advert 検証を再実行し、`/v1/sorafs/providers` と比較して
+  1. Torii discovery (`/v2/sorafs/providers`) で該当 advert を取得する。
+  2. provider pipeline で advert 検証を再実行し、`/v2/sorafs/providers` と比較して
      エラーを再現する。
   3. 次の refresh deadline 前に advert をローテーションするよう provider と調整する。
 - **変更凍結。** R1/R2 期間中は capability schema の変更を出さない (rollout 委員会の

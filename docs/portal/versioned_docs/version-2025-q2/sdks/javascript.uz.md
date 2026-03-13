@@ -89,7 +89,7 @@ SDK CLI-ni aks ettiruvchi maxsus oqimlarni to'playdi:
 - **Boshqaruv yordamchilari** – `recipes/governance.mjs` sahnalashtirishni namoyish etadi
   `governance` ko'rsatma quruvchilar bilan takliflar va byulletenlar.
 - **ISO ko'prigi** - `recipes/iso_bridge.mjs` `pacs.008` va qanday qilib topshirishni ko'rsatadi.
-  `/v1/iso20022` so'nggi nuqtalari yordamida so'rov o'tkazish holati.
+  `/v2/iso20022` so'nggi nuqtalari yordamida so'rov o'tkazish holati.
 - **SoraFS va triggerlar** – `src/toriiClient.js` ostida sahifalash yordamchilari ochiladi
   shartnomalar, aktivlar, triggerlar va SoraFS provayderlari uchun yozilgan iteratorlar.
 

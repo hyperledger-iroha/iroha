@@ -166,7 +166,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` およびクレート Rust のバージョン `lane_id` および `--lane-id` / `LaneSelector`。キュー ルーター `default_lane`。 `--lane-id`/`--dataspace-id` レーン レーンを確認してください。
 - **JS/Swift/Android.** SDK の `laneId`/`lane_id` كاختيارية وتعود إلى القيمة المعلنة `/status`。制作、演出、制作、制作、制作、制作、制作、制作、制作、制作、制作、制作、制作やあ。
-- **パイプライン/SSE テスト。** テスト `tx_lane_id == <u32>` (`docs/source/pipeline.md`)。 شترك في `/v1/pipeline/events/transactions` بهذا الإثبات أن الكتابات المرسلة بدون レーン صريح تصل تحت معرف LANEああ。
+- **パイプライン/SSE テスト。** テスト `tx_lane_id == <u32>` (`docs/source/pipeline.md`)。 شترك في `/v2/pipeline/events/transactions` بهذا الإثبات أن الكتابات المرسلة بدون レーン صريح تصل تحت معرف LANEああ。
 
 ## 7. いいえ
 

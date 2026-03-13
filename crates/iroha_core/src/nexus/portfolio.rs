@@ -279,6 +279,7 @@ mod tests {
                 .with_name(def_id.name().to_string())
                 .build(&ALICE_ID);
             world.asset_definitions.insert(def_id.clone(), definition);
+            world.track_asset_definition_domain(def_id);
 
             for (account_id, uaid, amount) in accounts {
                 let details =

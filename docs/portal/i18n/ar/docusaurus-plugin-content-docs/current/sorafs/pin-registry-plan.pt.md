@@ -72,7 +72,7 @@ Sidebar_label: Plano do Pin Registry
 
 | مكون | طريفة | الاستجابة(هو) |
 |------------|-------|-----------------|
-| سيرفيكو Torii | Expor `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). Fornecer paginacao + تصفية. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
+| سيرفيكو Torii | Expor `/v2/sorafs/pin` (إرسال)، `/v2/sorafs/pin/{cid}` (بحث)، `/v2/sorafs/aliases` (قائمة/ربط)، `/v2/sorafs/replication` (الطلبات/الإيصالات). Fornecer paginacao + تصفية. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | اتستاكاو | قم بتضمين الارتفاع/تجزئة التسجيل في الاستجابة؛ إضافة نموذج التحقق Norito لمجموعات SDK المستهلكة. | الأشعة تحت الحمراء الأساسية |
 | سطر الأوامر | المرسل `sorafs_manifest_stub` أو CLI الجديد `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
 | SDK | إنشاء روابط العميل (Rust/Go/TS) من المستوى Norito؛ إضافة الخصيتين التكاملية. | فرق SDK |
@@ -123,10 +123,10 @@ Sidebar_label: Plano do Pin Registry
 5. قم بتحديث المستندات/دفاتر التشغيل وتمييز عناصر خريطة الطريق بشكل كامل.
 
 يجب أن تشير كل قائمة مرجعية من SF-4 إلى هذه الخطة عند التقدم.
-قم بإعداد REST قبل إدخال نقاط النهاية في القائمة مع التحقق:- `GET /v1/sorafs/pin` و `GET /v1/sorafs/pin/{digest}` بيانات إعادة التدوير com
+قم بإعداد REST قبل إدخال نقاط النهاية في القائمة مع التحقق:- `GET /v2/sorafs/pin` و `GET /v2/sorafs/pin/{digest}` بيانات إعادة التدوير com
   روابط الأسماء المستعارة وأوامر النسخ وكائن المصادقة المشتق من ذلك
   التجزئة تفعل كتلة ultimo.
-- `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` معرض أو كتالوج دي
+- `GET /v2/sorafs/aliases` و `GET /v2/sorafs/replication` معرض أو كتالوج دي
   الاسم المستعار ativo e o backlog de أوامر النسخ المتماثل مع الصفحات المتسقة e
   مرشحات الحالة.
 

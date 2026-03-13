@@ -203,7 +203,7 @@ BLOB を使用してリソースを使い果たすか、無効なメタデータ
 - DA リプレイ キャッシュとカーソル永続性は DA-2 に導入されました。を参照してください。
   `crates/iroha_core/src/da/replay_cache.rs` での実装 (キャッシュ ロジック) と
   `crates/iroha_torii/src/da/ingest.rs` の Torii 統合。
-  指紋は `/v1/da/ingest` を通じてチェックされます。
+  指紋は `/v2/da/ingest` を通じてチェックされます。
 - PDP/PoTR ストリーミング シミュレーションは、プルーフ ストリーム ハーネスを介して実行されます。
   `crates/sorafs_car/tests/sorafs_cli.rs`、PoR/PDP/PoTR リクエスト フローをカバー
   脅威モデルでアニメーション化された障害シナリオ。

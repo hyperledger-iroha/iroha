@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii теперь показывает צילומי מצב кредитов ספקי вместе с פנקסי עמלות, чтобы
 לוחות מחוונים могли שער по низким балансам и פגעי עונשין:
 
-- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+- REST: `GET /v2/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
   которые отражают поля ספר חשבונות, проверенные в soak тесте. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - דגם Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит

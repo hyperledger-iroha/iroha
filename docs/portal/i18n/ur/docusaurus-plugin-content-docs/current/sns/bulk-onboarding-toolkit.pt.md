@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- مددگار ایک `POST /v1/sns/registrations` فی درخواست جاری کرتا ہے اور پہلے اس کو ختم کرتا ہے
+- مددگار ایک `POST /v2/sns/registrations` فی درخواست جاری کرتا ہے اور پہلے اس کو ختم کرتا ہے
   HTTP غلطی. جوابات لاگ میں این ڈی جےسن ریکارڈ کے طور پر شامل کیے جاتے ہیں۔
-- `--poll-status` ہر بھیجنے کے بعد `/v1/sns/registrations/{selector}` دوبارہ کدنتا ہے
+- `--poll-status` ہر بھیجنے کے بعد `/v2/sns/registrations/{selector}` دوبارہ کدنتا ہے
   (`--poll-attempts` تک ، پہلے سے طے شدہ 5) اس بات کی تصدیق کرنے کے لئے کہ ریکارڈ نظر آتا ہے۔
   `--suffix-map` ("لاحقہ" اقدار کے لئے `suffix_id` کا JSON) فراہم کریں تاکہ
   پولنگ کے لئے ٹول اخذ `{label}.{suffix}` لغوی۔

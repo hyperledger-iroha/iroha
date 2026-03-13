@@ -47,7 +47,7 @@ no [provider admission policy](./provider-admission-policy) ja esta ativa.
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` com `max_span` definido
      - `allow_unknown_capabilities=<true|false>` quando houver TLVs GREASE
-   - Valide via `/v1/sorafs/providers` e `sorafs_fetch`; warnings sobre capabilities
+   - Valide via `/v2/sorafs/providers` e `sorafs_fetch`; warnings sobre capabilities
      desconhecidas devem ser triageadas.
 3. **Validar readiness multi-source.**
    - Execute `sorafs_fetch` com `--provider-advert=<path>`; o CLI agora falha quando
@@ -191,9 +191,9 @@ arquivo e o ledger no mesmo PR.
 - **Weekly status mailer.** DevRel compartilha um resumo de admission metrics,
   warnings pendentes e deadlines proximas.
 - **Incident response.** Se alerts `reject` dispararem, on-call engineers:
-  1. Buscam o advert ofensivo via Torii discovery (`/v1/sorafs/providers`).
+  1. Buscam o advert ofensivo via Torii discovery (`/v2/sorafs/providers`).
   2. Reexecutam a validacao do advert no pipeline do provider e comparam com
-     `/v1/sorafs/providers` para reproduzir o erro.
+     `/v2/sorafs/providers` para reproduzir o erro.
   3. Coordenam com o provider a rotacao do advert antes do proximo refresh deadline.
 - **Change freezes.** Nenhuma mudanca no schema de capabilities durante R1/R2 a
   menos que o comite de rollout aprove; trials GREASE devem ser agendados na

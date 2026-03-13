@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- O helper emite un `POST /v1/sns/registrations` por solicitud y aborta no primero
+```- O helper emite un `POST /v2/sns/registrations` por solicitud y aborta no primero
   error HTTP. As respostas sao anexadas ao log como registros NDJSON.
-- `--poll-status` reconsulta `/v1/sns/registrations/{selector}` apos cada envío
+- `--poll-status` reconsulta `/v2/sns/registrations/{selector}` apos cada envío
   (ate `--poll-attempts`, predeterminado 5) para confirmar que o registro esta visible.
   Forneca `--suffix-map` (JSON de `suffix_id` para valores "suffix") para que a
   La herramienta deriva la literatura `{label}.{suffix}` para el sondeo.

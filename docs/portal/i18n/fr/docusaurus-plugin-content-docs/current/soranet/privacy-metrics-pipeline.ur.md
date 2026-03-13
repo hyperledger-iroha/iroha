@@ -75,8 +75,8 @@ Les doubles collecteurs SNNet-8a émettent des particules et des seaux Prio part
 
 ## Torii Points de terminaison d'ingestion
 
-Torii pour les points de terminaison HTTP contrôlés par télémétrie et les relais et collecteurs pour le transport sur mesure et les observations en avant:- `POST /v1/soranet/privacy/event` et charge utile `RecordSoranetPrivacyEventDto` pour la charge utile corps `SoranetPrivacyEventV1` en option `source` étiquette en option Torii demande un profil de télémétrie pour valider un événement et un événement HTTP `202 Accepted` est disponible Norito Enveloppe JSON et mode relais avec fenêtre de compartiment calculée (`bucket_start_unix`, `bucket_duration_secs`) et mode relais
-- `POST /v1/soranet/privacy/share` et charge utile `RecordSoranetPrivacyShareDto` pour la charge utile corps `SoranetPrivacyPrioShareV1` et optionnel `forwarded_by` indice de contrôle des flux de collecteur et audit des flux de collecteur Soumissions HTTP `202 Accepted` avec enveloppe Norito JSON et collecteur, fenêtre de compartiment, indice de suppression et résumé des informations. échecs de validation télémétrie `Conversion` réponse carte carte collecteurs collecteurs gestion déterministe des erreurs gestion des erreurs orchestrator pour boucle d'événements et interrogation de relais pour les actions émettent des actions pour Torii et pour les seaux de relais d'accumulateur Prio pour la synchronisation
+Torii pour les points de terminaison HTTP contrôlés par télémétrie et les relais et collecteurs pour le transport sur mesure et les observations en avant:- `POST /v2/soranet/privacy/event` et charge utile `RecordSoranetPrivacyEventDto` pour la charge utile corps `SoranetPrivacyEventV1` en option `source` étiquette en option Torii demande un profil de télémétrie pour valider un événement et un événement HTTP `202 Accepted` est disponible Norito Enveloppe JSON et mode relais avec fenêtre de compartiment calculée (`bucket_start_unix`, `bucket_duration_secs`) et mode relais
+- `POST /v2/soranet/privacy/share` et charge utile `RecordSoranetPrivacyShareDto` pour la charge utile corps `SoranetPrivacyPrioShareV1` et optionnel `forwarded_by` indice de contrôle des flux de collecteur et audit des flux de collecteur Soumissions HTTP `202 Accepted` avec enveloppe Norito JSON et collecteur, fenêtre de compartiment, indice de suppression et résumé des informations. échecs de validation télémétrie `Conversion` réponse carte carte collecteurs collecteurs gestion déterministe des erreurs gestion des erreurs orchestrator pour boucle d'événements et interrogation de relais pour les actions émettent des actions pour Torii et pour les seaux de relais d'accumulateur Prio pour la synchronisation
 
 Voici le profil de télémétrie des points de terminaison et le lien : métriques désactivées par rapport à `503 Service Unavailable` et le lien ci-dessous. clients Norito binaire (`application/x.norito`) et Norito JSON (`application/x.norito+json`) corps pour les clients serveur standard Torii extracteurs format de fichier pour négocier des fichiers
 
@@ -155,7 +155,7 @@ cargo xtask soranet-privacy-report \
 
 Gouvernance اب بھی ثبوت چاہتا ہے کہ پہلی budget de suppression d'exécution d'automatisation helper `--max-suppression-ratio <0-1>` est un outil de gestion de CI qui échoue rapidement pour supprimer la fenêtre autorisée des compartiments supprimés. (10 par défaut) Voici le flux :
 
-1. Point(s) de terminaison d'administrateur de relais pour orchestrateur et flux `/v1/soranet/privacy/event|share` et exportation NDJSON pour `artifacts/sorafs_privacy/<relay>.ndjson` pour le flux de données.
+1. Point(s) de terminaison d'administrateur de relais pour orchestrateur et flux `/v2/soranet/privacy/event|share` et exportation NDJSON pour `artifacts/sorafs_privacy/<relay>.ndjson` pour le flux de données.
 2. budget politique کے ساتھ assistant چلائیں :
 
    ```bash

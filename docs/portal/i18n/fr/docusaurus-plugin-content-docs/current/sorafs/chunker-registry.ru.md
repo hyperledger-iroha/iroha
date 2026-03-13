@@ -90,7 +90,7 @@ Le tableau indique l'état de votre téléphone en fonction du `sorafs.sf1@1.0.0
 Развертывание телеметрии:
 
 - **Les paramètres de récupération des paramètres** — CLI Iroha `sorafs toolkit pack` émettent des résumés de paramètres, des métadonnées CAR et des fichiers PoR pour l'ingestion dans les tableaux de bord.
-- **Annonces du fournisseur** — les annonces de charges utiles incluent les capacités métadonnées et les alias ; Vérifiez la fonction `/v1/sorafs/providers` (par exemple, la capacité `range`).
+- **Annonces du fournisseur** — les annonces de charges utiles incluent les capacités métadonnées et les alias ; Vérifiez la fonction `/v2/sorafs/providers` (par exemple, la capacité `range`).
 - **Monitoring gateway** — Les opérateurs doivent choisir pour `Content-Chunker`/`Content-Digest`, pour éviter les rétrogradations inutiles ; ожидается, что использование bridge снизится до нуля до депрекации.La dépréciation politique : si vous renversez le profil-preemnik, planifiez-vous également les publications suivantes
 Pont CARv1 vers les passerelles de production.
 

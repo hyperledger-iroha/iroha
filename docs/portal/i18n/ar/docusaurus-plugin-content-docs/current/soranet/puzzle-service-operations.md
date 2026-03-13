@@ -19,16 +19,16 @@ admission tickets المدعومة بـ Argon2 والتي تعكس policy الخ
 يعرض خمس نقاط نهاية HTTP:
 
 - `GET /healthz` - فحص liveness.
-- `GET /v1/puzzle/config` - يعيد معلمات PoW/puzzle الفعلية المسحوبة
+- `GET /v2/puzzle/config` - يعيد معلمات PoW/puzzle الفعلية المسحوبة
   من JSON الخاص بالـ relay (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - يصدر تذكرة Argon2; body JSON اختياري
+- `POST /v2/puzzle/mint` - يصدر تذكرة Argon2; body JSON اختياري
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   يطلب TTL اقصر (يتم ضبطه ضمن نافذة policy)، ويربط التذكرة بـ transcript hash،
   ويعيد تذكرة موقعة من relay + بصمة التوقيع عندما تكون مفاتيح التوقيع مهيئة.
-- `GET /v1/token/config` - عندما `pow.token.enabled = true` يعيد سياسة
+- `GET /v2/token/config` - عندما `pow.token.enabled = true` يعيد سياسة
   admission-token النشطة (issuer fingerprint, حدود TTL/clock-skew, relay ID,
   ومجموعة revocation المدمجة).
-- `POST /v1/token/mint` - يصدر ML-DSA admission token مرتبطا بـ resume hash المقدم؛
+- `POST /v2/token/mint` - يصدر ML-DSA admission token مرتبطا بـ resume hash المقدم؛
   body الطلب يقبل `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 تتم عملية التحقق من التذاكر المنتجة عبر خدمة الاختبار التكاملية
@@ -69,18 +69,18 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 يتوفر ايضا `--token-secret-hex` عندما يكون السر مدارا عبر pipeline خارجية. يقوم
-watcher لملف revocation بالحفاظ على `/v1/token/config` محدثا؛ نسق التحديثات مع
+watcher لملف revocation بالحفاظ على `/v2/token/config` محدثا؛ نسق التحديثات مع
 امر `soranet-admission-token revoke` لتجنب تاخر حالة revocation.
 
 اضبط `pow.signed_ticket_public_key_hex` في JSON الخاص بالـ relay للاعلان عن المفتاح
-العام ML-DSA-44 المستخدم للتحقق من PoW tickets الموقعة; يعكس `/v1/puzzle/config`
+العام ML-DSA-44 المستخدم للتحقق من PoW tickets الموقعة; يعكس `/v2/puzzle/config`
 المفتاح وبصمته BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) كي يتمكن clients
 من تثبيت verifier. يتم التحقق من التذاكر الموقعة مقابل relay ID وtranscript bindings
 وتشارك نفس مخزن revocation؛ تظل PoW tickets الخام بحجم 74 بايت صالحة عند تهيئة
 signed-ticket verifier. مرر secret الخاص بالموقع عبر `--signed-ticket-secret-hex`
 او `--signed-ticket-secret-path` عند تشغيل خدمة الالغاز; يرفض التشغيل keypairs
 غير المتطابقة اذا لم يتحقق السر من `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` يقبل `"signed": true` (واختياريا `"transcript_hash_hex"`) لارجاع
+`POST /v2/puzzle/mint` يقبل `"signed": true` (واختياريا `"transcript_hash_hex"`) لارجاع
 signed ticket مشفر بـ Norito الى جانب bytes التذكرة الخام; تتضمن الردود
 `signed_ticket_b64` و`signed_ticket_fingerprint_hex` لتتبع replay fingerprints. يتم
 رفض الطلبات مع `signed = true` اذا لم يتم تهيئة secret الموقع.
@@ -97,10 +97,10 @@ signed ticket مشفر بـ Norito الى جانب bytes التذكرة الخا
 3. **تجهيز اعادة التشغيل.** اعد تحميل وحدة systemd او الحاوية عند اعلان governance
    عن cutover الخاص بالتدوير. الخدمة لا تدعم hot-reload؛ اعادة التشغيل مطلوبة
    لالتقاط descriptor commit الجديد.
-4. **التحقق.** اصدر تذكرة عبر `POST /v1/puzzle/mint` وتاكد ان `difficulty` و`expires_at`
+4. **التحقق.** اصدر تذكرة عبر `POST /v2/puzzle/mint` وتاكد ان `difficulty` و`expires_at`
    يطابقان السياسة الجديدة. تقرير soak (`docs/source/soranet/reports/pow_resilience.md`)
    يلتقط حدود الكمون المتوقعة للمرجعية. عندما تكون التوكنات مفعلة، اجلب
-   `/v1/token/config` للتأكد من ان issuer fingerprint المعلن وعدد revocation
+   `/v2/token/config` للتأكد من ان issuer fingerprint المعلن وعدد revocation
    يطابقان القيم المتوقعة.
 
 ## اجراء التعطيل الطارئ
@@ -111,7 +111,7 @@ signed ticket مشفر بـ Norito الى جانب bytes التذكرة الخا
    offline.
 3. اعد تشغيل كل من relay وخدمة الالغاز لتطبيق التغيير.
 4. راقب `soranet_handshake_pow_difficulty` لضمان ان الصعوبة تنخفض الى قيمة hashcash
-   المتوقعة، وتحقق من ان `/v1/puzzle/config` يبلغ `puzzle = null`.
+   المتوقعة، وتحقق من ان `/v2/puzzle/config` يبلغ `puzzle = null`.
 
 ## المراقبة والتنبيهات
 
@@ -122,15 +122,15 @@ signed ticket مشفر بـ Norito الى جانب bytes التذكرة الخا
   لضبط cooldowns لـ `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Puzzle alignment:** يجب ان يطابق `soranet_handshake_pow_difficulty` الصعوبة
-  المعادة من `/v1/puzzle/config`. يشير الاختلاف الى تكوين relay قديم او فشل اعادة
+  المعادة من `/v2/puzzle/config`. يشير الاختلاف الى تكوين relay قديم او فشل اعادة
   التشغيل.
-- **Token readiness:** نبه اذا انخفض `/v1/token/config` الى `enabled = false`
+- **Token readiness:** نبه اذا انخفض `/v2/token/config` الى `enabled = false`
   بشكل غير متوقع او اذا ابلغ `revocation_source` عن timestamps قديمة. يجب على
   المشغلين تدوير ملف revocation بنمط Norito عبر CLI عند سحب توكن للحفاظ على
   دقة هذا endpoint.
 - **Service health:** افحص `/healthz` وفق cadence liveness المعتادة ونبه اذا
-  اعاد `/v1/puzzle/mint` استجابات HTTP 500 (يدل على عدم تطابق معلمات Argon2 او
-  فشل RNG). تظهر اخطاء token minting عبر استجابات HTTP 4xx/5xx على `/v1/token/mint`؛
+  اعاد `/v2/puzzle/mint` استجابات HTTP 500 (يدل على عدم تطابق معلمات Argon2 او
+  فشل RNG). تظهر اخطاء token minting عبر استجابات HTTP 4xx/5xx على `/v2/token/mint`؛
   تعامل مع الاخفاقات المتكررة كحالة paging.
 
 ## الامتثال وتسجيل التدقيق

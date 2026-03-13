@@ -121,7 +121,7 @@ Remarque : Vous devez exposer les éléments de sécurité [Liste de contrôle 
 ### Console Try It avec charge utile Norito en cours
 
 1. `fixtures/norito_rpc/transfer_asset.norito` luminaire pour luminaire یہ فائلیں raw Norito enveloppes ہیں؛ انہیں **base64 encode نہ کریں**۔
-2. Swagger et RapiDoc pour le point de terminaison NRPC sont disponibles (avec `POST /v1/pipeline/submit`) et le sélecteur **Content-Type** et `application/x-norito` pour le sélecteur de type de contenu.
+2. Swagger et RapiDoc pour le point de terminaison NRPC sont disponibles (avec `POST /v2/pipeline/submit`) et le sélecteur **Content-Type** et `application/x-norito` pour le sélecteur de type de contenu.
 3. demander l'éditeur de corps comme **binaire** comme sélecteur (Swagger comme "Fichier" comme RapiDoc comme sélecteur "Binaire/Fichier") ou `.norito` comme tel. widget octets et proxy pour le flux de données
 4. demande بھیجیں۔ Le Torii `X-Iroha-Error-Code: schema_mismatch` comprend un point de terminaison pour les charges utiles binaires Il s'agit d'un hachage de schéma pour `fixtures/norito_rpc/schema_hashes.json` build et d'un hachage de schéma pour Torii build.Vous avez besoin de jetons d'autorisation pour les hôtes Torii et vous avez besoin de jetons d'autorisation. charge utile دوبارہ بھیج سکیں۔ `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` Un flux de travail est disponible pour le plan d'adoption du NRPC-4 et un ensemble de preuves (journal + résumé JSON) et des critiques دوران Réponse Try It avec capture d'écran ci-dessous
 
@@ -132,10 +132,10 @@ et les appareils `curl` sont chargés de vérifier la relecture du proxy et de v
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-`transaction_fixtures.manifest.json` est utilisé pour l'entrée du luminaire et `cargo xtask norito-rpc-fixtures` pour l'encodage de la charge utile. Le mode Canary Torii est en cours de réalisation avec `curl` et proxy d'essai (`https://docs.sora.example/proxy/v1/pipeline/submit`) pour obtenir un proxy d'essai (`https://docs.sora.example/proxy/v1/pipeline/submit`). et le test d'infrastructure et les widgets du portail.
+`transaction_fixtures.manifest.json` est utilisé pour l'entrée du luminaire et `cargo xtask norito-rpc-fixtures` pour l'encodage de la charge utile. Le mode Canary Torii est en cours de réalisation avec `curl` et proxy d'essai (`https://docs.sora.example/proxy/v2/pipeline/submit`) pour obtenir un proxy d'essai (`https://docs.sora.example/proxy/v2/pipeline/submit`). et le test d'infrastructure et les widgets du portail.
 
 ## Observabilité et opérations
 
@@ -147,7 +147,7 @@ déploiements et calendrier des sondes groupées :
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Boutons d'environnement :- `TRYIT_PROXY_SAMPLE_PATH` - Itinéraire Torii (par `/proxy`) en cours de route

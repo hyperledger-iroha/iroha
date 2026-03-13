@@ -48,7 +48,7 @@ Este runbook guia operadores na validacao de uma implantacao `sorafs-node` embut
   ```
 
 - Garanta que o processo Torii tem acesso de leitura/escrita a `data_dir`.
-- Confirme que o no anuncia a capacidade esperada via `GET /v1/sorafs/capacity/state` quando uma declaracao for registrada.
+- Confirme que o no anuncia a capacidade esperada via `GET /v2/sorafs/capacity/state` quando uma declaracao for registrada.
 - Quando o smoothing esta habilitado, dashboards expõem contadores GiB·hour/PoR brutos e suavizados para destacar tendencias sem jitter ao lado de valores instantaneos.
 
 ### Dry run de CLI (opcional)
@@ -87,8 +87,8 @@ O comando emite um resumo JSON (digest do manifest, id do provedor, digest da pr
 Depois que o Torii estiver ativo voce pode recuperar os mesmos artefatos via HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke tests de CLI e sondas de gateway permanecem sincronizados.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -99,7 +99,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 2. Envie o manifest com codificacao base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -108,7 +108,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 3. Busque os dados fixados:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -124,7 +124,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 1. Fixe pelo menos um manifest como acima.
 2. Reinicie o processo Torii (ou o no inteiro).
 3. Reenvie a requisicao de fetch. O payload deve continuar disponivel e o digest retornado deve coincidir com o valor anterior ao reinicio.
-4. Inspecione `GET /v1/sorafs/storage/state` para confirmar que `bytes_used` reflete os manifests persistidos apos o reboot.
+4. Inspecione `GET /v2/sorafs/storage/state` para confirmar que `bytes_used` reflete os manifests persistidos apos o reboot.
 
 ## 4. Teste de rejeicao por quota
 
@@ -139,7 +139,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 2. Solicite uma amostra PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -162,7 +162,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 - Dashboards devem acompanhar:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
-  - contadores de sucesso/falha PoR expostos via `/v1/sorafs/capacity/state`
+  - contadores de sucesso/falha PoR expostos via `/v2/sorafs/capacity/state`
   - tentativas de publicacao de settlement via `sorafs_node_deal_publish_total{result=success|failure}`
 
 Seguir esses exercicios garante que o worker de storage embutido consiga ingerir dados, sobreviver a reinicios, respeitar quotas configuradas e gerar provas PoR deterministicas antes de o no anunciar capacidade para a rede mais ampla.

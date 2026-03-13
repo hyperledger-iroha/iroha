@@ -162,9 +162,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > שער Torii יכול לעזור לעוזרים לקריאה בלבד.
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
 > מניפסט Norito (base64) вместе с digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — возвращает детерминированный
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — возвращает детерминированный
 > JSON план чанков (`chunk_fetch_specs`) עבור כלי עבודה במורד הזרם.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Эти эндпоинты повторяют CLI вывод, поэтому пайплайны могут перейти от локальных
@@ -207,18 +207,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      согласования модели ממשל; пока дизайн предполагает строгие квоты и
      unpin операции, инициируемые оператором.
 
-### Интеграция деклараций емкости и תזמון- Torii צור קשר עם `CapacityDeclarationRecord` או `/v1/sorafs/capacity/declare`
+### Интеграция деклараций емкости и תזמון- Torii צור קשר עם `CapacityDeclarationRecord` או `/v2/sorafs/capacity/declare`
   во встроенный `CapacityManager`, так что каждый узел строит בזיכרון представление своих
   зафиксированных chunker/lane аллокаций. Менеджер публикует צילומי מצב לקריאה בלבד לטלמטרים
-  (`GET /v1/sorafs/capacity/state`) и применяет резервы per-profile/per-lane до принятия новых
+  (`GET /v2/sorafs/capacity/state`) и применяет резервы per-profile/per-lane до принятия новых
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Эндпоинт `/v1/sorafs/capacity/schedule` принимает מינהל שהונפקו `ReplicationOrderV1`
+- Эндпоинт `/v2/sorafs/capacity/schedule` принимает מינהל שהונפקו `ReplicationOrderV1`
   מטענים. Когда заказ нацелен на локального провайдера, менеджер проверяет дублирование
   расписаний, валидирует емкость chunker/lane, резервирует слот и возвращает `ReplicationPlan`
   с описанием оставшейся емкости, чтобы оркестрация могла продолжить בליעה. Заказы для
   других провайдеров подтверждаются ответом `ignored`, упрощая זרימות עבודה מרובות מפעילים.【crates/iroha_torii/src/routing.rs:484
 - ווי השלמה (например, после успешной ingest) вызывают
-  `POST /v1/sorafs/capacity/complete` עבור освобождения резерва через
+  `POST /v2/sorafs/capacity/complete` עבור освобождения резерва через
   `CapacityManager::complete_order`. Ответ включает תמונת מצב `ReplicationRelease`
   (סכומים остаточные, остатки chunker/lane), чтобы כלי תזמור могло
   ставить следующий заказ без הסקרים. Дальнейшая работа подключит это к pipeline

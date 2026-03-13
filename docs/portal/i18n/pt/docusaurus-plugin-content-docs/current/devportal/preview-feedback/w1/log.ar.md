@@ -28,7 +28,7 @@ Não há nada que você possa fazer.
 | parceiro-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 03/04/2025 | 12/04/2025 15:00 | 12/04/2025 15:11 | ✅ مكتمل 2025/04/26 | sorafs-op-01; ركز على ادلة تكافؤ وثائق orquestrador. |
 | parceiro-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 03/04/2025 | 12/04/2025 15:03 | 12/04/2025 15:15 | ✅ مكتمل 2025/04/26 | sorafs-op-02; Você pode usar o Norito/telemetria. |
 | parceiro-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 04/04/2025 | 12/04/2025 15:06 | 12/04/2025 15:18 | ✅ مكتمل 2025/04/26 | sorafs-op-03; Não há failover como resultado. |
-| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ مكتمل 2025/04/26 | torii-int-01; مراجعة دليل Torii `/v1/pipeline` e livro de receitas Experimente. |
+| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ مكتمل 2025/04/26 | torii-int-01; مراجعة دليل Torii `/v2/pipeline` e livro de receitas Experimente. |
 | parceiro-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 05/04/2025 | 12/04/2025 15:12 | 12/04/2025 15:23 | ✅ مكتمل 2025/04/26 | torii-int-02; شارك في تحديث لقطة Experimente (docs-preview/w1 #2). |
 | parceiro-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 05/04/2025 | 12/04/2025 15:15 | 12/04/2025 15:26 | ✅ مكتمل 2025/04/26 | SDK-parceiro-01; Baixar livros de receitas para JS/Swift + sanity para ISO. |
 | parceiro-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 11/04/2025 | 12/04/2025 15:18 | 12/04/2025 15:29 | ✅ مكتمل 2025/04/26 | SDK-parceiro-02; تم انهاء الامتثال 2025-04-11, ركز على ملاحظات Conectar/telemetria. |

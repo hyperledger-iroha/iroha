@@ -49,7 +49,7 @@ vigor.
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` con un `max_span` definido
      - `allow_unknown_capabilities=<true|false>` cuando haya TLVs GREASE
-   - Valida via `/v1/sorafs/providers` y `sorafs_fetch`; las advertencias sobre
+   - Valida via `/v2/sorafs/providers` y `sorafs_fetch`; las advertencias sobre
      capabilities desconocidas deben ser triageadas.
 3. **Validar readiness multi-origen.**
    - Ejecuta `sorafs_fetch` con `--provider-advert=<path>`; el CLI ahora falla
@@ -198,9 +198,9 @@ este archivo y el ledger en el mismo PR.
 - **Mailer semanal de estado.** DevRel circula un resumen breve de metricas de
   admision, advertencias pendientes y deadlines proximos.
 - **Respuesta a incidentes.** Si los alerts `reject` se activan, on-call:
-  1. Recupera el advert ofensivo via discovery de Torii (`/v1/sorafs/providers`).
+  1. Recupera el advert ofensivo via discovery de Torii (`/v2/sorafs/providers`).
   2. Re-ejecuta la validacion del advert en el pipeline del provider y compara con
-     `/v1/sorafs/providers` para reproducir el error.
+     `/v2/sorafs/providers` para reproducir el error.
   3. Coordina con el provider la rotacion del advert antes del siguiente refresh
      deadline.
 - **Congelamientos de cambios.** No se aplican cambios de schema de capabilities

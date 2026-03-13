@@ -13,17 +13,17 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 
 | Route | Method | Feature Gate | Description | Response |
 |-------|--------|--------------|-------------|----------|
-| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
-| `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
-| `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Aggregated relay health totals across all domains plus per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
-| `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
+| `/v2/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
+| `/v2/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
+| `/v2/kaigi/relays/health` | GET | `app_api` + `telemetry` | Aggregated relay health totals across all domains plus per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
+| `/v2/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
 > **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
 
 ### Response Schemas
 
 ```rust
-/// Summary response used by `/v1/kaigi/relays`.
+/// Summary response used by `/v2/kaigi/relays`.
 pub struct KaigiRelaySummaryDto {
     pub relay_id: String,
     pub domain: String,
@@ -38,7 +38,7 @@ pub struct KaigiRelaySummaryListDto {
     pub items: Vec<KaigiRelaySummaryDto>,
 }
 
-/// Detailed relay view returned by `/v1/kaigi/relays/{relay_id}`.
+/// Detailed relay view returned by `/v2/kaigi/relays/{relay_id}`.
 pub struct KaigiRelayDetailDto {
     pub relay: KaigiRelaySummaryDto,
     pub hpke_public_key_b64: String,
@@ -56,7 +56,7 @@ pub struct KaigiRelayDomainMetricsDto {
     pub health_reports_total: u64,
 }
 
-/// Health snapshot returned by `/v1/kaigi/relays/health`.
+/// Health snapshot returned by `/v2/kaigi/relays/health`.
 pub struct KaigiRelayHealthSnapshotDto {
     pub healthy_total: u64,
     pub degraded_total: u64,
@@ -73,7 +73,7 @@ so responses stay canonical across transports.
 
 ### SSE Payload Shape
 
-`/v1/kaigi/relays/events` reuses Torii's broadcast channel and emits JSON
+`/v2/kaigi/relays/events` reuses Torii's broadcast channel and emits JSON
 objects with the following structure (one per SSE event):
 
 - **Registration events** (`kind == "registration"`):

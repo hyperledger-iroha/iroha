@@ -27,16 +27,16 @@ ML-DSA アドミッション トークンとエッジ リレー。
 HTTP:
 
 - `GET /healthz` - 活気。
-- `GET /v1/puzzle/config` - يعيد معلمات PoW/パズル الفعلية المسحوبة
+- `GET /v2/puzzle/config` - يعيد معلمات PoW/パズル الفعلية المسحوبة
   JSON リレー (`handshake.descriptor_commit_hex`、`pow.*`)。
-- `POST /v1/puzzle/mint` - アルゴン 2;本文 JSON
+- `POST /v2/puzzle/mint` - アルゴン 2;本文 JSON
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   يطلب TTL اقصر (يتم ضبطه ضمن نافذة ポリシー) ، ويربط التذكرة بـ トランスクリプト ハッシュ
   ويعيد تذكرة موقعة من リレー + بصمة التوقيع عندما تكون مفاتيح التوقيع مهيئة。
-- `GET /v1/token/config` - عندما `pow.token.enabled = true` يعيد سياسة
+- `GET /v2/token/config` - عندما `pow.token.enabled = true` يعيد سياسة
   アドミッション トークン (発行者の指紋、TTL/クロック スキュー、リレー ID、
   ومجموعة 取り消し المدمجة）。
-- `POST /v1/token/mint` - ML-DSA アドミッション トークン 再開ハッシュ
+- `POST /v2/token/mint` - ML-DSA アドミッション トークン 再開ハッシュ
   本文は `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` です。
 
 تتم عملية التحقق من التذاكر المنتجة عبر خدمة الاختبار التكاملية
@@ -77,18 +77,18 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` のパイプライン。イエス
-ウォッチャー لملف 取り消し بالحفاظ على `/v1/token/config` محدثا؛重要な問題
+ウォッチャー لملف 取り消し بالحفاظ على `/v2/token/config` محدثا؛重要な問題
 `soranet-admission-token revoke` は取り消しです。
 
 اضبط `pow.signed_ticket_public_key_hex` في JSON الخاص بالـ リレー للاعلان عن المفتاح
-ML-DSA-44 は PoW チケットを取得します。 `/v1/puzzle/config`
+ML-DSA-44 は PoW チケットを取得します。 `/v2/puzzle/config`
 BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) クライアント
 من تثبيت 検証者。リレー ID とトランスクリプト バインディング
 取り消しPoW チケット 74 個のチケットを入手
 署名付きチケット検証者。秘密の秘密 `--signed-ticket-secret-hex`
 او `--signed-ticket-secret-path` عند تشغيل خدمة الالغاز;キーペア
 `pow.signed_ticket_public_key_hex` を参照してください。
-`POST /v1/puzzle/mint` يقبل `"signed": true` (واختياريا `"transcript_hash_hex"`)
+`POST /v2/puzzle/mint` يقبل `"signed": true` (واختياريا `"transcript_hash_hex"`)
 署名済みチケット Norito バイト数。最高のパフォーマンス
 `signed_ticket_b64` و`signed_ticket_fingerprint_hex` は、指紋を再生します。ユイシュス
 `signed = true` 秘密の秘密。
@@ -105,10 +105,10 @@ BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) クライアント
 3. **システム管理、ガバナンス管理。
    カットオーバーのバージョン。ホットリロードを実行するऔर देखें
    記述子はコミットを実行します。
-4. ** التحقق.** اصدر تذكرة عبر `POST /v1/puzzle/mint` وتاكد ان `difficulty` و`expires_at`
+4. ** التحقق.** اصدر تذكرة عبر `POST /v2/puzzle/mint` وتاكد ان `difficulty` و`expires_at`
    طابقان السياسة الجديدة。ソーク (`docs/source/soranet/reports/pow_resilience.md`)
    حدود الكمون المتوقعة للمرجعية。 عندما تكون التوكنات مفعلة، اجلب
-   `/v1/token/config` 発行者の指紋の取り消し
+   `/v2/token/config` 発行者の指紋の取り消し
    طابقان القيم المتوقعة。
 
 ## いいえ、いいえ。
@@ -119,7 +119,7 @@ BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) クライアント
    オフライン。
 3. ニュースを中継します。
 4. راقب `soranet_handshake_pow_difficulty` لضمان ان الصعوبة تنخفض الى قيمة hashcash
-   `/v1/puzzle/config` يبلغ `puzzle = null` を確認してください。
+   `/v2/puzzle/config` يبلغ `puzzle = null` を確認してください。
 
 ## और देखें- **レイテンシ SLO:** `soranet_handshake_latency_seconds` وابق P95 اقل من 300 ミリ秒。
   オフセットは、スロットルとガードをソークします。
@@ -128,15 +128,15 @@ BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) クライアント
   クールダウン `pow.quotas` (`soranet_abuse_remote_cooldowns`、
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **パズルの配置:** يجب ان يطابق `soranet_handshake_pow_difficulty` الصعوبة
-  `/v1/puzzle/config` です。 يشير الاختلاف الى تكوين リレー قديم او فشل اعادة
+  `/v2/puzzle/config` です。 يشير الاختلاف الى تكوين リレー قديم او فشل اعادة
   ああ。
-- **トークンの準備状況:** به اذا انخفض `/v1/token/config` الى `enabled = false`
+- **トークンの準備状況:** به اذا انخفض `/v2/token/config` الى `enabled = false`
   `revocation_source` のタイムスタンプ。やあ
   失効 Norito CLI 認証 سحب توكن للحفاظ على
   エンドポイント。
 - **サービスの健全性:** افحص `/healthz` وفق cadence liveness المعتادة ونبه اذا
-  `/v1/puzzle/mint` HTTP 500 (يدل على عدم تطابق معلمات Argon2 او
-  RNG)。トークンの鋳造とHTTP 4xx/5xx `/v1/token/mint`
+  `/v2/puzzle/mint` HTTP 500 (يدل على عدم تطابق معلمات Argon2 او
+  RNG)。トークンの鋳造とHTTP 4xx/5xx `/v2/token/mint`
   ページングを確認してください。
 
 ## और देखें

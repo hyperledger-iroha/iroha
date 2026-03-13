@@ -25,17 +25,17 @@ translator: machine-google-reviewed
 አምስት የኤችቲቲፒ መጨረሻ ነጥቦችን ያጋልጣል፡
 
 - `GET /healthz` - የቀጥታነት ምርመራ።
-- `GET /v1/puzzle/config` - የተጎተቱትን ውጤታማ የPoW/እንቆቅልሽ መለኪያዎች ይመልሳል
+- `GET /v2/puzzle/config` - የተጎተቱትን ውጤታማ የPoW/እንቆቅልሽ መለኪያዎች ይመልሳል
   ከሪሌይ JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - የአርጎን2 ቲኬት ደቂቃዎች; አማራጭ JSON አካል
+- `POST /v2/puzzle/mint` - የአርጎን2 ቲኬት ደቂቃዎች; አማራጭ JSON አካል
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   አጭር TTL ይጠይቃል (በመመሪያው መስኮት ላይ ተጣብቆ)፣ ትኬቱን ከ ሀ
   ግልባጭ ሃሽ፣ እና በቅብብሎሽ የተፈረመ ትኬት + የፊርማ አሻራ ይመልሳል
   የመፈረሚያ ቁልፎች ሲዋቀሩ.
-- `GET /v1/token/config` - `pow.token.enabled = true` ገባሪውን ሲመልስ
+- `GET /v2/token/config` - `pow.token.enabled = true` ገባሪውን ሲመልስ
   የማስመሰያ መመሪያ (የአከፋፋይ የጣት አሻራ፣ ቲቲኤል/የሰዓት-ስኬው ወሰኖች፣ የመተላለፊያ መታወቂያ፣
   እና የተዋሃደ የመሻሪያ ስብስብ).
-- `POST /v1/token/mint` – የML-DSA መግቢያ ማስመሰያ ከቀረበው ጋር የተያያዘ ነው።
+- `POST /v2/token/mint` – የML-DSA መግቢያ ማስመሰያ ከቀረበው ጋር የተያያዘ ነው።
   ሃሽ ከቆመበት ቀጥል; የጥያቄው አካል `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` ይቀበላል።
 
 በአገልግሎቱ የሚመረቱ ትኬቶች በ ውስጥ ተረጋግጠዋል
@@ -78,19 +78,19 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` ምስጢሩ ከባንድ ውጪ በሚተዳደርበት ጊዜም ይገኛል።
-የመሳሪያ ቧንቧ መስመር. የስረዛ ፋይል ጠባቂው `/v1/token/config` ን ያቆያል;
+የመሳሪያ ቧንቧ መስመር. የስረዛ ፋይል ጠባቂው `/v2/token/config` ን ያቆያል;
 መዘግየትን ለማስወገድ በI18NI0000027X ትዕዛዝ ማሻሻያዎችን ያስተባብሩ
 የመሻር ሁኔታ.
 
 ML-DSA-44 ይፋዊ ለማስተዋወቅ `pow.signed_ticket_public_key_hex` በሬሌይ JSON አቀናብር
-የተፈረመ የፖው ቲኬቶችን ለማረጋገጥ የሚያገለግል ቁልፍ; `/v1/puzzle/config` ቁልፉን እና BLAKE3 ያስተጋባል
+የተፈረመ የፖው ቲኬቶችን ለማረጋገጥ የሚያገለግል ቁልፍ; `/v2/puzzle/config` ቁልፉን እና BLAKE3 ያስተጋባል
 የጣት አሻራ (`signed_ticket_public_key_fingerprint_hex`) ደንበኞች አረጋጋጩን ይሰኩት።
 የተፈረሙ ቲኬቶች ከሪሌይ መታወቂያው እና ከጽሑፍ ግልባጭ ማያያዣዎች ጋር የተረጋገጡ ናቸው እና ተመሳሳይ ይጋራሉ።
 የስረዛ መደብር; ጥሬ 74-ባይት PoW ቲኬቶች የተፈረመበት የቲኬት አረጋጋጭ ዋጋ ያለው ሆኖ ይቆያል
 የተዋቀረ። የፈራሚውን ሚስጥር በ I18NI0000031X ወይም
 `--signed-ticket-secret-path` የእንቆቅልሽ አገልግሎት ሲጀመር; ጅምር ያልተዛመደውን ውድቅ ያደርጋል
 ሚስጥሩ በ`pow.signed_ticket_public_key_hex` ላይ ካልተረጋገጠ keypairs።
-`POST /v1/puzzle/mint` `"signed": true` (እና አማራጭ I18NI0000036X) ይቀበላል
+`POST /v2/puzzle/mint` `"signed": true` (እና አማራጭ I18NI0000036X) ይቀበላል
 ከጥሬ ትኬት ባይት ጎን Norito የተፈረመ ትኬት ይመለሱ። ምላሾች ያካትታሉ
 `signed_ticket_b64` እና `signed_ticket_fingerprint_hex` የጣት አሻራዎችን ለመከታተል ለማገዝ።
 የፈራሚው ሚስጥር ካልተዋቀረ ከ`signed = true` ጋር ያሉ ጥያቄዎች ውድቅ ይደረጋሉ።
@@ -111,7 +111,7 @@ ML-DSA-44 ይፋዊ ለማስተዋወቅ `pow.signed_ticket_public_key_hex` በ
 4. ** አረጋግጥ።** ትኬቱን በI18NI0000042X አውጥተህ አረጋግጥ
    ተመልሷል `difficulty` እና I18NI0000044X ከአዲሱ ፖሊሲ ጋር ይዛመዳሉ። የዘፈቀደ ዘገባ
    (`docs/source/soranet/reports/pow_resilience.md`) የሚጠበቀውን መዘግየት ይይዛል
-   ለማጣቀሻ ገደቦች. ማስመሰያዎች ሲነቁ፣ `/v1/token/config` ወደ ላይ ያውጡ
+   ለማጣቀሻ ገደቦች. ማስመሰያዎች ሲነቁ፣ `/v2/token/config` ወደ ላይ ያውጡ
    የማስታወቂያ ሰጭው የጣት አሻራ እና የስረዛ ቆጠራ ከዚህ ጋር መዛመዱን ያረጋግጡ
    የሚጠበቁ እሴቶች.
 
@@ -123,7 +123,7 @@ ML-DSA-44 ይፋዊ ለማስተዋወቅ `pow.signed_ticket_public_key_hex` በ
    የአርጎን2 በር ከመስመር ውጭ ነው።
 3. ለውጡን ተግባራዊ ለማድረግ ሁለቱንም የማስተላለፊያ እና የእንቆቅልሽ አገልግሎትን እንደገና ያስጀምሩ።
 4. ችግሩ ወደ ታች መውረድን ለማረጋገጥ `soranet_handshake_pow_difficulty`ን ተቆጣጠር
-   የሚጠበቀው የሃሽካሽ ዋጋ፣ እና የ`/v1/puzzle/config` ሪፖርቶችን ያረጋግጡ
+   የሚጠበቀው የሃሽካሽ ዋጋ፣ እና የ`/v2/puzzle/config` ሪፖርቶችን ያረጋግጡ
    `puzzle = null`.
 
 ## ክትትል እና ማስጠንቀቂያ
@@ -137,14 +137,14 @@ ML-DSA-44 ይፋዊ ለማስተዋወቅ `pow.signed_ticket_public_key_hex` በ
 - ** የእንቆቅልሽ አሰላለፍ፡** `soranet_handshake_pow_difficulty` መመሳሰል አለበት።
   ችግር በ I18NI0000059X ተመልሷል። ልዩነት የቆየ ቅብብሎሽ ያሳያል
   config ወይም ያልተሳካ ዳግም ማስጀመር.
-- ** ማስመሰያ ዝግጁነት፡** `/v1/token/config` ወደ `enabled = false` ከወረደ ማንቂያ
+- ** ማስመሰያ ዝግጁነት፡** `/v2/token/config` ወደ `enabled = false` ከወረደ ማንቂያ
   ሳይታሰብ ወይም I18NI0000062X የቆዩ የጊዜ ማህተሞችን ከዘገበ። ኦፕሬተሮች
   ማስመሰያ በሚሆንበት ጊዜ የI18NT0000002X መሻሪያ ፋይልን በCLI በኩል ማሽከርከር አለበት።
   ይህ የመጨረሻ ነጥብ ትክክለኛ እንዲሆን ጡረታ ወጥቷል።
 - **የአገልግሎት ጤና፡** `/healthz` በተለመደው የአኗኗር ዘይቤ እና ማንቂያ
-  `/v1/puzzle/mint` HTTP 500 ምላሾችን ከመለሰ (የአርጎን2 መለኪያን ያመለክታል
+  `/v2/puzzle/mint` HTTP 500 ምላሾችን ከመለሰ (የአርጎን2 መለኪያን ያመለክታል
   አለመመጣጠን ወይም RNG ውድቀቶች)። የማስመሰያ ስራ ስህተቶች በ HTTP 4xx/5xx በኩል ይታያሉ
-  በ `/v1/token/mint` ላይ ምላሾች; ተደጋጋሚ ውድቀቶችን እንደ የገጽታ ሁኔታ ይያዙ።
+  በ `/v2/token/mint` ላይ ምላሾች; ተደጋጋሚ ውድቀቶችን እንደ የገጽታ ሁኔታ ይያዙ።
 
 ## ተገዢነት እና ኦዲት ምዝግብ ማስታወሻ
 

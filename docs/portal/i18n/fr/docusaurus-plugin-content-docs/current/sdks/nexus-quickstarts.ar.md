@@ -14,7 +14,7 @@ La référence est `docs/source/nexus_sdk_quickstarts.md`. Vous avez besoin de p
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
-export NEXUS_PIPELINE_URL="https://torii.nexus.sora.org/v1/pipeline"
+export NEXUS_PIPELINE_URL="https://torii.nexus.sora.org/v2/pipeline"
 export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```

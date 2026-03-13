@@ -31,7 +31,7 @@ Pressupõe que a pilha de orquestração entregue sob SF-6 ya está implantada (
 > **Veja también:** El [Runbook de operações do orquestador](./orchestrator-ops.md) cubre los procedimientos de ejecución (captura de marcador, alternancia de implementación en fases, reversión). Use ambas como referencias en conjunto durante mudanças ao vivo.
 
 ## 1. Validación previa al voto1. **Confirmar insumos de gobernanza.**
-   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` com payloads de capacidade de intervalo e orçamentos de stream. Valide vía `/v1/sorafs/providers` y compare con los campos de capacidad esperados.
+   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` com payloads de capacidade de intervalo e orçamentos de stream. Valide vía `/v2/sorafs/providers` y compare con los campos de capacidad esperados.
    - Instantáneas de telemetría que fornecem taxas de latência/falha devem ter menos de 15 minutos antes de cada ejecución canária.
 2. **Preparar una configuración.**
    - Persiste la configuración JSON del orquestador en el árbol en camadas `iroha_config`:

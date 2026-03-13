@@ -117,7 +117,7 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
    `LaneRelayBroadcaster` צורך כעת את `LaneRelayEnvelope`s שנפלטו בזמן אטימת הבלוק ומפיץ אותם כ-frames
    בעלי עדיפות גבוהה `NetworkMessage::LaneRelay`. המעטפות מאומתות, מדוללות לפי
    `(lane_id,dataspace_id,height,settlement_hash)`, ונשמרות בצילום הסטטוס של Sumeragi
-   (`/v1/sumeragi/status`) עבור מפעילים ומבקרים. ה-broadcaster ימשיך להתפתח כדי לצרף ארטיפקטים של DA
+   (`/v2/sumeragi/status`) עבור מפעילים ומבקרים. ה-broadcaster ימשיך להתפתח כדי לצרף ארטיפקטים של DA
    (הוכחות RBC chunk, Norito headers, manifests של SoraFS/Object) ולהזין את ה-merge ring בלי חסימת
    head-of-line.
 
@@ -129,7 +129,7 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
 
 5. **התמדה וחשיפה.**  
    Kura כותבת את ה-lane block, את רשומת ה-merge ואת `LaneBlockCommitment` בצורה אטומית כדי שה-replay
-   יוכל לשחזר את אותה הפחתה. `/v1/sumeragi/status` חושף:
+   יוכל לשחזר את אותה הפחתה. `/v2/sumeragi/status` חושף:
    - `lane_commitments` (מטא-דאטה של ביצוע).
    - `lane_settlement_commitments` (ה-payload המתואר כאן).
    - `lane_relay_envelopes` (relay headers, QCs, DA digests, settlement hash ומוני bytes של RBC).
@@ -165,8 +165,8 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
   `nexus_audit_outcome_total` קיימים כבר ב-`crates/iroha_telemetry/src/metrics.rs`. מפעילים צריכים
   `lane_relay_invalid_total` צריך להישאר אפס מחוץ לתרגילי יריב.
 - **משטחי Torii:**  
-  `/v1/sumeragi/status` כולל `lane_commitments`, `lane_settlement_commitments` וצילומי dataspace.
-  `/v1/nexus/lane-config` (מתוכנן) יפרסם את הגאומטריה של `LaneConfig` כדי שלקוחות יוכלו למפות
+  `/v2/sumeragi/status` כולל `lane_commitments`, `lane_settlement_commitments` וצילומי dataspace.
+  `/v2/nexus/lane-config` (מתוכנן) יפרסם את הגאומטריה של `LaneConfig` כדי שלקוחות יוכלו למפות
   `lane_id` לתוויות dataspace.
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` מציג backlog של lane, אותות זמינות DA ואת סכומי settlement

@@ -35,7 +35,7 @@ This specification completes **SFM-5 — XOR hedging & billing layer**.
 
 ## Price Feeds & Hedging Decision
 - **Feeds**:
-  - `primary`: on-chain XOR/USDT TWAP (10-minute window) published by governance oracle committee. Retrieved via Torii `GET /v1/oracle/price?symbol=XORUSDT`.
+  - `primary`: on-chain XOR/USDT TWAP (10-minute window) published by governance oracle committee. Retrieved via Torii `GET /v2/oracle/price?symbol=XORUSDT`.
   - `secondary`: Chainlink XOR/USDC feed or synthetic XOR/KSM + KSM/USDT pair (via HTTPS). Transformed into `PriceFeedV1`.
   - `tertiary`: internal market data (orderbook implied price) used as sanity check.
 - **Decision rules**:
@@ -56,7 +56,7 @@ This specification completes **SFM-5 — XOR hedging & billing layer**.
 - **Aggregation**:
   - Billing runs hourly to update accruals in `billing_accruals` table.
   - Weekly (Monday 00:00 UTC) finalize `BillingStatementV1` per account (providers + buyers).
-  - Ad-hoc statements on demand (`POST /v1/billing/statements/run`).
+  - Ad-hoc statements on demand (`POST /v2/billing/statements/run`).
 - **Statement schema** (unchanged from draft, reaffirmed):
   ```norito
   struct BillingStatementV1 {
@@ -76,28 +76,28 @@ This specification completes **SFM-5 — XOR hedging & billing layer**.
 - **Line items** include category, quantity, unit prices (XOR & USD), metadata (manifest IDs, trade IDs).
 - **Adjustments** cover hedging gain/loss, penalties, credits.
 - **Distribution**:
-  - REST `GET /v1/billing/statements/{id}` (Norito + PDF). GraphQL option for dashboards.
+  - REST `GET /v2/billing/statements/{id}` (Norito + PDF). GraphQL option for dashboards.
   - Email notifications with secure link (expires 7 days).
   - CLI `sorafs billing download --period 2026-W09`.
-  - Acknowledgement required within 5 days; API `POST /v1/billing/statements/{id}/ack`.
+  - Acknowledgement required within 5 days; API `POST /v2/billing/statements/{id}/ack`.
 
 ## Escrow & Alerts
 - **Escrow monitoring**:
   - Evaluate provider/buyer XOR escrow vs projected weekly usage (`expected_usage = 7d average + safety factor`).
   - Alert thresholds: `warning` at 50% coverage, `critical` at 20%.
   - Auto top-up option: configure wallet to top up when below threshold.
-- **Balance API**: `GET /v1/billing/escrow/{account}` -> XOR balance, projected burn rate, USD equivalent.
+- **Balance API**: `GET /v2/billing/escrow/{account}` -> XOR balance, projected burn rate, USD equivalent.
 - **Notifications**: Slack, email, and Torii events `EscrowLowEventV1`.
 - **Runway dashboards**: Grafana shows `escrow_days_remaining`, `hedging_position`, `statement_status`.
 
 ## APIs & CLI
 - REST endpoints (secured with mTLS + JWT scopes):
-  - `GET /v1/hedging/price` – latest derived price, status, feed metadata.
-  - `GET /v1/hedging/status` – inventory, hedge ratio, outstanding trades.
-  - `GET /v1/billing/statements?account=&period=` – list statements.
-  - `POST /v1/billing/statements/{id}/ack` – acknowledge.
-  - `GET /v1/billing/accruals?account=` – interim usage totals.
-  - `GET /v1/billing/config` – current fees, hedging parameters.
+  - `GET /v2/hedging/price` – latest derived price, status, feed metadata.
+  - `GET /v2/hedging/status` – inventory, hedge ratio, outstanding trades.
+  - `GET /v2/billing/statements?account=&period=` – list statements.
+  - `POST /v2/billing/statements/{id}/ack` – acknowledge.
+  - `GET /v2/billing/accruals?account=` – interim usage totals.
+  - `GET /v2/billing/config` – current fees, hedging parameters.
 - CLI additions:
   - `sorafs hedging price` – prints current XOR/USD reference, feed status.
   - `sorafs hedging history --since 24h` – view decision log summary.

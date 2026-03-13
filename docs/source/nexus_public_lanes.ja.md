@@ -82,7 +82,7 @@ Delegators (および self-bond を追加するバリデータ) は `PublicLaneS
 - `metadata` は UX/バックオフィスのヒント (例: custody desk 参照番号) を格納。
 
 `PublicLaneUnbonding` は決定論的な引き出しスケジュール (`amount`, `release_at_ms`) を持つ。
-Torii は `GET /v1/nexus/public_lanes/{lane}/stake` で live shares と pending withdrawals を公開し、
+Torii は `GET /v2/nexus/public_lanes/{lane}/stake` で live shares と pending withdrawals を公開し、
 ウォレットが RPC 拡張なしでタイマー表示できるようにする。
 
 ライフサイクルフック (runtime enforced):
@@ -231,14 +231,14 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
     `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` は
     `(validator, staker)` ペアの pending-unbond ヒント付きで `/stake` をミラーする。
   - Torii snapshots (dashboards/SDKs 向け):
-    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
+    - `GET /v2/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
       `canonical I105 literal rendering` で literal 表示を制御（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
-    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
+    - `GET /v2/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) と pending unbond timers。`?validator=i105...` は
       特定バリデータ向けにフィルタし、`canonical I105 rendering` は全 literal に適用。
-  - Lifecycle ISIs は標準トランザクションパスを使用 (Torii `/v1/transactions`
+  - Lifecycle ISIs は標準トランザクションパスを使用 (Torii `/v2/transactions`
     または CLI instruction pipeline)。Norito JSON payload 例:
 
     ```jsonc
@@ -262,7 +262,7 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
 
 - ✅ Runtime と WSV storages が NX-9 の validator lifecycle を実装。activation timing、peer prerequisites、
   delayed exits、slash 後の再登録を回帰テストでカバー。
-- ✅ Torii が `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` を Norito JSON で提供し、
+- ✅ Torii が `/v2/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` を Norito JSON で提供し、
   SDKs と dashboards が custom RPC なしで lane 状態を監視可能。
 - ✅ Config/telemetry knobs をドキュメント化。混在 deployments でも stake-elected と admin-managed lanes を
   分離し、validator rosters の決定性を維持。

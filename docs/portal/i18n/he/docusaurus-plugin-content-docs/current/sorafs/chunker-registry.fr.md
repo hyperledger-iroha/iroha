@@ -96,7 +96,7 @@ nécessite une négociation לקוח מפורש (`Accept-Chunker` + `Accept-Dige
 Déploiement de la télémétrie:
 
 - **Télémétrie de fetch de chunks** — le CLI Iroha `sorafs toolkit pack` émet des digests de chunks, des métadonnées CAR et des racines PoR pour ingestion dans les לוחות מחוונים.
-- **מודעות ספק** - les payloads d'adverts incluent des métadonnées de capacités et d'alias; validez la couverture דרך `/v1/sorafs/providers` (לדוגמה, presence de la capacité `range`).
+- **מודעות ספק** - les payloads d'adverts incluent des métadonnées de capacités et d'alias; validez la couverture דרך `/v2/sorafs/providers` (לדוגמה, presence de la capacité `range`).
 - **שער מעקב** - המפעילים דואגים לדווח על ההצמדות `Content-Chunker`/`Content-Digest` pour dettecter les downgrades inattendus; l'usage du bridge est censé tendre versus zéro avant la dépréciation.
 
 Politique de dépréciation : une fois qu'un profil successeur est ratifié, planifiez une fenêtre de פרסום כפול

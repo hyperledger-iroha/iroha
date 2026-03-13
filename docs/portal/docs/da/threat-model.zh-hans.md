@@ -219,7 +219,7 @@ blob 会耗尽资源或走私无效元数据。
 - DA 重播缓存和光标持久性登陆 DA-2。请参阅
   `crates/iroha_core/src/da/replay_cache.rs`（缓存逻辑）中的实现和
   Torii 集成在 `crates/iroha_torii/src/da/ingest.rs` 中，该线程
-  通过 `/v1/da/ingest` 进行指纹检查。
+  通过 `/v2/da/ingest` 进行指纹检查。
 - PDP/PoTR 流模拟通过验证流工具进行
   `crates/sorafs_car/tests/sorafs_cli.rs`，涵盖 PoR/PDP/PoTR 请求流程
   以及威胁模型中动画的故障场景。

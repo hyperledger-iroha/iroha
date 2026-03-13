@@ -44,7 +44,7 @@ nécessitent aucun accesorio externo.
 ## Observabilidad
 
 Torii expone el mantenimiento de instantáneas de proveedores de crédito en los libros de contabilidad de tarifas junto con los paneles de control
-puissent gate sur les faibles soldes et penales strikes:- RESTO: `GET /v1/sorafs/capacity/state` reenvío de platos principales `credit_ledger[*]` aquí
+puissent gate sur les faibles soldes et penales strikes:- RESTO: `GET /v2/sorafs/capacity/state` reenvío de platos principales `credit_ledger[*]` aquí
   refleja los campos del libro mayor verificados en la prueba de remojo. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importar archivos de seguimiento Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`

@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ## 1. 飞行前验证
 
 1. **确认治理投入。**
-   - 所有候选提供商必须发布包含范围能力有效负载和流预算的 `ProviderAdvertV1` 信封。通过 `/v1/sorafs/providers` 进行验证并与预期的功能字段进行比较。
+   - 所有候选提供商必须发布包含范围能力有效负载和流预算的 `ProviderAdvertV1` 信封。通过 `/v2/sorafs/providers` 进行验证并与预期的功能字段进行比较。
    - 在每次金丝雀运行之前，提供延迟/故障率的遥测快照应小于 15 分钟。
 2. **舞台配置。**
    - 将 Orchestrator JSON 配置保留在分层 `iroha_config` 树中：

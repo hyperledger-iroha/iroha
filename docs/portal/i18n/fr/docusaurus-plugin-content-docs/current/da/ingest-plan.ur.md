@@ -38,7 +38,7 @@ Codecs Norito pour les utilisateurs serde/JSON fallback pour les utilisateurs
 ## Surface API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -198,13 +198,13 @@ les manifestes facultatifs vérifient les octets et décompressent les octets
   اور Déblocage du travail de parité du SDK ہوتا ہے۔
 - `iroha app da get` Alias axé sur DA pour un orchestrateur multi-source et pour utiliser un orchestrateur multi-source
   `iroha app sorafs fetch` en français Manifeste des opérateurs + artefacts de plan de fragments (`--manifest`, `--plan`, `--manifest-id`)
-  **یا** Ticket de stockage Torii via `--storage-ticket` en ligne Chemin d'accès aux tickets CLI `/v1/da/manifests/<ticket>`manifeste télécharger le bundle کو `artifacts/da/fetch_<timestamp>/` میں محفوظ کرتی ہے (remplacement via
+  **یا** Ticket de stockage Torii via `--storage-ticket` en ligne Chemin d'accès aux tickets CLI `/v2/da/manifests/<ticket>`manifeste télécharger le bundle کو `artifacts/da/fetch_<timestamp>/` میں محفوظ کرتی ہے (remplacement via
   `--manifest-cache-dir`) et `--manifest-id` pour le hachage blob dérivé et pour la liste `--gateway-provider`
   کے ساتھ orchestrator run کرتی ہے۔ SoraFS récupérateur de boutons avancés pour les enveloppes de manifeste,
   étiquettes client, caches de garde, remplacements de transport d'anonymat, exportation du tableau de bord (chemins `--output`)
   `--manifest-endpoint` pour le remplacement du point de terminaison du manifeste pour les contrôles de disponibilité de bout en bout
   Utilisez l'espace de noms `da` pour créer une copie de la logique de l'orchestrateur
-- `iroha app da get-blob` Torii et `GET /v1/da/manifests/{storage_ticket}` pour les manifestes canoniques
+- `iroha app da get-blob` Torii et `GET /v2/da/manifests/{storage_ticket}` pour les manifestes canoniques
   Voir `manifest_{ticket}.norito`, `manifest_{ticket}.json`, et `chunk_plan_{ticket}.json`
   `artifacts/da/fetch_<timestamp>/` میں لکھتی (یا fourni par l'utilisateur `--output-dir`) et `iroha app da get`
   invocation (par `--manifest-id`) echo کرتی ہے جو suivi orchestrateur chercher کیلئے درکار ہے۔ اس سے opérateurs

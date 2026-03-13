@@ -66,13 +66,13 @@ Soporte de herramientas:
 Las solicitudes HTTP deterministas de las puertas de enlace aceptan metadatos publicitarios y espejos
 کرتی ہیں۔
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
 |-------------|---------|
 | **Encabezados** | `Range` (ventana única alineada con compensaciones de fragmentos), `dag-scope: block`, `X-SoraFS-Chunker`, opcional `X-SoraFS-Nonce`, base64 `X-SoraFS-Stream-Token`. |
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range` es una ventana servida y contiene metadatos `X-Sora-Chunk-Range` y encabezados de fragmentos/tokens y eco |
 | **Modos de fallo** | rangos desalineados en `416`, tokens faltantes/no válidos en `401`, y los presupuestos de flujo/byte superan en `429` |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Recuperación de fragmento único y encabezados کے ساتھ más resumen de fragmento determinista ۔ reintentos
 یا descargas forenses کے لیے مفید جب CAR slices غیر ضروری ہوں۔
@@ -119,11 +119,11 @@ Errores de operadores/SDK:
 - `iroha app sorafs pin list|show`, `alias list`, o `replication list` registro pin
   Los puntos finales REST envuelven pruebas de auditoría y bloques de atestación.
   raw Norito Impresión JSON کرتے ہیں۔
-- `iroha app sorafs storage pin` o `torii /v1/sorafs/pin/register` Norito y JSON
+- `iroha app sorafs storage pin` o `torii /v2/sorafs/pin/register` Norito y JSON
   manifiesta کے ساتھ pruebas de alias opcionales اور sucesores aceptan کرتے ہیں؛ mal formado
   pruebas de `400`, pruebas obsoletas de `503` o `Warning: 110`, pruebas caducadas
   Por `412`۔
-- Puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- Puntos finales REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   estructuras de atestación شامل کرتے ہیں تاکہ clientes últimos encabezados de bloque کے
   خلاف verificar datos کر سکیں۔
 

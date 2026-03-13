@@ -117,14 +117,14 @@ Windows 現在發出 `suppression_reason` 標籤，以便操作員可以區分
 Torii 現在公開兩個遙測門控 HTTP 端點，以便中繼和收集器
 可以在不嵌入定制傳輸的情況下轉發觀察結果：
 
-- `POST /v1/soranet/privacy/event` 接受
+- `POST /v2/soranet/privacy/event` 接受
   `RecordSoranetPrivacyEventDto` 有效負載。身體包裹著一個
   `SoranetPrivacyEventV1` 加上可選的 `source` 標籤。 Torii 驗證
   針對活動遙測配置文件的請求、記錄事件並響應
   帶有 HTTP `202 Accepted` 以及包含以下內容的 Norito JSON 信封
   計算的桶窗口（`bucket_start_unix`、`bucket_duration_secs`）和
   中繼模式。
-- `POST /v1/soranet/privacy/share` 接受 `RecordSoranetPrivacyShareDto`
+- `POST /v2/soranet/privacy/share` 接受 `RecordSoranetPrivacyShareDto`
   有效負載。機身帶有 `SoranetPrivacyPrioShareV1` 和可選的
   `forwarded_by` 提示操作員可以審核收集器流量。成功
   提交返回 HTTP `202 Accepted` 和 Norito JSON 信封總結
@@ -254,7 +254,7 @@ cargo xtask soranet-privacy-report \
 窗口（默認 10%）或尚不存在存儲桶時。推薦流程：
 
 1. 從中繼管理端點以及協調器的端點導出 NDJSON
-   `/v1/soranet/privacy/event|share` 流進
+   `/v2/soranet/privacy/event|share` 流進
    `artifacts/sorafs_privacy/<relay>.ndjson`。
 2. 使用策略預算運行助手：
 

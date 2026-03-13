@@ -72,7 +72,7 @@ Les règles de validation rejettent stake zero, רשימות סרטוני היכ
 Les gateways acceptent des requêtes HTTP déterministes qui reflètent les
 מדדי פרסומות.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | נחישות | פרטים |
 |--------|--------|
@@ -80,7 +80,7 @@ Les gateways acceptent des requêtes HTTP déterministes qui reflètent les
 | **תגובות** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` מותאם לשירותי הגנה, מתודות `X-Sora-Chunk-Range`, ואסימונים של כותרות. |
 | **Modes d'échec** | `416` pour plages mal alignées, `401` pour tokens manquants/invalides, `429` lorsque les budgets stream/octet sont dépassés. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch d'un seul chunk avec les mêmes כותרות, פלוס le digest déterministe du
 נתח. Utile pour les retries ou les téléchargements forensiques quand les
@@ -133,12 +133,12 @@ Erreurs courantes remontées aux opérateurs/SDKs :
 - `iroha app sorafs pin list|show`, `alias list` ו-`replication list` מסמלים
   נקודות קצה REST du pin-registry et impriment du Norito JSON brut avec blocks
   d'attestation pour l'audit.
-- `iroha app sorafs storage pin` ו-`torii /v1/sorafs/pin/register` מקובלים
+- `iroha app sorafs storage pin` ו-`torii /v2/sorafs/pin/register` מקובלים
   מניפסט Norito או JSON, בתוספת des proofs d'alias optionnels et des successors;
   des proofs mal formés renvoient `400`, des proofs consolètes exposent `503` avec
   `Warning: 110`, et des proofs expirés renvoient `412`.
-- Les נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) incluent des structures d'atestation pour que les
+- Les נקודות קצה REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) incluent des structures d'atestation pour que les
   clients vérifient les données avec les derniers headers de bloc avant d'agir.
 
 ## רפרנסים

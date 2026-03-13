@@ -75,7 +75,7 @@ sidebar_label: נתח השקה של Чеклист
    указанный в `torii.sorafs.discovery.admission.envelopes_dir`.
 3. ראה, פרסומות של ספקים распространяются через Discovery API:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. הצג את כותרות הממשל של נקודות הקצה/התוכנית:
    ```bash

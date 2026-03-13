@@ -677,6 +677,7 @@ fn populate_genesis_results(
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::new(),
     };
     let world = World::with(
         Vec::<iroha_data_model::domain::Domain>::new(),
@@ -725,12 +726,12 @@ fn populate_genesis_results(
 
 fn apply_preexec_nexus_overrides(
     state: &mut State,
-    genesis_key_pair: &KeyPair,
+    _genesis_key_pair: &KeyPair,
     nexus_config: Option<&ActualNexus>,
     block_policies: Option<&DaProofPolicyBundle>,
 ) -> Result<(), Report> {
-    let gas_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-    let gas_account = gas_account_id.to_string();
+    // Use a single-domain test account literal to avoid ambiguous subject->domain resolution.
+    let gas_account = ALICE_ID.to_string();
 
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
@@ -1394,6 +1395,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         let controller_account_entry = Account {
             id: controller.clone(),
@@ -1401,6 +1403,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         let asset_domain = asset_definition_id.domain().clone();
         let controller_domain = asset_domain.clone();
@@ -1707,6 +1710,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();

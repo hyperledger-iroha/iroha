@@ -115,14 +115,14 @@ mantener acumuladores obsoletos en memoria.
 ## Puntos finales de ingesta Torii
 
 Torii ahora exponen dos endpoints HTTP con telemetría gateada para que retransmisiones y
-coleccionistas reenvien observaciones sin incrustar un transporte a medida:- `POST /v1/soranet/privacy/event` acepta una carga útil
+coleccionistas reenvien observaciones sin incrustar un transporte a medida:- `POST /v2/soranet/privacy/event` acepta una carga útil
   `RecordSoranetPrivacyEventDto`. El cuerpo envuelve un `SoranetPrivacyEventV1`
   mas una etiqueta opcional `source`. Torii valida la solicitud contra el
   perfil de telemetria activo, registra el evento y responde con HTTP
   `202 Accepted` junto con un sobre Norito JSON que contiene la ventana
   computada del cubo (`bucket_start_unix`, `bucket_duration_secs`) y el
   modo del relevo.
-- `POST /v1/soranet/privacy/share` acepta una carga útil `RecordSoranetPrivacyShareDto`.
+- `POST /v2/soranet/privacy/share` acepta una carga útil `RecordSoranetPrivacyShareDto`.
   El cuerpo lleva un `SoranetPrivacyPrioShareV1` y una pista opcional `forwarded_by`
   para que los operadores auditen flujos de recolectores. Las entregas exitosas
   devuelven HTTP `202 Accepted` con un sobre Norito JSON que resume el
@@ -249,7 +249,7 @@ ventana permitida (predeterminado 10%) o cuando aún no hay cubos presentes. Flu
 recomendado:
 
 1. Exporta NDJSON desde el endpoint admin del relevo y el stream
-   `/v1/soranet/privacy/event|share` del orquestador hacia
+   `/v2/soranet/privacy/event|share` del orquestador hacia
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Ejecuta el helper con el presupuesto de póliza:
 

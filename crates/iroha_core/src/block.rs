@@ -64,7 +64,10 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId,
-    account::{AccountController, AccountId},
+    account::{
+        AccountController, AccountId,
+        address::{self, AccountAddress, AccountAddressError},
+    },
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -750,16 +753,52 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
 }
 
 pub(crate) fn parse_account_literal_with_world(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
     input: &str,
 ) -> Option<AccountId> {
     let literal = input.trim();
     if literal.is_empty() {
         return None;
     }
-    AccountId::parse_encoded(literal)
-        .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+
+    let account = parse_account_literal_relaxed(literal)?;
+
+    let linked_domains = world.domains_for_subject(&account);
+    if linked_domains.len() > 1 {
+        return None;
+    }
+
+    // Some test fixtures construct worlds directly and rely on domain ownership
+    // as the only available domain-disambiguation signal.
+    if linked_domains.is_empty()
+        && world
+            .domains_iter()
+            .filter(|domain| domain.owned_by() == &account)
+            .take(2)
+            .count()
+            > 1
+    {
+        return None;
+    }
+
+    Some(account)
+}
+
+fn parse_account_literal_relaxed(literal: &str) -> Option<AccountId> {
+    if let Ok(parsed) = AccountId::parse_encoded(literal) {
+        return Some(parsed.into_account_id());
+    }
+
+    let expected = address::chain_discriminant();
+    let parsed = match AccountAddress::from_i105_for_discriminant(literal, Some(expected)) {
+        Ok(address) => Some(address),
+        Err(AccountAddressError::UnexpectedNetworkPrefix { found, .. }) => {
+            AccountAddress::from_i105_for_discriminant(literal, Some(found)).ok()
+        }
+        Err(_) => None,
+    }?;
+
+    parsed.to_account_id().ok()
 }
 
 fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {

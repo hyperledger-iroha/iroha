@@ -62,7 +62,7 @@ Gossip واعٍ لـ dataspace
 
 Manifests القدرات وUAID
 - الحسابات العالمية: كل مشارك يحصل على UAID حتمي (`UniversalAccountId` في `crates/iroha_data_model/src/nexus/manifest.rs`) يغطي كل dataspaces. manifests القدرات (`AssetPermissionManifest`) تربط UAID بdataspace محدد وepochs للتفعيل/الانتهاء وقائمة مرتبة من قواعد allow/deny `ManifestEntry` تحدد `dataspace`, `program_id`, `method`, `asset` وادوار AMX اختيارية. قواعد deny تفوز دائما؛ المقيّم يخرج `ManifestVerdict::Denied` مع سبب تدقيق او grant `Allowed` مع metadata السماح المطابق.
-- snapshots لمحافظ UAID مكشوفة عبر `GET /v1/accounts/{uaid}/portfolio` (راجع `docs/source/torii/portfolio_api.md`) ومدعومة بالمجمع الحتمي في `iroha_core::nexus::portfolio`.
+- snapshots لمحافظ UAID مكشوفة عبر `GET /v2/accounts/{uaid}/portfolio` (راجع `docs/source/torii/portfolio_api.md`) ومدعومة بالمجمع الحتمي في `iroha_core::nexus::portfolio`.
 - Allowances: كل allow يحمل buckets `AllowanceWindow` حتمية (`PerSlot`, `PerMinute`, `PerDay`) مع `max_amount` اختياري. Hosts وSDKs تستهلك نفس payload Norito لضمان تماثل التنفيذ.
 - تليمترية التدقيق: Space Directory يبث `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) عند تغير حالة البيان. السطح `SpaceDirectoryEventFilter` يسمح لمشتركي Torii/data-event بمراقبة التحديثات والالغاءات وقرارات deny-wins بدون plumbing مخصص.
 
@@ -123,16 +123,16 @@ Manifests القدرات وUAID
 
 يمكن للمشغلين وSDKs تنفيذ نفس العمليات عبر HTTPS. Torii يطبق نفس التحقق من الصلاحيات ويوقع المعاملات لصالح السلطة المقدمة (المفاتيح الخاصة تبقى في الذاكرة داخل معالج Torii الامن):
 
-- `GET /v1/space-directory/uaids/{uaid}` — حل bindings الحالية للـ dataspace لUAID (عناوين موحدة، ids، program bindings). اضف `canonical I105 output` لاخراج Sora Name Service (I105 هو المفضل؛ I105 هو الخيار الثاني لسورا فقط).
-- `GET /v1/accounts/{uaid}/portfolio` — مجمع Norito يعكس `ToriiClient.getUaidPortfolio` لاظهار الممتلكات العامة. اضف `asset_id=<asset#definition::owner>` لتصفية اللقطة الى اصل واحد.
-- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — جلب JSON المانيفست canonical وmetadata وhash.
-- `POST /v1/space-directory/manifests` — ارسال مانيفست جديد او بديل من JSON (`authority`, `private_key`, `manifest`, `reason` اختياري). Torii يعيد `202 Accepted` عند ادخال المعاملة في الصف.
-- `POST /v1/space-directory/manifests/revoke` — ادراج الغاءات طارئة مع UAID وdataspace id وepoch فعال وسبب اختياري.
+- `GET /v2/space-directory/uaids/{uaid}` — حل bindings الحالية للـ dataspace لUAID (عناوين موحدة، ids، program bindings). اضف `canonical I105 output` لاخراج Sora Name Service (I105 هو المفضل؛ I105 هو الخيار الثاني لسورا فقط).
+- `GET /v2/accounts/{uaid}/portfolio` — مجمع Norito يعكس `ToriiClient.getUaidPortfolio` لاظهار الممتلكات العامة. اضف `asset_id=<asset#definition::owner>` لتصفية اللقطة الى اصل واحد.
+- `GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}` — جلب JSON المانيفست canonical وmetadata وhash.
+- `POST /v2/space-directory/manifests` — ارسال مانيفست جديد او بديل من JSON (`authority`, `private_key`, `manifest`, `reason` اختياري). Torii يعيد `202 Accepted` عند ادخال المعاملة في الصف.
+- `POST /v2/space-directory/manifests/revoke` — ادراج الغاءات طارئة مع UAID وdataspace id وepoch فعال وسبب اختياري.
 
 SDK JS (`javascript/iroha_js/src/toriiClient.js`) يغلف هذه الواجهات عبر `ToriiClient.getUaidPortfolio` و`.getUaidBindings` و`.getUaidManifests`؛ اصدارات Swift/Python ستعيد استخدام نفس REST payloads. راجع `docs/source/torii/portfolio_api.md` و`docs/space-directory.md`.
 
 تحديثات SDK/AMX الاخيرة
-- **NX-11 (التحقق من relay بين lanes):** helpers في SDK تتحقق من envelopes المعروضة عبر `/v1/sumeragi/status`. عميل Rust يوفر `iroha::nexus` لبناء/التحقق ورفض التكرار `(lane_id, dataspace_id, height)`. ربط Python يوفر `verify_lane_relay_envelope_bytes`/`lane_settlement_hash` وSDK JS يوفر `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample`.
+- **NX-11 (التحقق من relay بين lanes):** helpers في SDK تتحقق من envelopes المعروضة عبر `/v2/sumeragi/status`. عميل Rust يوفر `iroha::nexus` لبناء/التحقق ورفض التكرار `(lane_id, dataspace_id, height)`. ربط Python يوفر `verify_lane_relay_envelope_bytes`/`lane_settlement_hash` وSDK JS يوفر `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample`.
   【crates/iroha/src/nexus.rs:1】【python/iroha_python/iroha_python_rs/src/lib.rs:666】【crates/iroha_js_host/src/lib.rs:640】【javascript/iroha_js/src/nexus.js:1】
 - **NX-17 (حواجز ميزانية AMX):** `ivm::analysis::enforce_amx_budget` يقدر تكلفة التنفيذ per-dataspace/group ويطبق ميزانيات 30 ms / 140 ms. يوفر مخرجات واضحة ومغطى باختبارات وحدة.
   【crates/ivm/src/analysis.rs:142】【crates/ivm/src/analysis.rs:241】
@@ -228,7 +228,7 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- `POST /v1/nexus/lifecycle` لاضافة/ازالة lanes بدون اعادة تشغيل، مع سلوك وتحقق واضحين.
+- `POST /v2/nexus/lifecycle` لاضافة/ازالة lanes بدون اعادة تشغيل، مع سلوك وتحقق واضحين.
 
 Migration Path
 - خطوات الانتقال من Iroha 2 الى Iroha 3.

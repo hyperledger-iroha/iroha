@@ -67,13 +67,13 @@ Los proveedores de rango de rango deben seleccionar los siguientes metadatos:| P
 
 Las puertas de enlace controlan las conexiones HTTP determinadas y se utilizan metadatos.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`| Требование | Detalles |
+### `GET /v2/sorafs/storage/car/{manifest_id}`| Требование | Detalles |
 |------------|--------|
 | **Encabezados** | `Range` (intervalo de frecuencia, compensaciones de fragmentos), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` opcional y base64 opcional `X-SoraFS-Stream-Token`. |
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range`, descripciones de intervalos regulares, metadanos `X-Sora-Chunk-Range` y este fragmentador/token de encabezados. |
 | **Modos de fallo** | `416` para nunca выровненных дипазонов, `401` para отсутствующих/невалидных токенов, `429` при Presupuesto de flujo/byte previo. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Recuperar fragmentos nuevos con los encabezados más fragmentos de resumen predeterminados.
 Para recuperar o descargar descargas forenses, no hay suficientes cortes de CAR.
@@ -120,12 +120,12 @@ SDK según `sorafs_orchestrator`):1. **Собрать входные данны�
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` оборачивают
   Puntos finales REST de registro pin y certificación de bloques Norito JSON
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` según el modelo Norito
+- `iroha app sorafs storage pin` y `torii /v2/sorafs/pin/register` según el modelo Norito
   y manifiestos JSON además de pruebas de alias y sucesores opcionales; pruebas mal formadas
   возвращают `400`, pruebas obsoletas дают `503` с `Warning: 110`, pruebas caducadas
   возвращают `412`.
-- Puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) включают структуры atestación, чтобы клиенты могли
+- Puntos finales REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) включают структуры atestación, чтобы клиенты могли
   pruebe estos encabezados de bloque disponibles antes del diseño.
 
 ## Ссылки- Especificaciones canónicas:

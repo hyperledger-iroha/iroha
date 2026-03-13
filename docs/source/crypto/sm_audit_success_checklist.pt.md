@@ -36,7 +36,7 @@ condições antes de ativar a assinatura SM para validadores de produção.
 - [] Últimos resultados de testes determinísticos capturados:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` e
       Norito luminárias de ida e volta.
-- [ ] Anúncio Torii `/v1/node/capabilities` (via `iroha runtime capabilities`) registrado, verificando os campos de manifesto `crypto.sm` e o instantâneo da política de aceleração.
+- [ ] Anúncio Torii `/v2/node/capabilities` (via `iroha runtime capabilities`) registrado, verificando os campos de manifesto `crypto.sm` e o instantâneo da política de aceleração.
 
 # Execução de Engajamento
 

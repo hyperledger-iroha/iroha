@@ -15,7 +15,7 @@ title: Conciliacao de capacidade da SoraFS
 description: Fluxo noturno para comparar os ledgers de taxa de capacidade com as exportacoes de transferencias XOR.
 ---
 
-O item do roadmap **SF-2c** exige que a tesouraria comprove que o ledger de taxas de capacidade corresponde as transferencias XOR executadas todas as noites. Use o helper `scripts/telemetry/capacity_reconcile.py` para comparar o snapshot `/v1/sorafs/capacity/state` com o lote de transferencias executado e emitir metricas de texto Prometheus para o Alertmanager.
+O item do roadmap **SF-2c** exige que a tesouraria comprove que o ledger de taxas de capacidade corresponde as transferencias XOR executadas todas as noites. Use o helper `scripts/telemetry/capacity_reconcile.py` para comparar o snapshot `/v2/sorafs/capacity/state` com o lote de transferencias executado e emitir metricas de texto Prometheus para o Alertmanager.
 
 ## Pre-requisitos
 - Snapshot do estado de capacidade (entradas `fee_ledger`) exportado do Torii.

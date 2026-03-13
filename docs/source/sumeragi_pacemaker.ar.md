@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-01-01
 
 القياسات المعروضة (انظر telemetry.md):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
-- لقطة REST: `/v1/sumeragi/phases` تتضمن الان `ema_ms` الى جانب احدث
+- لقطة REST: `/v2/sumeragi/phases` تتضمن الان `ema_ms` الى جانب احدث
   زمنيات المراحل كي تتمكن لوحات المتابعة من رسم اتجاه EMA دون سحب
   Prometheus مباشرة.
 - Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`

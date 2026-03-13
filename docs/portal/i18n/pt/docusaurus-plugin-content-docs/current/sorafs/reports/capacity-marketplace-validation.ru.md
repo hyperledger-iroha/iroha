@@ -28,7 +28,7 @@ Verifique se a nova opção foi testada para o mercado de trabalho para seus ope
 
 | Prova | Validação | Documentação |
 |-------|------------|----------|
-| Registro принимает канонические декларации емкости | O teste de integração usa `/v1/sorafs/capacity/declare` para configurar a API do aplicativo, testar a configuração do arquivo, salvar metadados e transferir para o registro nós. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registro принимает канонические декларации емкости | O teste de integração usa `/v2/sorafs/capacity/declare` para configurar a API do aplicativo, testar a configuração do arquivo, salvar metadados e transferir para o registro nós. | `crates/iroha_torii/src/routing.rs:7654` |
 | Contrato inteligente отклоняет несовпадающие cargas úteis | A unidade de teste é garantida, quais provedores de IDs e cada GiB comprometido são fornecidos com uma declaração de declaração de segurança. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI выпускает канонические artefatos onбординга | CLI chicote пишет детерминированные Norito/JSON/Base64 usa e valida viagens de ida e volta, operadores de operação podem ser usados декларации offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Operador de operação de gerenciamento de fluxo de trabalho, estruturas e guarda-corpos | Документация перечисляет схему декларации, política de padrões e шаги ревью para o conselho. | `../storage-capacity-marketplace.md` |

@@ -137,7 +137,7 @@ NX-7 change controls include the signed bundle references automatically:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --status-url https://torii.example.com/v2/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -274,7 +274,7 @@ bundle manifest into one artefact set so load runs can be published directly to 
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v1/sumeragi/status \
+     --status-url https://torii.example.com/v2/sumeragi/status \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -333,7 +333,7 @@ While the workload is saturating the lane:
 1. Snapshot Torii status + metrics:
 
    ```bash
-   curl -sS https://torii.example.com/v1/sumeragi/status \
+   curl -sS https://torii.example.com/v2/sumeragi/status \
      > artifacts/nexus/load/payments-2026q2/torii_status.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom

@@ -29,7 +29,7 @@ translator: manual
 - להחליף את הקריאות הקשיחות `LaneId::SINGLE`/`DataSpaceId::GLOBAL` ברגע שמתזמן Nexus (SFQ, לוגיקת Fusion, מדיניות Data-Space) יוטמע.
 - להרחיב משטחים (קבלה, Gossip, Torii) כך שיקבלו את המזהים החדשים ויעבירו אותם בין צמתים.
 - לאחר שמסלולים מרובים יופעלו, להחליף את תוויות הטלמטריה/מטריקות מהמזהים ה placeholders לערכים האמיתיים.
-- לעדכן את נהלי התפעול כך שיכללו `iroha_cli app nexus lane-report --summary --only-missing --fail-on-sealed`, ולהצליב עם `lane_governance_sealed_total` / `lane_governance_sealed_aliases` שמופיעים ב-`/v1/sumeragi/status` כדי לעצור פריסות כאשר מניפסט ממשל עדיין חסר.
+- לעדכן את נהלי התפעול כך שיכללו `iroha_cli app nexus lane-report --summary --only-missing --fail-on-sealed`, ולהצליב עם `lane_governance_sealed_total` / `lane_governance_sealed_aliases` שמופיעים ב-`/v2/sumeragi/status` כדי לעצור פריסות כאשר מניפסט ממשל עדיין חסר.
 
 ## תכנית מעבר לנתיבים/מרחבי נתונים
 

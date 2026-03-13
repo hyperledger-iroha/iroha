@@ -82,7 +82,7 @@ Testing:
 
 | جزو | کام | مالک/مالکان |
 |------|-----|-------------|
-| Torii Service | `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts) فراہم کریں۔ pagination + filtering مہیا کریں۔ | Networking TL / Core Infra |
+| Torii Service | `/v2/sorafs/pin` (submit)، `/v2/sorafs/pin/{cid}` (lookup)، `/v2/sorafs/aliases` (list/bind)، `/v2/sorafs/replication` (orders/receipts) فراہم کریں۔ pagination + filtering مہیا کریں۔ | Networking TL / Core Infra |
 | Attestation | responses میں registry height/hash شامل کریں؛ Norito attestation struct شامل کریں جسے SDKs consume کریں۔ | Core Infra |
 | CLI | `sorafs_manifest_stub` میں توسیع یا نئی `sorafs_pin` CLI بنائیں جس میں `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | Tooling WG |
 | SDK | Norito schema سے client bindings (Rust/Go/TS) generate کریں؛ integration tests شامل کریں۔ | SDK Teams |
@@ -139,9 +139,9 @@ Dashboards:
 SF-4 کے ہر checklist آئٹم میں پیش رفت پر اس منصوبے کا حوالہ ہونا چاہیے۔
 REST facade اب attested listing endpoints کے ساتھ آتی ہے:
 
-- `GET /v1/sorafs/pin` اور `GET /v1/sorafs/pin/{digest}` manifests واپس کرتے ہیں جن میں
+- `GET /v2/sorafs/pin` اور `GET /v2/sorafs/pin/{digest}` manifests واپس کرتے ہیں جن میں
   alias bindings، replication orders، اور تازہ ترین block hash سے ماخوذ attestation object شامل ہے۔
-- `GET /v1/sorafs/aliases` اور `GET /v1/sorafs/replication` فعال alias catalogue اور
+- `GET /v2/sorafs/aliases` اور `GET /v2/sorafs/replication` فعال alias catalogue اور
   replication order backlog کو consistent pagination اور status filters کے ساتھ ظاہر کرتے ہیں۔
 
 CLI ان calls کو wrap کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,

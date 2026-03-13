@@ -47,7 +47,7 @@ Déploiement du système avec les véhicules SF-2b/2c
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` avec `max_span`
      - `allow_unknown_capabilities=<true|false>` pour la graisse TLV
-   - Vérifiez que `/v1/sorafs/providers` et `sorafs_fetch` ; avant-première
+   - Vérifiez que `/v2/sorafs/providers` et `sorafs_fetch` ; avant-première
      Les capacités les plus récentes doivent être triées.
 3. **Préparation multi-sources.**
    - Выполните `sorafs_fetch` avec `--provider-advert=<path>` ; CLI теперь падает,
@@ -190,9 +190,9 @@ Tous les temps sont disponibles en UTC. Les données d'application figurent dans
 - **Statut de statut actuel.** DevRel a défini la mesure du résumé
   admission, текущих avertissements и предстоящих délais.
 - **Réponse aux incidents.** Si vous signalez les alertes `reject`, les agents de garde :
-  1. Téléchargez l'annonce problématique pour Discovery Torii (`/v1/sorafs/providers`).
+  1. Téléchargez l'annonce problématique pour Discovery Torii (`/v2/sorafs/providers`).
   2. Publier une annonce de validation dans le pipeline du fournisseur et la publier
-     `/v1/sorafs/providers`, que vous avez choisi.
+     `/v2/sorafs/providers`, que vous avez choisi.
   3. Coordonner la rotation de l'annonce en fonction de la date limite d'actualisation.
 - **Amélioration des capacités de schéma.** Capacités de schéma améliorées dans R1/R2, etc.
   Le déploiement du comité n'est pas terminé ; L'épandage de GRAISSE doit être effectué à un moment donné

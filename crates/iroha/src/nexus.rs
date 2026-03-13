@@ -1,7 +1,7 @@
 //! Cross-lane helpers for Nexus (NX-11).
 //!
 //! The helpers here let SDK callers build and validate the `LaneRelayEnvelope`
-//! payloads surfaced by `/v1/sumeragi/status`, ensuring settlement proofs stay
+//! payloads surfaced by `/v2/sumeragi/status`, ensuring settlement proofs stay
 //! self-consistent before they are forwarded to other lanes.
 
 use std::collections::HashSet;
