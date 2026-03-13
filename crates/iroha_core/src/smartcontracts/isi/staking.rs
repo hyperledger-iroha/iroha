@@ -1618,7 +1618,8 @@ fn parse_staking_account_literal(
                         owner_domains.join(", ")
                     )
                 } else {
-                    "literal decoded but could not be resolved in the current world state".to_owned()
+                    "literal decoded but could not be resolved in the current world state"
+                        .to_owned()
                 }
             } else {
                 "literal decoded but failed world-state disambiguation".to_owned()

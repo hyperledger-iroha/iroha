@@ -82,7 +82,6 @@ const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
-const SETUP_REGISTER_MINT_ATTEMPTS: usize = 3;
 const SETUP_REGISTER_MINT_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
 const SWAP_BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -340,6 +339,14 @@ fn npos_multilane_genesis_post_topology_transactions(
     let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
     let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
+    let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("asset definition domain"),
+        "ds1coin".parse().expect("asset definition name"),
+    );
+    let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("asset definition domain"),
+        "ds2coin".parse().expect("asset definition name"),
+    );
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
@@ -350,6 +357,24 @@ fn npos_multilane_genesis_post_topology_transactions(
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
+        Register::asset_definition({
+            let __asset_definition_id = ds1_asset_def.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = ds2_asset_def.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Mint::asset_numeric(
+            100_u32,
+            AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
     let mut validator_tx = Vec::with_capacity(TOTAL_PEERS * 2);
@@ -901,13 +926,51 @@ fn leader_or_highest_height_peer_index(
         .0
 }
 
+fn preferred_lane_for_account(account_id: &AccountId) -> u32 {
+    if account_id == &*ALICE_ID {
+        DS1_LANE_INDEX
+    } else if account_id == &*BOB_ID {
+        DS2_LANE_INDEX
+    } else {
+        NEXUS_LANE_INDEX
+    }
+}
+
+fn lane_bounded_peer_index_for_account(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    account_id: &AccountId,
+) -> usize {
+    let peers = network.peers();
+    if peers.is_empty() {
+        return 0;
+    }
+
+    let lane_index = preferred_lane_for_account(account_id) as usize;
+    let start = lane_index.saturating_mul(VALIDATORS_PER_LANE);
+    let end = start.saturating_add(VALIDATORS_PER_LANE).min(peers.len());
+    if start >= end {
+        return leader_or_highest_height_peer_index(network, status_client);
+    }
+
+    (start..end)
+        .max_by_key(|index| {
+            peers[*index]
+                .client()
+                .get_sumeragi_status_wire()
+                .map(|status| status.commit_qc.height)
+                .unwrap_or(0)
+        })
+        .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
+}
+
 fn leader_targeted_client_for_account(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
     account_id: &AccountId,
     private_key: &PrivateKey,
 ) -> Client {
-    let index = leader_or_highest_height_peer_index(network, status_client);
+    let index = lane_bounded_peer_index_for_account(network, status_client, account_id);
     network.peers()[index].client_for(account_id, private_key.clone())
 }
 
@@ -1413,142 +1476,16 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         (&alice_ds2_asset, Numeric::from(0_u32)),
         (&bob_ds2_asset, Numeric::from(200_u32)),
     ];
-    let mut seeded = false;
-    let mut setup_register_mint_retries_used = 0usize;
-    let mut last_seed_error: Option<eyre::Report> = None;
-    for attempt in 0..SETUP_REGISTER_MINT_ATTEMPTS {
-        let setup_alice_submitter = leader_targeted_client_for_account(
-            &network,
+    let setup_register_mint_retries_used = 0usize;
+    {
+        let _phase = phase_timings.phase("setup register+mint: query/assert");
+        wait_for_expected_balances_with_tick_timeout(
             &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-        );
-        let setup_bob_submitter =
-            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
-        let setup_register_mint_barrier_target = {
-            let _phase = phase_timings.phase("setup register+mint: tx submit enqueue");
-            let pre_barrier_height = alice
-                .get_sumeragi_status_wire()
-                .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height
-                .max(
-                    bob.get_sumeragi_status_wire()
-                        .map_err(|err| eyre!(err))?
-                        .commit_qc
-                        .height,
-                );
-            let setup_alice_tx = setup_alice_submitter.build_transaction(
-                vec![
-                    InstructionBox::from(Register::asset_definition({
-                        let __asset_definition_id = ds1_asset_def.clone();
-                        AssetDefinition::numeric(__asset_definition_id.clone())
-                            .with_name(__asset_definition_id.name().to_string())
-                    })),
-                    InstructionBox::from(Mint::asset_numeric(100_u32, alice_ds1_asset.clone())),
-                ],
-                Metadata::default(),
-            );
-            let setup_bob_tx = setup_bob_submitter.build_transaction(
-                vec![
-                    InstructionBox::from(Register::asset_definition({
-                        let __asset_definition_id = ds2_asset_def.clone();
-                        AssetDefinition::numeric(__asset_definition_id.clone())
-                            .with_name(__asset_definition_id.name().to_string())
-                    })),
-                    InstructionBox::from(Mint::asset_numeric(200_u32, bob_ds2_asset.clone())),
-                ],
-                Metadata::default(),
-            );
-            setup_alice_submitter.submit_transaction(&setup_alice_tx)?;
-            setup_bob_submitter.submit_transaction(&setup_bob_tx)?;
-            pre_barrier_height.saturating_add(1)
-        };
-        let barrier_result = {
-            let _phase = phase_timings.phase("setup register+mint: barrier wait");
-            wait_for_height_with_tick_timeout(
-                &alice,
-                &alice,
-                setup_register_mint_barrier_target,
-                "register+mint setup barrier on alice",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )
-        };
-        if let Err(err) = barrier_result {
-            let barrier_error_text = err.to_string();
-            let seeded_on_barrier_timeout = {
-                let _phase =
-                    phase_timings.phase("setup register+mint: barrier-timeout query/assert");
-                wait_for_expected_balances_with_tick_timeout(
-                    &alice,
-                    &alice,
-                    &seeded_balances,
-                    "seed balances after setup barrier timeout",
-                    SETUP_REGISTER_MINT_QUERY_TIMEOUT,
-                )
-            };
-            if seeded_on_barrier_timeout.is_ok() {
-                eprintln!(
-                    "[setup] register+mint attempt {} converged via query fallback after barrier timeout",
-                    attempt + 1
-                );
-                seeded = true;
-                break;
-            }
-            let query_error_text = seeded_on_barrier_timeout
-                .err()
-                .map(|query_err| query_err.to_string());
-            if attempt + 1 == SETUP_REGISTER_MINT_ATTEMPTS {
-                let combined = if let Some(query_error_text) = query_error_text {
-                    eyre!(
-                        "setup register+mint barrier timeout: {barrier_error_text}; query fallback timeout: {query_error_text}"
-                    )
-                } else {
-                    eyre!("setup register+mint barrier timeout: {barrier_error_text}")
-                };
-                last_seed_error = Some(combined);
-                break;
-            }
-            eprintln!(
-                "[setup] register+mint attempt {} barrier did not converge; retrying",
-                attempt + 1
-            );
-            setup_register_mint_retries_used = setup_register_mint_retries_used.saturating_add(1);
-            continue;
-        }
-        let query_result = {
-            let _phase = phase_timings.phase("setup register+mint: query/assert");
-            wait_for_expected_balances_with_tick_timeout(
-                &alice,
-                &alice,
-                &seeded_balances,
-                "seed balances after pipelined setup",
-                SETUP_REGISTER_MINT_QUERY_TIMEOUT,
-            )
-        };
-        match query_result {
-            Ok(()) => {
-                seeded = true;
-                break;
-            }
-            Err(err) => {
-                if attempt + 1 == SETUP_REGISTER_MINT_ATTEMPTS {
-                    last_seed_error = Some(err);
-                    break;
-                }
-                eprintln!(
-                    "[setup] register+mint attempt {} did not converge; retrying",
-                    attempt + 1
-                );
-                setup_register_mint_retries_used =
-                    setup_register_mint_retries_used.saturating_add(1);
-            }
-        }
-    }
-    if !seeded {
-        return Err(last_seed_error
-            .unwrap_or_else(|| eyre!("seed register+mint did not converge within retry budget")));
+            &alice,
+            &seeded_balances,
+            "seed balances from genesis setup",
+            SETUP_REGISTER_MINT_QUERY_TIMEOUT,
+        )?;
     }
 
     let mut swap_outcome_fallbacks = 0usize;

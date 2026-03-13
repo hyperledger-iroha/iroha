@@ -2008,7 +2008,10 @@ mod tests {
         let multisig_id = new_account_id(&multisig_key);
         let mut metadata = Metadata::default();
         metadata.insert(spec_key(), Json::new(spec.clone()));
-        metadata.insert((*MULTISIG_HOME_DOMAIN_KEY).clone(), Json::new(domain_id.clone()));
+        metadata.insert(
+            (*MULTISIG_HOME_DOMAIN_KEY).clone(),
+            Json::new(domain_id.clone()),
+        );
         Register::account(
             iroha_data_model::account::NewAccount::new_in_domain(
                 multisig_id.clone(),

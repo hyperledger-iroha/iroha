@@ -2,6 +2,10 @@
 
 Last updated: 2026-03-13
 
+## Multilane Genesis Pre-exec Follow-up
+1. Investigate and fix `RegisterPublicLaneValidator` pre-exec failures that reference synthetic `aid:*` asset-definition IDs (currently pre-exec falls back to synthetic success in cross-dataspace localnet startup).
+2. Ensure staking asset-definition lookup stays deterministic across pre-exec and runtime paths without relying on fallback behavior, and add a regression integration test for the corrected path.
+
 ## Multisig Admission Follow-up
 1. Add an end-to-end integration test that proves an unregistered signatory can successfully complete `MultisigPropose`/`MultisigApprove` against a live multi-peer network (not just unit-level admission/execution slices).
 

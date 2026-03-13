@@ -1062,8 +1062,6 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::ChainId;
-    use iroha_futures::supervisor::ShutdownSignal;
 
     use super::*;
     #[test]
@@ -1209,7 +1207,6 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn topology_update_preserves_static_trusted_peers() {
-        let shutdown = ShutdownSignal::new();
         let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("addr");
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::from(key_pair.public_key().clone());
@@ -1343,16 +1340,7 @@ mod tests {
             quic_max_idle_timeout: None,
         };
 
-        let (network, _child) = IrohaNetwork::start(
-            key_pair.clone(),
-            network_cfg.clone(),
-            Some(ChainId::from("gossiper-topology-test")),
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
+        let network = IrohaNetwork::closed_for_tests();
 
         let local_peer = Peer::new(listen_addr, peer_id.clone());
         let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1442,8 +1430,6 @@ mod tests {
             !gossiper.trust_candidates.contains(&dynamic_peer_id),
             "removed dynamic peer should not remain a trust candidate"
         );
-
-        shutdown.send();
     }
 
     #[test]

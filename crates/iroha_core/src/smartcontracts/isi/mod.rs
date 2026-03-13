@@ -1067,7 +1067,10 @@ mod tests {
         };
 
         let tx = TransactionBuilder::new(chain_id.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone())
-            .with_instructions::<InstructionBox>([])
+            .with_instructions([Log::new(
+                Level::INFO,
+                "genesis stateless admission".to_owned(),
+            )])
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let crypto_cfg = state.crypto();
         assert!(

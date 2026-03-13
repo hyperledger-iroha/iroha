@@ -67,6 +67,11 @@ pub fn aad_v1(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     aad
 }
 
+/// Build canonical AAD for the current Connect envelope format.
+pub fn aad(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
+    aad_v1(sid, dir, seq)
+}
+
 /// Derive a 96-bit ChaCha20-Poly1305 nonce from sequence: 0x00000000 || `seq_le`.
 pub fn nonce_from_seq(seq: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
@@ -104,6 +109,17 @@ pub fn seal_envelope_v1(
     }
 }
 
+/// Seal an envelope using the canonical Connect envelope format.
+pub fn seal_envelope(
+    key: &[u8; 32],
+    sid: &[u8; 32],
+    dir: Dir,
+    seq: u64,
+    payload: ConnectPayloadV1,
+) -> ConnectFrameV1 {
+    seal_envelope_v1(key, sid, dir, seq, payload)
+}
+
 /// Open a ciphertext frame and return the decrypted envelope. Enforces Envelope.seq == frame.seq.
 ///
 /// # Errors
@@ -131,6 +147,11 @@ pub fn open_envelope_v1(
         return Err("seq_mismatch");
     }
     Ok(env)
+}
+
+/// Open a ciphertext frame using the canonical Connect envelope format.
+pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
+    open_envelope_v1(key, frame)
 }
 
 /// Deterministic Norito-encoded BLAKE2b-256 hash of permissions.
