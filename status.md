@@ -2,6 +2,20 @@
 
 Last updated: 2026-03-13
 
+## 2026-03-13 Follow-up: cross-dataspace localnet runtime stabilization
+- Stabilized `integration_tests/tests/nexus/cross_dataspace_localnet.rs` setup so the
+  multilane atomic-swap scenario converges reliably in real localnet runs:
+  - `leader_targeted_client_for_account(...)` now prefers a peer from the expected lane
+    slice (`alice -> ds1`, `bob -> ds2`, default -> nexus) instead of a single global
+    highest-height leader.
+  - Seed balances (`ds1coin` for Alice and `ds2coin` for Bob) are provisioned in
+    multilane genesis post-topology bootstrap instructions and verified at runtime via
+    balance assertions (instead of flaky runtime register+mint submissions).
+- Runtime validation (not CI-only):
+  - `IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod nexus::multilane_router::multilane_router_provisions_storage_and_routes_rules -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod nexus::multilane_pipeline::multilane_catalog_sets_up_storage_and_routing -- --exact --nocapture` (pass)
+
 ## 2026-03-13 Follow-up: FASTPQ stage2 balanced backend fixture refresh
 - Refreshed stale Stage 2 backend regression fixtures to match current canonical
   prover output:

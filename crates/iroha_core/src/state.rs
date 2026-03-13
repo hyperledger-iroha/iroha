@@ -8336,6 +8336,20 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
+        for domain_id in world.domains_for_subject(account_id) {
+            let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
+                Some((_, to)) => to.clone(),
+                None => world
+                    .domain(&domain_id)
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+            };
+
+            if &domain_owner == authority {
+                return Ok(true);
+            }
+        }
+
         let target_perm: Permission =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                 account: account_id.clone(),
@@ -8407,6 +8421,20 @@ impl DetachedStateTransactionDelta {
     ) -> Result<bool, ValidationFail> {
         if transfer.source() == authority {
             return Ok(true);
+        }
+
+        for domain_id in world.domains_for_subject(transfer.source()) {
+            let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
+                Some((_, to)) => to.clone(),
+                None => world
+                    .domain(&domain_id)
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+            };
+
+            if &source_domain_owner == authority {
+                return Ok(true);
+            }
         }
 
         let transferred_domain_owner = match self.domain_owner_transfer.get(transfer.object()) {

@@ -517,18 +517,17 @@ impl AccountAddress {
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
         let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
-        let payload = if let Some(payload) =
-            Self::strip_i105_sentinel_for_discriminant(encoded, expected)
-        {
-            payload
-        } else if let Some(found) = i105_discriminant_from_sentinel(encoded)
-            && found != expected
-        {
-            return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
-        } else {
-            // Compatibility: legacy literals may omit the chain-discriminant sentinel.
-            encoded
-        };
+        let payload =
+            if let Some(payload) = Self::strip_i105_sentinel_for_discriminant(encoded, expected) {
+                payload
+            } else if let Some(found) = i105_discriminant_from_sentinel(encoded)
+                && found != expected
+            {
+                return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
+            } else {
+                // Compatibility: legacy literals may omit the chain-discriminant sentinel.
+                encoded
+            };
         let digits = i105_to_digits(payload)?;
         if digits.len() <= I105_CHECKSUM_LEN {
             return Err(AccountAddressError::I105TooShort);

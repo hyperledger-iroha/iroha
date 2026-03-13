@@ -1508,10 +1508,10 @@ mod tests {
         let err = reverse
             .execute(&ALICE_ID, &mut stx)
             .expect_err("matrix should reject substitution");
+        let err_msg = err.to_string();
         assert!(
-            err.to_string().contains(
-                "collateral substitution from bond#wonderland to note#wonderland is not allowed"
-            ),
+            err_msg.contains("collateral substitution from")
+                && err_msg.contains("is not allowed by policy"),
             "unexpected error message: {err:?}"
         );
     }

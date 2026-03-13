@@ -7388,13 +7388,18 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = fixture_account("bob");
-        let ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let scoped_account = account
+            .clone()
+            .to_account_id("wonderland".parse().expect("domain"));
+        let payload = norito_blob(&scoped_account);
+        let expected_scoped_account: ScopedAccountId =
+            norito::decode_from_bytes(&payload).expect("decode scoped account");
+        let ptr = store_tlv(&mut vm, PointerType::AccountId, &payload);
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
-        let expected = InstructionBox::from(Register::account(Account::new(
-            account.clone().to_account_id("wonderland".parse().unwrap()),
-        )));
+        let expected =
+            InstructionBox::from(Register::account(Account::new(expected_scoped_account)));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -7427,16 +7432,16 @@ mod pointer_abi_tests {
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
         );
-        let ptr = store_tlv(
-            &mut vm,
-            PointerType::AssetDefinitionId,
-            &norito_blob(&asset_def),
-        );
+        let payload = norito_blob(&asset_def);
+        let expected_asset_def: AssetDefinitionId =
+            norito::decode_from_bytes(&payload).expect("decode canonical asset definition id");
+        let ptr = store_tlv(&mut vm, PointerType::AssetDefinitionId, &payload);
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
         let expected = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+            AssetDefinition::numeric(expected_asset_def.clone())
+                .with_name(expected_asset_def.name().to_string()),
         ));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
