@@ -363,6 +363,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         let definition_id =
@@ -426,6 +427,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         let definition_id =
@@ -505,6 +507,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         let business_account = Account {
             id: business_account_id.clone(),
@@ -512,6 +515,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         let definition_id =
