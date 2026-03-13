@@ -2,7 +2,7 @@
 //! Integration tests for the `/v2/offline/revocations{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
-use std::{str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 
 use axum::{
     Router,
@@ -307,6 +307,7 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         });
         accounts.push(Account {
             id: seed.certificate.operator.clone(),
@@ -314,6 +315,7 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         });
     }
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
