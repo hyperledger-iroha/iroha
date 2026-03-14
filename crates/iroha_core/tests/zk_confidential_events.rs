@@ -159,7 +159,7 @@ fn shield_emits_confidential_event() {
 #[test]
 fn transfer_emits_confidential_event() {
     let (state, account_id, keypair, asset_def_id) = setup_state();
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let attachment =
@@ -251,7 +251,7 @@ fn unshield_emits_confidential_event() {
     let rho = [11u8; 32];
     let chain = "iroha-test-chain";
     let nullifier = derive_test_nullifier(&nk, &rho, &asset_def_id.to_string(), chain);
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let attachment =

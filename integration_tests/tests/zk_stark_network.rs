@@ -3,21 +3,28 @@
 
 use std::{str::FromStr as _, time::Duration};
 
-use eyre::{Result, WrapErr as _, eyre};
+use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
+    isi::{Grant, InstructionBox},
     metadata::Metadata,
     name::Name,
+    permission::Permission,
     proof::{
         ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
     },
     transaction::{Executable, IvmBytecode, IvmProved, signed::TransactionBuilder},
     zk::BackendTag,
 };
+use iroha_executor_data_model::permission::governance::{
+    CanEnactGovernance, CanManageParliament, CanSubmitGovernanceBallot,
+};
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
+use iroha_test_samples::ALICE_ID;
+use reqwest::{Client as HttpClient, StatusCode};
 
 #[derive(norito::JsonSerialize)]
 struct ZkIvmDeriveRequest {
@@ -35,7 +42,10 @@ struct ZkIvmDeriveResponse {
 #[derive(norito::JsonSerialize)]
 struct ZkIvmProveRequest {
     vk_ref: VerifyingKeyId,
-    proved: IvmProved,
+    authority: iroha_data_model::account::AccountId,
+    metadata: Metadata,
+    bytecode: IvmBytecode,
+    proved: Option<IvmProved>,
 }
 
 #[derive(norito::JsonDeserialize)]
@@ -59,6 +69,14 @@ fn has_test_network_feature(feature: &str) -> bool {
                 .any(|item| item.trim() == feature)
         })
         .unwrap_or(false)
+}
+
+fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
+    ensure!(
+        has_test_network_feature(feature),
+        "{test_name}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` to execute the runtime path"
+    );
+    Ok(())
 }
 
 fn sample_stark_vk_box(backend: &str, circuit_id: &str) -> VerifyingKeyBox {
@@ -108,12 +126,93 @@ fn derive_ballot_nullifier(
     out
 }
 
+async fn submit_and_wait_next_block<I>(
+    client: &Client,
+    network: &sandbox::SerializedNetwork,
+    instruction: I,
+    expected_height: &mut u64,
+    context: &str,
+) -> Result<()>
+where
+    I: Into<InstructionBox>,
+{
+    client
+        .submit_with_metadata(instruction, Metadata::default())
+        .wrap_err_with(|| format!("submit {context}"))?;
+    *expected_height = expected_height.saturating_add(1);
+    network
+        .ensure_blocks(*expected_height)
+        .await
+        .wrap_err_with(|| format!("wait for commit after {context}"))?;
+    Ok(())
+}
+
+fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
+    let mut url = client.torii_url.clone();
+    let mut path_segments = url
+        .path_segments_mut()
+        .expect("torii_url must be a base URL");
+    path_segments.clear();
+    path_segments.extend(segments.iter().copied());
+    drop(path_segments);
+    url
+}
+
+async fn post_torii_json_v2(
+    client: &Client,
+    segments: &[&str],
+    payload: &norito::json::Value,
+    context: &str,
+) -> Result<norito::json::Value> {
+    let url = torii_v2_url(client, segments);
+    let body = norito::json::to_vec(payload)?;
+    let response = HttpClient::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?
+        .post(url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let bytes = response.bytes().await?.to_vec();
+    if status != StatusCode::OK {
+        let body = String::from_utf8_lossy(&bytes);
+        return Err(eyre!("{context}: HTTP {status}. {body}"));
+    }
+    Ok(norito::json::from_slice(&bytes)?)
+}
+
+async fn get_torii_json_v2(
+    client: &Client,
+    segments: &[&str],
+    context: &str,
+) -> Result<norito::json::Value> {
+    let url = torii_v2_url(client, segments);
+    let response = HttpClient::builder()
+        .timeout(Duration::from_secs(20))
+        .build()?
+        .get(url)
+        .send()
+        .await?;
+    let status = response.status();
+    let bytes = response.bytes().await?.to_vec();
+    if status != StatusCode::OK {
+        let body = String::from_utf8_lossy(&bytes);
+        return Err(eyre!("{context}: HTTP {status}. {body}"));
+    }
+    Ok(norito::json::from_slice(&bytes)?)
+}
+
 async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<ProofAttachment> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
-        let value = client
-            .get_zk_ivm_prove_job_json(job_id)
-            .wrap_err("fetch ivm prove job")?;
+        let value = get_torii_json_v2(
+            client,
+            &["v2", "zk", "ivm", "prove", job_id],
+            "fetch /v2/zk/ivm/prove/{job_id}",
+        )
+        .await?;
         let dto: ZkIvmProveJob =
             norito::json::from_value(value).wrap_err("decode prove job dto")?;
         match dto.status.as_str() {
@@ -140,17 +239,15 @@ async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<Proo
 
 #[tokio::test]
 async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
-    if !has_test_network_feature("zk-stark") {
-        eprintln!(
-            "skipping stark_governance_and_shielded_ivm_paths: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
-        );
-        return Ok(());
-    }
+    require_test_network_feature(
+        "zk-stark",
+        stringify!(stark_governance_and_shielded_ivm_paths),
+    )?;
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
-    let ivm_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
-    let ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1";
-    let tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1";
+    let backend = "stark/fri";
+    let ivm_circuit_id = "ivm-execution";
+    let ballot_circuit_id = "vote-ballot";
+    let tally_circuit_id = "vote-tally";
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -174,8 +271,51 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    let mut expected_height = 1_u64;
 
     let client = network.client();
+    let election_id = "stark-vote-network-e2e".to_owned();
+
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        Grant::account_permission(
+            Permission::new("CanManageVerifyingKeys".to_string(), Json::new(())),
+            ALICE_ID.clone(),
+        ),
+        &mut expected_height,
+        "grant CanManageVerifyingKeys",
+    )
+    .await?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone()),
+        &mut expected_height,
+        "grant CanManageParliament",
+    )
+    .await?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        Grant::account_permission(
+            Permission::from(CanSubmitGovernanceBallot {
+                referendum_id: election_id.clone(),
+            }),
+            ALICE_ID.clone(),
+        ),
+        &mut expected_height,
+        "grant CanSubmitGovernanceBallot",
+    )
+    .await?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()),
+        &mut expected_height,
+        "grant CanEnactGovernance",
+    )
+    .await?;
 
     let ivm_vk_id = VerifyingKeyId::new(backend, "ivm_exec_stark");
     let ivm_vk_box = sample_stark_vk_box(backend, ivm_circuit_id);
@@ -192,12 +332,17 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     ivm_vk_record.vk_len = ivm_vk_box.bytes.len() as u32;
     ivm_vk_record.max_proof_bytes = 8 * 1024 * 1024;
     ivm_vk_record.key = Some(ivm_vk_box.clone());
-    client.submit_blocking(
+    submit_and_wait_next_block(
+        &client,
+        &network,
         iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: ivm_vk_id.clone(),
             record: ivm_vk_record,
         },
-    )?;
+        &mut expected_height,
+        "register ivm verifying key",
+    )
+    .await?;
 
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id);
@@ -215,12 +360,17 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     ballot_vk_record.vk_len = ballot_vk_box.bytes.len() as u32;
     ballot_vk_record.max_proof_bytes = 8 * 1024 * 1024;
     ballot_vk_record.key = Some(ballot_vk_box.clone());
-    client.submit_blocking(
+    submit_and_wait_next_block(
+        &client,
+        &network,
         iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: ballot_vk_id.clone(),
             record: ballot_vk_record,
         },
-    )?;
+        &mut expected_height,
+        "register ballot verifying key",
+    )
+    .await?;
 
     let tally_vk_id = VerifyingKeyId::new(backend, "vote_tally");
     let tally_vk_box = sample_stark_vk_box(backend, tally_circuit_id);
@@ -238,26 +388,37 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     tally_vk_record.vk_len = tally_vk_box.bytes.len() as u32;
     tally_vk_record.max_proof_bytes = 8 * 1024 * 1024;
     tally_vk_record.key = Some(tally_vk_box.clone());
-    client.submit_blocking(
+    submit_and_wait_next_block(
+        &client,
+        &network,
         iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: tally_vk_id.clone(),
             record: tally_vk_record,
         },
-    )?;
+        &mut expected_height,
+        "register tally verifying key",
+    )
+    .await?;
 
-    let election_id = "stark-vote-network-e2e".to_owned();
     let nullifier_domain = "gov:ballot:v1".to_owned();
     let eligible_root = [0x22; 32];
-    client.submit_blocking(iroha_data_model::isi::zk::CreateElection {
-        election_id: election_id.clone(),
-        options: 2,
-        eligible_root,
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: ballot_vk_id.clone(),
-        vk_tally: tally_vk_id.clone(),
-        domain_tag: nullifier_domain.clone(),
-    })?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        iroha_data_model::isi::zk::CreateElection {
+            election_id: election_id.clone(),
+            options: 2,
+            eligible_root,
+            start_ts: 0,
+            end_ts: 0,
+            vk_ballot: ballot_vk_id.clone(),
+            vk_tally: tally_vk_id.clone(),
+            domain_tag: nullifier_domain.clone(),
+        },
+        &mut expected_height,
+        "create election",
+    )
+    .await?;
 
     let bad_commit = [0x33; 32];
     let mismatched_ballot_proof = iroha_core::zk::prove_stark_fri_open_verify_envelope(
@@ -299,12 +460,19 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         ProofAttachment::new_ref(backend.to_owned(), ballot_proof, ballot_vk_id.clone());
     let nullifier =
         derive_ballot_nullifier(&nullifier_domain, &client.chain, &election_id, &commit);
-    client.submit_blocking(iroha_data_model::isi::zk::SubmitBallot {
-        election_id: election_id.clone(),
-        ciphertext: commit.to_vec(),
-        ballot_proof: ballot_attachment,
-        nullifier,
-    })?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        iroha_data_model::isi::zk::SubmitBallot {
+            election_id: election_id.clone(),
+            ciphertext: commit.to_vec(),
+            ballot_proof: ballot_attachment,
+            nullifier,
+        },
+        &mut expected_height,
+        "submit valid ballot",
+    )
+    .await?;
 
     let tally = vec![7_u64, 2_u64];
     let tally_columns = tally
@@ -320,11 +488,18 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     )
     .map_err(|err| eyre!(err))?;
     let tally_attachment = ProofAttachment::new_ref(backend.to_owned(), tally_proof, tally_vk_id);
-    client.submit_blocking(iroha_data_model::isi::zk::FinalizeElection {
-        election_id,
-        tally,
-        tally_proof: tally_attachment,
-    })?;
+    submit_and_wait_next_block(
+        &client,
+        &network,
+        iroha_data_model::isi::zk::FinalizeElection {
+            election_id,
+            tally,
+            tally_proof: tally_attachment,
+        },
+        &mut expected_height,
+        "finalize election",
+    )
+    .await?;
 
     let meta = ivm::ProgramMetadata {
         mode: ivm::ivm_mode::ZK,
@@ -342,31 +517,42 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let derive_req = ZkIvmDeriveRequest {
         vk_ref: ivm_vk_id.clone(),
         authority: client.account.clone(),
-        metadata: tx_meta,
-        bytecode,
+        metadata: tx_meta.clone(),
+        bytecode: bytecode.clone(),
     };
     let derive_req_json = norito::json::to_value(&derive_req)?;
-    let derive_resp_json = client
-        .post_zk_ivm_derive_json(&derive_req_json)
-        .wrap_err("post /v1/zk/ivm/derive")?;
+    let derive_resp_json = post_torii_json_v2(
+        &client,
+        &["v2", "zk", "ivm", "derive"],
+        &derive_req_json,
+        "post /v2/zk/ivm/derive",
+    )
+    .await?;
     let derive_resp: ZkIvmDeriveResponse =
         norito::json::from_value(derive_resp_json).wrap_err("decode derive response")?;
 
     let prove_req = ZkIvmProveRequest {
         vk_ref: ivm_vk_id.clone(),
-        proved: derive_resp.proved.clone(),
+        authority: client.account.clone(),
+        metadata: tx_meta.clone(),
+        bytecode,
+        proved: Some(derive_resp.proved.clone()),
     };
     let prove_req_json = norito::json::to_value(&prove_req)?;
-    let prove_created_json = client
-        .post_zk_ivm_prove_json(&prove_req_json)
-        .wrap_err("post /v1/zk/ivm/prove")?;
+    let prove_created_json = post_torii_json_v2(
+        &client,
+        &["v2", "zk", "ivm", "prove"],
+        &prove_req_json,
+        "post /v2/zk/ivm/prove",
+    )
+    .await?;
     let prove_created: ZkIvmProveJobCreated =
         norito::json::from_value(prove_created_json).wrap_err("decode prove created response")?;
     let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
 
     let tx_valid = TransactionBuilder::new(client.chain.clone(), client.account.clone())
         .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
-        .with_metadata(Metadata::default())
+        .with_metadata(tx_meta.clone())
         .with_attachments(ProofAttachmentList(vec![attachment.clone()]))
         .sign(client.key_pair.private_key());
     client
@@ -377,7 +563,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
     let tx_bad = TransactionBuilder::new(client.chain.clone(), client.account.clone())
         .with_executable(Executable::IvmProved(derive_resp.proved))
-        .with_metadata(Metadata::default())
+        .with_metadata(tx_meta)
         .with_attachments(ProofAttachmentList(vec![bad_attachment]))
         .sign(client.key_pair.private_key());
     let bad = client.submit_transaction_blocking(&tx_bad);

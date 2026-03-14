@@ -646,7 +646,7 @@ impl PeersGossiper {
     }
 
     fn trust_payload(info: &PeerTrustInfo) -> Vec<u8> {
-        let mut payload = Vec::from(b"iroha-peer-trust-v1".as_slice());
+        let mut payload = Vec::from(b"iroha-peer-trust".as_slice());
         payload.extend_from_slice(&info.peer_id.encode());
         payload.extend_from_slice(&info.trusted.encode());
         payload.extend_from_slice(&info.score.encode());

@@ -5781,7 +5781,7 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn strict_policy_accepts_domain_in_abi_v1() {
+    fn strict_policy_accepts_domain_in_abi_current() {
         // Prepare VM with ABI v1 (baseline)
         let meta = ivm::ProgramMetadata {
             version_major: 1,
@@ -8243,10 +8243,10 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
         let fixture =
-            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
         iroha_data_model::zk::OpenVerifyEnvelope {
             backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: "halo2/ipa:tiny-add-v1".to_string(),
+            circuit_id: "halo2/ipa:tiny-add".to_string(),
             vk_hash: [1u8; 32],
             public_inputs: fixture.public_inputs,
             proof_bytes: fixture.proof_bytes,
@@ -9800,7 +9800,7 @@ mod tests {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:vote-tally-v1";
+        let circuit_id = "halo2/ipa:vote-tally";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let schema_hash = [5u8; 32];
@@ -9866,7 +9866,7 @@ mod tests {
         world.elections.insert("election-1".to_string(), election);
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:state-hydrate-v1";
+        let circuit_id = "halo2/ipa:state-hydrate";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let schema_hash = [7u8; 32];
@@ -10013,7 +10013,7 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let circuit_id = "halo2/ipa:transfer-check";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![1u8, 2, 3, 4];
@@ -10039,7 +10039,7 @@ mod tests {
         assert!(host.enforce_zk_envelope(&ok_env, "transfer").is_ok());
 
         let bad_circuit_env = dummy_env(
-            "halo2/ipa:wrong-circuit-v1",
+            "halo2/ipa:wrong-circuit",
             commitment,
             public_inputs,
             vec![0xAA; 16],
@@ -10058,7 +10058,7 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let circuit_id = "halo2/ipa:transfer-check";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![9u8, 8, 7, 6];
@@ -10113,7 +10113,7 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let circuit_id = "halo2/ipa:transfer-check";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![1u8, 2, 3, 4];
@@ -10162,7 +10162,7 @@ mod tests {
         host.set_current_manifest_id(Some("core".to_string()));
 
         let backend = "halo2/ipa";
-        let circuit_id = "halo2/ipa:transfer-check-v1";
+        let circuit_id = "halo2/ipa:transfer-check";
         let vk_bytes = minimal_zk1_vk_bytes(6);
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let public_inputs = vec![3u8, 1, 4, 1, 5, 9];

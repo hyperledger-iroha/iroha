@@ -573,8 +573,6 @@ mod tests {
 
     #[test]
     fn records_fastpq_transcripts() {
-        use std::str::FromStr;
-
         use iroha_data_model::{
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},

@@ -448,8 +448,8 @@ pub mod isi {
         }
     }
 
-    const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot-v1";
-    const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally-v1";
+    const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot";
+    const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally";
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
         if crate::zk::is_stark_fri_v1_backend(backend) {
@@ -1370,7 +1370,7 @@ pub mod isi {
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "verifying key id backend must target stark/fri-v1".into(),
+                                "verifying key id backend must target stark/fri".into(),
                             ),
                         ));
                     }
@@ -1420,7 +1420,7 @@ pub mod isi {
                         } else {
                             return Err(InstructionExecutionError::InvalidParameter(
                                 InvalidParameterError::SmartContract(
-                                    "unsupported stark/fri-v1 backend variant".into(),
+                                    "unsupported stark/fri backend variant".into(),
                                 ),
                             ));
                         };
@@ -5214,7 +5214,7 @@ pub mod isi {
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "verifying key id backend must target stark/fri-v1".into(),
+                            "verifying key id backend must target stark/fri".into(),
                         ),
                     ));
                 }
@@ -5262,7 +5262,7 @@ pub mod isi {
                     } else {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "unsupported stark/fri-v1 backend variant".into(),
+                                "unsupported stark/fri backend variant".into(),
                             ),
                         ));
                     };
@@ -8011,7 +8011,7 @@ pub mod isi {
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
+                // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -8282,7 +8282,7 @@ pub mod isi {
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
+                // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -11316,17 +11316,17 @@ pub mod isi {
             assert!(voting_circuit_matches(
                 "halo2/ipa",
                 "halo2/pasta/ipa/any-circuit",
-                "vote-ballot-v1"
+                "vote-ballot"
             ));
             assert!(voting_circuit_matches(
-                "stark/fri/sha256-goldilocks-v1",
-                "stark/fri/sha256-goldilocks-v1:vote-ballot-v1",
-                "vote-ballot-v1"
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:vote-ballot",
+                "vote-ballot"
             ));
             assert!(!voting_circuit_matches(
-                "stark/fri/sha256-goldilocks-v1",
-                "stark/fri/sha256-goldilocks-v1:vote-tally-v1",
-                "vote-ballot-v1"
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:vote-tally",
+                "vote-ballot"
             ));
         }
 
@@ -11481,7 +11481,7 @@ pub mod isi {
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
 
-            let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks-v1", &payload)
+            let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &payload)
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
@@ -11491,13 +11491,13 @@ pub mod isi {
         fn decode_open_verify_envelope_accepts_stark_backend() {
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Stark,
-                "stark/fri/sha256-goldilocks-v1:dummy-circuit",
+                "stark/fri/sha256-goldilocks:dummy-circuit",
                 [0u8; 32],
                 vec![1, 2, 3],
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            let proof_box = ProofBox::new("stark/fri/sha256-goldilocks-v1".into(), bytes.clone());
+            let proof_box = ProofBox::new("stark/fri/sha256-goldilocks".into(), bytes.clone());
             let decoded = decode_open_verify_envelope(&proof_box).expect("decode");
             assert_eq!(decoded.backend, BackendTag::Stark);
             assert_eq!(decoded.circuit_id, envelope.circuit_id);
@@ -11520,7 +11520,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa/tiny-add2inst-public-v1",
+                "halo2/pasta/ipa/tiny-add2inst-public",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11540,7 +11540,7 @@ pub mod isi {
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                "halo2/ipa:tiny-add2inst-public-v1",
+                "halo2/ipa:tiny-add2inst-public",
                 commitment,
                 Vec::new(),
                 Vec::new(),
@@ -11646,13 +11646,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri/sha256-goldilocks-v1:vote-ballot-v1",
+                "stark/fri/sha256-goldilocks:vote-ballot",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11673,7 +11673,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri/sha256-goldilocks-v1:vote-tally-v1",
+                "stark/fri/sha256-goldilocks:vote-tally",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11722,13 +11722,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri/sha256-goldilocks-v1:not-a-ballot-circuit",
+                "stark/fri/sha256-goldilocks:not-a-ballot-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11747,7 +11747,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri/sha256-goldilocks-v1:not-a-tally-circuit",
+                "stark/fri/sha256-goldilocks:not-a-tally-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -14167,7 +14167,7 @@ pub mod isi {
         }
 
         #[test]
-        fn register_domain_rejects_labels_failing_norm_v1() {
+        fn register_domain_rejects_labels_failing_norm_current() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);

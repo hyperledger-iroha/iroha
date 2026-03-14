@@ -57,13 +57,13 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
 
     // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
     let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tally");
     let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new(
         1,
-        "halo2/pasta/tiny-add-public-v1",
+        "halo2/pasta/tiny-add-public",
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pallas",
         fixture.schema_hash,

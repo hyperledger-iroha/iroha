@@ -192,24 +192,24 @@ const MAX_INST_ROWS: usize = 8192;
 /// Canonical backend identifier for Halo2 IPA verification.
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
-pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri-v1";
+pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
-pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution";
 
-/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
+/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution`.
 ///
 /// The execution proof instances still carry concrete values in the proof payload;
 /// this descriptor is only used for stable registry binding via
 /// `VerifyingKeyRecord.public_inputs_schema_hash`.
-pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_v1","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
+pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_current","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
 
-/// Returns the canonical schema descriptor bytes for `ivm-execution-v1`.
+/// Returns the canonical schema descriptor bytes for `ivm-execution`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
     IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1
 }
 
-/// Returns the canonical schema hash for `ivm-execution-v1`.
+/// Returns the canonical schema hash for `ivm-execution`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
     iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
@@ -238,14 +238,14 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 
 /// Returns `true` when `backend` denotes the native STARK/FRI verifier family.
 ///
-/// The canonical family identifier is `stark/fri-v1`. Implementations may use
-/// additional suffixes under this prefix (e.g., `stark/fri/sha256-goldilocks-v1`).
+/// The canonical family identifier is `stark/fri`. Implementations may use
+/// additional suffixes under this prefix (e.g., `stark/fri/sha256-goldilocks`).
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
 }
 
-/// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
+/// Returns `true` when `backend` is accepted for `ivm-execution` proofs.
 #[inline]
 #[must_use]
 pub fn is_ivm_execution_backend(backend: &str) -> bool {
@@ -292,12 +292,12 @@ fn ivm_execution_public_inputs_columns(
         .collect()
 }
 
-/// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
+/// Build a Halo2 IPA `ivm-execution` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
 ///
-/// Note: the current `ivm-execution-v1` circuit is a **binding** circuit. It does **not**
+/// Note: the current `ivm-execution` circuit is a **binding** circuit. It does **not**
 /// prove correct IVM execution semantics by itself, so admission still performs deterministic
 /// VM replay to recompute the overlay/commitments and reject mismatches.
 ///
@@ -335,7 +335,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
             })?;
 
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
@@ -404,7 +404,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         OsRng,
         &mut transcript,
     )
-    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
+    .map_err(|err| format!("failed to create ivm-execution proof: {err}"))?;
     let proof_raw = transcript.finalize();
 
     let mut proof_payload = zk1::wrap_start();
@@ -425,7 +425,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
 
-/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
+/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution` circuit.
 ///
 /// The returned bytes are the Halo2 `ProvingKey` serialization using `SerdeFormat::Processed`,
 /// suitable for persistence in the Torii prover key store (`<backend>__<name>.pk`).
@@ -453,7 +453,7 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
             })?;
 
     let pk = keygen_pk(
@@ -483,7 +483,7 @@ fn normalize_stark_fri_circuit_id_for_backend(backend: &str, raw: &str) -> Optio
 }
 
 #[cfg(feature = "zk-stark")]
-fn stark_open_verify_domain_tag_v1(
+fn stark_open_verify_domain_tag_current(
     backend: &str,
     circuit_id: &str,
     vk_hash: [u8; 32],
@@ -512,7 +512,7 @@ fn stark_open_verify_domain_tag_v1(
 
 /// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
-/// The produced envelope is accepted by the native `stark/fri-v1` verifier and binds:
+/// The produced envelope is accepted by the native `stark/fri` verifier and binds:
 /// - backend family/variant tag
 /// - circuit identifier
 /// - verifying-key commitment
@@ -533,7 +533,7 @@ pub fn prove_stark_fri_open_verify_envelope(
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     if !is_stark_fri_v1_backend(backend) {
-        return Err("STARK proving requires stark/fri-v1 backend".to_owned());
+        return Err("STARK proving requires stark/fri backend".to_owned());
     }
     if vk_box.backend.as_str() != backend {
         return Err("STARK proving requires vk backend to match requested backend".to_owned());
@@ -557,7 +557,7 @@ pub fn prove_stark_fri_open_verify_envelope(
         && !backend.contains("/sha256-")
         && !backend.contains("/poseidon2-")
     {
-        return Err("unsupported stark/fri-v1 backend variant".to_owned());
+        return Err("unsupported stark/fri backend variant".to_owned());
     }
 
     let req_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
@@ -569,7 +569,7 @@ pub fn prove_stark_fri_open_verify_envelope(
     }
 
     let vk_hash = hash_vk(vk_box);
-    let domain_tag = stark_open_verify_domain_tag_v1(
+    let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,
         vk_hash,
@@ -608,7 +608,7 @@ pub fn prove_stark_fri_open_verify_envelope(
     Ok(ProofBox::new(backend.to_owned(), encoded))
 }
 
-/// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
+/// Build a STARK/FRI `ivm-execution` proof envelope for IVM proved execution.
 ///
 /// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
@@ -697,7 +697,7 @@ pub mod test_utils {
     /// Build a deterministic Halo2 IPA envelope fixture for the provided circuit identifier.
     ///
     /// When the circuit identifier resolves to a supported fixture circuit (currently
-    /// `tiny-add-v1`, `tiny-add-public-v1`, `tiny-add-2rows-v1`), the returned
+    /// `tiny-add`, `tiny-add-public`, `tiny-add-2rows`), the returned
     /// [`FixtureEnvelope`] embeds a real Halo2 proof and VK bytes.
     /// Otherwise, it falls back to a deterministic placeholder payload for negative tests.
     /// The public input bytes and their Blake2b hash are returned so tests can reuse the hash when
@@ -999,7 +999,7 @@ pub mod test_utils {
         }
     }
 
-    /// Deterministic Halo2 IPA fixture for the historical `ivm-overlay-bind-v1` circuit.
+    /// Deterministic Halo2 IPA fixture for the historical `ivm-overlay-bind` circuit.
     ///
     /// The circuit exposes 8 instance columns (1 row each) and constrains witness
     /// values to equal those instances. This fixture is retained for regression/
@@ -1011,10 +1011,10 @@ pub mod test_utils {
         code_hash: CryptoHash,
         overlay_hash: CryptoHash,
     ) -> FixtureEnvelope {
-        halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind-v1", code_hash, overlay_hash)
+        halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind", code_hash, overlay_hash)
     }
 
-    /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
+    /// Deterministic Halo2 IPA fixture for `ivm-execution` proof attachments.
     ///
     /// The circuit exposes 16 instance columns (1 row each) corresponding to:
     /// - `code_hash` (4 `u64` limbs, little-endian)
@@ -1030,7 +1030,7 @@ pub mod test_utils {
         gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
         halo2_ivm_execution_bind_v1_envelope(
-            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa:ivm-execution",
             code_hash,
             overlay_hash,
             events_commitment,
@@ -1045,10 +1045,10 @@ pub mod test_utils {
         let backend = super::halo2_ipa_backend_from_circuit_id(circuit_id)?;
         let name = backend.rsplit('/').next()?;
         match name {
-            "tiny-add-v1" => Some(tiny_add_bundle),
-            "tiny-add-public-v1" => Some(tiny_add_public_bundle),
-            "tiny-add2inst-public-v1" => Some(tiny_add2inst_public_bundle),
-            "tiny-add-2rows-v1" => Some(tiny_add_2rows_bundle),
+            "tiny-add" => Some(tiny_add_bundle),
+            "tiny-add-public" => Some(tiny_add_public_bundle),
+            "tiny-add2inst-public" => Some(tiny_add2inst_public_bundle),
+            "tiny-add-2rows" => Some(tiny_add_2rows_bundle),
             _ => None,
         }
     }
@@ -1346,8 +1346,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1357,8 +1357,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1369,8 +1369,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -1381,8 +1381,8 @@ pub mod test_utils {
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn halo2_fixture_envelope_is_stable_for_tiny_add_2rows() {
-        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows-v1", [0u8; 32]);
-        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows-v1", [0u8; 32]);
+        let first = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/ipa:tiny-add-2rows", [0u8; 32]);
         assert_eq!(first.proof_bytes, second.proof_bytes);
         assert_eq!(first.vk_bytes, second.vk_bytes);
         assert!(!first.proof_bytes.is_empty());
@@ -3557,7 +3557,7 @@ pub struct DedupCache {
 }
 
 #[cfg(feature = "zk-preverify")]
-const TRACE_DIGEST_BACKEND: &str = "zk-trace/digest-v1";
+const TRACE_DIGEST_BACKEND: &str = "zk-trace/digest";
 
 #[cfg(feature = "zk-preverify")]
 static TRACE_PROOF_QUEUE: OnceLock<Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>>> =
@@ -3591,7 +3591,7 @@ pub fn make_trace_digest_artifact(
 #[cfg(feature = "zk-preverify")]
 const TRACE_MOCK_BLOB_HEADER: &[u8; 4] = b"ZKMP";
 #[cfg(feature = "zk-preverify")]
-const TRACE_MOCK_BACKEND: &str = "zk-trace/mock-proof-v1";
+const TRACE_MOCK_BACKEND: &str = "zk-trace/mock-proof";
 #[cfg(feature = "zk-preverify")]
 const TRACE_QUEUE_MAX_SPINS: usize = 20;
 #[cfg(feature = "zk-preverify")]
@@ -3986,7 +3986,7 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     prf_env.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     prf_env.extend_from_slice(&payload);
 
-    let backend = "halo2/pasta/ipa/tiny-add-public-v1";
+    let backend = "halo2/pasta/ipa/tiny-add-public";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(!verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -4069,7 +4069,7 @@ fn ipa_vote_bool_commit_zk1() {
     let mut prf_env = crate::zk::zk1::wrap_start();
     crate::zk::zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
     crate::zk::zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut prf_env);
-    let backend = "halo2/pasta/ipa/vote-bool-commit-v1";
+    let backend = "halo2/pasta/ipa/vote-bool-commit";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -4141,7 +4141,7 @@ fn halo2_verify_rejects_vk_without_bytes() {
     .expect("proof created");
     let proof_bytes = transcript.finalize();
 
-    let backend = "halo2/pasta/ipa/vote-bool-commit-v1";
+    let backend = "halo2/pasta/ipa/vote-bool-commit";
     let mut vk_env = crate::zk::zk1::wrap_start();
     crate::zk::zk1::wrap_append_ipa_k(&mut vk_env, k);
     crate::zk::zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
@@ -4262,7 +4262,7 @@ fn ipa_anon_transfer_commit_zk1() {
     ];
     crate::zk::zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut prf_env);
 
-    let backend = "halo2/pasta/ipa/anon-transfer-2x2-v1";
+    let backend = "halo2/pasta/ipa/anon-transfer-2x2";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -4343,7 +4343,7 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
     let cols: [&[Scalar]; 2] = [&[commit][..], &[root][..]];
     crate::zk::zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut prf_env);
 
-    let backend = "halo2/pasta/ipa/vote-bool-commit-merkle2-v1";
+    let backend = "halo2/pasta/ipa/vote-bool-commit-merkle2";
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -4518,7 +4518,7 @@ fn verify_stark_fri_open_verify_envelope(
         iroha_logger::debug!(
             backend,
             reason,
-            "stark/fri-v1 proof rejected (metadata/integrity check failed)"
+            "stark/fri proof rejected (metadata/integrity check failed)"
         );
         false
     };
@@ -4546,7 +4546,7 @@ fn verify_stark_fri_open_verify_envelope(
     } else if backend.contains("/poseidon2-") {
         Some(STARK_HASH_POSEIDON2_V1)
     } else {
-        return reject("unsupported stark/fri-v1 backend variant");
+        return reject("unsupported stark/fri backend variant");
     };
 
     // Decode and validate the STARK verifying key payload. This pins the verifier
@@ -4595,7 +4595,7 @@ fn verify_stark_fri_open_verify_envelope(
     //
     // This prevents re-wrapping a valid STARK envelope under a different circuit/vk/public-inputs
     // header without detection.
-    let expected_domain_tag = stark_open_verify_domain_tag_v1(
+    let expected_domain_tag = stark_open_verify_domain_tag_current(
         backend,
         &env.circuit_id,
         env.vk_hash,
@@ -4697,7 +4697,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
         {
             iroha_logger::debug!(
                 backend,
-                "stark/fri-v1 backend requested but binary was built without `zk-stark`"
+                "stark/fri backend requested but binary was built without `zk-stark`"
             );
             return false;
         }
@@ -4731,9 +4731,9 @@ mod stark_backend_tag_tests {
 
     #[test]
     fn detects_base_and_variant_backends() {
-        assert!(is_stark_fri_v1_backend("stark/fri-v1"));
-        assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks-v1"));
-        assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks-v1"));
+        assert!(is_stark_fri_v1_backend("stark/fri"));
+        assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
+        assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
     }
@@ -4741,8 +4741,8 @@ mod stark_backend_tag_tests {
     #[test]
     fn ivm_execution_backend_allowlist_is_explicit() {
         assert!(is_ivm_execution_backend("halo2/ipa"));
-        assert!(is_ivm_execution_backend("stark/fri-v1"));
-        assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks-v1"));
+        assert!(is_ivm_execution_backend("stark/fri"));
+        assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks"));
         assert!(!is_ivm_execution_backend("groth16/bn254"));
         assert!(!is_ivm_execution_backend("halo2/kzg"));
     }
@@ -4763,8 +4763,8 @@ mod stark_prover_tests {
 
     #[test]
     fn prove_stark_open_verify_envelope_roundtrip() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let circuit_id = format!("{backend}:tiny-open-v1");
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -4791,8 +4791,8 @@ mod stark_prover_tests {
 
     #[test]
     fn prove_stark_ivm_execution_envelope_roundtrip() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let circuit_id = format!("{backend}:ivm-execution-v1");
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:ivm-execution");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -4820,8 +4820,8 @@ mod stark_prover_tests {
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_circuit_id_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let circuit_id = format!("{backend}:tiny-open-v1");
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -4855,10 +4855,10 @@ mod stark_prover_tests {
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_malformed_payload_without_panic() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
+        let backend = "stark/fri/sha256-goldilocks";
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
-            circuit_id: format!("{backend}:tiny-open-v1"),
+            circuit_id: format!("{backend}:tiny-open"),
             n_log2: 4,
             blowup_log2: 2,
             fold_arity: 2,
@@ -4875,9 +4875,9 @@ mod stark_prover_tests {
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_backend_variant_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let wrong_backend = "stark/fri/poseidon2-goldilocks-v1";
-        let circuit_id = format!("{backend}:tiny-open-v1");
+        let backend = "stark/fri/sha256-goldilocks";
+        let wrong_backend = "stark/fri/poseidon2-goldilocks";
+        let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -4906,9 +4906,9 @@ mod stark_prover_tests {
 
     #[test]
     fn verify_stark_open_verify_envelope_rejects_vk_backend_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks-v1";
-        let mismatched_vk_backend = "stark/fri/poseidon2-goldilocks-v1";
-        let circuit_id = format!("{backend}:tiny-open-v1");
+        let backend = "stark/fri/sha256-goldilocks";
+        let mismatched_vk_backend = "stark/fri/poseidon2-goldilocks";
+        let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -5200,20 +5200,20 @@ mod halo2_ipa_alias_tests {
     #[test]
     fn halo2_ipa_circuit_id_maps_to_pasta_backend() {
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/ipa:tiny-add-v1").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add-v1")
+            halo2_ipa_backend_from_circuit_id("halo2/ipa:tiny-add").as_deref(),
+            Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/pasta/tiny-add-v1").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add-v1")
+            halo2_ipa_backend_from_circuit_id("halo2/pasta/tiny-add").as_deref(),
+            Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/pasta/ipa/tiny-add-v1").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add-v1")
+            halo2_ipa_backend_from_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
+            Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("tiny-add-v1").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add-v1")
+            halo2_ipa_backend_from_circuit_id("tiny-add").as_deref(),
+            Some("halo2/pasta/ipa/tiny-add")
         );
         assert!(halo2_ipa_backend_from_circuit_id("").is_none());
     }
@@ -5222,7 +5222,7 @@ mod halo2_ipa_alias_tests {
     fn halo2_ipa_rejects_missing_vk() {
         let env = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: "halo2/ipa:tiny-add-v1".into(),
+            circuit_id: "halo2/ipa:tiny-add".into(),
             vk_hash: [0u8; 32],
             public_inputs: Vec::new(),
             proof_bytes: vec![0xAA, 0xBB],
@@ -6132,7 +6132,7 @@ mod pasta_tiny {
 
     /// Circuit binding sixteen single-row instance columns to witness values.
     ///
-    /// This is used by `ivm-execution-v1` fixtures to ensure the proof is bound to
+    /// This is used by `ivm-execution` fixtures to ensure the proof is bound to
     /// all public commitments required by `Executable::IvmProved` admission.
     ///
     /// Note: This circuit does **not** prove correct IVM execution by itself.
@@ -6167,7 +6167,7 @@ mod pasta_tiny {
             let adv = std::array::from_fn(|_| meta.advice_column());
             let inst = std::array::from_fn(|_| meta.instance_column());
             let s = meta.selector();
-            meta.create_gate("ivm_execution_bind_v1", |meta| {
+            meta.create_gate("ivm_execution_bind_current", |meta| {
                 let s = meta.query_selector(s);
                 let mut cons = Vec::with_capacity(16);
                 for i in 0..16 {
@@ -6186,7 +6186,7 @@ mod pasta_tiny {
         ) -> Result<(), PlonkError> {
             let values = self.values;
             layouter.assign_region(
-                || "ivm_execution_bind_v1",
+                || "ivm_execution_bind_current",
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     for (i, column) in adv.iter().enumerate() {
@@ -8769,7 +8769,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
     let col_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
     let normalized = backend.replace("/ipa/", "/");
     match normalized.as_str() {
-        "halo2/pasta/tiny-add-v1" => {
+        "halo2/pasta/tiny-add" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8784,7 +8784,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-mul-v1" => {
+        "halo2/pasta/tiny-mul" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8805,7 +8805,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-add-2rows-v1" => {
+        "halo2/pasta/tiny-add-2rows" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8820,7 +8820,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-add-public-v1" => {
+        "halo2/pasta/tiny-add-public" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8841,7 +8841,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-mul-public-v1" => {
+        "halo2/pasta/tiny-mul-public" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8862,7 +8862,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-id-public-v1" => {
+        "halo2/pasta/tiny-id-public" => {
             if col_refs.is_empty() {
                 // requires a public instance
                 return false;
@@ -8881,7 +8881,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-add3-v1" => {
+        "halo2/pasta/tiny-add3" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8896,7 +8896,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-add2inst-public-v1" => {
+        "halo2/pasta/tiny-add2inst-public" => {
             if col_refs.len() < 2 {
                 return false;
             }
@@ -8914,7 +8914,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-anon-transfer-2x2-v1" => {
+        "halo2/pasta/tiny-anon-transfer-2x2" => {
             cached_vk_for!(
                 &params,
                 normalized.as_str(),
@@ -8987,7 +8987,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 }
             )
         }
-        "halo2/pasta/tiny-vote-bool-v1" => {
+        "halo2/pasta/tiny-vote-bool" => {
             let circuit = pasta_tiny::VoteBool;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9085,7 +9085,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     // For IPA, we normalize backend tag to reuse circuit mapping
     let normalized = backend.replace("/ipa/", "/");
     match normalized.as_str() {
-        "halo2/pasta/tiny-add-v1" => {
+        "halo2/pasta/tiny-add" => {
             let circuit = pasta_tiny::Add;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9104,7 +9104,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-mul-v1" => {
+        "halo2/pasta/tiny-mul" => {
             let circuit = pasta_tiny::Mul;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9135,7 +9135,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
-        "halo2/pasta/tiny-add-2rows-v1" => {
+        "halo2/pasta/tiny-add-2rows" => {
             let circuit = pasta_tiny::AddTwoRows;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9154,7 +9154,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-add-public-v1" => {
+        "halo2/pasta/tiny-add-public" => {
             let circuit = pasta_tiny::AddPublic;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9185,7 +9185,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
-        "halo2/pasta/tiny-mul-public-v1" => {
+        "halo2/pasta/tiny-mul-public" => {
             let circuit = pasta_tiny::MulPublic;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9216,7 +9216,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
-        "halo2/pasta/tiny-id-public-v1" => {
+        "halo2/pasta/tiny-id-public" => {
             let circuit = pasta_tiny::IdPublic;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9238,7 +9238,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-add3-v1" => {
+        "halo2/pasta/tiny-add3" => {
             let circuit = pasta_tiny::AddThree;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9257,7 +9257,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-add2inst-public-v1" => {
+        "halo2/pasta/tiny-add2inst-public" => {
             let circuit = pasta_tiny::AddTwoInstPublic;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9279,7 +9279,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-overlay-bind-v1" => {
+        "halo2/pasta/ivm-overlay-bind" => {
             // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
             if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
@@ -9302,7 +9302,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-execution-v1" => {
+        "halo2/pasta/ivm-execution" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
             if col_refs.len() != 16 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
@@ -9325,7 +9325,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-anon-transfer-2x2-v1" => {
+        "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9344,7 +9344,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/anon-transfer-2x2-v1" => {
+        "halo2/pasta/anon-transfer-2x2" => {
             // Instances: 5 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf], 1 row
             if col_refs.len() < 5 {
                 return false;
@@ -9363,7 +9363,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
-        "halo2/pasta/anon-transfer-2x2-merkle2-v1" => {
+        "halo2/pasta/anon-transfer-2x2-merkle2" => {
             // Instances: 6 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf, root], 1 row
             if col_refs.len() < 6 {
                 return false;
@@ -9382,9 +9382,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 }
             )
         }
-        "halo2/pasta/anon-transfer-2x2-merkle8-v1" => {
+        "halo2/pasta/anon-transfer-2x2-merkle8" => {
             // Use depth-8 generic with dual membership; select algorithm by backend suffix
-            let use_poseidon = backend.ends_with("-poseidon-v1");
+            let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
                 let circuit = poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9429,7 +9429,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
-        "halo2/pasta/tiny-vote-bool-v1" => {
+        "halo2/pasta/tiny-vote-bool" => {
             let circuit = pasta_tiny::VoteBool;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
                 Ok(v) => v,
@@ -9448,7 +9448,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-commit-open-v1" => {
+        "halo2/pasta/tiny-commit-open" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
             #[cfg(feature = "zk-halo2-ipa-poseidon")]
             let circuit = pasta_tiny::poseidon::CommitOpenPoseidon;
@@ -9474,7 +9474,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/tiny-merkle2-v1" => {
+        "halo2/pasta/tiny-merkle2" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
             #[cfg(feature = "zk-halo2-ipa-poseidon")]
             let circuit = pasta_tiny::poseidon::Merkle2Poseidon;
@@ -9500,7 +9500,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/vote-bool-commit-v1" => {
+        "halo2/pasta/vote-bool-commit" => {
             // Instances: [commit], 1 row
             let circuit = pasta_tiny::VoteBoolCommit;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9523,7 +9523,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/vote-bool-commit-merkle2-v1" => {
+        "halo2/pasta/vote-bool-commit-merkle2" => {
             // Instances: [commit, root], 1 row
             let circuit = pasta_tiny::VoteBoolCommitMerkle2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9546,9 +9546,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/vote-bool-commit-merkle8-v1" => {
+        "halo2/pasta/vote-bool-commit-merkle8" => {
             // Use depth-8 generic; select algorithm by backend suffix
-            let use_poseidon = backend.ends_with("-poseidon-v1");
+            let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
                 let circuit = poseidon_depth::VoteBoolCommitMerklePoseidon::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9594,8 +9594,8 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             }
         }
         // Depth-16 variants
-        "halo2/pasta/anon-transfer-2x2-merkle16-v1" => {
-            let use_poseidon = backend.ends_with("-poseidon-v1");
+        "halo2/pasta/anon-transfer-2x2-merkle16" => {
+            let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
                 let circuit = poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9640,8 +9640,8 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 .is_ok()
             }
         }
-        "halo2/pasta/vote-bool-commit-merkle16-v1" => {
-            let use_poseidon = backend.ends_with("-poseidon-v1");
+        "halo2/pasta/vote-bool-commit-merkle16" => {
+            let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
                 let circuit = poseidon_depth::VoteBoolCommitMerklePoseidon::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9947,7 +9947,7 @@ mod tests {
     #[allow(dead_code)]
     fn backend_tag_vote_bool_commit_merkle(depth: usize, use_poseidon: bool) -> String {
         let algo = if use_poseidon { "-poseidon" } else { "" };
-        format!("halo2/pasta/ipa/vote-bool-commit-merkle{depth}{algo}-v1")
+        format!("halo2/pasta/ipa/vote-bool-commit-merkle{depth}{algo}")
     }
 
     #[cfg(all(
@@ -9957,7 +9957,7 @@ mod tests {
     #[allow(dead_code)]
     fn backend_tag_anon_transfer_merkle(depth: usize, use_poseidon: bool) -> String {
         let algo = if use_poseidon { "-poseidon" } else { "" };
-        format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algo}-v1")
+        format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algo}")
     }
     #[cfg(all(
         feature = "halo2-dev-tests",
@@ -10039,7 +10039,7 @@ mod tests {
         }
 
         let params: PastaParams = pasta_params_new(5);
-        let backend = "halo2/pasta/cache-test-v1";
+        let backend = "halo2/pasta/cache-test";
         let circuit = CacheCircuit;
         let first = keygen_vk_cached(backend, &params, &circuit).expect("vk");
         let second = keygen_vk_cached(backend, &params, &circuit).expect("vk");
@@ -10185,7 +10185,7 @@ mod tests {
         zk1::wrap_append_proof(&mut prf_env, &proof_bytes);
         zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-add-public-v1";
+        let backend = "halo2/pasta/ipa/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -10380,7 +10380,7 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_gate_requires_vk_and_valid_encoding() {
-        let backend = "halo2/pasta/tiny-add-v1";
+        let backend = "halo2/pasta/tiny-add";
         let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
         // Missing VK → reject
         assert!(!super::verify_backend(backend, &proof, None));
@@ -10513,7 +10513,7 @@ mod tests {
         zk1::wrap_append_proof(&mut proof_container, &proof_bytes);
 
         // Wrap into data model boxes
-        let backend = "halo2/pasta/tiny-add-v1";
+        let backend = "halo2/pasta/tiny-add";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
 
@@ -10646,7 +10646,7 @@ mod tests {
         zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut proof_container);
 
         // Verify via backend dispatch
-        let backend = "halo2/pasta/tiny-add-public-v1";
+        let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -10786,7 +10786,7 @@ mod tests {
         let mut proof_container = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_container, &proof_bytes);
 
-        let backend = "halo2/pasta/tiny-add-2rows-v1";
+        let backend = "halo2/pasta/tiny-add-2rows";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -10888,7 +10888,7 @@ mod tests {
         zk1::wrap_append_vk_pasta(&mut vk_container, &vk_h2);
 
         // Backend/tag
-        let backend = "halo2/pasta/tiny-id-public-v1";
+        let backend = "halo2/pasta/tiny-id-public";
 
         // Case 1: Missing INST → must fail
         let mut proof_container = zk1::wrap_start();
@@ -11102,8 +11102,8 @@ mod tests {
         zk1::wrap_append_proof(&mut pr_id_env, &p_id);
         zk1::wrap_append_instances_pasta_fp(&[Scalar::from(7u64)], &mut pr_id_env);
 
-        let b_add = "halo2/pasta/ipa/tiny-add-v1";
-        let b_id = "halo2/pasta/ipa/tiny-id-public-v1";
+        let b_add = "halo2/pasta/ipa/tiny-add";
+        let b_id = "halo2/pasta/ipa/tiny-id-public";
         let vk_add_box = VerifyingKeyBox::new(b_add.into(), vk_add_env);
         let vk_id_box = VerifyingKeyBox::new(b_id.into(), vk_id_env);
         let pr_add_box = ProofBox::new(b_add.into(), pr_add_env);
@@ -11252,7 +11252,7 @@ mod tests {
         let mut proof_env = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
-        let backend = "halo2/pasta/ipa/tiny-add-2rows-v1";
+        let backend = "halo2/pasta/ipa/tiny-add-2rows";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -11383,7 +11383,7 @@ mod tests {
         let mut proof_env = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
-        let backend = "halo2/pasta/ipa/tiny-add3-v1";
+        let backend = "halo2/pasta/ipa/tiny-add3";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -11469,7 +11469,7 @@ mod tests {
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
         zk1::wrap_append_instances_pasta_fp(insts[0][0], &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -11535,7 +11535,7 @@ mod tests {
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
         zk1::wrap_append_instances_pasta_fp(insts[0][0], &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/tiny-merkle2-v1";
+        let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -11630,7 +11630,7 @@ mod tests {
         let cols: [&[Scalar]; 2] = [&[commit][..], &[root][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/vote-bool-commit-merkle8-v1";
+        let backend = "halo2/pasta/ipa/vote-bool-commit-merkle8";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -11744,7 +11744,7 @@ mod tests {
         ];
         zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/anon-transfer-2x2-merkle8-v1";
+        let backend = "halo2/pasta/ipa/anon-transfer-2x2-merkle8";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13299,7 +13299,7 @@ mod tests {
         let cut = proof_bytes.len().saturating_sub(1);
         prf_env.extend_from_slice(&proof_bytes[..cut]);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13364,7 +13364,7 @@ mod tests {
         prf_env1.extend_from_slice(&(1u32).to_le_bytes());
         // No data appended (should fail on header alone)
 
-        let backend = "halo2/pasta/ipa/tiny-merkle2-v1";
+        let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env.clone());
         let prf_box1 = ProofBox::new(backend.into(), prf_env1);
         assert!(!super::verify_backend(backend, &prf_box1, Some(&vk_box)));
@@ -13453,7 +13453,7 @@ mod tests {
         let col: [&[Scalar]; 1] = [&[insts[0][0][0]][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&col, &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13514,7 +13514,7 @@ mod tests {
         let col: [&[Scalar]; 1] = [&[root][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&col, &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-merkle2-v1";
+        let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13603,7 +13603,7 @@ mod tests {
         let col: [&[Scalar]; 1] = [&[insts[0][0][0]][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&col, &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13701,7 +13701,7 @@ mod tests {
         let col: [&[Scalar]; 1] = [&[insts[0][0][0]][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&col, &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13782,7 +13782,7 @@ mod tests {
         // I10P #2 (correct)
         zk1::wrap_append_instances_pasta_fp_cols(&[&[commit][..]], &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13861,7 +13861,7 @@ mod tests {
         // I10P #2 wrong
         zk1::wrap_append_instances_pasta_fp_cols(&[&[Scalar::ZERO][..]], &mut prf_env);
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -13961,7 +13961,7 @@ mod tests {
             let col: [&[Scalar]; 1] = [&[commit][..]];
             zk1::wrap_append_instances_pasta_fp_cols(&col, &mut prf_env);
 
-            let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+            let backend = "halo2/pasta/ipa/tiny-commit-open";
             let vk_box = VerifyingKeyBox::new(backend.into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.into(), prf_env);
             assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14042,7 +14042,7 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        let backend = "halo2/pasta/ipa/tiny-commit-open-v1";
+        let backend = "halo2/pasta/ipa/tiny-commit-open";
         let mut vk_env_base = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_env_base, k);
         zk1::wrap_append_vk_pasta(&mut vk_env_base, &vk_h2);
@@ -14130,7 +14130,7 @@ mod tests {
         let k = 5u32;
         let params: PastaParams = pasta_params_new(k);
         let vk_h2 =
-            keygen_vk_cached("halo2/pasta/ipa/tiny-add-v1", &params, &pasta_tiny::Add).expect("vk");
+            keygen_vk_cached("halo2/pasta/ipa/tiny-add", &params, &pasta_tiny::Add).expect("vk");
         let mut vk_env = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_env, k);
         zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
@@ -14140,7 +14140,7 @@ mod tests {
         prf_env.extend_from_slice(&too_big.to_le_bytes());
         // no payload appended
 
-        let backend = "halo2/pasta/ipa/tiny-add-v1"; // any recognized halo2 backend tag
+        let backend = "halo2/pasta/ipa/tiny-add"; // any recognized halo2 backend tag
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14273,7 +14273,7 @@ mod tests {
         let cols: [&[Scalar]; 2] = [&[Scalar::from(5u64)][..], &[Scalar::from(8u64)][..]];
         zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/tiny-add2inst-public-v1";
+        let backend = "halo2/pasta/ipa/tiny-add2inst-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14403,7 +14403,7 @@ mod tests {
         let mut proof_env = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
-        let backend = "halo2/pasta/ipa/tiny-anon-transfer-2x2-v1";
+        let backend = "halo2/pasta/ipa/tiny-anon-transfer-2x2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14504,7 +14504,7 @@ mod tests {
         let mut proof_env = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
-        let backend = "halo2/pasta/ipa/tiny-vote-bool-v1";
+        let backend = "halo2/pasta/ipa/tiny-vote-bool";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14605,7 +14605,7 @@ mod tests {
         zk1::wrap_append_ipa_k(&mut vk_env, k);
         zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
-        let backend = "halo2/pasta/ipa/tiny-id-public-v1";
+        let backend = "halo2/pasta/ipa/tiny-id-public";
         // Case 1: Missing INST → must fail
         let mut proof_env1 = zk1::wrap_start();
         zk1::wrap_append_proof(&mut proof_env1, &proof_bytes);
@@ -14746,7 +14746,7 @@ mod tests {
         zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
         zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut proof_env);
 
-        let backend = "halo2/pasta/ipa/tiny-add-public-v1";
+        let backend = "halo2/pasta/ipa/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -14877,7 +14877,7 @@ mod tests {
         zk1::wrap_append_proof(&mut proof_container, &proof_bytes);
         zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut proof_container);
 
-        let backend = "halo2/pasta/tiny-mul-public-v1";
+        let backend = "halo2/pasta/tiny-mul-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -15008,7 +15008,7 @@ mod tests {
         proof_container.extend_from_slice(&(1u32).to_le_bytes());
         proof_container.extend_from_slice(inst_col[0].to_repr().as_ref());
 
-        let backend = "halo2/pasta/tiny-add-public-v1";
+        let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
@@ -15139,7 +15139,7 @@ mod tests {
         proof_container.extend_from_slice(&(1u32).to_le_bytes());
         proof_container.extend_from_slice(&[0xFFu8; 32]); // invalid field repr
 
-        let backend = "halo2/pasta/tiny-add-public-v1";
+        let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));

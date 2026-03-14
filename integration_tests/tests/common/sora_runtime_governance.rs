@@ -663,7 +663,7 @@ pub async fn wait_for_tx_applied(
     timeout: Duration,
     stage: &str,
 ) -> Result<()> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
+    let mut status_url = torii_url.join("v2/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex);
@@ -739,7 +739,7 @@ pub async fn wait_for_tx_rejected(
     timeout: Duration,
     stage: &str,
 ) -> Result<norito::json::Value> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
+    let mut status_url = torii_url.join("v2/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex);

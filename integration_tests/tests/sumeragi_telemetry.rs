@@ -3,7 +3,7 @@
 //!
 //! This integration test spins up an `NPoS` network with redundant collector fan-out,
 //! injects large RBC payloads with deterministic chunk loss, and then cross-checks
-//! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface over
+//! `/v2/sumeragi/telemetry` snapshots against the Prometheus metrics surface over
 //! multiple block heights. The goal is to ensure operators can rely on the telemetry
 //! payload even when collectors need redundant fan-out to make progress.
 

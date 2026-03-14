@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
+//! SSE smoke test: verify that `/v2/events/sse` streams trigger and data events.
 
 use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
@@ -222,7 +222,7 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
             if let Ok(mut stream) = TcpStream::connect(target) {
                 stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
                 let req = format!(
-                    "GET /v1/events/sse HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                    "GET /v2/events/sse HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
                 );
                 if stream.write_all(req.as_bytes()).is_err() {
                     std::thread::sleep(backoff);

@@ -97,7 +97,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     assert_eq!(got_after, hex::encode(latest));
 
     // 2) ZkTransfer appends outputs and emits root_before/after and outputs_commitments
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let att = iroha_data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), pr, vk);

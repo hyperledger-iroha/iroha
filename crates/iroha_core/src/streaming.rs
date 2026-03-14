@@ -5862,7 +5862,7 @@ mod tests {
             max_resolution: Resolution::R1080p,
             hdr_supported: true,
             capture_hdr: false,
-            neural_bundles: vec!["bundle-v1".into()],
+            neural_bundles: vec!["bundle".into()],
             audio_caps: AudioCapability {
                 sample_rates: vec![48_000],
                 ambisonics: false,

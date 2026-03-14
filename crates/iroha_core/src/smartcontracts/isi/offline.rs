@@ -2214,7 +2214,7 @@ pub mod isi {
                 Json::new("device-001".to_owned()),
             );
             receipt.platform_proof = OfflinePlatformProof::Provisioned(AndroidProvisionedProof {
-                manifest_schema: "offline_provisioning_v1".to_owned(),
+                manifest_schema: "offline_provisioning_current".to_owned(),
                 manifest_version: Some(1),
                 manifest_issued_at_ms: receipt.issued_at_ms.saturating_sub(1),
                 challenge_hash: Hash::new(b"provisioned-challenge"),
@@ -5220,7 +5220,7 @@ pub mod isi {
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND,
             platform,
         )?;
-        if backend != "stark/fri/poseidon2-goldilocks-v1" {
+        if backend != "stark/fri/poseidon2-goldilocks" {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::AggregateProofHashError,
                 platform,
@@ -10456,7 +10456,7 @@ mod attestation {
             }
         }
 
-        const PROVISIONED_SCHEMA: &str = "offline_provisioning_v1";
+        const PROVISIONED_SCHEMA: &str = "offline_provisioning_current";
         const PROVISIONED_VERSION: u32 = 1;
         const PROVISIONED_MAX_AGE: u64 = 604_800_000;
 
@@ -11579,8 +11579,6 @@ mod attestation {
 
     #[cfg(test)]
     mod counter_state_tests {
-        use std::str::FromStr;
-
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_data_model::{
             account::AccountId,
@@ -11677,7 +11675,7 @@ mod attestation {
 
 #[cfg(test)]
 mod aggregate_proof_tests {
-    use std::{str::FromStr, sync::OnceLock};
+    use std::sync::OnceLock;
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use blake2::{
@@ -12148,13 +12146,13 @@ mod aggregate_proof_tests {
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND
                 .parse()
                 .expect("metadata key"),
-            "stark/fri/poseidon2-goldilocks-v1",
+            "stark/fri/poseidon2-goldilocks",
         );
         metadata.insert(
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID
                 .parse()
                 .expect("metadata key"),
-            "offline-merge-v1",
+            "offline-merge",
         );
         metadata.insert(
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_PUBLIC_INPUTS_B64
