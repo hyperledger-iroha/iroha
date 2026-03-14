@@ -3460,7 +3460,7 @@ fn seal_connect_payload_py(
     let sid_arr = fixed_array::<32>(sid, "sid")?;
     let dir = parse_connect_direction(direction)?;
     let payload = parse_connect_payload(payload)?;
-    let frame = connect_sdk::seal_envelope_v1(&key_arr, &sid_arr, dir, sequence, payload);
+    let frame = connect_sdk::seal_envelope(&key_arr, &sid_arr, dir, sequence, payload);
     let encoded = codec::Encode::encode(&frame);
     Ok(Py::from(PyBytes::new(py, encoded.as_slice())))
 }
@@ -3470,7 +3470,7 @@ fn seal_connect_payload_py(
 fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> PyResult<Py<PyDict>> {
     let key_arr = fixed_array::<32>(key, "key")?;
     let frame = decode_connect_frame_bytes(frame_bytes)?;
-    let envelope = connect_sdk::open_envelope_v1(&key_arr, &frame).map_err(|err| {
+    let envelope = connect_sdk::open_envelope(&key_arr, &frame).map_err(|err| {
         PyValueError::new_err(format!("failed to decrypt connect payload: {err}"))
     })?;
     let mapping = PyDict::new(py);
