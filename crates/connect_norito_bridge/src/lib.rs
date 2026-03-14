@@ -3068,7 +3068,7 @@ pub unsafe extern "C" fn connect_norito_connect_encrypt_envelope(
             Err(_) => return -3,
         };
         let frame =
-            connect_sdk::seal_envelope_v1(&key, &sid, direction, envelope.seq, envelope.payload);
+            connect_sdk::seal_envelope(&key, &sid, direction, envelope.seq, envelope.payload);
         let buf = match encode_connect_frame(&frame) {
             Ok(buf) => buf,
             Err(_) => return ERR_CONNECT_ENCODE,
@@ -3101,7 +3101,7 @@ pub unsafe extern "C" fn connect_norito_connect_decrypt_ciphertext(
             Ok(f) => f,
             Err(_) => return -2,
         };
-        let envelope = match connect_sdk::open_envelope_v1(&key, &frame) {
+        let envelope = match connect_sdk::open_envelope(&key, &frame) {
             Ok(env) => env,
             Err(_) => return -3,
         };
@@ -12057,7 +12057,7 @@ mod tests {
         };
         assert_eq!(
             canonical_err_value.get("code").and_then(JsonValue::as_str),
-            Some("ERR_INVALID_I105_CHAR")
+            Some("ERR_UNSUPPORTED_ADDRESS_FORMAT")
         );
         connect_norito_free(canonical_err_ptr);
 
