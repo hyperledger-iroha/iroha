@@ -2,6 +2,20 @@
 
 Last updated: 2026-03-14
 
+## 2026-03-14 Follow-up: Norito burn/mint fixture parity re-sync
+- Fixed stale Norito instruction fixtures under `fixtures/norito_instructions` that no
+  longer matched canonical Rust encoding:
+  - `burn_asset_numeric.json`
+  - `burn_asset_fractional.json`
+  - `mint_asset_numeric.json`
+- Updated both fixture payload fields per file:
+  - `instruction` (canonical Norito JSON/base64 string)
+  - `encoded_hex` (canonical `InstructionBox` bytes)
+- This restores parity for `integration_tests/tests/norito_burn_fixture.rs`.
+
+### Validation (this follow-up)
+- `cargo test -p integration_tests --test norito_burn_fixture -- --nocapture` (pass)
+
 ## 2026-03-14 Follow-up: workspace strict-clippy stabilization and sidecar API alignment
 - Resolved strict workspace lint and compile failures surfaced by
   `cargo clippy --workspace --all-targets -- -D warnings`:
