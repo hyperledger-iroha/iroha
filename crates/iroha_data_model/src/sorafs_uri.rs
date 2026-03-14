@@ -25,6 +25,8 @@ mod model {
 
 impl SorafsUri {
     fn validate(value: &str) -> Result<(), ParseError> {
+        const PREFIX: &str = "sorafs://";
+
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return Err(ParseError {
@@ -42,7 +44,6 @@ impl SorafsUri {
             });
         }
 
-        const PREFIX: &str = "sorafs://";
         let Some(rest) = trimmed.strip_prefix(PREFIX) else {
             return Err(ParseError {
                 reason: "Logo URI must use `sorafs://` scheme",
