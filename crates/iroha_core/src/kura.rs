@@ -3236,17 +3236,17 @@ pub struct PipelineRecoverySidecar {
 }
 
 impl PipelineRecoverySidecar {
-    const FORMAT_V1_LABEL: &'static str = "pipeline.recovery.v1";
+    const FORMAT_LABEL: &'static str = "pipeline.recovery";
 
-    /// Create a new v1 recovery sidecar payload.
-    pub fn new_v1(
+    /// Create a new recovery sidecar payload.
+    pub fn new(
         height: u64,
         block_hash: HashOf<BlockHeader>,
         dag: PipelineDagSnapshot,
         txs: Vec<PipelineTxSnapshot>,
     ) -> Self {
         Self {
-            format: PipelineRecoveryFormat::V1,
+            format: PipelineRecoveryFormat::Current,
             height,
             block_hash,
             dag,
@@ -3258,7 +3258,7 @@ impl PipelineRecoverySidecar {
     /// Return the human-readable format tag describing the recovery payload.
     pub fn format_label(&self) -> &'static str {
         match self.format {
-            PipelineRecoveryFormat::V1 => Self::FORMAT_V1_LABEL,
+            PipelineRecoveryFormat::Current => Self::FORMAT_LABEL,
         }
     }
 
@@ -3363,7 +3363,7 @@ impl PipelineRecoverySidecar {
 pub enum PipelineRecoveryFormat {
     #[codec(index = 1)]
     /// Sidecars anchored to a specific block hash to avoid reuse across forks.
-    V1,
+    Current,
 }
 
 /// Deterministic DAG summary embedded in pipeline recovery metadata.
@@ -3405,7 +3405,7 @@ pub struct PipelineProofSnapshot {
 pub enum RosterSidecarFormat {
     #[codec(index = 1)]
     /// Roster snapshot format with stake metadata.
-    V1,
+    Current,
 }
 
 /// Persisted roster metadata enabling roster reconstruction during block sync.
@@ -3430,10 +3430,10 @@ pub struct RosterSidecar {
 }
 
 impl RosterSidecar {
-    const FORMAT_V1_LABEL: &'static str = "roster.snapshot.v1";
+    const FORMAT_LABEL: &'static str = "roster.snapshot";
 
-    /// Construct a new roster sidecar payload using the v1 schema.
-    pub fn new_v1(
+    /// Construct a new roster sidecar payload using the current schema.
+    pub fn new(
         height: u64,
         block_hash: HashOf<BlockHeader>,
         commit_qc: Option<Qc>,
@@ -3441,7 +3441,7 @@ impl RosterSidecar {
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> Self {
         Self {
-            format: RosterSidecarFormat::V1,
+            format: RosterSidecarFormat::Current,
             height,
             block_hash,
             commit_qc,
@@ -3453,7 +3453,7 @@ impl RosterSidecar {
     /// Return the human-readable format tag.
     pub fn format_label(&self) -> &'static str {
         match self.format {
-            RosterSidecarFormat::V1 => Self::FORMAT_V1_LABEL,
+            RosterSidecarFormat::Current => Self::FORMAT_LABEL,
         }
     }
 
@@ -8828,7 +8828,7 @@ mod tests {
         .unwrap();
 
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             block_hash,
             PipelineDagSnapshot {
@@ -8842,7 +8842,7 @@ mod tests {
         assert_eq!(got.height, 1);
         assert_eq!(got.block_hash, block_hash);
         assert_eq!(got.dag.key_count, 0);
-        assert_eq!(got.format_label(), "pipeline.recovery.v1");
+        assert_eq!(got.format_label(), "pipeline.recovery");
     }
 
     #[test]
@@ -8871,7 +8871,7 @@ mod tests {
         .unwrap();
 
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             block_hash,
             PipelineDagSnapshot {
@@ -8915,7 +8915,7 @@ mod tests {
         .unwrap();
 
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             block_hash,
             PipelineDagSnapshot {
@@ -8980,7 +8980,7 @@ mod tests {
         .unwrap();
 
         let hashes = store_dummy_blocks(&kura, 2);
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             hashes[0],
             PipelineDagSnapshot {
@@ -8990,7 +8990,7 @@ mod tests {
             Vec::new(),
         );
         let payload = sidecar.encode_framed().expect("encode sidecar");
-        let temp_sidecar = PipelineRecoverySidecar::new_v1(
+        let temp_sidecar = PipelineRecoverySidecar::new(
             1,
             hashes[1],
             PipelineDagSnapshot {
@@ -9078,7 +9078,7 @@ mod tests {
         .unwrap();
 
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             block_hash,
             PipelineDagSnapshot {
@@ -9129,7 +9129,7 @@ mod tests {
         .unwrap();
 
         let hashes = store_dummy_blocks(&kura, 2);
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             hashes[0],
             PipelineDagSnapshot {
@@ -9140,7 +9140,7 @@ mod tests {
         );
         kura.write_pipeline_metadata(&sidecar);
 
-        let temp_sidecar = PipelineRecoverySidecar::new_v1(
+        let temp_sidecar = PipelineRecoverySidecar::new(
             1,
             hashes[1],
             PipelineDagSnapshot {
@@ -9193,7 +9193,7 @@ mod tests {
         let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; 32]));
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             2,
             block_hash,
             PipelineDagSnapshot {
@@ -9285,7 +9285,7 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; 32]));
         assert_ne!(expected_hash, mismatch_hash, "mismatch hash must differ");
 
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             mismatch_hash,
             PipelineDagSnapshot {
@@ -9334,8 +9334,8 @@ mod tests {
             fingerprint: [1u8; 32],
             key_count: 1,
         };
-        let sidecar1 = PipelineRecoverySidecar::new_v1(1, hashes[0], dag, Vec::new());
-        let sidecar2 = PipelineRecoverySidecar::new_v1(2, hashes[1], dag, Vec::new());
+        let sidecar1 = PipelineRecoverySidecar::new(1, hashes[0], dag, Vec::new());
+        let sidecar2 = PipelineRecoverySidecar::new(2, hashes[1], dag, Vec::new());
 
         kura.write_pipeline_metadata(&sidecar1);
         kura.write_pipeline_metadata(&sidecar2);
@@ -9456,7 +9456,7 @@ mod tests {
         let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
-        let sidecar1 = PipelineRecoverySidecar::new_v1(
+        let sidecar1 = PipelineRecoverySidecar::new(
             1,
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
             PipelineDagSnapshot {
@@ -9465,7 +9465,7 @@ mod tests {
             },
             Vec::new(),
         );
-        let sidecar2 = PipelineRecoverySidecar::new_v1(
+        let sidecar2 = PipelineRecoverySidecar::new(
             2,
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32])),
             PipelineDagSnapshot {
@@ -9530,7 +9530,7 @@ mod tests {
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
         let hashes = store_dummy_blocks(&kura, 2);
-        let sidecar1 = PipelineRecoverySidecar::new_v1(
+        let sidecar1 = PipelineRecoverySidecar::new(
             1,
             hashes[0],
             PipelineDagSnapshot {
@@ -9539,7 +9539,7 @@ mod tests {
             },
             Vec::new(),
         );
-        let sidecar2 = PipelineRecoverySidecar::new_v1(
+        let sidecar2 = PipelineRecoverySidecar::new(
             2,
             hashes[1],
             PipelineDagSnapshot {
@@ -9605,7 +9605,7 @@ mod tests {
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             1,
             block_hash,
             PipelineDagSnapshot {
@@ -9706,7 +9706,7 @@ mod tests {
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
         let hashes = store_dummy_blocks(&kura, 2);
-        let sidecar2 = PipelineRecoverySidecar::new_v1(
+        let sidecar2 = PipelineRecoverySidecar::new(
             2,
             hashes[1],
             PipelineDagSnapshot {
@@ -9951,14 +9951,14 @@ mod tests {
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },
         };
-        let sidecar = RosterSidecar::new_v1(1, block_hash, Some(cert.clone()), None, None);
+        let sidecar = RosterSidecar::new(1, block_hash, Some(cert.clone()), None, None);
 
         kura.write_roster_metadata(&sidecar);
         let got = kura.read_roster_metadata(1).expect("sidecar exists");
 
         assert_eq!(got.height, 1);
         assert_eq!(got.block_hash, block_hash);
-        assert_eq!(got.format_label(), "roster.snapshot.v1");
+        assert_eq!(got.format_label(), "roster.snapshot");
         assert_eq!(
             got.commit_qc.as_ref().map(|c| c.validator_set_hash),
             Some(HashOf::new(&roster))
@@ -10000,7 +10000,7 @@ mod tests {
         let index_path = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
-        let sidecar = RosterSidecar::new_v1(2, block_hash, None, None, None);
+        let sidecar = RosterSidecar::new(2, block_hash, None, None, None);
         let payload = sidecar.encode_framed().expect("encode sidecar");
         assert!(
             Kura::append_indexed_sidecar(
@@ -10055,7 +10055,7 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDD; 32]));
         assert_ne!(expected_hash, mismatch_hash, "mismatch hash must differ");
 
-        let sidecar = RosterSidecar::new_v1(1, mismatch_hash, None, None, None);
+        let sidecar = RosterSidecar::new(1, mismatch_hash, None, None, None);
         kura.write_roster_metadata(&sidecar);
 
         assert!(
@@ -10120,7 +10120,7 @@ mod tests {
                 bls_aggregate_signature: vec![0xAA; 96],
             },
         };
-        let sidecar = RosterSidecar::new_v1(1, block_hash, Some(cert), None, None);
+        let sidecar = RosterSidecar::new(1, block_hash, Some(cert), None, None);
         kura.write_roster_metadata(&sidecar);
 
         assert!(
@@ -10186,7 +10186,7 @@ mod tests {
                 stake: iroha_primitives::numeric::Numeric::new(10, 0),
             }],
         };
-        let sidecar = RosterSidecar::new_v1(
+        let sidecar = RosterSidecar::new(
             1,
             block_hash,
             Some(cert.clone()),
@@ -10199,7 +10199,7 @@ mod tests {
 
         assert_eq!(got.height, 1);
         assert_eq!(got.block_hash, block_hash);
-        assert_eq!(got.format_label(), "roster.snapshot.v1");
+        assert_eq!(got.format_label(), "roster.snapshot");
         assert_eq!(got.stake_snapshot, Some(stake_snapshot));
         assert_eq!(got.roster_snapshot(), Some(roster));
     }

@@ -499,7 +499,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             if let Ok(id) = rest.parse::<AssetDefinitionId>() {
                 canonical.push(CanonicalStateKey::AssetDefinition(id));
             } else if !rest.is_empty() {
-                // Compatibility: accept legacy alias-shaped asset definition hints
+                // Compatibility: accept historical alias-shaped asset definition hints
                 // (e.g. `asset_def:name#domain`) and preserve them verbatim.
                 state_keys.insert(raw.to_owned());
             } else {
@@ -1652,7 +1652,7 @@ mod tests {
 
     #[test]
     fn access_set_hints_reject_unknown_keys() {
-        let reads = vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()];
+        let reads = vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[]).is_none());
     }
 
@@ -1897,7 +1897,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let hints = AccessSetHints {
-            read_keys: vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()],
+            read_keys: vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()],
             write_keys: Vec::new(),
         };
         let manifest = ContractManifest {

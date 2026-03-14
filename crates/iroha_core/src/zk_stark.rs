@@ -1,9 +1,9 @@
-//! Native STARK/FRI (binary folding) verifier used by the `stark/fri-v1/*` backends.
+//! Native STARK/FRI (binary folding) verifier used by the `stark/fri/*` backends.
 //!
 //! This module provides a deterministic verifier over the Goldilocks prime field.
 //! It supports:
-//! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri-v1/sha256-goldilocks-v1`), and
-//! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri-v1/poseidon2-goldilocks-v1`).
+//! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri/sha256-goldilocks-v1`), and
+//! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri/poseidon2-goldilocks-v1`).
 //!
 //! The verifier implements a multi-round binary FRI consistency check.
 //!
@@ -655,7 +655,7 @@ pub struct StarkFriParamsV1 {
     pub domain_tag: String,
 }
 
-/// Minimal verifying-key payload for the `stark/fri-v1/*` backends.
+/// Minimal verifying-key payload for the `stark/fri/*` backends.
 ///
 /// This is stored inside [`iroha_data_model::proof::VerifyingKeyBox::bytes`] and
 /// pins the verifier parameters (hash function, domain size, query count, etc.).

@@ -3756,7 +3756,7 @@ pub mod tests {
 
         if with_manifest {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 1,
@@ -5248,7 +5248,7 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        // Build minimal program with abi_version=1 (V1)
+        // Build minimal program with abi_version=1 (current baseline)
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(1);
         // Compute code hash over bytes after header

@@ -67,7 +67,11 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -127,7 +131,11 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
             domain_id.clone(),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -205,7 +213,11 @@ fn schedule_shielded_only_requires_window() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -274,7 +286,11 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
             domain_id.clone(),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -378,7 +394,11 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()

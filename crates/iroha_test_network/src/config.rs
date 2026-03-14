@@ -363,6 +363,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let garden_name: Name = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain");
+    let aid_name: Name = "aid".parse().expect("aid domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
 
@@ -376,12 +377,15 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .domain(garden_name)
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
+        .finish_domain()
+        .domain(aid_name)
         .finish_domain();
 
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
     let garden_domain: DomainId = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain id");
+    let aid_domain: DomainId = "aid".parse().expect("aid domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "rose".parse().unwrap(),
@@ -400,6 +404,11 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     builder = builder.append_instruction(Transfer::domain(
         genesis_id.clone(),
         wonderland_domain.clone(),
+        alice_id.clone(),
+    ));
+    builder = builder.append_instruction(Transfer::domain(
+        genesis_id.clone(),
+        aid_domain.clone(),
         alice_id.clone(),
     ));
     builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
@@ -438,6 +447,12 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: garden_domain.clone(),
+            },
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            CanRegisterAccount {
+                domain: aid_domain.clone(),
             },
             alice_id.clone(),
         )),
@@ -718,7 +733,39 @@ fn populate_genesis_results(
         false,
     )
     .unpack(|_| {});
-    let (valid_block, state_block) = validation.map_err(|(_, err)| Report::new(err))?;
+    let (valid_block, state_block) = match validation {
+        Ok(validated) => validated,
+        Err((rejected_block, err)) => {
+            let first_tx_error =
+                rejected_block
+                    .results()
+                    .enumerate()
+                    .find_map(|(index, result)| {
+                        result
+                            .as_ref()
+                            .err()
+                            .map(|tx_err| format!("tx#{index}: {tx_err}; details: {tx_err:?}"))
+                    });
+            let mut report = Report::new(err);
+            if let Some(first_tx_error) = first_tx_error {
+                report = report.wrap_err(format!(
+                    "genesis pre-execution produced rejected transaction result ({first_tx_error})"
+                ));
+            } else if rejected_block.has_results() {
+                report = report.wrap_err(
+                    "genesis pre-execution produced invalid results without a concrete transaction \
+                     rejection reason"
+                        .to_owned(),
+                );
+            } else {
+                report = report.wrap_err(
+                    "genesis pre-execution failed before transaction results were recorded"
+                        .to_owned(),
+                );
+            }
+            return Err(report);
+        }
+    };
     drop(state_block);
     let signed_block: iroha_data_model::block::SignedBlock = valid_block.into();
     Ok(rebuild_block_with_results(&signed_block, genesis_key_pair))

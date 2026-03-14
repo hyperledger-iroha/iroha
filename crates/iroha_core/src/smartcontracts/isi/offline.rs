@@ -5220,7 +5220,7 @@ pub mod isi {
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND,
             platform,
         )?;
-        if backend != "stark/fri-v1/poseidon2-goldilocks-v1" {
+        if backend != "stark/fri/poseidon2-goldilocks-v1" {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::AggregateProofHashError,
                 platform,
@@ -8905,7 +8905,7 @@ mod attestation {
         //
         // 1. Real device (iOS 18+):  SEQUENCE { [1] EXPLICIT OCTET STRING { <nonce> } }
         // 2. Earlier production:     SEQUENCE { SEQUENCE { [0] EXPLICIT OCTET STRING { <nonce> } } }
-        // 3. Legacy / test:          OCTET STRING { <nonce> }
+        // 3. Historical / test:          OCTET STRING { <nonce> }
 
         // Format 1: real Apple device — SEQUENCE { [1] EXPLICIT { OCTET STRING } }
         yasna::parse_der(nonce_ext_der, |reader| {
@@ -8928,7 +8928,7 @@ mod attestation {
                 })
             })
         })
-        // Format 3: legacy plain OCTET STRING
+        // Format 3: historical plain OCTET STRING
         .or_else(|_| yasna::parse_der(nonce_ext_der, |reader| reader.read_bytes()))
     }
 
@@ -9563,7 +9563,7 @@ mod attestation {
             RealDeviceTag1,
             /// Earlier production: SEQUENCE { SEQUENCE { [0] EXPLICIT { OCTET STRING } } }
             ProductionDerSequence,
-            /// Legacy plain OCTET STRING
+            /// Historical plain OCTET STRING
             LegacyOctetString,
         }
 
@@ -9950,7 +9950,7 @@ mod attestation {
                 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13,
                 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
             ];
-            // Format 3: legacy plain OCTET STRING
+            // Format 3: historical plain OCTET STRING
             const LEGACY_DER: [u8; 34] = [
                 0x04, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
                 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19,
@@ -9969,7 +9969,7 @@ mod attestation {
                 "Format 2: SEQUENCE {{ SEQUENCE {{ [0] EXPLICIT {{ OCTET STRING }} }} }}"
             );
             assert_eq!(
-                decode_app_attest_nonce_extension(&LEGACY_DER).expect("legacy DER decode"),
+                decode_app_attest_nonce_extension(&LEGACY_DER).expect("historical DER decode"),
                 EXPECTED_NONCE,
                 "Format 3: plain OCTET STRING"
             );
@@ -10025,7 +10025,7 @@ mod attestation {
                 &cfg,
                 None,
             )
-            .expect("legacy nonce extension should stay supported");
+            .expect("historical nonce extension should stay supported");
         }
 
         #[test]
@@ -12148,7 +12148,7 @@ mod aggregate_proof_tests {
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_BACKEND
                 .parse()
                 .expect("metadata key"),
-            "stark/fri-v1/poseidon2-goldilocks-v1",
+            "stark/fri/poseidon2-goldilocks-v1",
         );
         metadata.insert(
             AGGREGATE_PROOF_METADATA_OFFLINE_AGGREGATE_CIRCUIT_ID

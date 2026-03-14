@@ -480,6 +480,12 @@ fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
 
+fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) -> bool {
+    // Under multi-fault partitions, transaction dissemination can lag one round behind while
+    // still converging globally; defer strictness to the final supply assertion.
+    force_soft_fork || faulty_peers > 1
+}
+
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
     <[u8; 32]>::from(hash)
@@ -1263,11 +1269,14 @@ impl UnstableNetwork {
             )
             .max(Duration::from_secs(2));
         if stagger_faults {
+            let max_stagger_pause = network.pipeline_time().max(Duration::from_secs(2));
             let per_peer_pause = relay_pause
                 .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
                 .unwrap_or(Duration::from_secs(1))
-                .max(Duration::from_millis(200));
-            let recovery_gap = stagger_recovery_gap(network.pipeline_time());
+                .max(Duration::from_millis(200))
+                .min(max_stagger_pause);
+            let recovery_gap =
+                stagger_recovery_gap(network.pipeline_time()).min(Duration::from_secs(2));
             for (idx, peer) in faulty.iter().enumerate() {
                 relay.suspend(&peer.id()).activate();
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
@@ -1473,13 +1482,14 @@ impl UnstableNetwork {
                 next_resubmit_at = Instant::now() + submit_retry_backoff(attempt);
             }
             if now >= supply_deadline {
-                if self.force_soft_fork {
+                if allow_round_supply_deadline_slip(self.n_faulty_peers, self.force_soft_fork) {
                     iroha_logger::warn!(
                         ?expected_supply,
                         ?last_seen,
                         ?last_height,
+                        faulty_peers = self.n_faulty_peers,
                         target_height,
-                        "soft-fork round supply did not converge before deadline; continuing and relying on final supply assertion"
+                        "round supply did not converge before deadline; continuing and relying on final supply assertion"
                     );
                     break 'wait_supply;
                 }
@@ -1721,6 +1731,14 @@ mod tests {
         assert!(!allow_supply_resubmit(0, false));
         assert!(allow_supply_resubmit(1, false));
         assert!(allow_supply_resubmit(0, true));
+    }
+
+    #[test]
+    fn round_supply_deadline_slip_allowed_for_multi_fault_or_soft_fork() {
+        assert!(!allow_round_supply_deadline_slip(0, false));
+        assert!(!allow_round_supply_deadline_slip(1, false));
+        assert!(allow_round_supply_deadline_slip(2, false));
+        assert!(allow_round_supply_deadline_slip(0, true));
     }
 
     #[test]

@@ -75,7 +75,7 @@ impl DaPublisher {
         } else {
             config
                 .torii_api_url
-                .join("v1/da/ingest")
+                .join("v2/da/ingest")
                 .wrap_err("failed to derive /v2/da/ingest from torii_api_url")?
         };
         let client = HttpClient::builder()
@@ -155,7 +155,7 @@ impl DaManifestFetcher {
         } else {
             config
                 .torii_api_url
-                .join("v1/da/manifests/")
+                .join("v2/da/manifests/")
                 .wrap_err("failed to derive /v2/da/manifests from torii_api_url")?
         };
         let client = HttpClient::builder()
