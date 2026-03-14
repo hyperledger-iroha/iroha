@@ -546,7 +546,7 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
+    use std::{collections::BTreeMap, num::NonZeroU64};
 
     use iroha_data_model::{
         Registrable,

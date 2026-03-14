@@ -2,8 +2,8 @@
 //!
 //! This module provides a deterministic verifier over the Goldilocks prime field.
 //! It supports:
-//! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri/sha256-goldilocks-v1`), and
-//! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri/poseidon2-goldilocks-v1`).
+//! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri/sha256-goldilocks`), and
+//! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri/poseidon2-goldilocks`).
 //!
 //! The verifier implements a multi-round binary FRI consistency check.
 //!

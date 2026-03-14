@@ -21,8 +21,8 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 
-const BACKEND: &str = "stark/fri/sha256-goldilocks-v1";
-const STARK_TRANSFER_CIRCUIT: &str = "stark/fri/sha256-goldilocks-v1:zk-transfer-v1";
+const BACKEND: &str = "stark/fri/sha256-goldilocks";
+const STARK_TRANSFER_CIRCUIT: &str = "stark/fri/sha256-goldilocks:zk-transfer";
 
 fn stark_vk_bytes(circuit_id: &str) -> Vec<u8> {
     use iroha_core::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};

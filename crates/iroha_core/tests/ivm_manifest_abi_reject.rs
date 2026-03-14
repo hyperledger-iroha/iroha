@@ -337,7 +337,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let prog = minimal_ivm_program(1);
     let parsed = ProgramMetadata::parse(&prog).expect("valid header");
     let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
-    let abi_v1 = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash
     let header1 =
@@ -352,7 +352,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
 
     let manifest = manifest::ContractManifest {
         code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_v1)),
+        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_current)),
         compiler_fingerprint: None,
         features_bitmap: None,
         access_set_hints: None,

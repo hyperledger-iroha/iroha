@@ -27,7 +27,7 @@ use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 
 const BACKEND: &str = "halo2/ipa";
-const FIXTURE_CIRCUIT: &str = "halo2/ipa:tiny-add-v1";
+const FIXTURE_CIRCUIT: &str = "halo2/ipa:tiny-add";
 
 fn proof_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
     halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32])

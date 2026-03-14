@@ -4,7 +4,7 @@
 use iroha_core::state::State;
 
 #[test]
-fn find_active_abi_versions_default_is_v1() {
+fn find_active_abi_versions_default_is_current() {
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ValidSingularQuery,
     };

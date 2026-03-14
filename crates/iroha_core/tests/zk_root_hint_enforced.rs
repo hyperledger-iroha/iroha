@@ -202,7 +202,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
         0,
     ));
     let mut stx2 = block2.transaction();
-    let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let bad_vk = bad_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");
@@ -245,7 +245,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             .last()
             .unwrap()
     };
-    let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let ok_vk = ok_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");

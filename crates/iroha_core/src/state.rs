@@ -33416,7 +33416,7 @@ mod tests {
         let domain = Domain::new(domain_id).build(&account_id);
 
         let mut world = World::with([domain], [account], []);
-        let manifest_v1 = AssetPermissionManifest {
+        let manifest_current = AssetPermissionManifest {
             version: ManifestVersion::default(),
             uaid,
             dataspace,
@@ -33425,10 +33425,10 @@ mod tests {
             expiry_epoch: Some(6),
             entries: Vec::new(),
         };
-        let mut record_v1 = SpaceDirectoryManifestRecord::new(manifest_v1);
-        record_v1.lifecycle.mark_activated(1);
+        let mut record_current = SpaceDirectoryManifestRecord::new(manifest_current);
+        record_current.lifecycle.mark_activated(1);
         let mut set = SpaceDirectoryManifestSet::default();
-        set.upsert(record_v1.clone());
+        set.upsert(record_current.clone());
         world
             .space_directory_manifests_mut_for_testing()
             .insert(uaid, set);
@@ -33441,18 +33441,18 @@ mod tests {
             nexus.lane_config = lane_config.clone();
         }
 
-        let snapshot_v1 = state
+        let snapshot_current = state
             .refresh_axt_policies_from_directory()
             .expect("policy snapshot");
-        let first_entry = snapshot_v1
+        let first_entry = snapshot_current
             .entries
             .iter()
             .find(|entry| entry.dsid == dataspace)
             .expect("dataspace entry present")
             .policy;
-        let mut expected_root_v1 = [0u8; 32];
-        expected_root_v1.copy_from_slice(record_v1.manifest_hash.as_ref());
-        assert_eq!(first_entry.manifest_root, expected_root_v1);
+        let mut expected_root_current = [0u8; 32];
+        expected_root_current.copy_from_slice(record_current.manifest_hash.as_ref());
+        assert_eq!(first_entry.manifest_root, expected_root_current);
         assert_eq!(first_entry.min_handle_era, 1);
         assert_eq!(first_entry.target_lane, lane_id);
 

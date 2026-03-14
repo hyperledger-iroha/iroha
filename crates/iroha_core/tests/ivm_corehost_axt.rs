@@ -3260,7 +3260,7 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(55);
 
-    let entries_v1 = vec![AxtPolicyBinding {
+    let entries_current = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
             manifest_root: [0x11; 32],
@@ -3270,11 +3270,11 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
             current_slot: 7,
         },
     }];
-    let snapshot_v1 = AxtPolicySnapshot {
-        version: AxtPolicySnapshot::compute_version(&entries_v1),
-        entries: entries_v1,
+    let snapshot_current = AxtPolicySnapshot {
+        version: AxtPolicySnapshot::compute_version(&entries_current),
+        entries: entries_current,
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot_v1);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot_current);
 
     let mut vm = IVM::new(1_000_000);
     let descriptor = axt::AxtDescriptor {
@@ -3301,11 +3301,11 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
 
-    let proof_v1 = axt::ProofBlob {
+    let proof_current = axt::ProofBlob {
         payload: vec![0x11; 32],
         expiry_slot: Some(20),
     };
-    let proof_v1_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_v1);
+    let proof_v1_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_current);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
     host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)

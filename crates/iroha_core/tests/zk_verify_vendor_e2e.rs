@@ -103,7 +103,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     vm.set_host(host);
 
-    let ballot_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
+    let ballot_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public", [0u8; 32]);
     let ballot_vk = ballot_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");
@@ -111,7 +111,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ballot");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/pasta/tiny-add2inst-public-v1",
+        "halo2/pasta/tiny-add2inst-public",
         BackendTag::Halo2IpaPasta,
         "pallas",
         ballot_fixture.schema_hash,

@@ -1257,9 +1257,21 @@ impl UnstableNetwork {
             Numeric::one(),
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
         );
-        let tx = Arc::new(
-            builder_client.build_transaction_from_items(vec![mint_asset], Metadata::default()),
+        let mut tx_metadata = Metadata::default();
+        tx_metadata.insert(
+            "unstable_network_round"
+                .parse()
+                .expect("valid metadata key"),
+            u64::try_from(round_index).unwrap_or(u64::MAX),
         );
+        tx_metadata.insert(
+            "unstable_network_target_height"
+                .parse()
+                .expect("valid metadata key"),
+            target_height,
+        );
+        let tx =
+            Arc::new(builder_client.build_transaction_from_items(vec![mint_asset], tx_metadata));
         let partition_submit_window = relay_pause
             .min(
                 network

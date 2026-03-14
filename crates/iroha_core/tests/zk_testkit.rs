@@ -276,8 +276,8 @@ mod halo2_bundle {
 
     /// Generate a deterministic TinyAdd proof bundle for tests.
     pub fn tiny_add_bundle() -> TinyAddProofBundle {
-        let backend = "halo2/pasta/tiny-add-v1";
-        let name = "ballot_v1";
+        let backend = "halo2/pasta/tiny-add";
+        let name = "ballot_current";
         let k: u32 = 5;
 
         // Build Halo2 parameters and verifying/proving keys.
@@ -352,8 +352,8 @@ mod halo2_bundle {
     pub fn add2inst_public_bundle(commit: u64, root: u64) -> AddTwoInstPublicProofBundle {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
-        let backend = "halo2/pasta/ipa/tiny-add2inst-public-v1";
-        let name = "ballot_v1";
+        let backend = "halo2/pasta/ipa/tiny-add2inst-public";
+        let name = "ballot_current";
         let k: u32 = 6;
 
         let params: <IPACommitmentScheme<Curve> as CommitmentScheme>::ParamsProver =
@@ -398,7 +398,7 @@ mod halo2_bundle {
         let public_inputs_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/pasta/tiny-add2inst-public-v1",
+            "halo2/pasta/tiny-add2inst-public",
             BackendTag::Halo2IpaPasta,
             "pallas",
             public_inputs_hash,
@@ -478,9 +478,9 @@ mod halo2_bundle {
         };
 
         let backend = "halo2/ipa";
-        let envelope_circuit_id = "halo2/pasta/ipa/vote-bool-commit-merkle8-v1";
-        let circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1";
-        let name = "tally_v1";
+        let envelope_circuit_id = "halo2/pasta/ipa/vote-bool-commit-merkle8";
+        let circuit_id = "halo2/pasta/vote-bool-commit-merkle8";
+        let name = "tally_current";
         let k: u32 = 6;
 
         let params: <IPACommitmentScheme<Curve> as CommitmentScheme>::ParamsProver =

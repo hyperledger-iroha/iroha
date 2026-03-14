@@ -85,7 +85,7 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     vm.load_program(&meta.encode()).expect("load metadata");
 
     // Prepare a ZK_VERIFY_TRANSFER envelope TLV with a compact mock payload.
-    let env = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]).proof_bytes;
+    let env = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]).proof_bytes;
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env);
     let ptr_verify = store_tlv(&mut vm, &tlv);
     vm.memory

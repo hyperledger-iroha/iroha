@@ -120,7 +120,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     if let Some(Ok(Message::Binary(bin))) = ws.next().await {
         let mut cursor = bin.as_ref();
         if let Ok(frame) = proto::ConnectFrameV1::decode_all(&mut cursor)
-            && let Ok(env) = sdk::open_envelope_v1(&k_wallet, &frame)
+            && let Ok(env) = sdk::open_envelope_current(&k_wallet, &frame)
         {
             log_app_response(&env);
         }
@@ -157,13 +157,13 @@ async fn send_app_action(
             let payload = proto::ConnectPayloadV1::SignRequestTx {
                 tx_bytes: b"...".to_vec(),
             };
-            let frame = sdk::seal_envelope_v1(k_app, sid, proto::Dir::AppToWallet, 1, payload);
+            let frame = sdk::seal_envelope_current(k_app, sid, proto::Dir::AppToWallet, 1, payload);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
             println!("app: sent SignRequestTx");
         }
         "reject" => {
-            let rej = sdk::encrypt_reject_v1(
+            let rej = sdk::encrypt_reject_current(
                 k_app,
                 sid,
                 proto::Dir::AppToWallet,
@@ -176,7 +176,7 @@ async fn send_app_action(
             println!("app: sent encrypted Reject");
         }
         "close" => {
-            let close = sdk::encrypt_close_v1(
+            let close = sdk::encrypt_close_current(
                 k_app,
                 sid,
                 proto::Dir::AppToWallet,
@@ -195,7 +195,7 @@ async fn send_app_action(
             let payload = proto::ConnectPayloadV1::SignRequestTx {
                 tx_bytes: b"...".to_vec(),
             };
-            let frame = sdk::seal_envelope_v1(k_app, sid, proto::Dir::AppToWallet, 1, payload);
+            let frame = sdk::seal_envelope_current(k_app, sid, proto::Dir::AppToWallet, 1, payload);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
         }

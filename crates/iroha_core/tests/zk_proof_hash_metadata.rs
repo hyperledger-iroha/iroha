@@ -67,7 +67,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     }
 
     // 1) ZkTransfer emits zk.transfer.last with proof_hash
-    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");
     let vk_transfer = transfer_fixture
         .vk_box("halo2/ipa")
@@ -115,7 +115,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_unshield = unshield_fixture.proof_box("halo2/ipa");
     let vk_unshield = unshield_fixture
         .vk_box("halo2/ipa")

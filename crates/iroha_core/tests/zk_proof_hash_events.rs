@@ -54,9 +54,9 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
         "zcoin".parse().unwrap(),
     );
     let asset = AssetId::of(asset_def_id.clone(), authority_id.clone());
-    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_unshield = unshield_fixture.proof_box("halo2/ipa");
     let vk_transfer = transfer_fixture
         .vk_box("halo2/ipa")

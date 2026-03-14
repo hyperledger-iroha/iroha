@@ -77,8 +77,8 @@ fn main() {
     };
 
     // Compute deterministic hashes and signature preimage
-    let perms_hash = sdk::hash_permissions_v1(&acc_perms);
-    let proof_hash = sdk::hash_signin_proof_v1(&proof);
+    let perms_hash = sdk::hash_permissions_current(&acc_perms);
+    let proof_hash = sdk::hash_signin_proof_current(&proof);
     let preimage = sdk::build_approve_preimage(
         &sid,
         &app_pk,
