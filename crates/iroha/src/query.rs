@@ -1,4 +1,5 @@
 //! Functions and types to make queries to the Iroha peer.
+#![allow(clippy::result_large_err)]
 
 use std::{
     collections::HashMap,

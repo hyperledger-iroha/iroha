@@ -62,7 +62,7 @@ mod model {
     pub struct Domain {
         /// Identification of this [`Domain`].
         pub id: DomainId,
-        /// SoraFS URI to the [`Domain`] logo.
+        /// `SoraFS` URI to the [`Domain`] logo.
         #[getset(get = "pub")]
         pub logo: Option<SorafsUri>,
         /// [`Metadata`] of this `Domain` as a key-value store.
@@ -89,7 +89,7 @@ mod model {
     pub struct NewDomain {
         /// The identification associated with the domain builder.
         pub id: DomainId,
-        /// The (SoraFS) link to the logo of this domain.
+        /// The (`SoraFS`) link to the logo of this domain.
         pub logo: Option<SorafsUri>,
         /// Metadata associated with the domain builder.
         pub metadata: Metadata,

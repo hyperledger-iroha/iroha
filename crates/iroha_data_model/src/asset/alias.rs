@@ -38,11 +38,10 @@ impl AssetDefinitionAlias {
             validate_segment(domain_alias, "asset alias domain")?;
         }
         validate_segment(dataspace_alias, "asset alias dataspace")?;
-        let literal = if let Some(domain_alias) = domain_alias {
-            format!("{name}#{domain_alias}@{dataspace_alias}")
-        } else {
-            format!("{name}#{dataspace_alias}")
-        };
+        let literal = domain_alias.map_or_else(
+            || format!("{name}#{dataspace_alias}"),
+            |domain_alias| format!("{name}#{domain_alias}@{dataspace_alias}"),
+        );
         literal.parse()
     }
 

@@ -2,6 +2,29 @@
 
 Last updated: 2026-03-14
 
+## 2026-03-14 Follow-up: workspace strict-clippy stabilization and sidecar API alignment
+- Resolved strict workspace lint and compile failures surfaced by
+  `cargo clippy --workspace --all-targets -- -D warnings`:
+  - Fixed `clippy::unnested_or_patterns` and `clippy::option_if_let_else` in
+    account/address parsing paths.
+  - Fixed multiple `clippy::doc_markdown`, `clippy::items_after_statements`,
+    and `clippy::useless_conversion` findings in `iroha_data_model`.
+  - Removed stale `FromStr` imports in test modules that were failing under
+    `-D unused-imports`.
+  - Fixed `clippy::redundant_closure_call` and `clippy::question_mark` in
+    multisig account execution flow.
+- Kept existing public error-surface types intact and added targeted
+  `clippy::result_large_err` allowances where API-level `ValidationFail`/query
+  error types are intentional (notably in `iroha_executor` and `iroha::query`).
+- Aligned sidecar constructor call sites/tests to the current
+  `PipelineRecoverySidecar::new(...)` API and updated format-label assertions
+  from `"pipeline.recovery.v1"` to `"pipeline.recovery"`.
+- Validation (this follow-up):
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --test pipeline_recovery_endpoint` (pass)
+  - `cargo test -p iroha_kagami sidecar_prints_to_file` (pass)
+
 ## 2026-03-14 Follow-up: account-address strict parser error normalization
 - Fixed `AccountAddress::parse_encoded` (`crates/iroha_data_model/src/account/address.rs`)
   to normalize unsupported/non-I105 parser input back to

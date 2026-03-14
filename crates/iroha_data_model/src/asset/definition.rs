@@ -180,7 +180,7 @@ mod model {
         #[getset(get_copy = "pub")]
         #[registrable_builder(default = Mintable::default())]
         pub mintable: Mintable,
-        /// SoraFS URI to the [`AssetDefinition`] logo.
+        /// `SoraFS` URI to the [`AssetDefinition`] logo.
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub logo: Option<SorafsUri>,

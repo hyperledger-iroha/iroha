@@ -650,22 +650,23 @@ impl AccountId {
                 | AccountAddressError::InvalidI105Base
                 | AccountAddressError::InvalidI105Digit(_)
                 | AccountAddressError::UnsupportedAddressFormat
-                | AccountAddressError::InvalidLength,
-            )
-            | Err(AccountAddressError::ChecksumMismatch) => {
-                if let Some(account_id) = Self::parse_legacy_base58_envelope(input) {
-                    Ok((account_id, AccountAddressSource::Encoded))
-                } else if matches!(
-                    AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
-                    Err(AccountAddressError::ChecksumMismatch)
-                ) {
-                    Err(ParseError::new(
-                        AccountAddressErrorCode::ChecksumMismatch.as_str(),
-                    ))
-                } else {
-                    Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
-                }
-            }
+                | AccountAddressError::InvalidLength
+                | AccountAddressError::ChecksumMismatch,
+            ) => Self::parse_legacy_base58_envelope(input).map_or_else(
+                || {
+                    if matches!(
+                        AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
+                        Err(AccountAddressError::ChecksumMismatch)
+                    ) {
+                        Err(ParseError::new(
+                            AccountAddressErrorCode::ChecksumMismatch.as_str(),
+                        ))
+                    } else {
+                        Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
+                    }
+                },
+                |account_id| Ok((account_id, AccountAddressSource::Encoded)),
+            ),
             Err(err) => Err(ParseError::new(err.code_str())),
         }
     }
