@@ -11579,8 +11579,6 @@ mod attestation {
 
     #[cfg(test)]
     mod counter_state_tests {
-        use std::str::FromStr;
-
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_data_model::{
             account::AccountId,
@@ -11677,7 +11675,7 @@ mod attestation {
 
 #[cfg(test)]
 mod aggregate_proof_tests {
-    use std::{str::FromStr, sync::OnceLock};
+    use std::sync::OnceLock;
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use blake2::{

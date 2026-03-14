@@ -26,12 +26,12 @@ mod model {
     /// Canonical asset definition identifier.
     ///
     /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
-    /// satisfy UUIDv4 version/variant constraints.
+    /// satisfy `UUIDv4` version/variant constraints.
     #[derive(Debug, Clone, Getters, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
-        /// Canonical UUIDv4 bytes (no textual separators).
+        /// Canonical `UUIDv4` bytes (no textual separators).
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
         /// Deterministic domain component derived from canonical bytes.
@@ -139,7 +139,7 @@ impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
     ) -> Result<Self, norito::core::Error> {
         let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
         Self::from_uuid_bytes(aid_bytes)
-            .map_err(|err| norito::core::Error::Message(err.to_string().into()))
+            .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
 
@@ -242,10 +242,10 @@ impl AssetId {
 }
 
 impl AssetDefinitionId {
-    /// Construct an identifier from canonical UUIDv4 bytes.
+    /// Construct an identifier from canonical `UUIDv4` bytes.
     ///
     /// # Errors
-    /// Returns [`ParseError`] when `aid_bytes` do not satisfy UUIDv4
+    /// Returns [`ParseError`] when `aid_bytes` do not satisfy `UUIDv4`
     /// version/variant constraints.
     pub fn from_uuid_bytes(aid_bytes: [u8; 16]) -> Result<Self, ParseError> {
         if !is_uuid_v4_bytes(&aid_bytes) {
@@ -299,7 +299,7 @@ impl AssetDefinitionId {
     ///
     /// # Errors
     /// Returns [`ParseError`] when the textual form is not canonical or bytes
-    /// do not satisfy UUIDv4 constraints.
+    /// do not satisfy `UUIDv4` constraints.
     pub fn parse_aid_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {

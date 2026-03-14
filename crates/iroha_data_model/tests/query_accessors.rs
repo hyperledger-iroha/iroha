@@ -1,7 +1,5 @@
 //! Query accessor API coverage.
 
-use std::str::FromStr;
-
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
