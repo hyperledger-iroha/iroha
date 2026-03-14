@@ -2064,6 +2064,7 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn block_proofs_include_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
 

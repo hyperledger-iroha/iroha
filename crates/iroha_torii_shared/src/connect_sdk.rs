@@ -150,6 +150,12 @@ pub fn open_envelope_v1(
 }
 
 /// Open a ciphertext frame using the canonical Connect envelope format.
+///
+/// # Errors
+///
+/// Returns an error when the frame is not ciphertext, decryption fails,
+/// decoding fails, or when the decrypted envelope sequence does not match
+/// the frame sequence.
 pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
     open_envelope_v1(key, frame)
 }

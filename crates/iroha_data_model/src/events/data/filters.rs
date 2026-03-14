@@ -1700,8 +1700,6 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn offline_filter_matches_platform_policy() {
-        use core::str::FromStr;
-
         use crate::{
             account::AccountId,
             asset::AssetDefinitionId,

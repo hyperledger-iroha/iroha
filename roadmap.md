@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Multilane Genesis Pre-exec Follow-up
 1. Investigate and fix `RegisterPublicLaneValidator` pre-exec failures that reference synthetic `aid:*` asset-definition IDs (currently pre-exec falls back to synthetic success in cross-dataspace localnet startup).

@@ -1,6 +1,7 @@
 //! API for *Runtime Executors*.
 #![allow(unsafe_code)]
 #![allow(unexpected_cfgs)]
+#![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, BTreeSet};
 

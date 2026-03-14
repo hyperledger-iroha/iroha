@@ -562,6 +562,7 @@ mod evaluate {
         expression::{EvaluatesTo, Expression, Greater, Value},
     };
 
+    #[allow(clippy::result_large_err)]
     pub trait Evaluate {
         /// The resulting type of the expression.
         type Value;
@@ -570,6 +571,7 @@ mod evaluate {
         fn evaluate(&self, context: &impl Context) -> Result<Self::Value, ValidationFail>;
     }
 
+    #[allow(clippy::result_large_err)]
     pub trait Context {
         /// Execute query against the current state of `Iroha`
         fn query(&self, query: &NumericQuery) -> Result<Value, ValidationFail>;
