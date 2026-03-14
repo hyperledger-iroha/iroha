@@ -1885,22 +1885,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if trimmed.is_empty() {
             return None;
         }
-        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
+        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
             return (!rest.is_empty()).then(|| trimmed.to_string());
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/ipa::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/ipa:") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/ipa/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
-        Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
+        Some(format!("halo2/pasta/ipa/{trimmed}"))
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {

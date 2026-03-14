@@ -5750,7 +5750,7 @@ pub mod tests {
         let mut world = World::with([domain], [account], []);
         if bind_manifest {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 1,

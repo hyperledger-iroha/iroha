@@ -407,7 +407,7 @@ async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Res
     let url = network
         .client()
         .torii_url
-        .join("/v1/da/ingest")
+        .join("/v2/da/ingest")
         .expect("compose DA ingest URL");
     let response = http
         .post(url)

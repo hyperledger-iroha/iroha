@@ -296,7 +296,7 @@ mod tests {
         issued_ms: u64,
     ) -> AssetPermissionManifest {
         AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms,

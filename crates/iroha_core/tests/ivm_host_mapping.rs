@@ -272,7 +272,8 @@ fn host_rejects_insufficient_asset_transfer() {
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(new_account_in_domain(&from, &domain_id)));
     let reg_to = RegisterBox::from(Register::account(new_account_in_domain(&to, &domain_id)));
-    let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+    let new_asset_def =
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         100u64,
@@ -606,7 +607,8 @@ fn host_bridges_mint_asset() {
         let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(
             &authority, &domain_id,
         )));
-        let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+        let new_asset_def =
+            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
         let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
         let executor = tx.world.executor().clone();
         for instr in [

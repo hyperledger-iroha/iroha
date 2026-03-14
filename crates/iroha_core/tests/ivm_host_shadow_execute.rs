@@ -78,7 +78,9 @@ fn setup_state(authority: &AccountId, asset_def: &AssetDefinitionId) -> State {
         let reg_domain = Register::domain(Domain::new(domain_id.clone()));
         let reg_account =
             Register::account(NewAccount::new_in_domain(authority.clone(), domain_id));
-        let reg_asset = Register::asset_definition(AssetDefinition::numeric(asset_def.clone()));
+        let reg_asset = Register::asset_definition(
+            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+        );
         for instr in [
             InstructionBox::from(reg_domain),
             InstructionBox::from(reg_account),
@@ -108,10 +110,12 @@ fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<Stri
 #[test]
 fn ivm_host_shadow_execute_matches_native_execute() {
     let authority = ALICE_ID.clone();
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+    let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "coin".parse().unwrap(),
     );
+    let asset_def = AssetDefinitionId::parse_aid_literal(&asset_def_seed.canonical_literal())
+        .expect("canonical aid literal");
     let key: Name = "parity_key".parse().unwrap();
     let value = iroha_primitives::json::Json::new("shadow");
     let amount = Numeric::from(100_u64);

@@ -2861,7 +2861,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-state"));
 
     let manifest = AssetPermissionManifest {
-        version: ManifestVersion::V1,
+        version: ManifestVersion::default(),
         uaid,
         dataspace: dsid,
         issued_ms: 0,

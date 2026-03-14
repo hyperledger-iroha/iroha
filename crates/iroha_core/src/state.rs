@@ -7133,7 +7133,7 @@ mod storage_migration_tests {
         world.uaid_accounts.insert(uaid, account_id.clone());
 
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -7199,7 +7199,7 @@ mod storage_migration_tests {
         world.uaid_accounts.insert(uaid, account_id.clone());
 
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -13363,7 +13363,7 @@ impl State {
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
-        let sidecar = crate::kura::RosterSidecar::new_v1(
+        let sidecar = crate::kura::RosterSidecar::new(
             commit_qc.height,
             commit_qc.subject_block_hash,
             Some(commit_qc.clone()),
@@ -24979,13 +24979,13 @@ pub(crate) mod deserialize {
             let mut legacy_map = json::native::Map::new();
             legacy_map.insert("revert".to_owned(), json::Value::Null);
             legacy_map.insert("blocks".to_owned(), blocks);
-            let legacy = json::Value::Object(legacy_map);
+            let historical = json::Value::Object(legacy_map);
 
             let mut map = json::native::Map::new();
-            map.insert("parameters".to_owned(), legacy);
+            map.insert("parameters".to_owned(), historical);
 
             let parsed = take_parameters_cell(&mut map, "parameters")
-                .expect("legacy envelope should decode into parameters cell");
+                .expect("historical envelope should decode into parameters cell");
             assert_eq!(parsed.view().get(), &expected);
         }
 
@@ -26594,7 +26594,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26673,7 +26673,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26741,7 +26741,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26801,7 +26801,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26882,7 +26882,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26961,7 +26961,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27081,7 +27081,7 @@ mod tests {
                 },
                 DataSpaceMetadata {
                     id: removed,
-                    alias: "legacy".to_string(),
+                    alias: "historical".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27095,7 +27095,7 @@ mod tests {
 
         let manifest_record = |uaid: UniversalAccountId, dataspace: DataSpaceId| {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 1,
@@ -31644,7 +31644,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -32472,7 +32472,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -32596,7 +32596,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -33199,7 +33199,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -33314,7 +33314,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -33417,7 +33417,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest_v1 = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -33457,7 +33457,7 @@ mod tests {
         assert_eq!(first_entry.target_lane, lane_id);
 
         let manifest_v2 = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 5,
@@ -33539,7 +33539,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,
@@ -33626,7 +33626,7 @@ mod tests {
 
         let mut world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,

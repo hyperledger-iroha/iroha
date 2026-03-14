@@ -151,7 +151,7 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
-        .join("v1/sumeragi/telemetry")
+        .join("v2/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
     let metrics_url = client
         .torii_url

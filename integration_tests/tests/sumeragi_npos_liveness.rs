@@ -344,7 +344,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             .wrap_err("blocks not persisted before restart")?;
         let pacemaker_url = client
             .torii_url
-            .join("v1/sumeragi/pacemaker")
+            .join("v2/sumeragi/pacemaker")
             .wrap_err("compose pacemaker URL")?;
         let http = reqwest::Client::new();
 

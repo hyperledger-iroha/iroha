@@ -832,7 +832,7 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
+    let backend = "stark/fri/sha256-goldilocks-v1";
     let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
@@ -897,7 +897,7 @@ fn stark_open_verify_envelope_poseidon2_variant_verifies() {
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
-    let backend = "stark/fri-v1/poseidon2-goldilocks-v1";
+    let backend = "stark/fri/poseidon2-goldilocks-v1";
     let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
@@ -998,7 +998,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     };
     use iroha_primitives::json::Json;
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
+    let backend = "stark/fri/sha256-goldilocks-v1";
     let circuit_id = "ivm-execution-v1";
 
     // Minimal ZK-mode IVM program: metadata + `HALT`.
@@ -1174,9 +1174,9 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
-    let ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1";
-    let tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1";
+    let backend = "stark/fri/sha256-goldilocks-v1";
+    let ballot_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-ballot-v1";
+    let tally_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-tally-v1";
     let election_id = "stark-vote-e2e".to_string();
     let nullifier_domain = "gov:ballot:v1";
 
@@ -1366,9 +1366,9 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
-    let bad_ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:not-a-ballot-circuit";
-    let tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1";
+    let backend = "stark/fri/sha256-goldilocks-v1";
+    let bad_ballot_circuit_id = "stark/fri/sha256-goldilocks-v1:not-a-ballot-circuit";
+    let tally_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-tally-v1";
     let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:ballot:schema:v1").into();
     let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:tally:schema:v1").into();
 
@@ -1487,9 +1487,9 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
-    let backend = "stark/fri-v1/sha256-goldilocks-v1";
-    let ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1";
-    let bad_tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:not-a-tally-circuit";
+    let backend = "stark/fri/sha256-goldilocks-v1";
+    let ballot_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-ballot-v1";
+    let bad_tally_circuit_id = "stark/fri/sha256-goldilocks-v1:not-a-tally-circuit";
     let ballot_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:ballot:schema:v1").into();
     let tally_schema_hash: [u8; 32] = iroha_crypto::Hash::new(b"gov:vote:tally:schema:v1").into();
 
@@ -1736,9 +1736,9 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
     .expect("submit halo2 ballot");
 
     // Register a STARK VK/circuit pair and submit a valid STARK ballot.
-    let stark_backend = "stark/fri-v1/sha256-goldilocks-v1";
-    let stark_ballot_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1";
-    let stark_tally_circuit_id = "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1";
+    let stark_backend = "stark/fri/sha256-goldilocks-v1";
+    let stark_ballot_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-ballot-v1";
+    let stark_tally_circuit_id = "stark/fri/sha256-goldilocks-v1:vote-tally-v1";
     let stark_ballot_vk_id = VerifyingKeyId::new(stark_backend, "mixed_stark_ballot");
     let stark_ballot_vk_box =
         sample_stark_vk_box(stark_backend, stark_ballot_circuit_id, STARK_HASH_SHA256_V1);

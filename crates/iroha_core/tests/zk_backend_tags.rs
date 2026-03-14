@@ -73,7 +73,7 @@ fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
     let chain: ChainId = "test-chain".parse().unwrap();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa-v1/tiny-add-v1", [0u8; 32]);
+    let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add-v1", [0u8; 32]);
     let vk_box = halo2_fixture
         .vk_box("halo2/pasta/ipa-v1")
         .expect("fixture verifying key");

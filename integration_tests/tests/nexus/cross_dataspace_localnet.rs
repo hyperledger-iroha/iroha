@@ -340,11 +340,11 @@ fn npos_multilane_genesis_post_topology_transactions(
     let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset definition domain"),
+        "nexus".parse().expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset definition domain"),
+        "nexus".parse().expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
     let mut bootstrap_tx = vec![
@@ -377,7 +377,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
-    let mut validator_tx = Vec::with_capacity(TOTAL_PEERS * 2);
     for (index, peer) in topology.iter().enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
@@ -401,7 +400,7 @@ fn npos_multilane_genesis_post_topology_transactions(
             )
             .into(),
         );
-        validator_tx.push(
+        bootstrap_tx.push(
             RegisterPublicLaneValidator::new(
                 lane_id,
                 validator_id.clone(),
@@ -411,10 +410,10 @@ fn npos_multilane_genesis_post_topology_transactions(
             )
             .into(),
         );
-        validator_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
+        bootstrap_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
     }
 
-    vec![bootstrap_tx, validator_tx]
+    vec![bootstrap_tx]
 }
 
 fn wait_for_height(
@@ -926,27 +925,17 @@ fn leader_or_highest_height_peer_index(
         .0
 }
 
-fn preferred_lane_for_account(account_id: &AccountId) -> u32 {
-    if account_id == &*ALICE_ID {
-        DS1_LANE_INDEX
-    } else if account_id == &*BOB_ID {
-        DS2_LANE_INDEX
-    } else {
-        NEXUS_LANE_INDEX
-    }
-}
-
-fn lane_bounded_peer_index_for_account(
+fn lane_bounded_peer_index(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
-    account_id: &AccountId,
+    lane_index: u32,
 ) -> usize {
     let peers = network.peers();
     if peers.is_empty() {
         return 0;
     }
 
-    let lane_index = preferred_lane_for_account(account_id) as usize;
+    let lane_index = lane_index as usize;
     let start = lane_index.saturating_mul(VALIDATORS_PER_LANE);
     let end = start.saturating_add(VALIDATORS_PER_LANE).min(peers.len());
     if start >= end {
@@ -964,13 +953,14 @@ fn lane_bounded_peer_index_for_account(
         .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
 }
 
-fn leader_targeted_client_for_account(
+fn leader_targeted_client_for_lane(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
     account_id: &AccountId,
     private_key: &PrivateKey,
+    lane_index: u32,
 ) -> Client {
-    let index = lane_bounded_peer_index_for_account(network, status_client, account_id);
+    let index = lane_bounded_peer_index(network, status_client, lane_index);
     network.peers()[index].client_for(account_id, private_key.clone())
 }
 
@@ -1330,14 +1320,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         )?;
     }
 
-    let ds1_submitter = leader_targeted_client_for_account(
+    let ds1_submitter = leader_targeted_client_for_lane(
         &network,
         &alice,
         &ALICE_ID,
         ALICE_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
     );
-    let ds2_submitter =
-        leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+    let ds2_submitter = leader_targeted_client_for_lane(
+        &network,
+        &bob,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
     let (ds1_observation, ds2_observation) = {
         let _phase = phase_timings.phase("route probes ds1+ds2: tx submit + route wait");
         rt.block_on(async {
@@ -1407,11 +1403,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
     }
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset definition"),
+        "nexus".parse().expect("asset definition"),
         "ds1coin".parse().expect("asset definition"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset definition"),
+        "nexus".parse().expect("asset definition"),
         "ds2coin".parse().expect("asset definition"),
     );
     let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
@@ -1424,11 +1420,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let bob_ds2_asset = AssetId::new(ds2_asset_def.clone(), BOB_ID.clone());
 
     let setup_grants_barrier_target = {
-        let submitter = leader_targeted_client_for_account(
+        let submitter = leader_targeted_client_for_lane(
             &network,
             &alice,
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
         );
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let pre_barrier_height = alice
@@ -1511,11 +1508,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 SettlementAtomicity::AllOrNothing,
             ),
         );
-        let mut submitter = leader_targeted_client_for_account(
+        let mut submitter = leader_targeted_client_for_lane(
             &network,
             &alice,
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
         );
         let (successful_swap_tx, successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
@@ -1598,8 +1596,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 SettlementAtomicity::AllOrNothing,
             ),
         );
-        let mut submitter =
-            leader_targeted_client_for_account(&network, &bob, &BOB_ID, BOB_KEYPAIR.private_key());
+        let mut submitter = leader_targeted_client_for_lane(
+            &network,
+            &bob,
+            &BOB_ID,
+            BOB_KEYPAIR.private_key(),
+            DS2_LANE_INDEX,
+        );
         let (reverse_swap_tx, reverse_swap_entry_hash, reverse_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute reverse swap: tx submit enqueue");
             let pre_barrier_height = alice
@@ -1680,11 +1683,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let _phase = phase_timings.phase(format!(
             "soak {soak_iterations} iterations: paired swap throughput"
         ));
-        let mut soak_submitter = leader_targeted_client_for_account(
+        let mut soak_submitter = leader_targeted_client_for_lane(
             &network,
             &alice,
             &ALICE_ID,
             ALICE_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
         );
         for iteration in 0..soak_iterations {
             let iteration_started = Instant::now();
@@ -1692,11 +1696,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             for attempt in 0..SOAK_ITERATION_ATTEMPTS {
                 let attempt_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
                     let retarget_started = Instant::now();
-                    soak_submitter = leader_targeted_client_for_account(
+                    soak_submitter = leader_targeted_client_for_lane(
                         &network,
                         &alice,
                         &ALICE_ID,
                         ALICE_KEYPAIR.private_key(),
+                        DS1_LANE_INDEX,
                     );
                     let target_elapsed = retarget_started.elapsed();
                     let forward_swap = DvpIsi::new(
@@ -1962,11 +1967,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     SettlementAtomicity::AllOrNothing,
                 ),
             );
-            let submitter = leader_targeted_client_for_account(
+            let submitter = leader_targeted_client_for_lane(
                 &network,
                 &alice,
                 &ALICE_ID,
                 ALICE_KEYPAIR.private_key(),
+                DS1_LANE_INDEX,
             );
             let mut submitter = submitter;
             let failing_swap_tx = submitter
@@ -2054,11 +2060,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             SettlementAtomicity::AllOrNothing,
                         ),
                     );
-                    let submitter = leader_targeted_client_for_account(
+                    let submitter = leader_targeted_client_for_lane(
                         &network,
                         &alice,
                         &ALICE_ID,
                         ALICE_KEYPAIR.private_key(),
+                        DS1_LANE_INDEX,
                     );
                     let fallback_error = submitter
                         .submit_blocking(InstructionBox::from(final_fallback_swap))
@@ -2102,6 +2109,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     phase_timings.emit_summary();
 
     Ok(())
+}
+
+#[test]
+fn cross_dataspace_localnet_genesis_preexecution_smoke() {
+    // Build-only smoke test keeps genesis pre-execution coverage cheap and deterministic.
+    let _network = localnet_builder().build();
 }
 
 #[cfg(test)]
