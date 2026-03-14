@@ -2114,6 +2114,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 #[test]
 fn cross_dataspace_localnet_genesis_preexecution_smoke() {
     // Build-only smoke test keeps genesis pre-execution coverage cheap and deterministic.
+    let _guard = sandbox::serial_guard();
     let _network = localnet_builder().build();
 }
 

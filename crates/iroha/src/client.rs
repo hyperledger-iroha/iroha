@@ -8901,7 +8901,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_uaid_portfolio(&self, uaid: &str) -> Result<UaidPortfolioResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_portfolio.uaid")?;
-        let path = format!("v1/accounts/{canonical}/portfolio");
+        let path = format!("v2/accounts/{canonical}/portfolio");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
@@ -8929,7 +8929,7 @@ impl Client {
         query: Option<UaidBindingsQuery>,
     ) -> Result<UaidBindingsResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_bindings_with_query.uaid")?;
-        let path = format!("v1/space-directory/uaids/{canonical}");
+        let path = format!("v2/space-directory/uaids/{canonical}");
         let url = join_torii_url(&self.torii_url, &path);
         let builder = self
             .default_request(HttpMethod::GET, url)
@@ -8954,7 +8954,7 @@ impl Client {
         query: Option<UaidManifestQuery>,
     ) -> Result<UaidManifestsResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_manifests.uaid")?;
-        let path = format!("v1/space-directory/uaids/{canonical}/manifests");
+        let path = format!("v2/space-directory/uaids/{canonical}/manifests");
         let url = join_torii_url(&self.torii_url, &path);
         let builder = self
             .default_request(HttpMethod::GET, url)

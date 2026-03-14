@@ -11,7 +11,7 @@
         "dataspace": 12,
         "program": "cbdc.transfer",
         "method": "use_asset_handle",
-        "asset": "CBDC#centralbank",
+        "asset": "aid:6e156b5010e645f883eb831946b88db8",
         "role": "Participant"
       },
       "effect": {

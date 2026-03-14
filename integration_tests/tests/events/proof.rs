@@ -18,7 +18,7 @@ const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
 const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let vk_box = fixture
         .vk_box("halo2/ipa")
         .expect("fixture must include a verifying key");
