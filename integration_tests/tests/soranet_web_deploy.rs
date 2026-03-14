@@ -205,7 +205,7 @@ async fn fetch_payload(
     manifest_id_hex: &str,
     length: u64,
 ) -> Result<Vec<u8>> {
-    let fetch_url = torii_url.join("/v1/sorafs/storage/fetch")?;
+    let fetch_url = torii_url.join("/v2/sorafs/storage/fetch")?;
     let manifest_envelope = manifest_envelope_header(manifest_id_hex)?;
     let request = norito::json!({
         "manifest_id_hex": manifest_id_hex,

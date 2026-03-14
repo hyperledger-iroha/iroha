@@ -3882,15 +3882,16 @@ mod tests {
             };
             let selector = SelectorTuple::<Domain>::default();
 
-            let mut legacy = apply_query_postprocessing(
+            let mut historical = apply_query_postprocessing(
                 sample_sorted_domains().into_iter(),
                 selector.clone(),
                 &params,
                 QueryLimits::default(),
             )
-            .expect("legacy path");
-            let (legacy_first_batch, legacy_next) = legacy.next_batch(0).expect("legacy first");
-            let legacy_remaining = legacy.remaining();
+            .expect("historical path");
+            let (legacy_first_batch, legacy_next) =
+                historical.next_batch(0).expect("historical first");
+            let legacy_remaining = historical.remaining();
 
             let fast = stored_sorted_fast_start_params(&params, QueryLimits::default())
                 .expect("fast path selection")
@@ -3932,18 +3933,18 @@ mod tests {
         };
         let selector = SelectorTuple::<Domain>::default();
 
-        let mut legacy = apply_query_postprocessing(
+        let mut historical = apply_query_postprocessing(
             sample_sorted_domains().into_iter(),
             selector.clone(),
             &params,
             QueryLimits::default(),
         )
-        .expect("legacy path");
-        let (_legacy_first, legacy_cursor) = legacy.next_batch(0).expect("legacy first");
-        let expected_cursor = legacy_cursor.expect("legacy continuation");
-        let (legacy_second, _legacy_next) = legacy
+        .expect("historical path");
+        let (_legacy_first, legacy_cursor) = historical.next_batch(0).expect("historical first");
+        let expected_cursor = legacy_cursor.expect("historical continuation");
+        let (legacy_second, _legacy_next) = historical
             .next_batch(expected_cursor.get())
-            .expect("legacy second");
+            .expect("historical second");
         let expected_second_ids = domain_ids_from_batch(legacy_second);
 
         let fast = stored_sorted_fast_start_params(&params, QueryLimits::default())

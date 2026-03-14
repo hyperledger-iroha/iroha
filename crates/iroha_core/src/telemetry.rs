@@ -10896,7 +10896,7 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::telemetry"));
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 1,

@@ -93,8 +93,11 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                        .into(),
+                    Register::asset_definition(
+                        AssetDefinition::numeric(asset_def_id.clone())
+                            .with_name(asset_def_id.name().to_string()),
+                    )
+                    .into(),
                 )
                 .expect("register asset definition");
 

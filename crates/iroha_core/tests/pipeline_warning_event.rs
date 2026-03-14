@@ -104,7 +104,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
             writes: Vec::new(),
         })
         .collect();
-    let sidecar = PipelineRecoverySidecar::new_v1(
+    let sidecar = PipelineRecoverySidecar::new(
         height,
         block_hash,
         PipelineDagSnapshot {
@@ -222,7 +222,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let block_hash = new_block.header().hash();
     let mut fingerprint = [0u8; 32];
     fingerprint[..4].copy_from_slice(&[0xBA, 0xAD, 0xF0, 0x0D]);
-    let sidecar = PipelineRecoverySidecar::new_v1(
+    let sidecar = PipelineRecoverySidecar::new(
         height,
         block_hash,
         PipelineDagSnapshot {

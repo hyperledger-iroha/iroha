@@ -1600,8 +1600,8 @@ mod tests {
             Hash::new(&bytes)
         };
 
-        let backend = "stark/fri-v1/sha256-goldilocks-v1";
-        let circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
+        let backend = "stark/fri/sha256-goldilocks-v1";
+        let circuit_id = "stark/fri/sha256-goldilocks-v1:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -1755,8 +1755,8 @@ mod tests {
             Hash::new(&bytes)
         };
 
-        let backend = "stark/fri-v1/sha256-goldilocks-v1";
-        let circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
+        let backend = "stark/fri/sha256-goldilocks-v1";
+        let circuit_id = "stark/fri/sha256-goldilocks-v1:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -3691,24 +3691,24 @@ fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
+    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
         return (!rest.is_empty()).then(|| trimmed.to_string());
     }
     if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
     }
     if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
         if let Some(rest) = rest.strip_prefix("::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
     }
-    Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
+    Some(format!("halo2/pasta/ipa/{trimmed}"))
 }
 
 fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -4062,7 +4062,7 @@ fn extract_expected_single_row_columns(columns: Vec<Vec<[u8; 32]>>) -> Option<Ve
     Some(out)
 }
 
-const IVM_OVERLAY_BIND_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa-v1/ivm-overlay-bind-v1";
+const IVM_OVERLAY_BIND_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-overlay-bind-v1";
 
 fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
     backend == crate::zk::ZK_BACKEND_HALO2_IPA
@@ -4071,7 +4071,7 @@ fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
 }
 
-const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa-v1/ivm-execution-v1";
+const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-execution-v1";
 
 fn is_full_semantics_ivm_execution_circuit(backend: &str, circuit_id: &str) -> bool {
     if backend == crate::zk::ZK_BACKEND_HALO2_IPA {

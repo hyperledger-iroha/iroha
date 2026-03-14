@@ -17782,6 +17782,8 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn deferred_missing_payload_qc_expiry_is_bounded() {
+    let _worker_guard = status::worker_queue_test_guard();
+    status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
     status::reset_missing_block_fetch_counters_for_tests();
@@ -17845,6 +17847,8 @@ async fn deferred_missing_payload_qc_expiry_is_bounded() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn deferred_missing_payload_qc_expiry_defers_while_dependency_progress_recent() {
+    let _worker_guard = status::worker_queue_test_guard();
+    status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     status::reset_missing_block_fetch_counters_for_tests();
@@ -30927,7 +30931,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    let sidecar = crate::kura::RosterSidecar::new_v1(
+    let sidecar = crate::kura::RosterSidecar::new(
         4,
         block_hash,
         Some(commit_qc.clone()),
@@ -31070,7 +31074,7 @@ fn sidecar_quarantine_disables_sidecar_roster_usage() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    kura.write_roster_metadata(&crate::kura::RosterSidecar::new_v1(
+    kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
         height,
         block_hash,
         Some(commit_qc.clone()),
@@ -31244,7 +31248,7 @@ async fn sidecar_mismatch_on_uncommitted_height_does_not_quarantine() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF2; Hash::LENGTH]));
     actor
         .kura
-        .write_roster_metadata(&crate::kura::RosterSidecar::new_v1(
+        .write_roster_metadata(&crate::kura::RosterSidecar::new(
             height,
             stored_hash,
             None,
@@ -31293,7 +31297,7 @@ async fn sidecar_noncanonical_mismatch_retargets_missing_request_to_canonical_ha
         .expect("store canonical block");
     actor
         .kura
-        .write_roster_metadata(&crate::kura::RosterSidecar::new_v1(
+        .write_roster_metadata(&crate::kura::RosterSidecar::new(
             height,
             canonical_hash,
             None,
@@ -31557,7 +31561,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    let sidecar = crate::kura::RosterSidecar::new_v1(
+    let sidecar = crate::kura::RosterSidecar::new(
         6,
         block_hash,
         Some(commit_qc.clone()),
@@ -65219,6 +65223,8 @@ async fn reschedule_allows_fast_timeout_with_da_payload_available_when_enabled()
 
 #[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -66616,6 +66622,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
 async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
     let _worker_guard = super::status::worker_queue_test_guard();
     let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::set_tx_queue_backpressure(crate::queue::BackpressureState::Healthy {
         queued: 0,
         capacity: NonZeroUsize::new(1).expect("non-zero tx queue capacity"),

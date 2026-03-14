@@ -10,6 +10,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{
+        GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
         GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
         GovernanceStageApproval, GovernanceStageApprovals, State, World, WorldReadOnly,
     },
@@ -19,7 +20,10 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     events::data::governance::GovernanceEvent,
-    governance::types::ParliamentBody,
+    governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
+        ProposalKind,
+    },
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -46,11 +50,13 @@ fn referendum_open_and_close_by_height() {
 
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let pid = [0xAB; 32];
+    let rid = hex::encode(pid);
     {
         let mut sblock1 = state.block(header1);
         let mut stx1 = sblock1.transaction();
         stx1.world.governance_referenda_mut().insert(
-            "rid-auto-window".to_string(),
+            rid.clone(),
             GovernanceReferendumRecord {
                 h_start: 2,
                 h_end: 3,
@@ -58,6 +64,28 @@ fn referendum_open_and_close_by_height() {
                 mode: GovernanceReferendumMode::Plain,
             },
         );
+        let proposal = GovernanceProposalRecord {
+            proposer: iroha_test_samples::ALICE_ID.clone(),
+            kind: ProposalKind::DeployContract(DeployContractProposal {
+                namespace: "apps".into(),
+                contract_id: "auto-window.v1".into(),
+                code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32]))
+                    .expect("code hash"),
+                abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32]))
+                    .expect("abi hash"),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            created_height: header1.height().get(),
+            status: GovernanceProposalStatus::Proposed,
+            pipeline: GovernancePipeline::seeded(
+                header1.height().get(),
+                stx1.world.governance_referenda().get(&rid),
+                &stx1.gov,
+            ),
+            parliament_snapshot: None,
+        };
+        stx1.world.governance_proposals_mut().insert(pid, proposal);
         let mut approvals = GovernanceStageApprovals::default();
         approvals.stages.insert(
             ParliamentBody::RulesCommittee,
@@ -79,7 +107,7 @@ fn referendum_open_and_close_by_height() {
         );
         stx1.world
             .governance_stage_approvals_mut()
-            .insert("rid-auto-window".to_string(), approvals);
+            .insert(rid.clone(), approvals);
         stx1.apply();
 
         let has_opened_at_h1 = sblock1.world.take_external_events().iter().any(|event| {
@@ -103,14 +131,14 @@ fn referendum_open_and_close_by_height() {
         let referendum = view
             .world()
             .governance_referenda()
-            .get("rid-auto-window")
+            .get(&rid)
             .copied()
             .expect("referendum should persist after H=1");
         assert_eq!(referendum.status, GovernanceReferendumStatus::Proposed);
         let approvals = view
             .world()
             .governance_stage_approvals()
-            .get("rid-auto-window")
+            .get(&rid)
             .expect("stage approvals should persist after H=1");
         assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 0));
         assert!(approvals.quorum_met(ParliamentBody::AgendaCouncil, 0));
@@ -120,11 +148,6 @@ fn referendum_open_and_close_by_height() {
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     {
         let mut sblock2 = state.block(header2);
-        let status_open_at_h2 = sblock2
-            .world
-            .governance_referenda()
-            .get("rid-auto-window")
-            .is_some_and(|record| record.status == GovernanceReferendumStatus::Open);
         let has_opened_event_at_h2 = sblock2.world.take_external_events().iter().any(|event| {
             matches!(
                 event,
@@ -137,19 +160,20 @@ fn referendum_open_and_close_by_height() {
                     )
             )
         });
+        sblock2.commit().expect("commit block at H=2");
+        let status_open_at_h2 = state
+            .view()
+            .world()
+            .governance_referenda()
+            .get(&rid)
+            .is_some_and(|record| record.status == GovernanceReferendumStatus::Open);
         assert!(status_open_at_h2);
         assert!(has_opened_event_at_h2 || status_open_at_h2);
-        sblock2.commit().expect("commit block at H=2");
     }
 
     // Block H=3: closes.
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
-    let status_closed_at_h3 = sblock3
-        .world
-        .governance_referenda()
-        .get("rid-auto-window")
-        .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
     let has_closed_event_at_h3 = sblock3.world.take_external_events().iter().any(|event| {
         matches!(
             event,
@@ -162,7 +186,13 @@ fn referendum_open_and_close_by_height() {
                 )
         )
     });
+    sblock3.commit().expect("commit block at H=3");
+    let status_closed_at_h3 = state
+        .view()
+        .world()
+        .governance_referenda()
+        .get(&rid)
+        .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
     assert!(status_closed_at_h3);
     assert!(has_closed_event_at_h3 || status_closed_at_h3);
-    sblock3.commit().expect("commit block at H=3");
 }

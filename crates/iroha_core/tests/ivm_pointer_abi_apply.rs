@@ -128,7 +128,8 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         to.clone(),
         domain_id.clone(),
     )));
-    let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+    let new_asset_def =
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         1000u64,

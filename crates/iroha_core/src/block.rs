@@ -1098,15 +1098,14 @@ mod pipeline_recovery_tests {
             writes: Vec::new(),
         }];
 
-        let sidecar_mismatch =
-            PipelineRecoverySidecar::new_v1(height, other_hash, dag, txs.clone());
+        let sidecar_mismatch = PipelineRecoverySidecar::new(height, other_hash, dag, txs.clone());
         assert!(
             expected_pipeline_dag_fingerprint(height, block_hash, &[call_hash], &sidecar_mismatch)
                 .is_none(),
             "sidecars anchored to a different block hash should be ignored"
         );
 
-        let sidecar_match = PipelineRecoverySidecar::new_v1(height, block_hash, dag, txs);
+        let sidecar_match = PipelineRecoverySidecar::new(height, block_hash, dag, txs);
         assert_eq!(
             expected_pipeline_dag_fingerprint(height, block_hash, &[call_hash], &sidecar_match),
             Some(dag.fingerprint),
@@ -6651,7 +6650,7 @@ pub(crate) mod valid {
                 );
 
                 let mut sidecar =
-                    PipelineRecoverySidecar::new_v1(height, block_hash, dag_snapshot, txs_sidecar);
+                    PipelineRecoverySidecar::new(height, block_hash, dag_snapshot, txs_sidecar);
                 #[cfg(feature = "zk-preverify")]
                 {
                     let proofs = crate::zk::collect_trace_proofs_for_height(height);

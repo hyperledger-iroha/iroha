@@ -66,10 +66,9 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const PROOF_FETCH_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
-const STARK_BACKEND: &str = "stark/fri-v1/sha256-goldilocks-v1";
-const CIRCUIT_ID_VALID: &str = "stark/fri-v1/sha256-goldilocks-v1:cross-dataspace-verifyproof-v1";
-const CIRCUIT_ID_MISMATCH: &str =
-    "stark/fri-v1/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
+const STARK_BACKEND: &str = "stark/fri/sha256-goldilocks-v1";
+const CIRCUIT_ID_VALID: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v1";
+const CIRCUIT_ID_MISMATCH: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
 const SCHEMA_VALID: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v1";
 const SCHEMA_MISMATCH: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v2";
 
@@ -98,6 +97,14 @@ fn has_test_network_feature(feature: &str) -> bool {
                 .any(|item| item.trim() == feature)
         })
         .unwrap_or(false)
+}
+
+fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
+    ensure!(
+        has_test_network_feature(feature),
+        "{test_name}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` to execute the runtime path"
+    );
+    Ok(())
 }
 
 fn localnet_builder() -> NetworkBuilder {
@@ -363,7 +370,6 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
 }
 
 fn expected_lane_validators(network: &sandbox::SerializedNetwork) -> BTreeSet<String> {
-    let validator_domain: DomainId = "nexus".parse().expect("validator domain");
     network
         .peers()
         .iter()
@@ -524,7 +530,9 @@ async fn wait_for_route_probe_approval(
                             event.dataspace_id().as_u64()
                         );
                     }
-                    return Ok(RouteProbeOutcome::Rejected(format!("{reason}")));
+                    return Ok(RouteProbeOutcome::Rejected(format!(
+                        "{reason}; debug={reason:?}"
+                    )));
                 }
                 TransactionStatus::Expired => {
                     return Err(eyre!("{context}: route probe transaction expired"));
@@ -626,7 +634,9 @@ async fn wait_for_route_probe_rejection(
                             event.dataspace_id().as_u64()
                         );
                     }
-                    return Ok(RouteProbeOutcome::Rejected(format!("{reason}")));
+                    return Ok(RouteProbeOutcome::Rejected(format!(
+                        "{reason}; debug={reason:?}"
+                    )));
                 }
                 TransactionStatus::Expired => {
                     return Err(eyre!("{context}: route probe transaction expired"));
@@ -901,7 +911,7 @@ async fn fetch_proof_record_payload(
             .expect("torii_url must be a base URL");
         segments.clear();
         let proof_id_string = proof_id.to_string();
-        segments.extend(["v1", "proofs", proof_id_string.as_str()]);
+        segments.extend(["v2", "proofs", proof_id_string.as_str()]);
     }
 
     let response = HttpClient::builder()
@@ -1004,12 +1014,10 @@ async fn wait_for_absent_proof_record(
 
 #[tokio::test]
 async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Result<()> {
-    if !has_test_network_feature("zk-stark") {
-        eprintln!(
-            "skipping stark_cross_dataspace_verifyproof_validity_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
-        );
-        return Ok(());
-    }
+    require_test_network_feature(
+        "zk-stark",
+        stringify!(stark_cross_dataspace_verifyproof_validity_without_payload_leak),
+    )?;
 
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
@@ -1026,7 +1034,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
@@ -1134,12 +1141,10 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
 #[tokio::test]
 async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak()
 -> Result<()> {
-    if !has_test_network_feature("zk-stark") {
-        eprintln!(
-            "skipping stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
-        );
-        return Ok(());
-    }
+    require_test_network_feature(
+        "zk-stark",
+        stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
+    )?;
 
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
@@ -1156,7 +1161,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
@@ -1263,12 +1267,10 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
 
 #[tokio::test]
 async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> Result<()> {
-    if !has_test_network_feature("zk-stark") {
-        eprintln!(
-            "skipping stark_cross_dataspace_verifyproof_rejection_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
-        );
-        return Ok(());
-    }
+    require_test_network_feature(
+        "zk-stark",
+        stringify!(stark_cross_dataspace_verifyproof_rejection_without_payload_leak),
+    )?;
 
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
@@ -1285,7 +1287,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,
@@ -1420,12 +1421,12 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
 #[tokio::test]
 async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak()
 -> Result<()> {
-    if !has_test_network_feature("zk-stark") {
-        eprintln!(
-            "skipping stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak: set TEST_NETWORK_IROHAD_FEATURES=zk-stark"
-        );
-        return Ok(());
-    }
+    require_test_network_feature(
+        "zk-stark",
+        stringify!(
+            stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak
+        ),
+    )?;
 
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
@@ -1444,7 +1445,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let nexus_observer = network.peer().client_for(
         &nexus_observer_id,

@@ -36,7 +36,7 @@ fn decodes_android_approve_frame_fixture() {
             assert_eq!(parsed.to_string(), account_id);
             assert!(
                 !account_id.contains('@'),
-                "fixture must not use legacy account@domain literal"
+                "fixture must not use historical account@domain literal"
             );
             assert_eq!(permissions, None);
             assert_eq!(proof, None);

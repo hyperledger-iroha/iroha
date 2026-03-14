@@ -73,7 +73,7 @@ mod vote_tally_bundle {
     }
 
     fn generate_bundle() -> Result<VoteTallyArtifacts> {
-        const BACKEND: &str = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
+        const BACKEND: &str = "halo2/pasta/ipa/vote-bool-commit-merkle8-v1";
         const CIRCUIT_ID: &str = "halo2/pasta/vote-bool-commit-merkle8-v1";
         const K: u32 = 6;
 
