@@ -549,8 +549,12 @@ impl AccountAddress {
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the input cannot be decoded as I105
-    /// (or if the discriminant sentinel mismatches expectations).
+    /// Returns [`AccountAddressError::UnsupportedAddressFormat`] for unsupported
+    /// non-I105 literals (including canonical-hex parser input) and malformed
+    /// I105 lexical forms.
+    ///
+    /// Preserves semantic decode failures such as checksum and discriminant
+    /// mismatches.
     pub fn parse_encoded(
         input: &str,
         expected_discriminant: Option<u16>,
@@ -561,9 +565,14 @@ impl AccountAddress {
         }
         match Self::from_i105_for_discriminant(trimmed, expected_discriminant) {
             Ok(address) => Ok(address),
-            Err(AccountAddressError::MissingI105Sentinel) => {
-                Err(AccountAddressError::UnsupportedAddressFormat)
-            }
+            Err(
+                AccountAddressError::MissingI105Sentinel
+                | AccountAddressError::I105TooShort
+                | AccountAddressError::InvalidI105Char(_)
+                | AccountAddressError::InvalidI105Base
+                | AccountAddressError::InvalidI105Digit(_)
+                | AccountAddressError::UnsupportedAddressFormat,
+            ) => Err(AccountAddressError::UnsupportedAddressFormat),
             Err(err) => Err(err),
         }
     }
