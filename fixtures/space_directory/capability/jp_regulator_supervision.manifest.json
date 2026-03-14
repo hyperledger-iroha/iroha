@@ -24,7 +24,7 @@
         "dataspace": 32,
         "program": "cbdc.supervision",
         "method": "issue_stop_order",
-        "asset": "CBDC#yen",
+        "asset": "aid:550e8400e29b41d4a7164466554400ee",
         "role": "Initiator"
       },
       "effect": {

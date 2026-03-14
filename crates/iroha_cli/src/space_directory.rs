@@ -1389,7 +1389,7 @@ mod tests {
         let allow_args = ManifestScaffoldAllowArgs {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
-            asset: Some("cbdc#centralbank".to_owned()),
+            asset: Some("aid:6e156b5010e645f883eb831946b88db8".to_owned()),
             role: Some("initiator".to_owned()),
             max_amount: Some("500000000".to_owned()),
             window: Some("per-day".to_owned()),

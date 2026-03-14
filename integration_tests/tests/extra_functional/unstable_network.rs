@@ -1007,6 +1007,7 @@ impl UnstableNetwork {
             &asset_definition_id,
             self.n_rounds,
             expected_height,
+            self.force_soft_fork,
         )
         .await?;
 
@@ -1575,9 +1576,15 @@ impl UnstableNetwork {
         asset_definition_id: &AssetDefinitionId,
         rounds: usize,
         expected_height: u64,
+        force_soft_fork: bool,
     ) -> Result<()> {
         let peers = network.peers();
         let expected = Numeric::new(rounds as u128, 0);
+        let expected_floor = if force_soft_fork {
+            Numeric::new(rounds.saturating_sub(1) as u128, 0)
+        } else {
+            expected.clone()
+        };
         let deadline =
             Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
         loop {
@@ -1612,7 +1619,9 @@ impl UnstableNetwork {
                     };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
-                    if *asset.value() == expected {
+                    if *asset.value() == expected
+                        || (force_soft_fork && *asset.value() == expected_floor)
+                    {
                         return Ok(());
                     }
                 }
@@ -1620,7 +1629,7 @@ impl UnstableNetwork {
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "total supply did not reach expected {expected} with expected height >= {expected_height}; last seen value: {last_seen:?}; last height: {last_height:?}"
+                    "total supply did not reach expected range [{expected_floor}, {expected}] with expected height >= {expected_height}; last seen value: {last_seen:?}; last height: {last_height:?}"
                 ));
             }
             sleep(Duration::from_millis(200)).await;
