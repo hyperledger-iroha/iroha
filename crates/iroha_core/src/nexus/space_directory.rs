@@ -306,7 +306,7 @@ mod tests {
 
     fn sample_manifest(dataspace: u32) -> AssetPermissionManifest {
         AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::manifest")),
             dataspace: DataSpaceId::new(u64::from(dataspace)),
             issued_ms: 123,
@@ -375,7 +375,7 @@ mod tests {
 
         if with_manifest {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 1,

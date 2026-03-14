@@ -406,24 +406,24 @@ pub mod isi {
         if trimmed.is_empty() {
             return None;
         }
-        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
+        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
             return (!rest.is_empty()).then(|| trimmed.to_string());
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
             if let Some(rest) = rest.strip_prefix("::") {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
             if let Some(rest) = rest.strip_prefix(':') {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
             if let Some(rest) = rest.strip_prefix('/') {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
         }
-        Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
+        Some(format!("halo2/pasta/ipa/{trimmed}"))
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -456,7 +456,7 @@ pub mod isi {
             // Enforce canonical STARK vote circuit roles to avoid swapping ballot/tally VKs.
             circuit_id_matches(backend, record_circuit_id, expected_id)
         } else {
-            // Preserve existing Halo2 and legacy backend behavior for backwards compatibility.
+            // Preserve existing Halo2 and historical backend behavior for backwards compatibility.
             true
         }
     }
@@ -11288,44 +11288,44 @@ pub mod isi {
         #[test]
         fn normalize_halo2_circuit_id_and_match_variants() {
             assert_eq!(
-                normalize_halo2_circuit_id(" halo2/pasta/ipa-v1/foo "),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                normalize_halo2_circuit_id(" halo2/pasta/ipa/foo "),
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(
                 normalize_halo2_circuit_id("halo2/pasta/foo"),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(
                 normalize_halo2_circuit_id("halo2/ipa:foo"),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(normalize_halo2_circuit_id(""), None);
 
             assert!(circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:zk-vote"
             ));
             assert!(!circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:other"
             ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
             assert!(voting_circuit_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/any-circuit",
+                "halo2/pasta/ipa/any-circuit",
                 "vote-ballot-v1"
             ));
             assert!(voting_circuit_matches(
-                "stark/fri-v1/sha256-goldilocks-v1",
-                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
+                "stark/fri/sha256-goldilocks-v1",
+                "stark/fri/sha256-goldilocks-v1:vote-ballot-v1",
                 "vote-ballot-v1"
             ));
             assert!(!voting_circuit_matches(
-                "stark/fri-v1/sha256-goldilocks-v1",
-                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
+                "stark/fri/sha256-goldilocks-v1",
+                "stark/fri/sha256-goldilocks-v1:vote-tally-v1",
                 "vote-ballot-v1"
             ));
         }
@@ -11336,7 +11336,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut vk_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/test-circuit",
+                "halo2/pasta/ipa/test-circuit",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11390,7 +11390,7 @@ pub mod isi {
             let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&schema).into();
             let mut vk_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/test-circuit",
+                "halo2/pasta/ipa/test-circuit",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11423,7 +11423,7 @@ pub mod isi {
         fn enforce_vk_max_proof_bytes_rejects_too_large() {
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/max-proof",
+                "halo2/pasta/ipa/max-proof",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11481,7 +11481,7 @@ pub mod isi {
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
 
-            let parsed = extract_vote_public_inputs("stark/fri-v1/sha256-goldilocks-v1", &payload)
+            let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks-v1", &payload)
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
@@ -11491,14 +11491,13 @@ pub mod isi {
         fn decode_open_verify_envelope_accepts_stark_backend() {
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Stark,
-                "stark/fri-v1/sha256-goldilocks-v1:dummy-circuit",
+                "stark/fri/sha256-goldilocks-v1:dummy-circuit",
                 [0u8; 32],
                 vec![1, 2, 3],
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            let proof_box =
-                ProofBox::new("stark/fri-v1/sha256-goldilocks-v1".into(), bytes.clone());
+            let proof_box = ProofBox::new("stark/fri/sha256-goldilocks-v1".into(), bytes.clone());
             let decoded = decode_open_verify_envelope(&proof_box).expect("decode");
             assert_eq!(decoded.backend, BackendTag::Stark);
             assert_eq!(decoded.circuit_id, envelope.circuit_id);
@@ -11521,7 +11520,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/tiny-add2inst-public-v1",
+                "halo2/pasta/ipa/tiny-add2inst-public-v1",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11600,7 +11599,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/vk-ok",
+                "halo2/pasta/ipa/vk-ok",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11647,13 +11646,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks-v1";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
+                "stark/fri/sha256-goldilocks-v1:vote-ballot-v1",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11674,7 +11673,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
+                "stark/fri/sha256-goldilocks-v1:vote-tally-v1",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11723,13 +11722,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks-v1";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:not-a-ballot-circuit",
+                "stark/fri/sha256-goldilocks-v1:not-a-ballot-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11748,7 +11747,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:not-a-tally-circuit",
+                "stark/fri/sha256-goldilocks-v1:not-a-tally-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11806,7 +11805,7 @@ pub mod isi {
             dataspace: DataSpaceId,
         ) {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 0,

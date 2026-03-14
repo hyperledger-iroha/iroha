@@ -72,7 +72,7 @@ async fn fetch_commit_certificates(
 ) -> Result<Vec<Qc>> {
     let base = reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii URL {torii}"))?;
     let mut url = base
-        .join("v1/sumeragi/commit-certificates")
+        .join("v2/sumeragi/commit-certificates")
         .wrap_err_with(|| format!("compose commit-certificates URL for {torii}"))?;
     {
         let mut pairs = url.query_pairs_mut();

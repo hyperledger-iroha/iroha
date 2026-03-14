@@ -145,7 +145,7 @@ pub mod torii;
 pub mod tx;
 /// Zero-knowledge verification helpers (backend dispatch + envelope validation).
 pub mod zk;
-/// Native STARK/FRI verifier under `zk-stark` (`stark/fri-v1/*`).
+/// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
 #[cfg(feature = "zk-stark")]
 pub mod zk_stark;
 
@@ -168,7 +168,7 @@ pub fn validate_genesis_block(
 #[cfg(test)]
 /// Test-only helpers shared across core modules.
 pub mod test_alias {
-    /// Legacy helper retained for callers; account alias resolvers are no longer installed.
+    /// Historical helper retained for callers; account alias resolvers are no longer installed.
     pub fn ensure() {
         // No-op by design.
     }
@@ -241,7 +241,7 @@ pub enum NetworkMessage {
     /// Network Time Service: time synchronization pong.
     TimePong(Box<crate::time::TimePong>),
     /// Iroha Connect (WalletConnect-style) frame relay.
-    Connect(Box<connect_proto::ConnectFrameV1>),
+    Connect(Box<connect_proto::ConnectFrame>),
     /// Norito Streaming control-plane frame.
     StreamingControl(Box<ControlFrame>),
     /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).

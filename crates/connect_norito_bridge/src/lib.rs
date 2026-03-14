@@ -12057,7 +12057,7 @@ mod tests {
         };
         assert_eq!(
             canonical_err_value.get("code").and_then(JsonValue::as_str),
-            Some("ERR_UNSUPPORTED_ADDRESS_FORMAT")
+            Some("ERR_INVALID_I105_CHAR")
         );
         connect_norito_free(canonical_err_ptr);
 

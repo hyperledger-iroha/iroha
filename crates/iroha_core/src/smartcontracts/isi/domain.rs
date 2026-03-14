@@ -212,7 +212,7 @@ pub mod isi {
             return false;
         }
 
-        // Fallback for legacy/normalized literals is only safe when the subject
+        // Fallback for historical/normalized literals is only safe when the subject
         // is scoped to a single domain.
         subject_domains.len() == 1
     }
@@ -2665,7 +2665,7 @@ mod tests {
         F: FnOnce(&mut SpaceDirectoryManifestRecord),
     {
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 0,

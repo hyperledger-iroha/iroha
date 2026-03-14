@@ -559,7 +559,7 @@ mod prf_collectors_tests {
     }
 }
 
-/// Legacy rotation keyed to the previous block hash.
+/// Historical rotation keyed to the previous block hash.
 ///
 /// This helper produces a `Topology` whose Set A (first `min_votes_for_commit()` peers)
 /// is rotated left by `hash(prev_block_hash) mod min_votes_for_commit` positions. The
@@ -573,7 +573,7 @@ mod prf_collectors_tests {
 /// Invariants
 /// - Deterministic across nodes and hardware.
 /// - Independent of any observed QC signer set for the same height.
-/// - Legacy behavior; permissioned mode now uses PRF-based ordering.
+/// - Historical behavior; permissioned mode now uses PRF-based ordering.
 ///
 /// Example
 /// ```ignore

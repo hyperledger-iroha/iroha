@@ -2551,7 +2551,7 @@ pub mod query {
             let mut alice_manifest_record =
                 crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
                     AssetPermissionManifest {
-                        version: iroha_data_model::nexus::ManifestVersion::V1,
+                        version: iroha_data_model::nexus::ManifestVersion::default(),
                         uaid: uaid_alice,
                         dataspace: dsid,
                         issued_ms: 1,
@@ -2564,7 +2564,7 @@ pub mod query {
             let mut bob_manifest_record =
                 crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
                     AssetPermissionManifest {
-                        version: iroha_data_model::nexus::ManifestVersion::V1,
+                        version: iroha_data_model::nexus::ManifestVersion::default(),
                         uaid: uaid_bob,
                         dataspace: dsid,
                         issued_ms: 1,

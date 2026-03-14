@@ -65,7 +65,7 @@ fn native_ipa_envelope_bytes() -> Vec<u8> {
 }
 
 fn native_ipa_attachment() -> iroha_data_model::proof::ProofAttachment {
-    let backend = "halo2/ipa-v1/poly-open";
+    let backend = "halo2/ipa/poly-open";
     let proof = iroha_data_model::proof::ProofBox::new(backend.into(), native_ipa_envelope_bytes());
     let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), Vec::new());
     iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof, vk)
@@ -99,7 +99,11 @@ fn register_zk_asset_writes_policy_metadata() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -187,7 +191,11 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -272,7 +280,11 @@ fn schedule_confidential_policy_transition_records_pending() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -384,7 +396,11 @@ fn confidential_policy_transition_applies_at_effective_height() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -506,7 +522,11 @@ fn cancel_confidential_policy_transition_clears_pending() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -622,7 +642,11 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -695,7 +719,11 @@ fn shield_rejected_when_policy_disallows() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
         stx.world
@@ -775,7 +803,11 @@ fn unshield_rejected_when_policy_disallows() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         stx.world
             .executor()
@@ -855,7 +887,11 @@ fn zk_transfer_rejected_when_policy_transparent() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
         stx.world
@@ -990,7 +1026,11 @@ fn shield_burns_and_unshield_mints() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -1213,7 +1253,11 @@ fn zk_roots_are_bounded_in_world_state() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
         iroha_data_model::isi::zk::RegisterZkAsset::new(
@@ -1369,7 +1413,11 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         for instr in [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_def_id.clone())
+                    .with_name(asset_def_id.name().to_string()),
+            )
+            .into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),

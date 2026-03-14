@@ -352,7 +352,7 @@ mod halo2_bundle {
     pub fn add2inst_public_bundle(commit: u64, root: u64) -> AddTwoInstPublicProofBundle {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
-        let backend = "halo2/pasta/ipa-v1/tiny-add2inst-public-v1";
+        let backend = "halo2/pasta/ipa/tiny-add2inst-public-v1";
         let name = "ballot_v1";
         let k: u32 = 6;
 
@@ -478,7 +478,7 @@ mod halo2_bundle {
         };
 
         let backend = "halo2/ipa";
-        let envelope_circuit_id = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
+        let envelope_circuit_id = "halo2/pasta/ipa/vote-bool-commit-merkle8-v1";
         let circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1";
         let name = "tally_v1";
         let k: u32 = 6;

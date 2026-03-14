@@ -1629,7 +1629,7 @@ impl RejectionStatsArgs {
         let endpoint = context
             .config()
             .torii_api_url
-            .join("v1/offline/rejections")
+            .join("v2/offline/rejections")
             .map_err(|err| eyre!("failed to derive /v2/offline/rejections URL: {err}"))?;
         let client = BlockingHttpClient::builder()
             .timeout(Duration::from_secs(10))

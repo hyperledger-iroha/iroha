@@ -69,9 +69,11 @@ fn asset_totals_track_multi_account_mint_and_burn() {
         "wonderland".parse().unwrap(),
         "multi_total".parse().unwrap(),
     );
-    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register asset definition");
+    Register::asset_definition(
+        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
+    )
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register asset definition");
 
     Mint::asset_numeric(
         50_u32,
@@ -178,9 +180,11 @@ fn asset_totals_drop_when_unregistering_account() {
         "wonderland".parse().unwrap(),
         "account_drop".parse().unwrap(),
     );
-    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register definition");
+    Register::asset_definition(
+        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register definition");
 
     Mint::asset_numeric(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
         .execute(&ALICE_ID, &mut stx_1)
@@ -225,7 +229,7 @@ fn asset_totals_drop_when_unregistering_account() {
 }
 
 #[test]
-fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
+fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -275,9 +279,11 @@ fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
         "source".parse().unwrap(),
         "domain_drop".parse().unwrap(),
     );
-    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source definition");
+    Register::asset_definition(
+        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register source definition");
 
     Mint::asset_numeric(
         7_u32,
@@ -317,7 +323,7 @@ fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
         .expect("source definition should remain");
-    assert_eq!(definition.total_quantity(), &numeric!(7));
+    assert_eq!(definition.total_quantity(), &numeric!(40));
 
     let manual_total = FindAssets::new()
         .execute(CompoundPredicate::PASS, &view)
@@ -327,14 +333,14 @@ fn asset_totals_drop_when_unregistering_domain_with_foreign_holders() {
             acc.checked_add(asset.value().clone())
                 .expect("manual total should not overflow")
         });
-    assert_eq!(manual_total, numeric!(7));
+    assert_eq!(manual_total, numeric!(40));
 
     assert!(
         FindAccounts::new()
             .execute(CompoundPredicate::PASS, &view)
             .expect("query accounts")
-            .all(|account| account.id() != &foreign_holder),
-        "foreign holder should be removed with its domain"
+            .any(|account| account.id() == &foreign_holder),
+        "foreign subject should remain after domain removal"
     );
 }
 
@@ -389,9 +395,11 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         "source".parse().unwrap(),
         "teardown".parse().unwrap(),
     );
-    Register::asset_definition(AssetDefinition::numeric(definition_id.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source definition");
+    Register::asset_definition(
+        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
+    )
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("register source definition");
 
     Mint::asset_numeric(
         4_u32,
