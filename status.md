@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-14
 
+## 2026-03-14 Follow-up: account-address strict parser error normalization
+- Fixed `AccountAddress::parse_encoded` (`crates/iroha_data_model/src/account/address.rs`)
+  to normalize unsupported/non-I105 parser input back to
+  `AccountAddressError::UnsupportedAddressFormat` instead of leaking low-level
+  lexical errors like `InvalidI105Char`.
+  - Normalized variants: `MissingI105Sentinel`, `I105TooShort`,
+    `InvalidI105Char`, `InvalidI105Base`, `InvalidI105Digit`,
+    and `UnsupportedAddressFormat`.
+  - Preserved semantic decode errors (for example, `ChecksumMismatch` and
+    `UnexpectedNetworkPrefix`) unchanged.
+- Updated the `parse_encoded` doc comment to reflect the normalized
+  error-contract for strict parser callers and FFI consumers.
+- Validation (this follow-up):
+  - `cargo test -p iroha_data_model parse_encoded_rejects_unknown_format -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model parse_encoded_accepts_only_i105 -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge account_address_parse_render_via_ffi -- --nocapture` (pass)
+  - `cargo fmt --all` (pass)
+
 ## 2026-03-14 Follow-up: offline app API account domain-link compile fix
 - Fixed `crates/iroha_torii/tests/offline_app_api.rs` account fixtures that failed
   to compile after `Account::linked_domains` became an explicit field.
