@@ -3,9 +3,16 @@
  * Copy the compiled `iroha_js_host` dynamic library into a `.node` artefact
  * that Node.js can load via `require`.
  */
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..");
@@ -34,6 +41,27 @@ if (!existsSync(source)) {
 const destDir = join(repoRoot, "javascript", "iroha_js", "native");
 mkdirSync(destDir, { recursive: true });
 const dest = join(destDir, "iroha_js_host.node");
+const checksumManifestPath = join(destDir, "iroha_js_host.checksums.json");
 
 copyFileSync(source, dest);
 console.log(`Copied native module to ${dest}`);
+
+const sha256 = createHash("sha256")
+  .update(readFileSync(dest))
+  .digest("hex");
+const platformKey = `${process.platform}-${process.arch}`.toLowerCase();
+writeFileSync(
+  checksumManifestPath,
+  `${JSON.stringify(
+    {
+      entries: {
+        [platformKey]: {
+          sha256,
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
+console.log(`Wrote checksum manifest to ${checksumManifestPath}`);
