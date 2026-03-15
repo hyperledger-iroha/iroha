@@ -52,7 +52,7 @@ ilova ichidagi artefaktlar (Xcode loyihasi simlari, ChaChaPoly-dan foydalanish v
    Skript iOS va macOS maqsadlari uchun Rust ko'prigi kutubxonasini to'playdi va ularni birlashtiradi
    Natijada bitta XCFramework katalogi ostidagi statik kutubxonalar.
    Bundan tashqari, `dist/NoritoBridge.artifacts.json` chiqaradi, ko'prik versiyasini va
-   har bir platforma uchun SHA-256 xeshlari (agar `NORITO_BRIDGE_VERSION` bilan versiyani bekor qiling.
+   har bir platforma uchun SHA-256 xeshlari (agar `--bridge-version <version>` bilan versiyani bekor qiling.
    kerak).
 
 2. Tarqatish uchun XCFrameworkni zip qiling:

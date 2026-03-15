@@ -31,6 +31,36 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAssetId("norito:")
     }
 
+    func testEncodeAssetIdFromComponentsMatchesLiteralEncoding() throws {
+        guard NoritoNativeBridge.shared.canEncodeAssetIdLiteral else {
+            throw XCTSkip("connect_norito_encode_asset_id_literal is unavailable in this runtime")
+        }
+        let accountId = try makeI105(seed: 7)
+        let literal = try OfflineNorito.assetIdLiteral(assetDefinitionId: "usd#wonderland", accountId: accountId)
+        let encodedFromLiteral = try OfflineNorito.encodeAssetId(literal)
+        let encodedFromParts = try OfflineNorito.encodeAssetId(
+            assetDefinitionId: "usd#wonderland",
+            accountId: accountId
+        )
+        XCTAssertEqual(literal.hasPrefix("norito:"), true)
+        XCTAssertEqual(encodedFromParts, encodedFromLiteral)
+    }
+
+    func testAssetIdLiteralBuilderRejectsAliasWithoutOnlineResolution() throws {
+        let accountId = try makeI105(seed: 9)
+        XCTAssertThrowsError(
+            try OfflineNorito.assetIdLiteral(
+                assetDefinitionId: "usd#issuer@main",
+                accountId: accountId
+            )
+        ) { error in
+            guard case let OfflineNoritoError.invalidAssetId(raw) = error else {
+                return XCTFail("Expected invalidAssetId error, got \(error)")
+            }
+            XCTAssertEqual(raw, "usd#issuer@main")
+        }
+    }
+
     func testEncodeAccountIdAcceptsI105AndI105DefaultForms() throws {
         let address = try makeAddress(seed: 1)
         let i105 = try address.toI105(networkPrefix: 0x02F1)

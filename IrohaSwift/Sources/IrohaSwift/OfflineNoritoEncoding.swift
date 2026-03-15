@@ -10,6 +10,7 @@ public enum OfflineNoritoError: Error, LocalizedError {
     case invalidAccountId(String)
     case invalidHash(String)
     case invalidMetadata(String)
+    case nativeBridgeUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ public enum OfflineNoritoError: Error, LocalizedError {
             return "Invalid hash: \(value)"
         case let .invalidMetadata(value):
             return "Invalid metadata payload: \(value)"
+        case let .nativeBridgeUnavailable(symbol):
+            return "Native Norito bridge is unavailable for symbol: \(symbol)"
         }
     }
 }
@@ -281,6 +284,42 @@ enum OfflineNorito {
 
     static func encodeAssetId(_ assetId: String) throws -> Data {
         try decodeNoritoAssetIdLiteral(assetId)
+    }
+
+    static func encodeAssetId(assetDefinitionId: String, accountId: String) throws -> Data {
+        let literal = try assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
+        return try encodeAssetId(literal)
+    }
+
+    static func assetIdLiteral(assetDefinitionId: String, accountId: String) throws -> String {
+        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDefinition.isEmpty else {
+            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+        }
+        if trimmedDefinition.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+        }
+        if trimmedDefinition.contains("@") {
+            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
+        }
+
+        let canonicalAccount = try canonicalizeEncodedAccountId(accountId)
+        let bridge = NoritoNativeBridge.shared
+        if let encoded = bridge.encodeAssetIdLiteral(
+            assetDefinition: trimmedDefinition,
+            accountId: canonicalAccount
+        ) {
+            let normalized = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+
+        if bridge.canEncodeAssetIdLiteral {
+            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
+        }
+
+        throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_encode_asset_id_literal")
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {

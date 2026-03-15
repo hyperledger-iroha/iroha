@@ -697,6 +697,166 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAccountAliasAsync() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["alias"] as? String, "alice")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "alias":"alice",
+              "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "index":7,
+              "source":"world_state"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let resolved = try await makeClient().resolveAccountAlias("alice")
+        XCTAssertEqual(resolved?.alias, "alice")
+        XCTAssertEqual(resolved?.accountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(resolved?.index, 7)
+        XCTAssertEqual(resolved?.source, "world_state")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveAccountAliasReturnsNilOnNotFound() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/aliases/resolve")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data())
+        }
+
+        let resolved = try await makeClient().resolveAccountAlias("missing-alias")
+        XCTAssertNil(resolved)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testBuildAssetIdLiteralResolvingAliases() async throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 3, count: 32))
+        let accountAddress = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        let accountId = try accountAddress.toI105(networkPrefix: 0x02F1)
+        let client = makeClient()
+        let encodeCallsQueue = DispatchQueue(label: "ToriiClientTests.assetIdBuilder.calls.alias")
+        var encodeCalls: [(String, String)] = []
+        client.assetIdLiteralBuilder = { assetDefinitionId, account in
+            encodeCallsQueue.sync {
+                encodeCalls.append((assetDefinitionId, account))
+            }
+            return "norito:aa"
+        }
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/aliases/resolve":
+                let payload = self.bodyJSON(from: request)
+                XCTAssertEqual(payload["alias"] as? String, "alice")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"alias":"alice","account_id":"\(accountId)","index":1}
+                """.data(using: .utf8)!
+                return (response, body)
+            case "/v1/assets/aliases/resolve":
+                let payload = self.bodyJSON(from: request)
+                XCTAssertEqual(payload["alias"] as? String, "usd#issuer@main")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"alias":"usd#issuer@main","asset_definition_id":"usd#wonderland","asset_name":"USD"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 404,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let literal = try await client.buildAssetIdLiteralResolvingAliases(
+            assetDefinitionIdOrAlias: "usd#issuer@main",
+            accountIdOrAlias: "alice"
+        )
+        XCTAssertEqual(literal, "norito:aa")
+        let observedCalls = encodeCallsQueue.sync { encodeCalls }
+        XCTAssertEqual(observedCalls.count, 1)
+        XCTAssertEqual(observedCalls.first?.0, "usd#wonderland")
+        XCTAssertEqual(observedCalls.first?.1, accountId)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAssetIdAliasFallbackForInvalidNonAliasDefinition() async throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 4, count: 32))
+        let accountAddress = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        let accountId = try accountAddress.toI105(networkPrefix: 0x02F1)
+        let client = makeClient()
+        let encodeCallsQueue = DispatchQueue(label: "ToriiClientTests.assetIdBuilder.calls.fallback")
+        var encodeCalls: [(String, String)] = []
+        client.assetIdLiteralBuilder = { assetDefinitionId, account in
+            encodeCallsQueue.sync {
+                encodeCalls.append((assetDefinitionId, account))
+            }
+            if assetDefinitionId == "symbol-without-domain" {
+                throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+            }
+            return "norito:bb"
+        }
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/assets/aliases/resolve":
+                let payload = self.bodyJSON(from: request)
+                XCTAssertEqual(payload["alias"] as? String, "symbol-without-domain")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"alias":"symbol-without-domain","asset_definition_id":"usd#wonderland","asset_name":"USD"}
+                """.data(using: .utf8)!
+                return (response, body)
+            case "/v1/aliases/resolve":
+                XCTFail("account alias endpoint should not be called for canonical account ids")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 404,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, Data())
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 404,
+                                               httpVersion: nil,
+                                               headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let literal = try await client.buildAssetIdLiteralResolvingAliases(
+            assetDefinitionIdOrAlias: "symbol-without-domain",
+            accountIdOrAlias: accountId
+        )
+        XCTAssertEqual(literal, "norito:bb")
+        let observedCalls = encodeCallsQueue.sync { encodeCalls }
+        XCTAssertEqual(observedCalls.map(\.0), ["symbol-without-domain", "usd#wonderland"])
+        XCTAssertEqual(observedCalls.map(\.1), [accountId, accountId])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionAsync() async throws {
         StubURLProtocol.handler = { request in
             switch request.url?.path {

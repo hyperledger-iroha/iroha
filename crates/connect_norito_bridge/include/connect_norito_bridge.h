@@ -915,6 +915,11 @@ int32_t connect_norito_decode_signed_transaction_json(
     const uint8_t* signed_bytes, unsigned long signed_len,
     uint8_t** out_json_ptr, unsigned long* out_json_len);
 
+int32_t connect_norito_encode_asset_id_literal(
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* account_id, unsigned long account_id_len,
+    uint8_t** out_asset_ptr, unsigned long* out_asset_len);
+
 int32_t connect_norito_decode_asset_id_json(
     const char* asset_literal, unsigned long asset_len,
     uint8_t** out_json_ptr, unsigned long* out_json_len);

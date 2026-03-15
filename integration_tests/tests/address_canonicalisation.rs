@@ -762,7 +762,7 @@ fn account_endpoint_url(
             .path_segments_mut()
             .expect("torii_url must allow path segments");
         path.clear();
-        path.push("v2");
+        path.push("v1");
         path.push("accounts");
         path.push(account_literal);
         for segment in segments {
@@ -779,7 +779,7 @@ fn explorer_account_qr_url(base: &reqwest::Url, account_literal: &str) -> reqwes
             .path_segments_mut()
             .expect("torii_url must allow path segments");
         path.clear();
-        path.push("v2");
+        path.push("v1");
         path.push("explorer");
         path.push("accounts");
         path.push(account_literal);

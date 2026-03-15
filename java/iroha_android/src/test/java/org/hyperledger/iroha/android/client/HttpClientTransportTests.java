@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -14,6 +15,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
+import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -74,6 +77,10 @@ public final class HttpClientTransportTests {
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
+    resolveAccountAliasParsesResponse();
+    resolveAssetAliasParsesResponse();
+    buildAssetIdLiteralResolvesAliases();
+    buildAssetIdLiteralFallsBackToAssetAliasResolutionForInvalidDefinition();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
@@ -705,6 +712,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    final String accountId = sampleI105(0x31);
     final String json =
         ("{"
             + "\"uaid\":\"uaid:"
@@ -715,7 +723,9 @@ public final class HttpClientTransportTests {
             + "\"dataspace_id\":42,"
             + "\"dataspace_alias\":\"sandbox\","
             + "\"accounts\":[{"
-            + "\"account_id\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
             + "\"asset_id\":\"norito:00\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
@@ -746,7 +756,7 @@ public final class HttpClientTransportTests {
     assert dataspace.accounts().size() == 1 : "Expected single account entry";
     final UaidPortfolioResponse.UaidPortfolioAccount account =
         dataspace.accounts().get(0);
-    assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".equals(account.accountId())
+    assert accountId.equals(account.accountId())
         : "Account ID mismatch";
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
@@ -829,6 +839,8 @@ public final class HttpClientTransportTests {
   private static void uaidBindingsRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    final String accountA = sampleI105(0x32);
+    final String accountB = sampleI105(0x33);
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -837,7 +849,11 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"]"
+            + "\"accounts\":[\""
+            + accountA
+            + "\",\""
+            + accountB
+            + "\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =
@@ -866,6 +882,7 @@ public final class HttpClientTransportTests {
   private static void uaidManifestsRequestSupportsQuery() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    final String accountId = sampleI105(0x34);
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -882,7 +899,9 @@ public final class HttpClientTransportTests {
             + "\"expired_epoch\":null,"
             + "\"revocation\":{\"epoch\":15,\"reason\":\"policy\"}"
             + "},"
-            + "\"accounts\":[\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"],"
+            + "\"accounts\":[\""
+            + accountId
+            + "\"],"
             + "\"manifest\":{"
             + "\"version\":\"1\","
             + "\"uaid\":\"uaid:"
@@ -920,7 +939,7 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation() != null : "Revocation should be present";
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
-    assert record.accounts().contains("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp") : "Accounts must surface";
+    assert record.accounts().contains(accountId) : "Accounts must surface";
     assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
     assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
@@ -939,6 +958,144 @@ public final class HttpClientTransportTests {
         : "Manifest URI must include encoded query parameters";
   }
 
+  private static void resolveAccountAliasParsesResponse() {
+    final String accountId = sampleI105(0x41);
+    final String json =
+        "{\"alias\":\"alice\",\"account_id\":\""
+            + accountId
+            + "\",\"index\":7,\"source\":\"world_state\"}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final AccountAliasResolution resolution = transport.resolveAccountAlias("alice").join();
+    assert resolution != null : "Account alias resolution should parse";
+    assert "alice".equals(resolution.alias()) : "Alias mismatch";
+    assert accountId.equals(resolution.accountId())
+        : "Account ID mismatch";
+    assert resolution.index() != null && resolution.index() == 7L : "Index mismatch";
+    assert "world_state".equals(resolution.source()) : "Source mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Alias request should be captured";
+    assert "POST".equals(request.method()) : "Alias resolve must use POST";
+    assert request.uri().toString().equals("https://torii.example/v1/aliases/resolve")
+        : "Alias resolve URI mismatch";
+    assert readBody(request).contains("\"alias\":\"alice\"")
+        : "Alias resolve request payload must include alias";
+  }
+
+  private static void resolveAssetAliasParsesResponse() {
+    final String json =
+        "{\"alias\":\"usd#issuer@main\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\",\"source\":\"world_state\"}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final AssetAliasResolution resolution = transport.resolveAssetAlias("usd#issuer@main").join();
+    assert resolution != null : "Asset alias resolution should parse";
+    assert "usd#issuer@main".equals(resolution.alias()) : "Alias mismatch";
+    assert "usd#wonderland".equals(resolution.assetDefinitionId())
+        : "Asset definition mismatch";
+    assert "USD".equals(resolution.assetName()) : "Asset name mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Alias request should be captured";
+    assert "POST".equals(request.method()) : "Asset alias resolve must use POST";
+    assert request.uri().toString().equals("https://torii.example/v1/assets/aliases/resolve")
+        : "Asset alias resolve URI mismatch";
+    assert readBody(request).contains("\"alias\":\"usd#issuer@main\"")
+        : "Asset alias request payload must include alias";
+  }
+
+  private static void buildAssetIdLiteralResolvesAliases() {
+    if (!AssetIdLiteral.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] buildAssetIdLiteral alias flow skipped (native unavailable).");
+      return;
+    }
+    final String accountId = sampleI105(0x42);
+    final List<TransportRequest> requests = new ArrayList<>();
+    final HttpTransportExecutor executor =
+        new HttpTransportExecutor() {
+          @Override
+          public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+            requests.add(request);
+            final String path = request.uri().getPath();
+            if (path.endsWith("/v1/aliases/resolve")) {
+              final String body =
+                  "{\"alias\":\"alice\",\"account_id\":\"" + accountId + "\",\"index\":1}";
+              return CompletableFuture.completedFuture(
+                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
+            }
+            if (path.endsWith("/v1/assets/aliases/resolve")) {
+              final String body =
+                  "{\"alias\":\"usd#issuer@main\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\"}";
+              return CompletableFuture.completedFuture(
+                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
+            }
+            return CompletableFuture.completedFuture(
+                new TransportResponse(404, new byte[0], "not found", Map.of()));
+          }
+        };
+    final ClientConfig config =
+        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final String literal =
+        transport.buildAssetIdLiteralResolvingAliases("usd#issuer@main", "alice").join();
+    assert literal.startsWith("norito:") : "Resolved asset literal must be encoded";
+    assert requests.stream()
+        .anyMatch(request -> request.uri().toString().endsWith("/v1/aliases/resolve"))
+        : "Account alias endpoint must be called";
+    assert requests.stream()
+        .anyMatch(request -> request.uri().toString().endsWith("/v1/assets/aliases/resolve"))
+        : "Asset alias endpoint must be called";
+  }
+
+  private static void buildAssetIdLiteralFallsBackToAssetAliasResolutionForInvalidDefinition() {
+    if (!AssetIdLiteral.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] buildAssetIdLiteral fallback flow skipped (native unavailable).");
+      return;
+    }
+    final String accountId = sampleI105(0x52);
+    final List<TransportRequest> requests = new ArrayList<>();
+    final HttpTransportExecutor executor =
+        new HttpTransportExecutor() {
+          @Override
+          public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+            requests.add(request);
+            final String path = request.uri().getPath();
+            if (path.endsWith("/v1/assets/aliases/resolve")) {
+              final String body =
+                  "{\"alias\":\"symbol-without-domain\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\"}";
+              return CompletableFuture.completedFuture(
+                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
+            }
+            return CompletableFuture.completedFuture(
+                new TransportResponse(404, new byte[0], "not found", Map.of()));
+          }
+        };
+    final ClientConfig config =
+        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final String literal =
+        transport.buildAssetIdLiteralResolvingAliases("symbol-without-domain", accountId).join();
+    assert literal.startsWith("norito:") : "Fallback-resolved asset literal must be encoded";
+    assert requests.stream()
+        .anyMatch(request -> request.uri().toString().endsWith("/v1/assets/aliases/resolve"))
+        : "Asset alias endpoint must be called on fallback";
+    assert requests.stream()
+        .noneMatch(request -> request.uri().toString().endsWith("/v1/aliases/resolve"))
+        : "Account alias endpoint should not be called for canonical account ids";
+  }
+
   private static void invalidateAndCancelDelegatesToExecutor() {
     final InvalidationTrackingExecutor executor = new InvalidationTrackingExecutor();
     final ClientConfig config =
@@ -950,6 +1107,17 @@ public final class HttpClientTransportTests {
 
   private static String readBody(final TransportRequest request) {
     return new String(request.body(), StandardCharsets.UTF_8);
+  }
+
+  private static String sampleI105(final int fill) {
+    try {
+      final byte[] publicKey = new byte[32];
+      Arrays.fill(publicKey, (byte) fill);
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final Exception ex) {
+      throw new AssertionError("failed to generate sample I105 account id", ex);
+    }
   }
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
@@ -1169,7 +1337,7 @@ public final class HttpClientTransportTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", fillValue))
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+            .setAuthority(sampleI105(fillValue & 0xFF))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)

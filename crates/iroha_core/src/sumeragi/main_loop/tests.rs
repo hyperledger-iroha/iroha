@@ -51031,12 +51031,12 @@ async fn force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let initial_frontier_proposal_grace =
+        actor.rebroadcast_cooldown().max(Duration::from_millis(500));
     let start = now
         .checked_sub(
             timeout
-                .saturating_add(availability_timeout)
+                .saturating_add(initial_frontier_proposal_grace)
                 .saturating_add(Duration::from_millis(1)),
         )
         .unwrap_or(now);
@@ -52947,23 +52947,6 @@ async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_mi
             view_change_triggered_view: None,
             attempts: 0,
         },
-    );
-
-    let queue_depths = super::status::worker_queue_depth_snapshot();
-    let backlog_signals = actor.idle_backlog_signals_for_height(height, queue_depths);
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let age = now.saturating_duration_since(start);
-    dbg!(age, timeout, backlog_signals.consensus_queue_backlog);
-    dbg!(
-        actor.has_actionable_missing_block_requests(),
-        actor.missing_qc_height_has_unresolved_dependency_at_height(height),
-        actor.frontier_catchup_has_unresolved_dependency(height),
-        actor.frontier_dependency_recovery_cause(height, now)
     );
 
     let before = super::status::snapshot();

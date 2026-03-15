@@ -1029,6 +1029,25 @@ transport.offlineToriiClient().queryTransfers(query)
     .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
 ```
 
+### Building encoded asset ids (`norito:<hex>`)
+
+For offline canonical-only encoding, build directly from textual definition + canonical I105 account:
+
+```java
+String assetId = AssetIdLiteral.encodeFromParts("usd#wonderland", "<account_i105>");
+```
+
+For alias inputs, use the transport helper that resolves aliases online first and then encodes:
+
+```java
+transport
+    .buildAssetIdLiteralResolvingAliases("usd#issuer@main", "alice")
+    .thenAccept(assetId -> System.out.println("asset_id=" + assetId));
+```
+
+`AssetIdLiteral.encodeFromParts(...)` intentionally rejects alias-shaped inputs (`...@...`) so offline flows remain deterministic without network calls.
+`buildAssetIdLiteralResolvingAliases(...)` also falls back to `/v1/assets/aliases/resolve` when a non-alias asset-definition input is not canonical (for example `symbol-without-domain`), matching Swift SDK behavior.
+
 Register signed certificates on-ledger by posting them to the offline allowances endpoint:
 
 ```java

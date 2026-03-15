@@ -102,13 +102,17 @@ impl ExplorerAggregates {
         for asset in world.assets_iter() {
             let account_id = asset.id().account().clone();
             let definition_id = asset.id().definition().clone();
-            let domain_id = asset.id().definition().domain().clone();
 
             let account_entry = agg.account_counters.entry(account_id.clone()).or_default();
             account_entry.assets = account_entry.assets.saturating_add(1);
 
-            let domain_entry = agg.domain_counters.entry(domain_id).or_default();
-            domain_entry.assets = domain_entry.assets.saturating_add(1);
+            if !definition_id.is_opaque_canonical() {
+                let domain_entry = agg
+                    .domain_counters
+                    .entry(definition_id.domain().clone())
+                    .or_default();
+                domain_entry.assets = domain_entry.assets.saturating_add(1);
+            }
 
             *agg.definition_instances
                 .entry(definition_id.clone())
