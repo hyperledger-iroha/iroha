@@ -29,7 +29,7 @@ Bu, SF-6 altında çatdırılan orkestrasiya yığınının artıq yerləşdiril
 ## 1. Uçuşdan əvvəl Qiymətləndirmə
 
 1. **İdarəetmə məlumatlarını təsdiq edin.**
-   - Bütün namizəd provayderlər diapazon qabiliyyətinin faydalı yükləri və axın büdcələri ilə `ProviderAdvertV1` zərflərini dərc etməlidirlər. `/v1/sorafs/providers` vasitəsilə təsdiqləyin və gözlənilən qabiliyyət sahələri ilə müqayisə edin.
+   - Bütün namizəd provayderlər diapazon qabiliyyətinin faydalı yükləri və axın büdcələri ilə `ProviderAdvertV1` zərflərini dərc etməlidirlər. `/v2/sorafs/providers` vasitəsilə təsdiqləyin və gözlənilən qabiliyyət sahələri ilə müqayisə edin.
    - Gecikmə/uğursuzluq dərəcələrini təmin edən telemetriya snapshotları hər kanareyka qaçışından əvvəl < 15 dəqiqə köhnə olmalıdır.
 2. **Mərhələ konfiqurasiyası.**
    - Qatlı `iroha_config` ağacında orkestr JSON konfiqurasiyasını davam etdirin:

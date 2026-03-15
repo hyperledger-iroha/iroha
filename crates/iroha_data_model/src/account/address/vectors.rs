@@ -159,9 +159,9 @@ pub struct SingleKeyVector {
     pub canonical_hex: String,
     /// I105-encoded controller address string.
     pub i105: String,
-    /// Halfwidth i105_default representation of the controller address.
+    /// Halfwidth `i105_default` representation of the controller address.
     pub i105_default_halfwidth: String,
-    /// Fullwidth i105_default representation of the controller address.
+    /// Fullwidth `i105_default` representation of the controller address.
     pub i105_default_fullwidth: String,
     /// Domain selector input data required to reproduce the controller address.
     pub domain_selector: DomainSelectorVector,
@@ -217,9 +217,9 @@ pub struct MultisigVector {
     pub canonical_hex: String,
     /// I105-encoded multisig address string.
     pub i105: String,
-    /// Halfwidth i105_default representation of the address.
+    /// Halfwidth `i105_default` representation of the address.
     pub i105_default_halfwidth: String,
-    /// Fullwidth i105_default representation of the address.
+    /// Fullwidth `i105_default` representation of the address.
     pub i105_default_fullwidth: String,
     /// Domain selector inputs that reproduce the canonical account.
     pub domain_selector: DomainSelectorVector,

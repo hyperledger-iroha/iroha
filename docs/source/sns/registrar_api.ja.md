@@ -26,7 +26,7 @@ This note specifies the Torii endpoints, gRPC services, request/response DTOs, a
 
 | Requirement | Detail |
 |-------------|--------|
-| Protocols | REST under `/v1/sns/*` and gRPC service `sns.v1.Registrar`. Both accept Norito-JSON (`application/json`) and Norito-RPC binary (`application/x-norito`). |
+| Protocols | REST under `/v2/sns/*` and gRPC service `sns.v1.Registrar`. Both accept Norito-JSON (`application/json`) and Norito-RPC binary (`application/x-norito`). |
 | Auth | `Authorization: Bearer` tokens or mTLS certificates issued per suffix steward. Governance-sensitive endpoints (freeze/unfreeze, reserved assignments) require `scope=sns.admin`. |
 | Rate limits | Registrars share the `torii.preauth_scheme_limits` buckets with JSON callers plus per-suffix burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
 | Telemetry | Torii exposes `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` for the registrar handlers (filter on `scheme="norito_rpc"`); the API also increments `sns_registrar_status_total{result, suffix_id}`. |
@@ -105,15 +105,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Endpoint | Method | Payload | Description |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Register or reopen a name. Resolves pricing tier, validates payment/governance proofs, emits registry events. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Steward/council assignment of reserved names. |
-| `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
+| `/v2/sns/registrations` | POST | `RegisterNameRequestV1` | Register or reopen a name. Resolves pricing tier, validates payment/governance proofs, emits registry events. |
+| `/v2/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
+| `/v2/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
+| `/v2/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
+| `/v2/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
+| `/v2/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
+| `/v2/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Steward/council assignment of reserved names. |
+| `/v2/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
+| `/v2/sns/registrations/{selector}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
 
 **Selector encoding:** the `{selector}` path segment accepts I105, I105, or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
 
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` must point to a `GovernanceHookV1` JSON document (see the DTO table above). The CLI forwards those payloads to `/v1/sns/registrations/{selector}/{renew,transfer,freeze}` so operators can rehearse the same flows the SDKs will exercise.
+`--governance-json` must point to a `GovernanceHookV1` JSON document (see the DTO table above). The CLI forwards those payloads to `/v2/sns/registrations/{selector}/{renew,transfer,freeze}` so operators can rehearse the same flows the SDKs will exercise.
 
 ## 4. gRPC Service
 
@@ -212,7 +212,7 @@ Every mutating call must attach evidence suitable for replay:
 
 Torii verifies proofs by checking:
 
-1. Proposal id exists in governance ledger (`/v1/governance/proposals/{id}`) and status is `Approved`.
+1. Proposal id exists in governance ledger (`/v2/governance/proposals/{id}`) and status is `Approved`.
 2. Hashes match the recorded vote artifacts.
 3. Steward/guardian signatures reference the expected public keys from `SuffixPolicyV1`.
 
@@ -222,7 +222,7 @@ Failed checks return `sns_err_governance_missing`.
 
 ### 6.1 Standard Registration
 
-1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
+1. Client queries `/v2/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
 2. Client builds `RegisterNameRequestV1`:
    - `selector` derived from the preferred I105 label.
    - `term_years` within policy bounds.
@@ -249,7 +249,7 @@ Grace renewals include the standard request plus penalty detection:
 
 1. Guardian submits `FreezeNameRequestV1` with ticket referencing incident id.
 2. Torii moves record to `NameStatus::Frozen`, emits `NameFrozen`.
-3. After remediation, council issues override; operator sends DELETE `/v1/sns/registrations/{selector}/freeze` with `GovernanceHookV1`.
+3. After remediation, council issues override; operator sends DELETE `/v2/sns/registrations/{selector}/freeze` with `GovernanceHookV1`.
 4. Torii validates override, emits `NameUnfrozen`.
 
 ## 7. Validation & Error Codes
@@ -267,7 +267,7 @@ All codes surface via `X-Iroha-Error-Code` and structured Norito JSON/NRPC envel
 ## 8. Implementation Notes
 
 - Torii stores pending auctions under `NameRecordV1.auction` and rejects direct registration attempts while `PendingAuction`.
-- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v1/finance/sns/payments`).
+- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v2/finance/sns/payments`).
 - SDKs should wrap these endpoints with strongly typed helpers so wallets can present clear error reasons (`ERR_SNS_RESERVED`, etc.).
 
 ## 9. Next Steps

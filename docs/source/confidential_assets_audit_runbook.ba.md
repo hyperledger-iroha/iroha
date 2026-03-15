@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - Сәйәсәт метамағлүмәттәре һәм көтөлгән күсеүҙәр аша мөмкин.
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), Көҙгө Swift SDK
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) һәм 1990 йылда документлаштырылған.
   икеһе лә конфиденциаль-активтар дизайны һәм SDK етәкселәр

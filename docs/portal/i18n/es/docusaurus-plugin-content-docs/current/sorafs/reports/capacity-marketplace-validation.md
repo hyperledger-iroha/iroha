@@ -20,7 +20,7 @@ La checklist siguiente debe revisarse antes de habilitar el marketplace para ope
 
 | Chequeo | Validacion | Evidencia |
 |-------|------------|----------|
-| El registry acepta declaraciones canonicas de capacidad | El test de integracion ejercita `/v1/sorafs/capacity/declare` via la app API, verificando el manejo de firmas, la captura de metadata y el handoff al registry del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
+| El registry acepta declaraciones canonicas de capacidad | El test de integracion ejercita `/v2/sorafs/capacity/declare` via la app API, verificando el manejo de firmas, la captura de metadata y el handoff al registry del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
 | El smart contract rechaza payloads desalineados | El test unitario asegura que los IDs de provider y los campos de GiB comprometidos coinciden con la declaracion firmada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | El CLI emite artefactos canonicos de onboarding | El harness de CLI escribe salidas Norito/JSON/Base64 deterministicas y valida round-trips para que los operadores puedan preparar declaraciones offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | La guia de operadores captura el flujo de admision y los guardrails de gobernanza | La documentacion enumera el esquema de declaracion, los defaults de policy y los pasos de revision para el council. | `../storage-capacity-marketplace.md` |

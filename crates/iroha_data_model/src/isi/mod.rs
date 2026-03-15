@@ -1314,6 +1314,8 @@ macro_rules! enum_type {
     };
 }
 
+/// Asset-definition alias binding instructions.
+pub mod asset_alias;
 /// Confidential registry management instructions.
 /// Bridge proof ingestion instructions.
 pub mod bridge;
@@ -1363,6 +1365,7 @@ pub mod verifying_keys;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
 
+pub use asset_alias::*;
 pub use confidential::*;
 pub use domain_link::*;
 pub use kaigi::*;
@@ -2467,7 +2470,10 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
@@ -2606,7 +2612,10 @@ mod tests {
                 .parse()
                 .expect("public key"),
         );
-        let asset_def_id: AssetDefinitionId = "coin#alice".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "alice".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
         let role_id: RoleId = "auditor".parse().unwrap();
 
@@ -2659,7 +2668,10 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();

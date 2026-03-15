@@ -27,7 +27,7 @@ translator: machine-google-reviewed
 
 |相|窗口|範圍 |退出標準 |
 |--------|--------|--------|---------------|
-| **P0 – 實驗室平價** | 2025 年第二季度 | Rust CLI + Python Smoke 套件在 CI 中運行 `/v1/norito-rpc`，JS 幫助程序通過單元測試，Android 模擬線束練習雙重傳輸。 | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` 和 `javascript/iroha_js/test/noritoRpcClient.test.js` 在 CI 中呈綠色； Android 線束連接至 `./gradlew test`。 |
+| **P0 – 實驗室平價** | 2025 年第二季度 | Rust CLI + Python Smoke 套件在 CI 中運行 `/v2/norito-rpc`，JS 幫助程序通過單元測試，Android 模擬線束練習雙重傳輸。 | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` 和 `javascript/iroha_js/test/noritoRpcClient.test.js` 在 CI 中呈綠色； Android 線束連接至 `./gradlew test`。 |
 | **P1 – SDK 預覽** | Q32025 |簽入共享夾具包，`scripts/run_norito_rpc_fixtures.sh --sdk <label>` 在 `artifacts/norito_rpc/` 中記錄日誌 + JSON，SDK 示例中公開可選的 Norito 傳輸標誌。 |已簽名的夾具清單、自述文件更新顯示選擇加入的使用情況、IOS2 標誌後面可用的 Swift 預覽 API。 |
 | **P2 – 分期/AND4 預覽** | Q12026 |暫存 Torii 池更喜歡 Norito，Android AND4 預覽客戶端和 Swift IOS2 奇偶校驗套件默認為二進制傳輸，填充遙測儀表板 `dashboards/grafana/torii_norito_rpc_observability.json`。 | `docs/source/torii/norito_rpc_stage_reports.md` 捕獲金絲雀，`scripts/telemetry/test_torii_norito_rpc_alerts.sh` 通過，Android 模擬線束重播捕獲成功/錯誤情況。 |
 | **P3 – 正式發布** | Q42026 | Norito 成為所有 SDK 的默認傳輸； JSON 仍然是一種停電後備方案。發布作業歸檔每個標籤的奇偶工件。 |發布 Rust/JS/Python/Swift/Android 的清單包 Norito 煙霧輸出；強制執行 Norito 與 JSON 錯誤率 SLO 的警報閾值； `status.md` 和發行說明引用了 GA 證據。 |

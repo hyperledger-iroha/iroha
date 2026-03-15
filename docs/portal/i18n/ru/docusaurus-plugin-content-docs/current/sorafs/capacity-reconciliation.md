@@ -7,7 +7,7 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-Пункт дорожной карты **SF-2c** требует, чтобы казначейство доказало соответствие реестра сборов за емкость XOR-переводам, выполняемым каждую ночь. Используйте `scripts/telemetry/capacity_reconcile.py`, чтобы сравнить snapshot `/v1/sorafs/capacity/state` с выполненным батчем переводов и выпустить текстовые метрики Prometheus для Alertmanager.
+Пункт дорожной карты **SF-2c** требует, чтобы казначейство доказало соответствие реестра сборов за емкость XOR-переводам, выполняемым каждую ночь. Используйте `scripts/telemetry/capacity_reconcile.py`, чтобы сравнить snapshot `/v2/sorafs/capacity/state` с выполненным батчем переводов и выпустить текстовые метрики Prometheus для Alertmanager.
 
 ## Предварительные условия
 - Snapshot состояния емкости (записи `fee_ledger`), экспортированный из Torii.

@@ -78,7 +78,7 @@ Rust とヘルパーは、両方の機能を備えています。 Валидац
 
 ## Сервисный фасад (Интеграция Torii/SDK)| Компонент | Задача | Ответственные |
 |----------|----------|----------|
-| Сервис Torii | Экспонировать `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。 Обеспечить пагинацию + фильтрацию. |ネットワーキング TL / コア インフラ |
+| Сервис Torii | Экспонировать `/v2/sorafs/pin` (送信)、`/v2/sorafs/pin/{cid}` (検索)、`/v2/sorafs/aliases` (リスト/バインド)、`/v2/sorafs/replication` (注文/受領)。 Обеспечить пагинацию + фильтрацию. |ネットワーキング TL / コア インフラ |
 | Аттестация |レジストリを参照してください。 Norito、SDK を使用してください。 |コアインフラ |
 | CLI | `sorafs_manifest_stub` および CLI `sorafs_pin`、`pin submit`、`alias bind`、`order issue`、`registry export` を参照してください。 |ツーリングWG |
 | SDK | Сгенерировать клиентские バインディング (Rust/Go/TS) と Norito; добавить интеграционные тесты。 | SDK チーム |
@@ -135,10 +135,10 @@ Rust とヘルパーは、両方の機能を備えています。 Валидац
 SF-4 のテストが完了しました。
 REST はエンドポイントを維持します:
 
-- `GET /v1/sorafs/pin` および `GET /v1/sorafs/pin/{digest}` のマニフェスト
+- `GET /v2/sorafs/pin` および `GET /v2/sorafs/pin/{digest}` のマニフェスト
   エイリアス バインディング、注文 репликации и объектом аттестации、производным от
   хэза последнего блока。
-- `GET /v1/sorafs/aliases` と `GET /v1/sorafs/replication` は、
+- `GET /v2/sorafs/aliases` と `GET /v2/sorafs/replication` は、
   別名とバックログ заказов репликации с консистентной пагинацией и
   Єильтрами статуса。
 

@@ -123,7 +123,7 @@ const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 /// `Result` with [`QueryError`] as an error
 pub type QueryResult<T> = core::result::Result<T, QueryError>;
 
-/// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
+/// Filters for `/v2/zk/prover/reports` listing/counting/deletion endpoints.
 #[derive(Debug, Default, Clone)]
 pub struct ZkProverReportsFilter<'a> {
     /// Only successful reports
@@ -204,7 +204,7 @@ impl ZkProverReportsFilter<'_> {
     }
 }
 
-/// Filters for `/v1/zk/proofs` list/count endpoints.
+/// Filters for `/v2/zk/proofs` list/count endpoints.
 #[derive(Debug, Default, Clone)]
 pub struct ZkProofsFilter<'a> {
     /// Exact backend (e.g., `halo2/ipa`).
@@ -260,7 +260,7 @@ impl ZkProofsFilter<'_> {
     }
 }
 
-/// Filters for `/v1/sorafs/pin` listing endpoint.
+/// Filters for `/v2/sorafs/pin` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsPinListFilter<'a> {
     /// Maximum number of manifests to return.
@@ -286,7 +286,7 @@ impl SorafsPinListFilter<'_> {
     }
 }
 
-/// Filters for `/v1/sorafs/aliases` listing endpoint.
+/// Filters for `/v2/sorafs/aliases` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsAliasListFilter<'a> {
     /// Maximum number of aliases to return.
@@ -317,7 +317,7 @@ impl SorafsAliasListFilter<'_> {
     }
 }
 
-/// Filters for `/v1/sorafs/replication` listing endpoint.
+/// Filters for `/v2/sorafs/replication` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsReplicationListFilter<'a> {
     /// Maximum number of replication orders to return.
@@ -348,7 +348,7 @@ impl SorafsReplicationListFilter<'_> {
     }
 }
 
-/// Filters for `/v1/sorafs/audit/repair/status` listing endpoint.
+/// Filters for `/v2/sorafs/audit/repair/status` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsRepairStatusFilter<'a> {
     /// Optional status filter (`queued`, `verifying`, `in_progress`, `completed`, `failed`, `escalated`).
@@ -650,7 +650,7 @@ pub struct UaidPortfolioDataspace {
     pub accounts: Vec<UaidPortfolioAccount>,
 }
 
-/// Response returned by `/v1/accounts/{uaid}/portfolio`.
+/// Response returned by `/v2/accounts/{uaid}/portfolio`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioResponse {
     /// Canonical UAID literal (`uaid:<64-hex>`).
@@ -661,7 +661,7 @@ pub struct UaidPortfolioResponse {
     pub dataspaces: Vec<UaidPortfolioDataspace>,
 }
 
-/// Dataspace bindings entry returned by `/v1/space-directory/uaids/{uaid}`.
+/// Dataspace bindings entry returned by `/v2/space-directory/uaids/{uaid}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidBindingsDataspace {
     /// Dataspace identifier.
@@ -672,7 +672,7 @@ pub struct UaidBindingsDataspace {
     pub accounts: Vec<String>,
 }
 
-/// Response returned by `/v1/space-directory/uaids/{uaid}`.
+/// Response returned by `/v2/space-directory/uaids/{uaid}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidBindingsResponse {
     /// Canonical UAID literal (`uaid:<64-hex>`).
@@ -681,23 +681,12 @@ pub struct UaidBindingsResponse {
     pub dataspaces: Vec<UaidBindingsDataspace>,
 }
 
-/// Optional knobs accepted by the explorer QR endpoint.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ExplorerAccountQrOptions;
-
-impl ExplorerAccountQrOptions {
-    fn apply(self, builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        let _ = self;
-        builder
-    }
-}
-
-/// Snapshot returned by `/v1/explorer/accounts/{account_id}/qr`.
+/// Snapshot returned by `/v2/explorer/accounts/{account_id}/qr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountQrSnapshot {
     /// Canonical account identifier (I105).
     pub canonical_id: String,
-    /// Rendered literal using the requested address format.
+    /// Rendered literal (I105).
     pub literal: String,
     /// I105 prefix for the network.
     pub network_prefix: u16,
@@ -793,7 +782,7 @@ pub struct UaidManifestLifecycle {
     pub revocation: Option<UaidManifestRevocation>,
 }
 
-/// Manifest status reported by `/v1/space-directory/uaids/{uaid}/manifests`.
+/// Manifest status reported by `/v2/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UaidManifestStatus {
     /// Manifest is pending activation.
@@ -820,7 +809,7 @@ impl UaidManifestStatus {
     }
 }
 
-/// Filter for `/v1/space-directory/uaids/{uaid}/manifests`.
+/// Filter for `/v2/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UaidManifestStatusFilter {
     /// Return only active manifests.
@@ -872,7 +861,7 @@ impl UaidManifestQuery {
     }
 }
 
-/// UAID manifest entry returned by `/v1/space-directory/uaids/{uaid}/manifests`.
+/// UAID manifest entry returned by `/v2/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidManifestRecord {
     /// Dataspace identifier.
@@ -891,7 +880,7 @@ pub struct UaidManifestRecord {
     pub manifest: AssetPermissionManifest,
 }
 
-/// Response returned by `/v1/space-directory/uaids/{uaid}/manifests`.
+/// Response returned by `/v2/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidManifestsResponse {
     /// Canonical UAID literal (`uaid:<64-hex>`).
@@ -1437,7 +1426,7 @@ fn shared_data_model_compatibility_state(
     state
 }
 
-/// Filters for `/v1/sumeragi/evidence` listing endpoint.
+/// Filters for `/v2/sumeragi/evidence` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SumeragiEvidenceListFilter<'a> {
     /// Maximum number of entries to return (server caps at 1000).
@@ -2543,12 +2532,12 @@ impl Client {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// GET `/v1/sumeragi/status` — consensus status snapshot.
+    /// GET `/v2/sumeragi/status` — consensus status snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_status(&self) -> Result<SumeragiStatusWire> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
+        let url = join_torii_url(&self.torii_url, "v2/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_NORITO),
@@ -2573,12 +2562,12 @@ impl Client {
             .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))
     }
 
-    /// GET `/v1/sumeragi/status` — consensus status snapshot.
+    /// GET `/v2/sumeragi/status` — consensus status snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_status_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
+        let url = join_torii_url(&self.torii_url, "v2/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_NORITO),
@@ -2603,7 +2592,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/status` with typed decoding and lane relay validation.
+    /// GET `/v2/sumeragi/status` with typed decoding and lane relay validation.
     ///
     /// This helper decodes the status payload into [`SumeragiStatusWire`] and rejects responses that
     /// contain invalid lane relay envelopes (e.g., mismatched settlement hashes or DA/QC bindings).
@@ -2612,7 +2601,7 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
     /// lane relay envelope fails verification.
     pub fn get_sumeragi_status_wire(&self) -> Result<SumeragiStatusWire> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
+        let url = join_torii_url(&self.torii_url, "v2/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_NORITO),
@@ -2643,7 +2632,7 @@ impl Client {
         Ok(wire)
     }
 
-    /// GET `/v1/sumeragi/status` and return verified cross-lane transfer proofs.
+    /// GET `/v2/sumeragi/status` and return verified cross-lane transfer proofs.
     ///
     /// This helper enforces lane relay envelope validation (settlement hash, DA hash, QC subject)
     /// and rejects duplicate `(lane_id, dataspace_id, block_height)` tuples before returning the
@@ -2661,14 +2650,14 @@ impl Client {
             .collect())
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
+    /// GET `/v2/nexus/public_lanes/{lane}/validators` — lifecycle snapshot for public-lane validators.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_public_lane_validators(&self, lane_id: LaneId) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/validators", lane_id.as_u32()),
+            &format!("v2/nexus/public_lanes/{}/validators", lane_id.as_u32()),
         );
         let req = self.default_request(HttpMethod::GET, url);
         let resp = self.send_builder(req)?;
@@ -2682,7 +2671,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/stake` — bonded stake per validator/staker.
+    /// GET `/v2/nexus/public_lanes/{lane}/stake` — bonded stake per validator/staker.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2693,7 +2682,7 @@ impl Client {
     ) -> Result<JsonValue> {
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/stake", lane_id.as_u32()),
+            &format!("v2/nexus/public_lanes/{}/stake", lane_id.as_u32()),
         );
         let mut req = self.default_request(HttpMethod::GET, url);
         if let Some(value) = validator {
@@ -2713,7 +2702,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/nexus/public_lanes/{lane}/rewards/pending` — pending rewards for an account.
+    /// GET `/v2/nexus/public_lanes/{lane}/rewards/pending` — pending rewards for an account.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2728,7 +2717,7 @@ impl Client {
         }
         let url = join_torii_url(
             &self.torii_url,
-            &format!("v1/nexus/public_lanes/{}/rewards/pending", lane_id.as_u32()),
+            &format!("v2/nexus/public_lanes/{}/rewards/pending", lane_id.as_u32()),
         );
         let mut req = self
             .default_request(HttpMethod::GET, url)
@@ -2747,7 +2736,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/sumeragi/commit_qc/:hash` — full commit QC record for a parent block hash.
+    /// GET `/v2/sumeragi/commit_qc/:hash` — full commit QC record for a parent block hash.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2781,7 +2770,7 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/sumeragi/vrf/penalties/:epoch` — VRF penalties snapshot for the given epoch.
+    /// GET `/v2/sumeragi/vrf/penalties/:epoch` — VRF penalties snapshot for the given epoch.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2801,7 +2790,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/vrf/epoch/:epoch` — VRF epoch snapshot (participants, randomness state).
+    /// GET `/v2/sumeragi/vrf/epoch/:epoch` — VRF epoch snapshot (participants, randomness state).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2818,7 +2807,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/leader` — leader index snapshot with optional PRF context.
+    /// GET `/v2/sumeragi/leader` — leader index snapshot with optional PRF context.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2835,7 +2824,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/params` — on-chain Sumeragi parameters snapshot.
+    /// GET `/v2/sumeragi/params` — on-chain Sumeragi parameters snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2852,7 +2841,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/parameters` — full parameter snapshot (system + custom).
+    /// GET `/v2/parameters` — full parameter snapshot (system + custom).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2862,12 +2851,12 @@ impl Client {
         decode_parameters_response(&resp)
     }
 
-    /// GET `/v1/sumeragi/collectors` — current collector indices and peer IDs.
+    /// GET `/v2/sumeragi/collectors` — current collector indices and peer IDs.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_collectors_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/collectors");
+        let url = join_torii_url(&self.torii_url, "v2/sumeragi/collectors");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -2879,7 +2868,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
+    /// GET `/v2/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2909,7 +2898,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/pacemaker` — pacemaker timers/config snapshot.
+    /// GET `/v2/sumeragi/pacemaker` — pacemaker timers/config snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2927,7 +2916,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/phases` — latest per-phase latencies (ms).
+    /// GET `/v2/sumeragi/phases` — latest per-phase latencies (ms).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2945,7 +2934,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/telemetry` — aggregated telemetry snapshot.
+    /// GET `/v2/sumeragi/telemetry` — aggregated telemetry snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2962,7 +2951,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/rbc` — RBC session/throughput counters.
+    /// GET `/v2/sumeragi/rbc` — RBC session/throughput counters.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -2980,12 +2969,12 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/rbc/sessions` — RBC sessions snapshot.
+    /// GET `/v2/sumeragi/rbc/sessions` — RBC sessions snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_rbc_sessions_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc/sessions");
+        let url = join_torii_url(&self.torii_url, "v2/sumeragi/rbc/sessions");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -2997,7 +2986,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
+    /// GET `/v2/sumeragi/evidence/count` — total persisted evidence entries.
     ///
     /// # Errors
     /// Returns an error if the request fails or the response is non-OK/invalid JSON.
@@ -3009,7 +2998,7 @@ impl Client {
         Ok(value)
     }
 
-    /// GET `/v1/sumeragi/evidence` — list persisted evidence entries.
+    /// GET `/v2/sumeragi/evidence` — list persisted evidence entries.
     ///
     /// # Errors
     /// Returns an error if the request fails or the response is non-OK/invalid JSON.
@@ -3025,7 +3014,7 @@ impl Client {
         Ok(value)
     }
 
-    /// GET `/v1/sumeragi/evidence` — list persisted evidence entries (Norito wire).
+    /// GET `/v2/sumeragi/evidence` — list persisted evidence entries (Norito wire).
     ///
     /// Sets `Accept: application/x-norito` and decodes the `(total, Vec<EvidenceRecord>)` payload.
     ///
@@ -3054,7 +3043,7 @@ impl Client {
         Ok(decoded)
     }
 
-    /// POST `/v1/sumeragi/evidence` — submit Norito-framed evidence (hex string).
+    /// POST `/v2/sumeragi/evidence` — submit Norito-framed evidence (hex string).
     ///
     /// # Errors
     /// Returns an error if the request fails, the response is unexpected, or JSON parsing fails.
@@ -3439,7 +3428,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/accounts/resolve"
+            "http://mock.local/v2/accounts/resolve"
         );
         let body = String::from_utf8(snapshot.body.clone()).expect("utf8 body");
         assert_eq!(body, format!("{{\"literal\":\"{literal}\"}}"));
@@ -3470,7 +3459,7 @@ mod evidence_http_tests {
         assert_eq!(store.len(), 1);
         let snapshot = &store[0];
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/prove");
+        assert_eq!(snapshot.url.as_str(), "http://mock.local/v2/zk/ivm/prove");
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(body, req);
         let has_content_type = snapshot.headers.iter().any(|(name, value)| {
@@ -3502,7 +3491,7 @@ mod evidence_http_tests {
         assert_eq!(store.len(), 1);
         let snapshot = &store[0];
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.as_str(), "http://mock.local/v1/zk/ivm/derive");
+        assert_eq!(snapshot.url.as_str(), "http://mock.local/v2/zk/ivm/derive");
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(body, req);
         let has_content_type = snapshot.headers.iter().any(|(name, value)| {
@@ -3530,7 +3519,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
+            "http://mock.local/v2/zk/ivm/prove/abc"
         );
     }
 
@@ -3553,7 +3542,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::DELETE);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/zk/ivm/prove/abc"
+            "http://mock.local/v2/zk/ivm/prove/abc"
         );
     }
 
@@ -3683,7 +3672,7 @@ mod evidence_http_tests {
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/storage/token");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/storage/token");
         assert!(
             snapshot
                 .headers
@@ -4015,7 +4004,7 @@ mod evidence_http_tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/evidence");
         let headers: HashMap<_, _> = snapshot
             .headers
             .iter()
@@ -4062,7 +4051,7 @@ mod evidence_http_tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/evidence");
     }
 
     #[test]
@@ -4111,7 +4100,7 @@ mod evidence_http_tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence/count");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/evidence/count");
     }
 
     #[test]
@@ -4141,7 +4130,7 @@ mod evidence_http_tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/evidence");
         let params: HashMap<_, _> = snapshot
             .url
             .query_pairs()
@@ -4227,7 +4216,7 @@ mod evidence_http_tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/evidence");
         let headers: HashMap<_, _> = snapshot
             .headers
             .iter()
@@ -4273,7 +4262,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
+                    "/v2/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
                     "/query" => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
@@ -4305,7 +4294,7 @@ mod evidence_http_tests {
 
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4322,7 +4311,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
+                    "/v2/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
                     "/query" => {
                         let response = QueryResponse::Iterable(QueryOutput {
                             batch: QueryOutputBatchBoxTuple {
@@ -4354,7 +4343,7 @@ mod evidence_http_tests {
 
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4375,7 +4364,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
+                    "/v2/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     "/query" => {
@@ -4410,7 +4399,7 @@ mod evidence_http_tests {
         );
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4466,7 +4455,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
+                    "/v2/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     "/query" => {
@@ -4497,7 +4486,7 @@ mod evidence_http_tests {
         );
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4518,7 +4507,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
+                    "/v2/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     "/query" => {
@@ -4555,7 +4544,7 @@ mod evidence_http_tests {
         );
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4576,7 +4565,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
+                    "/v2/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     "/query" => {
@@ -4611,7 +4600,7 @@ mod evidence_http_tests {
         );
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[0].url.path(), "/v2/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
 
@@ -4677,7 +4666,7 @@ mod evidence_http_tests {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
+                    "/v2/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
                     }
                     "/query" => {
@@ -5522,7 +5511,7 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails, if it response with error, or if the node
-    /// data model version is missing or incompatible. If `/v1/node/capabilities` responds with
+    /// data model version is missing or incompatible. If `/v2/node/capabilities` responds with
     /// HTTP 429 or transient 5xx statuses, the compatibility probe is treated as transient and
     /// deferred.
     pub fn submit_transaction(
@@ -6187,7 +6176,7 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending request or decoding fails
-    /// Fetch node configuration via `/v1/config`.
+    /// Fetch node configuration via `/v2/config`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
@@ -6221,7 +6210,7 @@ impl Client {
     ///
     /// # Errors
     /// If sending request or decoding fails
-    /// Update node configuration via `/v1/config`.
+    /// Update node configuration via `/v2/config`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails or response is non-OK.
@@ -6339,7 +6328,7 @@ impl Client {
         Ok(body.to_string())
     }
 
-    /// Convenience: fetch recent shielded roots as JSON from the app API `/v1/zk/roots` endpoint.
+    /// Convenience: fetch recent shielded roots as JSON from the app API `/v2/zk/roots` endpoint.
     /// This is an operator/testing helper and not consensus‑critical.
     ///
     /// # Errors
@@ -6367,7 +6356,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Fetch current execution witness snapshot as JSON from `/v1/debug/witness`.
+    /// Fetch current execution witness snapshot as JSON from `/v2/debug/witness`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -6385,7 +6374,7 @@ impl Client {
     }
 
     /// Fetch current execution witness snapshot as Norito-encoded bytes.
-    /// Prefers Accept-driven `/v1/debug/witness` and falls back to `.bin`.
+    /// Prefers Accept-driven `/v2/debug/witness` and falls back to `.bin`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails or both endpoints return non-OK responses.
@@ -6407,7 +6396,7 @@ impl Client {
         Ok(resp.into_body())
     }
 
-    /// Convenience: POST a ZK verification request to `/v1/zk/verify` with a
+    /// Convenience: POST a ZK verification request to `/v2/zk/verify` with a
     /// Norito-encoded `OpenVerifyEnvelope` in the body.
     ///
     /// # Errors
@@ -6430,7 +6419,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST a ZK verification request to `/v1/zk/verify` with a
+    /// Convenience: POST a ZK verification request to `/v2/zk/verify` with a
     /// JSON DTO describing the proof and verifying key.
     ///
     /// # Errors
@@ -6453,7 +6442,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/aliases/voprf/evaluate` with a hex-encoded blinded element.
+    /// Convenience: POST `/v2/aliases/voprf/evaluate` with a hex-encoded blinded element.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
@@ -6469,7 +6458,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/resolve` with an alias string.
+    /// Convenience: POST `/v2/aliases/resolve` with an alias string.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
@@ -6483,7 +6472,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/aliases/resolve_index` with an index payload.
+    /// Convenience: POST `/v2/aliases/resolve_index` with an index payload.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
@@ -6497,7 +6486,21 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/accounts/resolve` with an account literal.
+    /// Convenience: POST `/v2/assets/aliases/resolve` with an asset alias literal.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
+    pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
+    /// Convenience: POST `/v2/accounts/resolve` with an account literal.
     ///
     /// # Errors
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
@@ -6511,7 +6514,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
+    /// Convenience: GET `/v2/sorafs/pin` to list manifests in the pin registry.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -6527,7 +6530,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: GET `/v1/sorafs/pin/{digest}` to inspect a specific manifest record.
+    /// Convenience: GET `/v2/sorafs/pin/{digest}` to inspect a specific manifest record.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -6543,7 +6546,7 @@ impl Client {
         Ok(response)
     }
 
-    /// Convenience: POST `/v1/sorafs/pin/register` to submit a manifest to the pin registry.
+    /// Convenience: POST `/v2/sorafs/pin/register` to submit a manifest to the pin registry.
     ///
     /// The `manifest` must correspond to the payload referenced by `chunk_digest_sha3_256`.
     /// The method accepts an optional alias binding and successor pointer.
@@ -6611,7 +6614,7 @@ impl Client {
         )
     }
 
-    /// Submit a DA blob to `/v1/da/ingest` and return the Torii receipt.
+    /// Submit a DA blob to `/v2/da/ingest` and return the Torii receipt.
     ///
     /// This is equivalent to running `iroha da submit` with the provided parameters.
     ///
@@ -6888,7 +6891,7 @@ impl Client {
         DaManifestBundle::from_json(&value)
     }
 
-    /// Fetch the active DA commitment proof-policy bundle from `/v1/da/proof_policies`.
+    /// Fetch the active DA commitment proof-policy bundle from `/v2/da/proof_policies`.
     ///
     /// # Errors
     ///
@@ -6911,7 +6914,7 @@ impl Client {
             .wrap_err("failed to decode DA proof policies response")
     }
 
-    /// Fetch a stable DA proof-policy snapshot from `/v1/da/proof_policy_snapshot`.
+    /// Fetch a stable DA proof-policy snapshot from `/v2/da/proof_policy_snapshot`.
     ///
     /// # Errors
     ///
@@ -6935,7 +6938,7 @@ impl Client {
             .wrap_err("failed to decode DA proof policy snapshot response")
     }
 
-    /// Query commitment records from `/v1/da/commitments`.
+    /// Query commitment records from `/v2/da/commitments`.
     ///
     /// # Errors
     ///
@@ -6965,7 +6968,7 @@ impl Client {
             .wrap_err("failed to decode DA commitments response")
     }
 
-    /// Build a commitment proof from `/v1/da/commitments/prove`.
+    /// Build a commitment proof from `/v2/da/commitments/prove`.
     ///
     /// # Errors
     ///
@@ -6995,7 +6998,7 @@ impl Client {
             .wrap_err("failed to decode DA commitment proof response")
     }
 
-    /// Verify a commitment proof against `/v1/da/commitments/verify`.
+    /// Verify a commitment proof against `/v2/da/commitments/verify`.
     ///
     /// # Errors
     ///
@@ -7025,7 +7028,7 @@ impl Client {
             .wrap_err("failed to decode DA commitment verify response")
     }
 
-    /// Query pin intent records from `/v1/da/pin_intents`.
+    /// Query pin intent records from `/v2/da/pin_intents`.
     ///
     /// # Errors
     ///
@@ -7055,7 +7058,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent list response")
     }
 
-    /// Build a pin intent proof from `/v1/da/pin_intents/prove`.
+    /// Build a pin intent proof from `/v2/da/pin_intents/prove`.
     ///
     /// # Errors
     ///
@@ -7085,7 +7088,7 @@ impl Client {
             .wrap_err("failed to decode DA pin intent proof response")
     }
 
-    /// Verify a pin intent proof against `/v1/da/pin_intents/verify`.
+    /// Verify a pin intent proof against `/v2/da/pin_intents/verify`.
     ///
     /// # Errors
     ///
@@ -7514,7 +7517,7 @@ impl Client {
         Ok(norito::json::Value::from(map))
     }
 
-    /// Convenience: GET `/v1/sorafs/aliases` to list manifest alias bindings.
+    /// Convenience: GET `/v2/sorafs/aliases` to list manifest alias bindings.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -7530,7 +7533,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: GET `/v1/sorafs/replication` to list replication orders.
+    /// Convenience: GET `/v2/sorafs/replication` to list replication orders.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -7546,7 +7549,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: GET `/v1/sorafs/audit/repair/status` to list repair tasks.
+    /// Convenience: GET `/v2/sorafs/audit/repair/status` to list repair tasks.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -7562,7 +7565,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: GET `/v1/sorafs/audit/repair/status/{manifest_hex}` to list repair tasks for a manifest.
+    /// Convenience: GET `/v2/sorafs/audit/repair/status/{manifest_hex}` to list repair tasks for a manifest.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -7580,7 +7583,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/audit/repair/claim` to claim a repair ticket.
+    /// Convenience: POST `/v2/sorafs/audit/repair/claim` to claim a repair ticket.
     ///
     /// # Errors
     /// Returns an error if request construction, serialization, or the HTTP call fails.
@@ -7597,7 +7600,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/audit/repair/complete` to close a repair ticket.
+    /// Convenience: POST `/v2/sorafs/audit/repair/complete` to close a repair ticket.
     ///
     /// # Errors
     /// Returns an error if request construction, serialization, or the HTTP call fails.
@@ -7614,7 +7617,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/audit/repair/fail` to fail a repair ticket.
+    /// Convenience: POST `/v2/sorafs/audit/repair/fail` to fail a repair ticket.
     ///
     /// # Errors
     /// Returns an error if request construction, serialization, or the HTTP call fails.
@@ -7631,7 +7634,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/audit/repair/slash` to submit a repair escalation proposal.
+    /// Convenience: POST `/v2/sorafs/audit/repair/slash` to submit a repair escalation proposal.
     ///
     /// # Errors
     /// Returns an error if request construction, serialization, or the HTTP call fails.
@@ -7648,7 +7651,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/storage/pin` with manifest and payload bytes.
+    /// Convenience: POST `/v2/sorafs/storage/pin` with manifest and payload bytes.
     ///
     /// # Errors
     /// Returns an error if request construction, serialization, or the HTTP call fails.
@@ -7671,7 +7674,7 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/sorafs/storage/token` to mint a stream token.
+    /// Convenience: POST `/v2/sorafs/storage/token` to mint a stream token.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -7765,7 +7768,7 @@ impl Client {
         .map_err(SorafsFetchError::from)
     }
 
-    /// Convenience: POST a ZK submit-proof request to `/v1/zk/submit-proof` with a
+    /// Convenience: POST a ZK submit-proof request to `/v2/zk/submit-proof` with a
     /// Norito-encoded envelope in the body. Returns JSON response with `{ ok, id }`.
     ///
     /// # Errors
@@ -7788,7 +7791,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST a ZK submit-proof request to `/v1/zk/submit-proof` with a
+    /// Convenience: POST a ZK submit-proof request to `/v2/zk/submit-proof` with a
     /// JSON DTO describing the proof and verifying key. Returns JSON response with `{ ok, id }`.
     ///
     /// # Errors
@@ -7815,7 +7818,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
+    /// Convenience: POST a ZK verify-batch request to `/v2/zk/verify-batch` with a
     /// Norito-encoded `Vec<OpenVerifyEnvelope>` in the body. Returns JSON `{ ok, statuses }`.
     ///
     /// # Errors
@@ -7838,7 +7841,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST a ZK verify-batch request to `/v1/zk/verify-batch` with a
+    /// Convenience: POST a ZK verify-batch request to `/v2/zk/verify-batch` with a
     /// JSON array of base64-encoded Norito `OpenVerifyEnvelope` items. Returns JSON `{ ok, statuses }`.
     ///
     /// # Errors
@@ -7865,7 +7868,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/zk/ivm/derive` with a JSON DTO body.
+    /// Convenience: POST `/v2/zk/ivm/derive` with a JSON DTO body.
     ///
     /// The request body is expected to match the Torii app API DTO:
     /// `{ vk_ref: { backend, name }, authority, metadata, bytecode }`.
@@ -7894,7 +7897,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST a ZK IVM prove job to `/v1/zk/ivm/prove` with a JSON DTO body.
+    /// Convenience: POST a ZK IVM prove job to `/v2/zk/ivm/prove` with a JSON DTO body.
     ///
     /// The request body is expected to match the Torii app API DTO:
     /// `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
@@ -7923,7 +7926,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: GET a ZK IVM prove job status from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    /// Convenience: GET a ZK IVM prove job status from `/v2/zk/ivm/prove/{job_id}` (JSON).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -7940,7 +7943,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: DELETE a ZK IVM prove job from `/v1/zk/ivm/prove/{job_id}` (JSON).
+    /// Convenience: DELETE a ZK IVM prove job from `/v2/zk/ivm/prove/{job_id}` (JSON).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -7957,7 +7960,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Convenience: POST `/v1/zk/vote/tally` with a JSON DTO body `{ election_id }`.
+    /// Convenience: POST `/v2/zk/vote/tally` with a JSON DTO body `{ election_id }`.
     /// Returns JSON `{ finalized: bool, tally: [u64; N] }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -7982,7 +7985,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Upload an attachment to the app API `/v1/zk/attachments`.
+    /// Upload an attachment to the app API `/v2/zk/attachments`.
     /// Returns JSON metadata `{ id, size, content_type, created_ms }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is not `201 Created`, or response JSON deserialization fails.
@@ -8008,7 +8011,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/proposals/deploy-contract` with a JSON DTO body.
+    /// POST `/v2/gov/proposals/deploy-contract` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_propose_deploy_json(
@@ -8033,7 +8036,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
+    /// POST `/v2/gov/ballots/zk` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_ballot_zk_json(
@@ -8058,7 +8061,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/ballots/plain` with a JSON DTO body.
+    /// POST `/v2/gov/ballots/plain` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_ballot_plain_json(
@@ -8083,7 +8086,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/protected-namespaces` with a JSON body `{ namespaces: [..] }` to apply directly.
+    /// POST `/v2/gov/protected-namespaces` with a JSON body `{ namespaces: [..] }` to apply directly.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_protected_set_json(
@@ -8111,7 +8114,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/finalize` with a JSON DTO body.
+    /// POST `/v2/gov/finalize` with a JSON DTO body.
     /// Expected body shape: `{ referendum_id: String, proposal_id: Hex64 }`.
     /// Returns JSON with `{ ok, tx_instructions: [{ wire_id, payload_hex }] }`.
     /// # Errors
@@ -8138,7 +8141,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/enact` with a JSON DTO body.
+    /// POST `/v2/gov/enact` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_enact_json(&self, value: &norito::json::Value) -> Result<norito::json::Value> {
@@ -8160,7 +8163,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/proposals/{id}`
+    /// GET `/v2/gov/proposals/{id}`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_proposal_json(&self, id_hex: &str) -> Result<norito::json::Value> {
@@ -8177,7 +8180,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/locks/{rid}`
+    /// GET `/v2/gov/locks/{rid}`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_locks_json(&self, rid: &str) -> Result<norito::json::Value> {
@@ -8194,7 +8197,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/council/current`
+    /// GET `/v2/gov/council/current`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_council_json(&self) -> Result<norito::json::Value> {
@@ -8210,7 +8213,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/council/audit` (optional `epoch` query)
+    /// GET `/v2/gov/council/audit` (optional `epoch` query)
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_council_audit_json(&self, epoch: Option<u64>) -> Result<norito::json::Value> {
@@ -8230,7 +8233,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/council/derive-vrf` with a JSON DTO body (feature: `gov_vrf` on server).
+    /// POST `/v2/gov/council/derive-vrf` with a JSON DTO body (feature: `gov_vrf` on server).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8256,7 +8259,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/council/persist` with a JSON DTO body (feature: `gov_vrf` on server).
+    /// POST `/v2/gov/council/persist` with a JSON DTO body (feature: `gov_vrf` on server).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8281,7 +8284,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/gov/council/replace` with a JSON DTO body (feature: `gov_vrf` on server).
+    /// POST `/v2/gov/council/replace` with a JSON DTO body (feature: `gov_vrf` on server).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8306,7 +8309,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/referenda/{id}`
+    /// GET `/v2/gov/referenda/{id}`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_referendum_json(&self, id: &str) -> Result<norito::json::Value> {
@@ -8323,7 +8326,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/tally/{id}`
+    /// GET `/v2/gov/tally/{id}`
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8341,7 +8344,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/unlocks/stats` (operator/audit stats)
+    /// GET `/v2/gov/unlocks/stats` (operator/audit stats)
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8358,7 +8361,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/protected-namespaces` (current protected namespaces list)
+    /// GET `/v2/gov/protected-namespaces` (current protected namespaces list)
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8375,7 +8378,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/instances/{ns}`
+    /// GET `/v2/gov/instances/{ns}`
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8383,7 +8386,7 @@ impl Client {
         self.get_gov_instances_by_ns_filtered_json(ns, None, None, None, None, None)
     }
 
-    /// GET `/v1/gov/instances/{ns}` with optional filters and pagination.
+    /// GET `/v2/gov/instances/{ns}` with optional filters and pagination.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8425,7 +8428,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/contracts/instances/{ns}` with optional filters and pagination.
+    /// GET `/v2/contracts/instances/{ns}` with optional filters and pagination.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -8467,7 +8470,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/contracts/code-bytes/{code_hash}` and decode base64 into bytes
+    /// GET `/v2/contracts/code-bytes/{code_hash}` and decode base64 into bytes
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or the response JSON lacks `code_b64`.
@@ -8492,7 +8495,7 @@ impl Client {
             .unwrap_or_default())
     }
 
-    /// GET `/v1/contracts/code/{code_hash}` and return manifest JSON
+    /// GET `/v2/contracts/code/{code_hash}` and return manifest JSON
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_contract_manifest_json(&self, code_hash_hex: &str) -> Result<norito::json::Value> {
@@ -8509,7 +8512,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/contracts/deploy` with JSON body `{ authority, private_key, code_b64 }`.
+    /// POST `/v2/contracts/deploy` with JSON body `{ authority, private_key, code_b64 }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_contract_deploy_json(
@@ -8545,7 +8548,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
+    /// POST `/v2/subscriptions/plans` with a JSON subscription plan payload.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8567,7 +8570,7 @@ impl Client {
             .wrap_err("failed to decode subscription plan create response")
     }
 
-    /// GET `/v1/subscriptions/plans` with optional query parameters.
+    /// GET `/v2/subscriptions/plans` with optional query parameters.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8594,7 +8597,7 @@ impl Client {
             .wrap_err("failed to decode subscription plan list response")
     }
 
-    /// POST `/v1/subscriptions` with a subscription creation payload.
+    /// POST `/v2/subscriptions` with a subscription creation payload.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8615,7 +8618,7 @@ impl Client {
         norito::json::from_value(payload).wrap_err("failed to decode subscription create response")
     }
 
-    /// GET `/v1/subscriptions` with optional query parameters.
+    /// GET `/v2/subscriptions` with optional query parameters.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8647,7 +8650,7 @@ impl Client {
         norito::json::from_value(payload).wrap_err("failed to decode subscription list response")
     }
 
-    /// GET `/v1/subscriptions/{subscription_id}`.
+    /// GET `/v2/subscriptions/{subscription_id}`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8662,7 +8665,7 @@ impl Client {
         norito::json::from_value(payload).wrap_err("failed to decode subscription get response")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/pause`.
+    /// POST `/v2/subscriptions/{subscription_id}/pause`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8675,7 +8678,7 @@ impl Client {
             .wrap_err("pause subscription request failed")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/resume`.
+    /// POST `/v2/subscriptions/{subscription_id}/resume`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8688,7 +8691,7 @@ impl Client {
             .wrap_err("resume subscription request failed")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/cancel`.
+    /// POST `/v2/subscriptions/{subscription_id}/cancel`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8701,7 +8704,7 @@ impl Client {
             .wrap_err("cancel subscription request failed")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/keep`.
+    /// POST `/v2/subscriptions/{subscription_id}/keep`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8714,7 +8717,7 @@ impl Client {
             .wrap_err("keep subscription request failed")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/charge-now`.
+    /// POST `/v2/subscriptions/{subscription_id}/charge-now`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8727,7 +8730,7 @@ impl Client {
             .wrap_err("charge subscription request failed")
     }
 
-    /// POST `/v1/subscriptions/{subscription_id}/usage`.
+    /// POST `/v2/subscriptions/{subscription_id}/usage`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -8770,7 +8773,7 @@ impl Client {
         norito::json::from_value(payload).wrap_err("failed to decode subscription action response")
     }
 
-    /// GET `/v1/runtime/abi/active`
+    /// GET `/v2/runtime/abi/active`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_abi_active_json(&self) -> Result<norito::json::Value> {
@@ -8786,7 +8789,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/runtime/abi/hash`
+    /// GET `/v2/runtime/abi/hash`
     /// Returns `{ policy: "V1", abi_hash_hex: "<64-hex>" }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8803,12 +8806,12 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/node/capabilities`
+    /// GET `/v2/node/capabilities`
     /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
-        let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
+        let url = join_torii_url(&self.torii_url, "v2/node/capabilities");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = resp
@@ -8828,6 +8831,10 @@ impl Client {
             );
             return Ok(None);
         }
+        if resp.status() == StatusCode::NOT_FOUND {
+            warn!("node capabilities probe returned 404; deferring data model compatibility check");
+            return Ok(None);
+        }
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get node capabilities: {} {}",
@@ -8838,12 +8845,12 @@ impl Client {
         Ok(Some(norito::json::from_slice(resp.body())?))
     }
 
-    /// GET `/v1/node/capabilities`
+    /// GET `/v2/node/capabilities`
     /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
+        let url = join_torii_url(&self.torii_url, "v2/node/capabilities");
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -8855,7 +8862,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/runtime/metrics`
+    /// GET `/v2/runtime/metrics`
     /// Returns a JSON summary of runtime metrics (ABI count and upgrade events counters).
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8872,7 +8879,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/runtime/upgrades`
+    /// GET `/v2/runtime/upgrades`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_upgrades_json(&self) -> Result<norito::json::Value> {
@@ -8888,13 +8895,13 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/accounts/{uaid}/portfolio` — aggregated holdings for a UAID.
+    /// GET `/v2/accounts/{uaid}/portfolio` — aggregated holdings for a UAID.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_uaid_portfolio(&self, uaid: &str) -> Result<UaidPortfolioResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_portfolio.uaid")?;
-        let path = format!("v1/accounts/{canonical}/portfolio");
+        let path = format!("v2/accounts/{canonical}/portfolio");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
@@ -8904,7 +8911,7 @@ impl Client {
         UaidPortfolioResponse::from_value(payload)
     }
 
-    /// GET `/v1/space-directory/uaids/{uaid}` — dataspace bindings for a UAID.
+    /// GET `/v2/space-directory/uaids/{uaid}` — dataspace bindings for a UAID.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8912,7 +8919,7 @@ impl Client {
         self.get_uaid_bindings_with_query(uaid, None)
     }
 
-    /// GET `/v1/space-directory/uaids/{uaid}` — dataspace bindings with query parameters.
+    /// GET `/v2/space-directory/uaids/{uaid}` — dataspace bindings with query parameters.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8922,7 +8929,7 @@ impl Client {
         query: Option<UaidBindingsQuery>,
     ) -> Result<UaidBindingsResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_bindings_with_query.uaid")?;
-        let path = format!("v1/space-directory/uaids/{canonical}");
+        let path = format!("v2/space-directory/uaids/{canonical}");
         let url = join_torii_url(&self.torii_url, &path);
         let builder = self
             .default_request(HttpMethod::GET, url)
@@ -8937,7 +8944,7 @@ impl Client {
         UaidBindingsResponse::from_value(payload)
     }
 
-    /// GET `/v1/space-directory/uaids/{uaid}/manifests` — capability manifests bound to a UAID.
+    /// GET `/v2/space-directory/uaids/{uaid}/manifests` — capability manifests bound to a UAID.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -8947,7 +8954,7 @@ impl Client {
         query: Option<UaidManifestQuery>,
     ) -> Result<UaidManifestsResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_manifests.uaid")?;
-        let path = format!("v1/space-directory/uaids/{canonical}/manifests");
+        let path = format!("v2/space-directory/uaids/{canonical}/manifests");
         let url = join_torii_url(&self.torii_url, &path);
         let builder = self
             .default_request(HttpMethod::GET, url)
@@ -8962,16 +8969,12 @@ impl Client {
         UaidManifestsResponse::from_value(payload)
     }
 
-    /// GET `/v1/explorer/accounts/{account_id}/qr` — share-ready QR metadata.
+    /// GET `/v2/explorer/accounts/{account_id}/qr` — share-ready QR metadata.
     ///
     /// # Errors
     /// Returns an error if the account id fails validation, the HTTP request fails,
     /// the response is non-OK, or JSON deserialization fails.
-    pub fn get_explorer_account_qr(
-        &self,
-        account_id: &str,
-        options: Option<ExplorerAccountQrOptions>,
-    ) -> Result<ExplorerAccountQrSnapshot> {
+    pub fn get_explorer_account_qr(&self, account_id: &str) -> Result<ExplorerAccountQrSnapshot> {
         let trimmed = account_id.trim();
         if trimmed.is_empty() {
             return Err(eyre!(
@@ -8983,13 +8986,12 @@ impl Client {
         let builder = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON);
-        let builder = options.unwrap_or_default().apply(builder);
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
         ExplorerAccountQrSnapshot::from_value(payload)
     }
 
-    /// POST `/v1/runtime/upgrades/propose` with a JSON DTO body (manifest).
+    /// POST `/v2/runtime/upgrades/propose` with a JSON DTO body (manifest).
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_runtime_propose_upgrade_json(
@@ -9014,7 +9016,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/runtime/upgrades/activate/:id` (id hex in path)
+    /// POST `/v2/runtime/upgrades/activate/:id` (id hex in path)
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -9036,7 +9038,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/runtime/upgrades/cancel/:id` (id hex in path)
+    /// POST `/v2/runtime/upgrades/cancel/:id` (id hex in path)
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -9058,7 +9060,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// List attachments via `/v1/zk/attachments`. Returns JSON array of metadata objects.
+    /// List attachments via `/v2/zk/attachments`. Returns JSON array of metadata objects.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_attachments_list(&self) -> Result<norito::json::Value> {
@@ -9074,7 +9076,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// List proof records via `/v1/zk/proofs` with optional filters.
+    /// List proof records via `/v2/zk/proofs` with optional filters.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_proofs_list_filtered(
@@ -9095,7 +9097,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Count proof records via `/v1/zk/proofs/count` with optional filters.
+    /// Count proof records via `/v2/zk/proofs/count` with optional filters.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or the JSON body is malformed.
     pub fn get_zk_proofs_count(&self, filter: &ZkProofsFilter) -> Result<u64> {
@@ -9116,7 +9118,7 @@ impl Client {
             .ok_or_else(|| eyre!("invalid count response"))
     }
 
-    /// Fetch a single proof record via `/v1/zk/proof/{backend}/{hash}`.
+    /// Fetch a single proof record via `/v2/zk/proof/{backend}/{hash}`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_proof_json(&self, backend: &str, hash_hex: &str) -> Result<norito::json::Value> {
@@ -9135,7 +9137,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Inspect proof retention configuration and live counters via `/v1/proofs/retention`.
+    /// Inspect proof retention configuration and live counters via `/v2/proofs/retention`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_proof_retention_status(&self) -> Result<iroha_torii_shared::ProofRetentionStatus> {
@@ -9154,7 +9156,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// List prover reports via `/v1/zk/prover/reports` with optional server-side filters.
+    /// List prover reports via `/v2/zk/prover/reports` with optional server-side filters.
     /// If a filter field is `None`, it is omitted.
     ///
     /// # Errors
@@ -9177,7 +9179,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Get count of prover reports via `/v1/zk/prover/reports/count` with optional filters.
+    /// Get count of prover reports via `/v2/zk/prover/reports/count` with optional filters.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON parse fails.
@@ -9199,7 +9201,7 @@ impl Client {
             .ok_or_else(|| eyre!("invalid count response"))
     }
 
-    /// Fetch attachment bytes by id via `/v1/zk/attachments/{id}`.
+    /// Fetch attachment bytes by id via `/v2/zk/attachments/{id}`.
     /// Returns the raw bytes and optional content-type.
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is non-OK.
@@ -9220,7 +9222,7 @@ impl Client {
         Ok((resp.body().clone(), ct))
     }
 
-    /// Delete attachment by id via `/v1/zk/attachments/{id}`.
+    /// Delete attachment by id via `/v2/zk/attachments/{id}`.
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `204 No Content`.
     pub fn delete_zk_attachment(&self, id: &str) -> Result<()> {
@@ -9236,7 +9238,7 @@ impl Client {
         Ok(())
     }
 
-    /// List prover reports via `/v1/zk/prover/reports`. Returns a JSON array of reports.
+    /// List prover reports via `/v2/zk/prover/reports`. Returns a JSON array of reports.
     /// This is a non‑consensus, app‑facing helper.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -9253,7 +9255,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Fetch a single prover report JSON by id via `/v1/zk/prover/reports/{id}`.
+    /// Fetch a single prover report JSON by id via `/v2/zk/prover/reports/{id}`.
     /// Returns a JSON object describing the report.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -9270,7 +9272,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Delete a prover report by id via `/v1/zk/prover/reports/{id}`.
+    /// Delete a prover report by id via `/v2/zk/prover/reports/{id}`.
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `204 No Content`.
     pub fn delete_zk_prover_report(&self, id: &str) -> Result<()> {
@@ -9286,7 +9288,7 @@ impl Client {
         Ok(())
     }
 
-    /// Bulk delete prover reports via `/v1/zk/prover/reports` with filters.
+    /// Bulk delete prover reports via `/v2/zk/prover/reports` with filters.
     /// Returns the number of deleted reports.
     ///
     /// # Errors
@@ -9309,7 +9311,7 @@ impl Client {
             .ok_or_else(|| eyre!("invalid delete response"))
     }
 
-    /// Convenience: POST `/v1/zk/vk/register` with a JSON DTO body.
+    /// Convenience: POST `/v2/zk/vk/register` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
     pub fn post_zk_vk_register(&self, value: &norito::json::Value) -> Result<()> {
@@ -9331,7 +9333,7 @@ impl Client {
         Ok(())
     }
 
-    /// Convenience: POST `/v1/zk/vk/update` with a JSON DTO body.
+    /// Convenience: POST `/v2/zk/vk/update` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
     pub fn post_zk_vk_update(&self, value: &norito::json::Value) -> Result<()> {
@@ -9353,7 +9355,7 @@ impl Client {
         Ok(())
     }
 
-    /// Convenience: GET `/v1/zk/vk/{backend}/{name}` as JSON Value.
+    /// Convenience: GET `/v2/zk/vk/{backend}/{name}` as JSON Value.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -9897,10 +9899,16 @@ mod subscription_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (provider, provider_key) = gen_account_in("commerce");
         let (subscriber, subscriber_key) = gen_account_in("users");
-        let plan_id: AssetDefinitionId = "fixed_plan#commerce".parse().unwrap();
+        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "commerce".parse().unwrap(),
+            "fixed_plan".parse().unwrap(),
+        );
         let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId = "usd#pay".parse().unwrap();
+        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "pay".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let provider_private = provider_key.private_key().clone();
         let subscriber_private = subscriber_key.private_key().clone();
@@ -10037,28 +10045,28 @@ mod subscription_http_tests {
                     .push(snapshot.clone());
                 let path = snapshot.url.path();
                 let response = match (snapshot.method.clone(), path) {
-                    (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                    (HttpMethod::POST, "/v2/subscriptions/plans") => {
                         json_response(StatusCode::OK, &plan_create_json)
                     }
-                    (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                    (HttpMethod::GET, "/v2/subscriptions/plans") => {
                         json_response(StatusCode::OK, &plan_list_json)
                     }
-                    (HttpMethod::POST, "/v1/subscriptions") => {
+                    (HttpMethod::POST, "/v2/subscriptions") => {
                         json_response(StatusCode::OK, &subscription_create_json)
                     }
-                    (HttpMethod::GET, "/v1/subscriptions") => {
+                    (HttpMethod::GET, "/v2/subscriptions") => {
                         json_response(StatusCode::OK, &subscription_list_json)
                     }
-                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                    (HttpMethod::GET, "/v2/subscriptions/sub-1$subscriptions") => {
                         json_response(StatusCode::OK, &subscription_get_json)
                     }
                     (
                         HttpMethod::POST,
-                        "/v1/subscriptions/sub-1$subscriptions/pause"
-                        | "/v1/subscriptions/sub-1$subscriptions/resume"
-                        | "/v1/subscriptions/sub-1$subscriptions/cancel"
-                        | "/v1/subscriptions/sub-1$subscriptions/charge-now"
-                        | "/v1/subscriptions/sub-1$subscriptions/usage",
+                        "/v2/subscriptions/sub-1$subscriptions/pause"
+                        | "/v2/subscriptions/sub-1$subscriptions/resume"
+                        | "/v2/subscriptions/sub-1$subscriptions/cancel"
+                        | "/v2/subscriptions/sub-1$subscriptions/charge-now"
+                        | "/v2/subscriptions/sub-1$subscriptions/usage",
                     ) => json_response(StatusCode::OK, &action_json),
                     _ => HttpResponse::builder()
                         .status(StatusCode::NOT_FOUND)
@@ -10107,10 +10115,10 @@ mod subscription_http_tests {
         assert_eq!(snapshots.len(), 10);
         for snapshot in &snapshots {
             match (snapshot.method.clone(), snapshot.url.path()) {
-                (HttpMethod::POST, "/v1/subscriptions/plans") => {
+                (HttpMethod::POST, "/v2/subscriptions/plans") => {
                     match_body(snapshot, &plan_request);
                 }
-                (HttpMethod::GET, "/v1/subscriptions/plans") => {
+                (HttpMethod::GET, "/v2/subscriptions/plans") => {
                     let params: Vec<(String, String)> = snapshot
                         .url
                         .query_pairs()
@@ -10125,10 +10133,10 @@ mod subscription_http_tests {
                         ]
                     );
                 }
-                (HttpMethod::POST, "/v1/subscriptions") => {
+                (HttpMethod::POST, "/v2/subscriptions") => {
                     match_body(snapshot, &subscription_request);
                 }
-                (HttpMethod::GET, "/v1/subscriptions") => {
+                (HttpMethod::GET, "/v2/subscriptions") => {
                     let params: Vec<(String, String)> = snapshot
                         .url
                         .query_pairs()
@@ -10145,19 +10153,19 @@ mod subscription_http_tests {
                         ]
                     );
                 }
-                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions") => {
+                (HttpMethod::GET, "/v2/subscriptions/sub-1$subscriptions") => {
                     assert!(snapshot.body.is_empty());
                 }
                 (
                     HttpMethod::POST,
-                    "/v1/subscriptions/sub-1$subscriptions/pause"
-                    | "/v1/subscriptions/sub-1$subscriptions/resume"
-                    | "/v1/subscriptions/sub-1$subscriptions/cancel"
-                    | "/v1/subscriptions/sub-1$subscriptions/charge-now",
+                    "/v2/subscriptions/sub-1$subscriptions/pause"
+                    | "/v2/subscriptions/sub-1$subscriptions/resume"
+                    | "/v2/subscriptions/sub-1$subscriptions/cancel"
+                    | "/v2/subscriptions/sub-1$subscriptions/charge-now",
                 ) => {
                     match_body(snapshot, &action_request);
                 }
-                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions/usage") => {
+                (HttpMethod::POST, "/v2/subscriptions/sub-1$subscriptions/usage") => {
                     match_body(snapshot, &usage_request);
                 }
                 _ => {}
@@ -11105,11 +11113,11 @@ mod url_join_tests {
     fn join_prover_reports_paths() {
         let base = Url::parse("http://localhost:8080/api/").unwrap();
         let u = join_torii_url(&base, "v1/zk/prover/reports");
-        assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/prover/reports");
+        assert_eq!(u.as_str(), "http://localhost:8080/api/v2/zk/prover/reports");
         let u2 = join_torii_url(&base, "v1/zk/prover/reports/abcd");
         assert_eq!(
             u2.as_str(),
-            "http://localhost:8080/api/v1/zk/prover/reports/abcd"
+            "http://localhost:8080/api/v2/zk/prover/reports/abcd"
         );
     }
 
@@ -11117,7 +11125,7 @@ mod url_join_tests {
     fn join_vote_tally_path() {
         let base = Url::parse("http://localhost:8080/api/").unwrap();
         let u = join_torii_url(&base, "v1/zk/vote/tally");
-        assert_eq!(u.as_str(), "http://localhost:8080/api/v1/zk/vote/tally");
+        assert_eq!(u.as_str(), "http://localhost:8080/api/v2/zk/vote/tally");
     }
 }
 
@@ -12129,7 +12137,7 @@ mod tests {
         assert_eq!(store.len(), 1);
         let snapshot = &store[0];
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/da/ingest");
+        assert_eq!(snapshot.url.path(), "/v2/da/ingest");
         assert!(
             snapshot
                 .headers
@@ -12257,7 +12265,7 @@ mod tests {
 
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
-        assert_eq!(store[0].url.path(), "/v1/da/ingest");
+        assert_eq!(store[0].url.path(), "/v2/da/ingest");
     }
 
     #[test]
@@ -12396,7 +12404,7 @@ mod tests {
         let expected_query = format!("block_hash={block_hash_hex}");
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/da/manifests/{}", bundle.storage_ticket_hex)
+            format!("/v2/da/manifests/{}", bundle.storage_ticket_hex)
         );
         assert_eq!(snapshot.url.query(), Some(expected_query.as_str()));
 
@@ -12520,7 +12528,7 @@ mod tests {
             store[0]
                 .url
                 .path()
-                .ends_with(&format!("/v1/da/manifests/{}", bundle.storage_ticket_hex))
+                .ends_with(&format!("/v2/da/manifests/{}", bundle.storage_ticket_hex))
         );
     }
 
@@ -12723,7 +12731,7 @@ mod tests {
             store[0]
                 .url
                 .path()
-                .ends_with(&format!("/v1/da/manifests/{}", bundle.storage_ticket_hex))
+                .ends_with(&format!("/v2/da/manifests/{}", bundle.storage_ticket_hex))
         );
     }
 
@@ -12748,7 +12756,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policies");
+        assert_eq!(store[0].url.path(), "/v2/da/proof_policies");
     }
 
     #[test]
@@ -12772,7 +12780,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::GET);
-        assert_eq!(store[0].url.path(), "/v1/da/proof_policy_snapshot");
+        assert_eq!(store[0].url.path(), "/v2/da/proof_policy_snapshot");
     }
 
     #[test]
@@ -12806,7 +12814,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments");
+        assert_eq!(store[0].url.path(), "/v2/da/commitments");
         let posted: DaCommitmentProofRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted request");
         assert_eq!(posted.manifest_hash, request.manifest_hash);
@@ -12846,7 +12854,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments/prove");
+        assert_eq!(store[0].url.path(), "/v2/da/commitments/prove");
     }
 
     #[test]
@@ -12875,7 +12883,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/commitments/verify");
+        assert_eq!(store[0].url.path(), "/v2/da/commitments/verify");
         let posted: DaCommitmentProof =
             norito::json::from_slice(&store[0].body).expect("decode posted proof");
         assert_eq!(posted, proof);
@@ -12911,7 +12919,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents");
+        assert_eq!(store[0].url.path(), "/v2/da/pin_intents");
         let posted: DaPinIntentQueryRequest =
             norito::json::from_slice(&store[0].body).expect("decode posted pin query");
         assert_eq!(posted.storage_ticket, request.storage_ticket);
@@ -12948,7 +12956,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/prove");
+        assert_eq!(store[0].url.path(), "/v2/da/pin_intents/prove");
     }
 
     #[test]
@@ -12973,7 +12981,7 @@ mod tests {
         let store = snapshots.lock().expect("lock snapshots");
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].method, HttpMethod::POST);
-        assert_eq!(store[0].url.path(), "/v1/da/pin_intents/verify");
+        assert_eq!(store[0].url.path(), "/v2/da/pin_intents/verify");
         let posted: DaPinIntentWithLocation =
             norito::json::from_slice(&store[0].body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
@@ -13323,7 +13331,7 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/accounts/uaid:{uaid_hex}/portfolio")
+            format!("/v2/accounts/uaid:{uaid_hex}/portfolio")
         );
         assert!(
             snapshot
@@ -13376,7 +13384,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/space-directory/uaids/uaid:{uaid_hex}")
+            format!("/v2/space-directory/uaids/uaid:{uaid_hex}")
         );
     }
 
@@ -13437,7 +13445,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
-            format!("/v1/space-directory/uaids/uaid:{uaid_hex}/manifests")
+            format!("/v2/space-directory/uaids/uaid:{uaid_hex}/manifests")
         );
         assert_eq!(
             snapshot.url.query(),
@@ -13446,7 +13454,7 @@ mod tests {
     }
 
     #[test]
-    fn get_public_lane_validators_omits_address_format_query() {
+    fn get_public_lane_validators_omits_query_params() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let response = json_response(StatusCode::OK, r#"{"lane_id":7,"total":0,"items":[]}"#);
@@ -13462,7 +13470,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/7/validators");
+        assert_eq!(snapshot.url.path(), "/v2/nexus/public_lanes/7/validators");
         assert_eq!(snapshot.url.query(), None);
     }
 
@@ -13486,7 +13494,7 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        assert_eq!(snapshot.url.path(), "/v1/nexus/public_lanes/1/stake");
+        assert_eq!(snapshot.url.path(), "/v2/nexus/public_lanes/1/stake");
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
                 "validator".into(),
@@ -13517,7 +13525,7 @@ mod tests {
             .expect("snapshot captured");
         assert_eq!(
             snapshot.url.path(),
-            "/v1/nexus/public_lanes/0/rewards/pending"
+            "/v2/nexus/public_lanes/0/rewards/pending"
         );
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
         assert!(pairs.contains(&(
@@ -13528,7 +13536,7 @@ mod tests {
     }
 
     #[test]
-    fn get_explorer_account_qr_parses_payload_and_omits_address_format_query() {
+    fn get_explorer_account_qr_parses_payload_and_omits_query_params() {
         let account_id = ALICE_ID.to_string();
         let address = AccountAddress::from_account_id(&ALICE_ID).expect("address from account");
         let i105_literal = address.to_i105().expect("i105 literal");
@@ -13548,7 +13556,7 @@ mod tests {
         let response = json_response(StatusCode::OK, &payload);
         let snapshot_store = Arc::clone(&snapshots);
         let qr = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.get_explorer_account_qr(&account_id, Some(ExplorerAccountQrOptions))
+            client.get_explorer_account_qr(&account_id)
         })
         .expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
@@ -13617,7 +13625,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
+                let response = if path == "/v2/node/capabilities" {
                     json_response(StatusCode::OK, &capabilities_body)
                 } else {
                     HttpResponse::builder()
@@ -13709,7 +13717,7 @@ mod tests {
             1,
             "only node capabilities should be fetched"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[0].url.path(), "/v2/node/capabilities");
     }
 
     #[test]
@@ -13743,7 +13751,7 @@ mod tests {
             1,
             "only node capabilities should be fetched"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[0].url.path(), "/v2/node/capabilities");
     }
 
     #[test]
@@ -13754,7 +13762,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
+                let response = if path == "/v2/node/capabilities" {
                     HttpResponse::builder()
                         .status(StatusCode::TOO_MANY_REQUESTS)
                         .body(b"rate limited".to_vec())
@@ -13792,7 +13800,7 @@ mod tests {
             2,
             "expected node capabilities + transaction requests"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[0].url.path(), "/v2/node/capabilities");
         assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
     }
 
@@ -13804,7 +13812,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
+                let response = if path == "/v2/node/capabilities" {
                     HttpResponse::builder()
                         .status(StatusCode::BAD_GATEWAY)
                         .body(b"bad gateway".to_vec())
@@ -13842,7 +13850,7 @@ mod tests {
             2,
             "expected node capabilities + transaction requests"
         );
-        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[0].url.path(), "/v2/node/capabilities");
         assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
     }
 
@@ -13855,7 +13863,7 @@ mod tests {
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
+                let response = if path == "/v2/node/capabilities" {
                     json_response(StatusCode::OK, &capabilities_body)
                 } else {
                     HttpResponse::builder()
@@ -13891,7 +13899,7 @@ mod tests {
         let store_guard = store.lock().expect("snapshot lock");
         let capability_requests = store_guard
             .iter()
-            .filter(|snapshot| snapshot.url.path() == "/v1/node/capabilities")
+            .filter(|snapshot| snapshot.url.path() == "/v2/node/capabilities")
             .count();
         let tx_requests = store_guard
             .iter()
@@ -14068,11 +14076,11 @@ mod tests {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 3] = [
             (
-                "/v1/sumeragi/pacemaker",
+                "/v2/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,
             ),
-            ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
+            ("/v2/sumeragi/phases", Client::get_sumeragi_phases_json),
+            ("/v2/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
         ];
 
         for (path, request) in cases {
@@ -14455,7 +14463,7 @@ mod tests {
             .cloned()
             .expect("snapshot captured");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/status");
+        assert_eq!(snapshot.url.path(), "/v2/sumeragi/status");
         let accept_header: HashMap<_, _> = snapshot
             .headers
             .iter()
@@ -15678,7 +15686,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/status");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/audit/repair/status");
         assert_eq!(snapshot.url.query(), Some("status=queued&provider=bb"));
     }
 
@@ -15703,7 +15711,7 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
-            "/v1/sorafs/audit/repair/status/deadbeef"
+            "/v2/sorafs/audit/repair/status/deadbeef"
         );
         assert_eq!(snapshot.url.query(), Some("status=completed"));
     }
@@ -15748,7 +15756,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/claim");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/audit/repair/claim");
         let body: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&request).expect("encode request");
@@ -15800,7 +15808,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/complete");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/audit/repair/complete");
         let body: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&request).expect("encode request");
@@ -15852,7 +15860,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/fail");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/audit/repair/fail");
         let body: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&request).expect("encode request");
@@ -15892,7 +15900,7 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/audit/repair/slash");
+        assert_eq!(snapshot.url.path(), "/v2/sorafs/audit/repair/slash");
         let body: norito::json::Value =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&proposal).expect("encode request");
@@ -16345,7 +16353,10 @@ mod tests {
             transaction::error::TransactionRejectionReason,
         };
 
-        let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             crate::data_model::isi::error::InstructionExecutionError::Query(
                 QueryExecutionFail::Find(FindError::AssetDefinition(asset_def)),

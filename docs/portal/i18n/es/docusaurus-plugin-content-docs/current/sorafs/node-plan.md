@@ -56,7 +56,7 @@ Notas de implementación:
 - Usa el stack Axum de Torii con payloads `norito::json`.
 - Agrega esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del backlog más la época/límite más antiguos y los timestamps de éxito/fallo más recientes por proveedor, impulsado por `sorafs_node::NodeHandle::por_ingestion_status`, y Torii registra los gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del backlog más la época/límite más antiguos y los timestamps de éxito/fallo más recientes por proveedor, impulsado por `sorafs_node::NodeHandle::por_ingestion_status`, y Torii registra los gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Scheduler y cumplimiento de cuotas
 

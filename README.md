@@ -89,8 +89,8 @@ Torii exposes both Norito and JSON APIs. Common operator endpoints:
 
 - `GET /status`
 - `GET /metrics`
-- `GET /v1/parameters`
-- `GET /v1/events/sse`
+- `GET /v2/parameters`
+- `GET /v2/events/sse`
 
 See the full endpoint reference in:
 

@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Бекітуден кейінгі конфигурация суреттері
 
 Референдум немесе басқару туралы дауыс беру аяқталғаннан кейін және `[settlement.repo]`
-өзгерту іске қосылды, әр теңдесінен `/v1/configuration` суретін түсіріңіз.
+өзгерту іске қосылды, әр теңдесінен `/v2/configuration` суретін түсіріңіз.
 аудиторлар бекітілген саясаттың кластер бойынша әрекет ететінін дәлелдей алады (қараңыз
 `docs/source/finance/repo_ops.md` §2.9 дәлелдер жұмыс процесі үшін).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

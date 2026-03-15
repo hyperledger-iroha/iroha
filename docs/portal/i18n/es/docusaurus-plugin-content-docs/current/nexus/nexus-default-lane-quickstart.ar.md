@@ -162,7 +162,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` y crate عميل Rust يحذفان حقل `lane_id` عندما لا تمرر `--lane-id` / `LaneSelector`. Hay un enrutador de cola como `default_lane`. Utilice el cable `--lane-id`/`--dataspace-id` en el carril correspondiente.
 - **JS/Swift/Android.** أحدث إصدارات SDK تعامل `laneId`/`lane_id` كاختيارية y تعود إلى المعلنة في `/status`. حافظ على سياسة التوجيه متزامنة بين puesta en escena y producción حتى لا تحتاج تطبيقات الهاتف لإعادة تهيئة طارئة.
-- **Pruebas de canalización/SSE.** مرشحات أحداث المعاملات تقبل الشرط `tx_lane_id == <u32>` (انظر `docs/source/pipeline.md`). Utilice `/v1/pipeline/events/transactions` para cambiar el carril y cambiar el carril.
+- **Pruebas de canalización/SSE.** مرشحات أحداث المعاملات تقبل الشرط `tx_lane_id == <u32>` (انظر `docs/source/pipeline.md`). Utilice `/v2/pipeline/events/transactions` para cambiar el carril y cambiar el carril.
 
 ## 7. المراقبة وروابط الحوكمة- `/status` incluye `nexus_lane_governance_sealed_total` y `nexus_lane_governance_sealed_aliases` con Alertmanager para mostrar el manifiesto de carril. ابق هذه التنبيهات مفعلة حتى في devnets.
 - خريطة القياس للـ planificador y لوحة حوكمة lanes (`dashboards/grafana/nexus_lanes.json`) تتوقع حقول alias/slug من الكتالوج. إذا اعدت تسمية alias, اعد تسمية دلائل Kura المقابلة كي يحافظ المدققون على مسارات حتمية (متابعة تحت NX-1).

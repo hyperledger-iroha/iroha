@@ -48,7 +48,7 @@ auditors share a single source of truth.
 ## 2. Provider Advert Lifecycle
 
 - Adverts are regenerated every 12 hours, expire after 24 hours, and must be
-  re-signed before Torii will serve them via `/v1/sorafs/providers`.
+  re-signed before Torii will serve them via `/v2/sorafs/providers`.
 - `ProviderAdvertBodyV1` carries QoS, stake, and transport hints; governance
   compares deterministic nonces to reject replayed payloads.
 - Operators submit new adverts by posting the signed Norito payload emitted by
@@ -56,7 +56,7 @@ auditors share a single source of truth.
 
   ```bash
   curl -sS -X POST --data-binary @provider_advert.to \
-    http://<torii-host>/v1/sorafs/provider/advert
+    http://<torii-host>/v2/sorafs/provider/advert
   ```
 
 - Dashboards to watch: `torii_sorafs_admission_total` (result labels), warning

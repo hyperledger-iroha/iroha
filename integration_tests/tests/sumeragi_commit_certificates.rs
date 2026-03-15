@@ -26,19 +26,29 @@ use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json;
 use tokio::time::{sleep, timeout};
 use toml::Table;
 
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMIT_CERT_POLL: Duration = Duration::from_millis(200);
-const STAKE_ASSET_ID: &str = "xor#nexus";
 const HIGH_STAKE: u64 = 7_000;
 const LOW_STAKE: u64 = 1_000;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
 
 type CommitCertificate = Qc;
+
+fn stake_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "nexus".parse().expect("nexus domain"),
+        "xor".parse().expect("stake asset name"),
+    )
+}
+
+fn stake_asset_id_literal() -> String {
+    stake_asset_definition_id().to_string()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
@@ -194,12 +204,14 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            let gas_account_str =
-                AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()).to_string();
+            let gas_account_str = ALICE_ID.to_string();
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
-                .write(["nexus", "staking", "stake_asset_id"], STAKE_ASSET_ID)
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_escrow_account_id"],
                     gas_account_str.clone(),
@@ -400,7 +412,7 @@ async fn fetch_commit_certificates(
 ) -> Result<Vec<CommitCertificate>> {
     let base = reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii url {torii}"))?;
     let mut url = base
-        .join("v1/sumeragi/commit-certificates")
+        .join("v2/sumeragi/commit-certificates")
         .wrap_err_with(|| format!("compose commit certificates URL for {torii}"))?;
     {
         let mut pairs = url.query_pairs_mut();
@@ -511,11 +523,15 @@ async fn fetch_metrics(
 
 fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let stake_asset_id: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
+    let stake_asset_id = stake_asset_definition_id();
     let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
-    let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-        .with_metadata(Metadata::default());
+    let definition = {
+        let __asset_definition_id = stake_asset_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+            .with_name(__asset_definition_id.name().to_string())
+    }
+    .with_metadata(Metadata::default());
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),

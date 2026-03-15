@@ -30,7 +30,7 @@ número de épocas y réplicas sin depender de la intención del remitente.
 | _Predeterminado (todas las demás clases)_ | 6 horas | 30 días | 3 | `warm` | `da.default` |
 
 Estos valores están integrados en `torii.da_ingest.replication_policy` y se aplican a
-todas las presentaciones `/v1/da/ingest`. Torii reescribe manifiestos con el impuesto
+todas las presentaciones `/v2/da/ingest`. Torii reescribe manifiestos con el impuesto
 perfil de retención y emite una advertencia cuando las personas que llaman proporcionan valores no coincidentes para
 Los operadores pueden detectar SDK obsoletos.
 
@@ -150,7 +150,7 @@ que SoraFS puede volver a replicar automáticamente blobs que no cumplen los req
    y evidencia del PPD.
 
 La cobertura de regresión vive en `integration_tests/tests/da/replication_policy.rs`;
-la suite envía una política de retención no coincidente a `/v1/da/ingest` y verifica
+la suite envía una política de retención no coincidente a `/v2/da/ingest` y verifica
 que el manifiesto recuperado expone el perfil aplicado en lugar de la persona que llama
 intención.
 

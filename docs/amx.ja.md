@@ -50,7 +50,7 @@ AMX（Atomic cross-data-space）トランザクションは、単一の提出で
   が handle 利用履歴の保持ウィンドウを設定。期待する handle 有効期間に合わせる。
   台帳は WSV に永続化され、起動時に復元され、保持ウィンドウと handle 失効の
   両方が過ぎた時点で決定論的に剪定される（peer 変更でもリプレイ穴を開けない）。
-- キャッシュ状態のデバッグ: Torii は `/v1/debug/axt/cache`（telemetry/dev ゲート）を
+- キャッシュ状態のデバッグ: Torii は `/v2/debug/axt/cache`（telemetry/dev ゲート）を
   公開し、AXT ポリシーのスナップショット版、直近の拒否（lane/理由/版）、
   キャッシュ済み証明（dataspace/状態/manifest root/slots）、拒否ヒント
   (`next_min_handle_era`/`next_min_sub_nonce`) を返す。スロット/manifest
@@ -115,7 +115,7 @@ Client        DS A (public)        DS B (private)        Nexus Lane        Settl
 | `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM ホスト | キャッシュ証明の確認 | gauge 値は適用スキュー後の expiry_slot。 |
 | Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane テレメトリ | DS あたり >5% で警告 | attesters や証明の遅延を示す。 |
 
-`/v1/debug/axt/cache` は `iroha_axt_proof_cache_state` の gauge を dataspace
+`/v2/debug/axt/cache` は `iroha_axt_proof_cache_state` の gauge を dataspace
 ごとのスナップショット（status, manifest root, verified/expiry slots）として
 提供する。
 
@@ -167,7 +167,7 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
   `cache_hit` が安定するはず。持続する miss は manifest 供給の欠落を示す。
 - handle が拒否されたら `iroha_axt_policy_reject_total{lane,reason}` と snapshot
   バージョンを確認し、`expiry`/`era`/`sub_nonce` なら更新を、`lane`/`manifest` なら
-  バインディング修復を行う。Torii の `/v1/debug/axt/cache` は `reject_hints` を返し、
+  バインディング修復を行う。Torii の `/v2/debug/axt/cache` は `reject_hints` を返し、
   `dataspace`, `target_lane`, `next_min_handle_era`, `next_min_sub_nonce` を提供する。
 
 ### SDK サンプル: トークン流出なしのリモート支払い
@@ -213,7 +213,7 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
 | ソース | 取得対象 | コマンド/パス | 証跡期待 |
 |--------|----------|---------------|----------|
 | Prometheus (`iroha_telemetry`) | スロット/AMX SLO: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | `https://$TORII/telemetry/metrics` をスクレイプまたは `docs/source/telemetry.md` のダッシュボードからエクスポート。 | ヒストグラムのスナップショット（必要ならアラート履歴）を nightly `status.md` に添付する。 |
-| Torii RBC snapshots | DA/RBC backlog: セッションごとの chunk backlog、view/height メタデータ、availability カウンタ（`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` は legacy）。 | `GET /v1/sumeragi/rbc` と `GET /v1/sumeragi/rbc/sessions`（`docs/source/samples/sumeragi_rbc_status.md` 参照）。 | AMX DA アラート時に JSON 応答を保存し、インシデントバンドルに添付。 |
+| Torii RBC snapshots | DA/RBC backlog: セッションごとの chunk backlog、view/height メタデータ、availability カウンタ（`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` は legacy）。 | `GET /v2/sumeragi/rbc` と `GET /v2/sumeragi/rbc/sessions`（`docs/source/samples/sumeragi_rbc_status.md` 参照）。 | AMX DA アラート時に JSON 応答を保存し、インシデントバンドルに添付。 |
 | Proof service metrics | PVO キャッシュ健全性: `iroha_pvo_cache_hit_ratio`, キャッシュ fill/evict カウンタ, proof queue depth | 証明サービスの `GET /metrics`（`IROHA_PVO_METRICS_URL`）または共通 OTLP collector。 | AMX スロットメトリクスと並べて cache hit ratio と queue depth を保存する。 |
 | Acceptance harness | slot/DA/RBC/PVO 混在負荷 | `ci/acceptance/slot_1s.yml` を再実行し `artifacts/acceptance/slot_1s/<timestamp>/` に保存。 | GA 前および pacemaker/DA 設定変更時に必須。YAML サマリと Prometheus スナップショットを添付。 |
 
@@ -221,8 +221,8 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
 
 | 症状 | 最初の確認 | 推奨対処 |
 |------|------------|----------|
-| `iroha_slot_duration_ms` の p95 が 1 000 ms を超える | `/telemetry/metrics` の Prometheus エクスポートと最新 `/v1/sumeragi/rbc` で DA ディファーを確認し、`ci/acceptance/slot_1s.yml` の直近アーティファクトと比較。 | AMX バッチサイズを下げる、または追加の RBC collectors（`sumeragi.collectors.k`）を有効化し、acceptance harness を再実行して証跡を取得。 |
-| missing availability の急増 | `/v1/sumeragi/rbc/sessions` の backlog と attester の健全性ダッシュボード。 | 不健全な attesters を外し、`redundant_send_r` を一時的に上げて配信を速め、`status.md` に記録。 |
+| `iroha_slot_duration_ms` の p95 が 1 000 ms を超える | `/telemetry/metrics` の Prometheus エクスポートと最新 `/v2/sumeragi/rbc` で DA ディファーを確認し、`ci/acceptance/slot_1s.yml` の直近アーティファクトと比較。 | AMX バッチサイズを下げる、または追加の RBC collectors（`sumeragi.collectors.k`）を有効化し、acceptance harness を再実行して証跡を取得。 |
+| missing availability の急増 | `/v2/sumeragi/rbc/sessions` の backlog と attester の健全性ダッシュボード。 | 不健全な attesters を外し、`redundant_send_r` を一時的に上げて配信を速め、`status.md` に記録。 |
 | `PVO_MISSING_OR_EXPIRED` が頻発 | Proof service のキャッシュメトリクスとスケジューラログ。 | 古い PVO を再生成し、ローテーション周期を短縮し、SDK が `expiry_slot` 前に handle を更新するようにする。 |
 | `AMX_LOCK_CONFLICT` または `AMX_TIMEOUT` が頻発 | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, 該当 manifest。 | Norito static analyzer を再実行し、read/write selectors を修正（またはバッチ分割）、更新済み manifest fixtures を公開。 |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` のアラート | Settlement router ログ（`docs/settlement-router.md`）、treasury バッファのダッシュボード、該当レシート。 | XOR バッファの補充や lane の XOR-only モード切替を行い、トレジャリーの対応を記録、スロット acceptance テストを再実行。 |
@@ -234,7 +234,7 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
   `duplicate`）に記録される。ブロック検証は
   `AxtEnvelopeValidationFailed { message, reason, snapshot_version }` を返し、
   拒否がどのポリシー snapshot に結びつくかを明示する。
-- `/v1/debug/axt/cache` は `{ policy_snapshot_version, last_reject, cache, hints }`
+- `/v2/debug/axt/cache` は `{ policy_snapshot_version, last_reject, cache, hints }`
   を返す。`last_reject` には直近の拒否 (lane/理由/版) が入り、`hints` は
   `next_min_handle_era`/`next_min_sub_nonce` を提供する。
 - アラートテンプレート: `iroha_axt_policy_reject_total{reason="manifest"}` または

@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Aide à retarder l'arrivée d'Odin `POST /v1/sns/registrations` et à l'aider à le faire.
+- Aide à retarder l'arrivée d'Odin `POST /v2/sns/registrations` et à l'aider à le faire.
   est activé par HTTP. Les réponses sont ajoutées au journal des messages de NDJSON.
-- `--poll-status` est automatiquement installé `/v1/sns/registrations/{selector}` après
+- `--poll-status` est automatiquement installé `/v2/sns/registrations/{selector}` après
   каждой отправки (до `--poll-attempts`, by умолчанию 5), чтобы подтвердить
   видимость записи. Recherchez `--suffix-map` (mapping JSON `suffix_id` dans la zone
   "suffixe"), l'instrument que vous utilisez est `{label}.{suffix}` pour l'interrogation.

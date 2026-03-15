@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | يظهر التكوين العبث | يقوم `ClientConfig` بالتحقق من صحة البيانات (التجزئة + المخطط) قبل التقديم ويسجل عمليات إعادة التحميل المرفوضة عبر `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | التنازل عن مفاتيح التوقيع | السياسات التي تتطلبها StrongBox، وأدوات التصديق، وعمليات تدقيق مصفوفة الأجهزة تحدد الانحراف؛ التجاوزات موثقة لكل حادث. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | تسرب معلومات تحديد الهوية الشخصية (PII) في القياس عن بعد | سلطات تجزئة Blake2b، وملفات تعريف الأجهزة المجمعة، وإغفال الناقل، وتجاوز التسجيل. | `docs/source/sdk/android/telemetry_redaction.md`; دعم قواعد اللعبة التي تمارسها §8. |
-| إعادة التشغيل أو الرجوع إلى إصدار سابق على Torii RPC | يقوم منشئ الطلبات `/v1/pipeline` بفرض تثبيت TLS وسياسة قناة الضوضاء وإعادة محاولة الميزانيات مع سياق السلطة المجزأة. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (مخطط له). |
+| إعادة التشغيل أو الرجوع إلى إصدار سابق على Torii RPC | يقوم منشئ الطلبات `/v2/pipeline` بفرض تثبيت TLS وسياسة قناة الضوضاء وإعادة محاولة الميزانيات مع سياق السلطة المجزأة. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (مخطط له). |
 | الإصدارات غير الموقعة أو غير القابلة للتكرار | شهادات CycloneDX SBOM + Sigstore مقسمة بواسطة قائمة التحقق AND6؛ يتطلب إصدار RFCs دليلاً في `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | التعامل مع الحادث غير مكتمل | يحدد Runbook + Playbook التجاوزات وتدريبات الفوضى وشجرة التصعيد؛ تتطلب تجاوزات القياس طلبات Norito الموقعة. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 التحكم في الوصول | سياسات StrongBox + تجاوز سير العمل الذي يتطلب عناصر Norito الموقعة. |
 | 7.5 ضوابط التشفير | متطلبات إنشاء المفاتيح وتخزينها واعتمادها من AND2 (دليل إدارة المفاتيح). |
 | 7.6 أمن العمليات | تجزئة القياس عن بعد، وتدريبات الفوضى، والاستجابة للحوادث، وإطلاق بوابة الأدلة. |
-| 7.7 أمن الاتصالات | `/v1/pipeline` سياسة TLS + السلطات المجزأة (مستند تنقيح القياس عن بعد). |
+| 7.7 أمن الاتصالات | `/v2/pipeline` سياسة TLS + السلطات المجزأة (مستند تنقيح القياس عن بعد). |
 | 7.8 اكتساب/ تطوير النظام | إنشاءات Gradle القابلة للتكرار ووحدات SBOM وبوابات المصدر في خطط AND5/AND6. |
 | 7.9 علاقات الموردين | شهادات Buildkite + Sigstore المسجلة جنبًا إلى جنب مع SBOMs التابعة لجهة خارجية. |
 | 7.10 إدارة الحوادث | تصعيد Runbook/Playbook، وتجاوز التسجيل، وعدادات فشل القياس عن بعد. |

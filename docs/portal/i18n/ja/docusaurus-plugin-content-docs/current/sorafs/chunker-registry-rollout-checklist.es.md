@@ -76,7 +76,7 @@ Sidebar_label: チャンカーのロールアウトのチェックリスト
    `torii.sorafs.discovery.admission.envelopes_dir` のステージング参照。
 3. API を介してプロバイダーの広告を確認し、発見します。
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. マニフェスト/プランのヘッダーのエンドポイントの取り出し:
    ```bash

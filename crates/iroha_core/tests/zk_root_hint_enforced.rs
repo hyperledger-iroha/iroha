@@ -109,14 +109,21 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     let mut stx = block.transaction();
 
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let alice = AccountId::new(KeyPair::random().public_key().clone());
 
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(alice.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), alice.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -195,7 +202,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
         0,
     ));
     let mut stx2 = block2.transaction();
-    let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let bad_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let bad_vk = bad_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");
@@ -238,7 +245,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
             .last()
             .unwrap()
     };
-    let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let ok_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let ok_vk = ok_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");

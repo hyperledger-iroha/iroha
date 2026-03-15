@@ -119,14 +119,14 @@ Prio-ийн хувьцаанууд `max_share_lag_buckets`-ийг давж, цу
 Torii нь одоо хоёр телеметрийн хаалгатай HTTP төгсгөлийн цэгийг ил гаргах тул реле болон коллекторууд
 захиалгат тээвэрлэлт оруулахгүйгээр ажиглалтыг дамжуулах боломжтой:
 
-- `POST /v1/soranet/privacy/event` зөвшөөрнө a
+- `POST /v2/soranet/privacy/event` зөвшөөрнө a
   `RecordSoranetPrivacyEventDto` ачаалал. Биеийг ороох a
   `SoranetPrivacyEventV1` болон нэмэлт `source` шошго. Torii баталгаажуулна
   идэвхтэй телеметрийн профайлын эсрэг хүсэлт гаргаж, үйл явдлыг бүртгэж, хариу өгнө
   HTTP `202 Accepted`-тай, Norito JSON дугтуйтай хамт
   тооцоолсон хувин цонх (`bucket_start_unix`, `bucket_duration_secs`) ба
   реле горим.
-- `POST /v1/soranet/privacy/share` нь `RecordSoranetPrivacyShareDto`-г хүлээн авдаг
+- `POST /v2/soranet/privacy/share` нь `RecordSoranetPrivacyShareDto`-г хүлээн авдаг
   ачаалал. Бие нь `SoranetPrivacyPrioShareV1` болон нэмэлт загвартай
   `forwarded_by` зөвлөмж нь операторууд коллекторын урсгалыг шалгах боломжтой. Амжилттай
   Ирүүлсэн материалууд нь HTTP `202 Accepted`-ийг Norito JSON дугтуйтай нэгтгэн харуулна.
@@ -256,7 +256,7 @@ cargo xtask soranet-privacy-report \
 цонх (өгөгдмөл 10%) эсвэл хувин байхгүй үед. Санал болгож буй урсгал:
 
 1. NDJSON-г релей админ төгсгөлийн цэгээс болон найруулагчийн цэгээс экспортлох
-   `/v1/soranet/privacy/event|share` руу урсдаг
+   `/v2/soranet/privacy/event|share` руу урсдаг
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Туслагчийг бодлогын төсвөөр ажиллуулна уу:
 

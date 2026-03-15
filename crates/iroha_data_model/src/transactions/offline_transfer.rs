@@ -314,8 +314,10 @@ mod tests {
     }
 
     fn sample_asset(domain: &str) -> crate::asset::AssetId {
-        let definition =
-            AssetDefinitionId::from_str(&format!("usd#{domain}")).expect("definition id");
+        let definition = AssetDefinitionId::new(
+            domain.parse().expect("domain id"),
+            "usd".parse().expect("asset name"),
+        );
         crate::asset::AssetId::new(definition, sample_account(0xD4, domain))
     }
 

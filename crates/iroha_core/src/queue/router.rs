@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use iroha_config::parameters::actual::{LaneRoutingPolicy, LaneRoutingRule};
+use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
@@ -20,7 +20,7 @@ use iroha_data_model::{
 };
 
 use crate::{
-    state::{State, StateView},
+    state::{State, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 
@@ -58,7 +58,26 @@ pub fn evaluate_policy(
     policy: &LaneRoutingPolicy,
     tx: &AcceptedTransaction<'_>,
 ) -> RoutingDecision {
-    let matched_rule = policy.rules.iter().find(|rule| rule_matches(rule, tx));
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, None));
+    let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
+    let dataspace_id = matched_rule
+        .and_then(|rule| rule.dataspace)
+        .unwrap_or(policy.default_dataspace);
+    RoutingDecision::new(lane_id, dataspace_id)
+}
+
+fn evaluate_policy_with_view(
+    policy: &LaneRoutingPolicy,
+    tx: &AcceptedTransaction<'_>,
+    state_view: &StateView<'_>,
+) -> RoutingDecision {
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| rule_matches(rule, tx, Some(state_view)));
     let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
     let dataspace_id = matched_rule
         .and_then(|rule| rule.dataspace)
@@ -151,17 +170,21 @@ fn normalize_routing_decision(
     RoutingDecision::new(lane_id, dataspace_id)
 }
 
-fn rule_matches(rule: &LaneRoutingRule, tx: &AcceptedTransaction<'_>) -> bool {
+fn rule_matches(
+    rule: &LaneRoutingRule,
+    tx: &AcceptedTransaction<'_>,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
     let matcher = &rule.matcher;
 
     if let Some(account) = matcher.account.as_deref()
-        && !account_matches(account, tx.as_ref().authority())
+        && !account_matches(account, tx.as_ref().authority(), state_view)
     {
         return false;
     }
 
     if let Some(instruction) = matcher.instruction.as_deref()
-        && !instructions_match(instruction, tx)
+        && !instructions_match(instruction, tx, state_view)
     {
         return false;
     }
@@ -169,7 +192,11 @@ fn rule_matches(rule: &LaneRoutingRule, tx: &AcceptedTransaction<'_>) -> bool {
     true
 }
 
-fn account_matches(pattern: &str, authority: &iroha_data_model::account::AccountId) -> bool {
+fn account_matches(
+    pattern: &str,
+    authority: &iroha_data_model::account::AccountId,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
     let pattern = pattern.trim();
     if pattern.is_empty() {
         return false;
@@ -178,16 +205,39 @@ fn account_matches(pattern: &str, authority: &iroha_data_model::account::Account
     if authority.to_string() == pattern {
         return true;
     }
+    if iroha_data_model::account::AccountId::parse_encoded(pattern)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .is_ok_and(|parsed| parsed == *authority)
+    {
+        return true;
+    }
 
     let wildcard_domain = pattern
         .strip_prefix("*@")
         .or_else(|| pattern.strip_prefix("domain:"))
         .or_else(|| pattern.strip_prefix("authority_domain:"));
 
-    wildcard_domain.is_some_and(|domain| !domain.trim().is_empty() && false)
+    wildcard_domain.is_some_and(|domain| {
+        let domain = domain.trim();
+        if domain.is_empty() {
+            return false;
+        }
+        let Some(state_view) = state_view else {
+            return false;
+        };
+        state_view
+            .world()
+            .domains_for_subject(authority)
+            .into_iter()
+            .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
+    })
 }
 
-fn instructions_match(matcher: &str, tx: &AcceptedTransaction<'_>) -> bool {
+fn instructions_match(
+    matcher: &str,
+    tx: &AcceptedTransaction<'_>,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
     let matcher_norm = matcher.trim().to_ascii_lowercase();
     if matcher_norm.is_empty() {
         return false;
@@ -202,9 +252,14 @@ fn instructions_match(matcher: &str, tx: &AcceptedTransaction<'_>) -> bool {
         return false;
     };
 
-    batch
-        .iter()
-        .any(|instruction| instruction_matches(matcher_label, destination_domain, &**instruction))
+    batch.iter().any(|instruction| {
+        instruction_matches(
+            matcher_label,
+            destination_domain,
+            &**instruction,
+            state_view,
+        )
+    })
 }
 
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
@@ -225,9 +280,10 @@ fn instruction_matches(
     matcher: &str,
     destination_domain: Option<&str>,
     instruction: &dyn Instruction,
+    state_view: Option<&StateView<'_>>,
 ) -> bool {
     if destination_domain
-        .is_some_and(|domain| !transfer_destination_matches_domain(instruction, domain))
+        .is_some_and(|domain| !transfer_destination_matches_domain(instruction, domain, state_view))
     {
         return false;
     }
@@ -249,7 +305,11 @@ fn instruction_matches(
     })
 }
 
-fn transfer_destination_matches_domain(instruction: &dyn Instruction, domain: &str) -> bool {
+fn transfer_destination_matches_domain(
+    instruction: &dyn Instruction,
+    domain: &str,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
     let domain = domain.trim();
     if domain.is_empty() {
         return false;
@@ -260,9 +320,20 @@ fn transfer_destination_matches_domain(instruction: &dyn Instruction, domain: &s
         return false;
     };
 
-    let _ = transfer;
-    let _ = domain;
-    false
+    let destination = match transfer {
+        TransferBox::Domain(transfer) => &transfer.destination,
+        TransferBox::AssetDefinition(transfer) => &transfer.destination,
+        TransferBox::Asset(transfer) => &transfer.destination,
+        TransferBox::Nft(transfer) => &transfer.destination,
+    };
+    let Some(state_view) = state_view else {
+        return false;
+    };
+    state_view
+        .world()
+        .domains_for_subject(destination)
+        .into_iter()
+        .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
 }
 
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
@@ -478,10 +549,56 @@ impl LaneRouter for ConfigLaneRouter {
             self.dataspace_catalog.as_ref(),
         )
     }
+
+    fn route_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> RoutingDecision {
+        let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
+        normalize_routing_decision(
+            decision,
+            self.policy.as_ref(),
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+        )
+    }
+
+    fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+        if policy_needs_state(self.policy.as_ref()) {
+            return None;
+        }
+        Some(self.route(tx))
+    }
+}
+
+fn policy_needs_state(policy: &LaneRoutingPolicy) -> bool {
+    policy
+        .rules
+        .iter()
+        .any(|rule| matcher_needs_state(&rule.matcher))
+}
+
+fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
+    let account_needs_state = matcher.account.as_deref().is_some_and(|account| {
+        let account = account.trim();
+        account.starts_with("*@")
+            || account.starts_with("domain:")
+            || account.starts_with("authority_domain:")
+    });
+
+    let instruction_needs_state = matcher.instruction.as_deref().is_some_and(|instruction| {
+        let instruction = instruction.trim().to_ascii_lowercase();
+        instruction.starts_with("transfer") && instruction.rsplit_once('@').is_some()
+    });
+
+    account_needs_state || instruction_needs_state
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -569,6 +686,34 @@ mod tests {
         crate::state::State::new(world, kura, query)
     }
 
+    fn state_with_accounts(accounts: &[(AccountId, DomainId)]) -> crate::state::State {
+        let mut domain_owners = BTreeMap::<DomainId, AccountId>::new();
+        let mut account_models = Vec::new();
+
+        for (account_id, domain_id) in accounts {
+            domain_owners
+                .entry(domain_id.clone())
+                .or_insert_with(|| account_id.clone());
+            account_models.push(
+                Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id),
+            );
+        }
+        let domain_models = domain_owners
+            .into_iter()
+            .map(|(domain_id, owner)| Domain::new(domain_id).build(&owner))
+            .collect::<Vec<_>>();
+
+        let world = crate::state::World::with(domain_models, account_models, []);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let telemetry = crate::telemetry::StateTelemetry::default();
+        #[cfg(feature = "telemetry")]
+        return crate::state::State::with_telemetry(world, kura, query, telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        crate::state::State::new(world, kura, query)
+    }
+
     #[test]
     fn applies_account_and_instruction_rules() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -603,11 +748,16 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
         let mint = Mint::asset_numeric(1u32, asset_id);
-        let register =
-            Register::asset_definition(AssetDefinition::numeric(asset_definition.clone()));
+        let register = Register::asset_definition(
+            AssetDefinition::numeric(asset_definition.clone())
+                .with_name(asset_definition.name().to_string()),
+        );
 
         let tx = sample_transaction(
             &alice_id,
@@ -1101,7 +1251,10 @@ mod tests {
             )))],
         );
 
-        let state = blank_state();
+        let state = state_with_accounts(&[
+            (uae_id.clone(), "uae".parse().expect("uae domain")),
+            (bank_id.clone(), "hbl".parse().expect("hbl domain")),
+        ]);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
 
@@ -1131,16 +1284,23 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "uae".parse().unwrap(),
+            "aed".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
-        let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id);
+        let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id.clone());
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
 
-        let decision = router.route_with_view(&tx, &blank_state().view());
+        let state = state_with_accounts(&[
+            (sender_id.clone(), "hbl".parse().expect("hbl domain")),
+            (receiver_id.clone(), "acme".parse().expect("acme domain")),
+        ]);
+        let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
 
@@ -1178,7 +1338,10 @@ mod tests {
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
-        let asset_definition: AssetDefinitionId = "aed#uae".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "uae".parse().unwrap(),
+            "aed".parse().unwrap(),
+        );
         let uae_transfer = Transfer::asset_numeric(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,
@@ -1187,7 +1350,7 @@ mod tests {
         let bank_transfer = Transfer::asset_numeric(
             AssetId::of(asset_definition, bank_sender_id.clone()),
             1_u32,
-            acme_receiver_id,
+            acme_receiver_id.clone(),
         );
 
         let uae_tx = sample_transaction(
@@ -1201,7 +1364,14 @@ mod tests {
             vec![InstructionBox::from(bank_transfer)],
         );
 
-        let state = blank_state();
+        let state = state_with_accounts(&[
+            (uae_sender_id.clone(), "uae".parse().expect("uae domain")),
+            (bank_sender_id.clone(), "hbl".parse().expect("hbl domain")),
+            (
+                acme_receiver_id.clone(),
+                "acme".parse().expect("acme domain"),
+            ),
+        ]);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
         assert_eq!(uae_decision.lane_id, LaneId::new(2));

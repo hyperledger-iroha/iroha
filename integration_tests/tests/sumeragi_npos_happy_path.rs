@@ -26,8 +26,9 @@ const PACEMAKER_EMA_BUDGET_MS: f64 = 5_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const RBC_DELIVER_MIN: f64 = 1.0;
 const RBC_WAIT_BUDGET: Duration = Duration::from_secs(20);
-const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(120);
-const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(120);
+// Full-workspace runs can delay large RBC delivery under network-test permit contention.
+const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
+const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(240);
 const LARGE_PAYLOAD_BYTES: usize = 6 * 1024 * 1024;
 
 #[derive(Clone)]
@@ -108,10 +109,10 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     let http = reqwest::Client::new();
     let torii = client.torii_url.clone();
     let collectors_url = torii
-        .join("v1/sumeragi/collectors")
+        .join("v2/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let sessions_url = torii
-        .join("v1/sumeragi/rbc/sessions")
+        .join("v2/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
 
@@ -201,14 +202,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
 
     let sessions_url_primary = client
         .torii_url
-        .join("v1/sumeragi/rbc/sessions")
+        .join("v2/sumeragi/rbc/sessions")
         .wrap_err("compose primary RBC sessions URL")?;
     let status_url_primary = client
         .torii_url
         .join("status")
         .wrap_err("compose primary status URL")?;
     let restart_sessions_url = reqwest::Url::parse(&format!(
-        "{}/v1/sumeragi/rbc/sessions",
+        "{}/v2/sumeragi/rbc/sessions",
         restart_peer.torii_url()
     ))
     .wrap_err("compose restart peer sessions URL")?;
@@ -321,7 +322,7 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     let http = reqwest::Client::new();
     let sessions_url = client
         .torii_url
-        .join("v1/sumeragi/rbc/sessions")
+        .join("v2/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
     let status_url = client
         .torii_url

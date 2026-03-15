@@ -60,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0
 MMR шыңдары солдан оңға қарай реттелген. Шыңдарды қаптау арқылы `mmr_root` мәнін қайта есептеңіз
 оңнан солға қарай: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Тексеру негізгі дәлелге ұқсас: `block_hash` файлынан қайта есептеңіз.
 тақырыбы, міндеттеме-сертификат қолдарын тексеру және міндеттемені тексеру
@@ -103,10 +103,10 @@ commit-сертификат кортежі, валидатор жиынының 
 
 ## API беті
 
-- `GET /v1/bridge/finality/{height}` – `BridgeFinalityProof` қайтарады
+- `GET /v2/bridge/finality/{height}` – `BridgeFinalityProof` қайтарады
   сұралған блок биіктігі. `Accept` арқылы мазмұн келіссөздері Norito немесе
   JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` қайтарады
+- `GET /v2/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` қайтарады
   (міндеттеме + негіздеме + тақырып/сертификат) сұралған биіктікке.
 
 ## Жазбалар мен бақылаулар

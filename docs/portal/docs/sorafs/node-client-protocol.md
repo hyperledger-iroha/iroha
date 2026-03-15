@@ -57,7 +57,7 @@ Tooling support:
 
 Gateways accept deterministic HTTP requests that mirror the advert metadata.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Requirement | Details |
 |-------------|---------|
@@ -65,7 +65,7 @@ Gateways accept deterministic HTTP requests that mirror the advert metadata.
 | **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
 | **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Single-chunk fetch with the same headers plus the deterministic chunk digest.
 Useful for retries or forensic downloads when CAR slices are unnecessary.
@@ -116,7 +116,7 @@ Common errors raised to operators/SDKs:
 - `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
   pin-registry REST endpoints and print raw Norito JSON with attestation blocks
   for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
+- `iroha app sorafs storage pin` and `torii /v2/sorafs/pin/register` accept Norito
   or JSON manifests plus optional alias proofs and successors; malformed proofs
   raise `400`, stale proofs surface `503` with `Warning: 110`, and
   hard-expired proofs return `412`.
@@ -132,8 +132,8 @@ Common errors raised to operators/SDKs:
   is capped to the most recent transitions.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
+- REST endpoints (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
+  `/v2/sorafs/replication`) include attestation structures so clients can
   verify data against the latest block headers before taking action.
 
 ## References

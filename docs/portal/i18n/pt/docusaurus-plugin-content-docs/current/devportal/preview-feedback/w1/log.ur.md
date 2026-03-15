@@ -28,7 +28,7 @@ descrição: پہلی پارٹنر onda de visualização کے لئے مجموع
 | parceiro-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 03/04/2025 | 12/04/2025 15:00 | 12/04/2025 15:11 | ✅ Data 2025/04/26 | sorafs-op-01; orquestrador documenta evidência de paridade |
 | parceiro-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 03/04/2025 | 12/04/2025 15:03 | 12/04/2025 15:15 | ✅ Data 2025/04/26 | sorafs-op-02; Norito/ligações cruzadas de telemetria کی توثیق۔ |
 | parceiro-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 04/04/2025 | 12/04/2025 15:06 | 12/04/2025 15:18 | ✅ Data 2025/04/26 | sorafs-op-03; exercícios de failover de várias fontes |
-| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ Data 2025/04/26 | torii-int-01; Torii `/v1/pipeline` + Experimente a revisão do livro de receitas۔ |
+| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ Data 2025/04/26 | torii-int-01; Torii `/v2/pipeline` + Experimente a revisão do livro de receitas۔ |
 | parceiro-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 05/04/2025 | 12/04/2025 15:12 | 12/04/2025 15:23 | ✅ Data 2025/04/26 | torii-int-02; Experimente a atualização da captura de tela میں ساتھ دیا (docs-preview/w1 #2). |
 | parceiro-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 05/04/2025 | 12/04/2025 15:15 | 12/04/2025 15:26 | ✅ Data 2025/04/26 | SDK-parceiro-01; Feedback do livro de receitas JS/Swift + verificações de integridade da ponte ISO۔ |
 | parceiro-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 11/04/2025 | 12/04/2025 15:18 | 12/04/2025 15:29 | ✅ Data 2025/04/26 | SDK-parceiro-02; conformidade 2025-04-11 کو clear، Notas de conexão/telemetria پر فوکس۔ |

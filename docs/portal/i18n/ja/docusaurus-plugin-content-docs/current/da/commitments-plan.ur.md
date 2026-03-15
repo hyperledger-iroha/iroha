@@ -30,7 +30,7 @@ Norito でエンコードされたスケール アドホック JSON スケール
   可用性状態 دوبارہ بنا سکیں۔
 - 決定的なメンバーシップ証明、ライトクライアントは確認します。
   マニフェスト ハッシュ مخصوص بلاک میں 確定 ہوا تھا۔
-- Torii クエリ (`/v1/da/commitments/*`) 証明、リレー
+- Torii クエリ (`/v2/da/commitments/*`) 証明、リレー
   SDK のガバナンス自動化とリプレイの可用性の向上
   監査する
 - `SignedBlockWire` エンベロープ 正規の構造 Norito
@@ -45,7 +45,7 @@ Norito でエンコードされたスケール アドホック JSON スケール
 3. **永続性/インデックス** WSV コミットメント クエリの処理
    (`iroha_core/src/wsv/mod.rs`)。
 4. **Torii RPC の追加** エンドポイントのリスト/クエリ/証明
-   `/v1/da/commitments` いいえ
+   `/v2/da/commitments` いいえ
 5. **統合テスト + フィクスチャ** 配線レイアウト、プルーフ フロー、検証
    `integration_tests/tests/da/commitments.rs` すごい
 
@@ -137,9 +137,9 @@ Torii のエンドポイントの数:
 
 |ルート |方法 |ペイロード |メモ |
 |----------|----------|----------|----------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス範囲フィルター、ページネーション) | `DaCommitmentPage` 合計数、コミットメント数、ブロック ハッシュ数、数字、数字。 |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ `(epoch, sequence)` タプル)۔ | `DaCommitmentProof` واپس کرتا ہے (レコード + マークル パス + ブロック ハッシュ)۔ |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ステートレス ヘルパー ブロック ハッシュ計算 ブロック 包含検証 ブロック ハッシュ計算SDK のアクセス `iroha_crypto` アクセス リンクの確認|
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス範囲フィルター、ページネーション) | `DaCommitmentPage` 合計数、コミットメント数、ブロック ハッシュ数、数字、数字。 |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ `(epoch, sequence)` タプル)۔ | `DaCommitmentProof` واپس کرتا ہے (レコード + マークル パス + ブロック ハッシュ)۔ |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |ステートレス ヘルパー ブロック ハッシュ計算 ブロック 包含検証 ブロック ハッシュ計算SDK のアクセス `iroha_crypto` アクセス リンクの確認|
 
 ペイロード `iroha_data_model::da::commitment` の数Toriiルーター
 ハンドラー DA 取り込みエンドポイント マウント トークン/mTLS

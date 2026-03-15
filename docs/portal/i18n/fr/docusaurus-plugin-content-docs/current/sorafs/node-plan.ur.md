@@ -54,7 +54,7 @@ Runtime Plumbing `sorafs_node::por` pour les interactions PoR et les threads : t
 Notes de mise en œuvre :
 
 - Torii pour la pile Axum et les charges utiles `norito::json` pour les charges utiles
-- réponses aux schémas Norito et aux schémas (`PinResultV1`, `FetchErrorV1`, structures de télémétrie)- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` pour la profondeur du backlog, l'époque/date limite la plus ancienne et le fournisseur, les horodatages de réussite/échec récents et `sorafs_node::NodeHandle::por_ingestion_status`, alimenté par `/v1/sorafs/por/ingestion/{manifest_digest_hex}`. Les tableaux de bord Torii et les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` enregistrent ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- réponses aux schémas Norito et aux schémas (`PinResultV1`, `FetchErrorV1`, structures de télémétrie)- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` pour la profondeur du backlog, l'époque/date limite la plus ancienne et le fournisseur, les horodatages de réussite/échec récents et `sorafs_node::NodeHandle::por_ingestion_status`, alimenté par `/v2/sorafs/por/ingestion/{manifest_digest_hex}`. Les tableaux de bord Torii et les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` enregistrent ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Planification et application des quotas
 

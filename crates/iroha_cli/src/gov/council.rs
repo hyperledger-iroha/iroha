@@ -125,7 +125,7 @@ pub struct GenVrfArgs {
     /// Output path; if omitted, prints JSON to stdout
     #[arg(long)]
     pub out: Option<std::path::PathBuf>,
-    /// Fetch `seed/epoch/chain_id` from /v1/gov/council/audit (overrides --epoch/--beacon-hex when set)
+    /// Fetch `seed/epoch/chain_id` from /v2/gov/council/audit (overrides --epoch/--beacon-hex when set)
     #[arg(long, default_value_t = false)]
     pub from_audit: bool,
 }
@@ -380,7 +380,7 @@ pub struct DeriveAndPersistArgs {
     /// Private key (hex) for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
+    /// Wait for `CouncilPersisted` event and verify via /v2/gov/council/current
     #[arg(long, default_value_t = false)]
     pub wait: bool,
 }
@@ -878,15 +878,21 @@ impl DeriveVrfArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    fn sample_candidate_account_i105() -> String {
+        let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+            .canonical_i105()
+            .expect("canonical i105")
+    }
 
     #[test]
     fn parse_candidate_flag_ok() {
-        let s = "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi,normal,UEtCQjQ=,UFJPT0Y=";
-        let c = parse_candidate_flag(s).expect("parse ok");
-        assert_eq!(
-            c.account_id,
-            "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi"
-        );
+        let account_id = sample_candidate_account_i105();
+        let s = format!("{account_id},normal,UEtCQjQ=,UFJPT0Y=");
+        let c = parse_candidate_flag(&s).expect("parse ok");
+        assert_eq!(c.account_id, account_id);
         assert_eq!(c.variant, "Normal");
         assert_eq!(c.pk_b64, "UEtCQjQ=");
         assert_eq!(c.proof_b64, "UFJPT0Y=");
@@ -894,10 +900,8 @@ mod tests {
 
     #[test]
     fn parse_candidate_flag_invalid_variant() {
-        let err = parse_candidate_flag(
-            "6cmzPVPXA7A2kgMVibuvWvhcriXC6MKSTArKMVWX3rbMq3HsX29pCwi,Other,pk,proof",
-        )
-        .unwrap_err();
+        let account_id = sample_candidate_account_i105();
+        let err = parse_candidate_flag(&format!("{account_id},Other,pk,proof")).unwrap_err();
         assert!(
             err.contains("variant"),
             "expected error about variant, got {err}"

@@ -1,11 +1,12 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::{format, io::Write, str::FromStr, string::String, vec::Vec};
+use std::{collections::BTreeSet, format, io::Write, str::FromStr, string::String, vec::Vec};
 
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
     DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
 };
+use bs58;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_primitives::json::Json;
@@ -39,6 +40,8 @@ use crate::{
 #[model]
 mod model {
     use super::*;
+    use std::collections::BTreeSet;
+
     use crate::account::rekey::AccountLabel;
     use crate::domain::DomainId;
 
@@ -101,6 +104,9 @@ mod model {
         /// Opaque identifiers bound to this account's UAID.
         #[norito(default)]
         pub opaque_ids: Vec<OpaqueAccountId>,
+        /// Domains currently linked to this account subject in state indexes.
+        #[norito(default)]
+        pub linked_domains: BTreeSet<DomainId>,
     }
 
     /// Builder submitted in a transaction to register an account in a specific domain.
@@ -342,6 +348,9 @@ pub struct AccountDetails {
     /// Opaque identifiers mapped to this account's UAID.
     #[norito(default)]
     pub opaque_ids: Vec<OpaqueAccountId>,
+    /// Domains currently linked to this account subject in state indexes.
+    #[norito(default)]
+    pub linked_domains: BTreeSet<DomainId>,
 }
 
 impl AccountDetails {
@@ -358,6 +367,7 @@ impl AccountDetails {
             label,
             uaid,
             opaque_ids,
+            linked_domains: BTreeSet::new(),
         }
     }
 
@@ -415,6 +425,17 @@ impl AccountDetails {
     /// Replace the opaque identifiers bound to this account.
     pub fn set_opaque_ids(&mut self, opaque_ids: Vec<OpaqueAccountId>) {
         self.opaque_ids = opaque_ids;
+    }
+
+    /// Borrow the domains linked to this account subject.
+    #[must_use]
+    pub fn linked_domains(&self) -> &BTreeSet<DomainId> {
+        &self.linked_domains
+    }
+
+    /// Replace the linked domain set for this account subject.
+    pub fn set_linked_domains(&mut self, linked_domains: BTreeSet<DomainId>) {
+        self.linked_domains = linked_domains;
     }
 }
 
@@ -570,9 +591,11 @@ impl AccountId {
 
     /// Parse an account identifier from text, returning the canonical representation and source.
     ///
-    /// Only canonical I105 literals are accepted.
+    /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
     /// I105 literals, aliases, UAID, and opaque account literals are rejected.
+    /// Legacy Base58 envelope literals remain accepted for backward compatibility and are
+    /// canonicalized into I105 on output.
     /// The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
@@ -627,13 +650,39 @@ impl AccountId {
                 | AccountAddressError::InvalidI105Base
                 | AccountAddressError::InvalidI105Digit(_)
                 | AccountAddressError::UnsupportedAddressFormat
-                | AccountAddressError::InvalidLength,
-            ) => Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT)),
-            Err(AccountAddressError::ChecksumMismatch) => Err(ParseError::new(
-                AccountAddressErrorCode::ChecksumMismatch.as_str(),
-            )),
+                | AccountAddressError::InvalidLength
+                | AccountAddressError::ChecksumMismatch,
+            ) => Self::parse_legacy_base58_envelope(input).map_or_else(
+                || {
+                    if matches!(
+                        AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
+                        Err(AccountAddressError::ChecksumMismatch)
+                    ) {
+                        Err(ParseError::new(
+                            AccountAddressErrorCode::ChecksumMismatch.as_str(),
+                        ))
+                    } else {
+                        Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
+                    }
+                },
+                |account_id| Ok((account_id, AccountAddressSource::Encoded)),
+            ),
             Err(err) => Err(ParseError::new(err.code_str())),
         }
+    }
+
+    fn parse_legacy_base58_envelope(input: &str) -> Option<Self> {
+        // Legacy account literals are base58 envelopes:
+        // [0x71, 0x0b] + canonical account payload + 2-byte trailer.
+        let raw = bs58::decode(input).into_vec().ok()?;
+        if raw.len() <= 4 || raw[0] != 0x71 || raw[1] != 0x0b {
+            return None;
+        }
+        let canonical = &raw[2..raw.len().saturating_sub(2)];
+        AccountAddress::from_canonical_bytes(canonical)
+            .ok()?
+            .to_account_id()
+            .ok()
     }
 }
 
@@ -849,6 +898,7 @@ impl NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
+            linked_domains: BTreeSet::from([self.domain]),
         }
     }
 }
@@ -960,6 +1010,7 @@ impl Registrable for NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
+            linked_domains: BTreeSet::from([self.domain]),
         }
     }
 }
@@ -1294,15 +1345,10 @@ impl IntoKeyValue for Account {
     type Key = AccountId;
     type Value = AccountValue;
     fn into_key_value(self) -> (Self::Key, Self::Value) {
-        (
-            self.id,
-            Owned::new(AccountDetails::new(
-                self.metadata,
-                self.label,
-                self.uaid,
-                self.opaque_ids,
-            )),
-        )
+        let mut details =
+            AccountDetails::new(self.metadata, self.label, self.uaid, self.opaque_ids);
+        details.set_linked_domains(self.linked_domains);
+        (self.id, Owned::new(details))
     }
 }
 
@@ -1381,6 +1427,7 @@ mod tests {
             label: Some(label.clone()),
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         let record =
@@ -1400,6 +1447,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         assert!(rekey::AccountRekeyRecord::from_account(&account).is_none());
@@ -1421,6 +1469,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         assert!(account.try_signatory().is_none());
     }
@@ -1520,6 +1569,7 @@ mod json_tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
         let json = norito::json::to_json(&account).expect("serialize account");

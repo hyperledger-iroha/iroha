@@ -35,7 +35,7 @@ El comando emite JSON que captura:
 
 - Hostnames canonicos y vanity derivados del provider id (`HostMappingInput` en
   `sorafs_manifest::hosts`).
-- Endpoints direct-CAR (`https://{host}/direct/v1/car/{manifest_digest_hex}`)
+- Endpoints direct-CAR (`https://{host}/direct/v2/car/{manifest_digest_hex}`)
   generados desde el digest del manifiesto.
 - Flags de capacidades detectadas desde metadata del manifiesto y adverts de
   admision (Torii gateway, QUIC/Noise,

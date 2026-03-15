@@ -27,17 +27,17 @@ Boletos de admisión respaldados por Argon2 جاری کرتا ہے جو relé ک
 corredor de tokens de admisión کرتا ہے۔ Varios puntos finales HTTP exponen کرتا ہے:
 
 - `GET /healthz` - sonda de vida.
-- `GET /v1/puzzle/config` - relé JSON (`handshake.descriptor_commit_hex`, `pow.*`) Negro
+- `GET /v2/puzzle/config` - relé JSON (`handshake.descriptor_commit_hex`, `pow.*`) Negro
   اٹھائے گئے موثر PoW/parámetros de rompecabezas واپس کرتا ہے۔
-- `POST /v1/puzzle/mint` - Billete Argon2 nuevo کرتا ہے؛ cuerpo JSON opcional
+- `POST /v2/puzzle/mint` - Billete Argon2 nuevo کرتا ہے؛ cuerpo JSON opcional
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   کم TTL کی درخواست کرتا ہے (ventana de política تک abrazadera), ticket کو transcripción hash
   سے enlazar کرتا ہے، اور claves de firma configuradas ہوں تو boleto firmado por retransmisión +
   firma huella digital واپس کرتا ہے۔
-- `GET /v1/token/config` - Aquí `pow.token.enabled = true` y un token de admisión activo
+- `GET /v2/token/config` - Aquí `pow.token.enabled = true` y un token de admisión activo
   política واپس کرتا ہے (huella digital del emisor, límites TTL/desviación del reloj, ID de retransmisión, اور
   conjunto de revocación fusionado).
-- `POST /v1/token/mint` - Token de admisión ML-DSA nuevo کرتا ہے جو hash de currículum proporcionado
+- `POST /v2/token/mint` - Token de admisión ML-DSA nuevo کرتا ہے جو hash de currículum proporcionado
   سے obligado ہوتا ہے؛ cuerpo de la solicitud `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
   قبول کرتا ہے۔Servicio کے بنائے گئے tickets کو prueba de integración
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo` میں verificar کیا جاتا ہے، جو
@@ -78,17 +78,17 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` بھی دستیاب ہے جب canalización secreta de herramientas fuera de banda کے ذریعے administrar ہو۔
-Vigilante de archivos de revocación `/v1/token/config` کو actual رکھتا ہے؛ actualizaciones کو
+Vigilante de archivos de revocación `/v2/token/config` کو actual رکھتا ہے؛ actualizaciones کو
 `soranet-admission-token revoke` کمانڈ کے ساتھ coordinar کریں تاکہ estado de revocación
 retraso نہ کرے۔Relay JSON میں `pow.signed_ticket_public_key_hex` set کریں تاکہ tickets PoW firmados
-verificar کرنے کے لئے ML-DSA-44 publicidad de clave pública ہو؛ `/v1/puzzle/config` یہ clave اور
+verificar کرنے کے لئے ML-DSA-44 publicidad de clave pública ہو؛ `/v2/puzzle/config` یہ clave اور
 اس کا BLAKE3 huella digital (`signed_ticket_public_key_fingerprint_hex`) eco کرتا ہے تاکہ
 PIN del verificador de clientes کر سکیں۔ ID de retransmisión de boletos firmados y enlaces de transcripción کے خلاف
 validar ہوتے ہیں اور اسی revocación almacenar کو compartir کرتے ہیں؛ tickets PoW sin procesar de 74 bytes
 verificador de ticket firmado configurado ہونے پر بھی válido رہتے ہیں۔ Secreto del firmante
 `--signed-ticket-secret-hex` یا `--signed-ticket-secret-path` کے ذریعے lanzamiento del servicio
 پر pasar کریں؛ Inicio pares de claves no coincidentes rechazar کرتا ہے اگر secreto
-`pow.signed_ticket_public_key_hex` کے خلاف validar نہ ہو۔ `POST /v1/puzzle/mint`
+`pow.signed_ticket_public_key_hex` کے خلاف validar نہ ہو۔ `POST /v2/puzzle/mint`
 `"signed": true` (اور opcional `"transcript_hash_hex"`) قبول کرتا ہے تاکہ Norito codificado
 bytes del billete sin procesar del billete firmado کے ساتھ واپس ہو؛ respuestas میں `signed_ticket_b64`
 اور `signed_ticket_fingerprint_hex` شامل ہوتے ہیں تاکہ reproducir pista de huellas dactilares ہوں۔
@@ -104,10 +104,10 @@ bytes del billete sin procesar del billete firmado کے ساتھ واپس ہو؛
 3. **Etapa de reinicio کریں۔** El corte de rotación de gobernanza anuncia کرے تو unidad systemd یا
    recarga de contenedores کریں۔ Servicio میں recarga en caliente نہیں ہے؛ نیا descriptor commit لینے کے لئے
    reiniciar ضروری ہے۔
-4. **Validar کریں۔** `POST /v1/puzzle/mint` کے ذریعے emisión de billete کریں اور تصدیق کریں کہ
+4. **Validar کریں۔** `POST /v2/puzzle/mint` کے ذریعے emisión de billete کریں اور تصدیق کریں کہ
    `difficulty` اور `expires_at` Política de coincidencia ہوں۔ Informe de remojo
    (`docs/source/soranet/reports/pow_resilience.md`) referencia a los límites de latencia esperados
-   capturar کرتا ہے۔ Los tokens permiten que ہوں تو `/v1/token/config` busque کریں تاکہ emisor anunciado
+   capturar کرتا ہے۔ Los tokens permiten que ہوں تو `/v2/token/config` busque کریں تاکہ emisor anunciado
    huella digital اور recuento de revocación valores esperados سے coincidencia ہوں۔
 
 ## Procedimiento de desactivación de emergencia1. Configuración del relé compartido میں `pow.puzzle.enabled = false` set کریں۔
@@ -116,7 +116,7 @@ bytes del billete sin procesar del billete firmado کے ساتھ واپس ہو؛
    los descriptores obsoletos rechazan ہوں۔
 3. Retransmisión اور servicio de rompecabezas دونوں reiniciar کریں تاکہ تبدیلی aplicar ہو۔
 4. Monitor `soranet_handshake_pow_difficulty` کریں تاکہ dificultad valor hashcash esperado
-   تک soltar ہو، اور verificar کریں کہ `/v1/puzzle/config` `puzzle = null` رپورٹ کرے۔
+   تک soltar ہو، اور verificar کریں کہ `/v2/puzzle/config` `puzzle = null` رپورٹ کرے۔
 
 ## Monitoreo y alerta- **Latencia SLO:** `soranet_handshake_latency_seconds` pista کریں اور P95 کو 300 ms سے نیچے رکھیں۔
   La prueba de remojo compensa los aceleradores de protección کے لئے datos de calibración فراہم کرتے ہیں۔
@@ -124,14 +124,14 @@ bytes del billete sin procesar del billete firmado کے ساتھ واپس ہو؛
 - **Presión de cuota:** `soranet_guard_capacity_report.py` کو métricas de relé کے ساتھ استعمال کریں تاکہ
   Ajuste de tiempos de reutilización de `pow.quotas` (`soranet_abuse_remote_cooldowns`, `soranet_handshake_throttled_remote_quota_total`) ہوں۔
   【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Alineación del rompecabezas:** `soranet_handshake_pow_difficulty` کو `/v1/puzzle/config` سے واپس ہونے والی
+- **Alineación del rompecabezas:** `soranet_handshake_pow_difficulty` کو `/v2/puzzle/config` سے واپس ہونے والی
   dificultad کے ساتھ partido ہونا چاہئے۔ Configuración de retransmisión obsoleta de divergencia یا reinicio fallido کی نشاندہی ہے۔
-- **Preparación del token:** اگر `/v1/token/config` غیر متوقع طور پر `enabled = false` ہو جائے یا
+- **Preparación del token:** اگر `/v2/token/config` غیر متوقع طور پر `enabled = false` ہو جائے یا
   `revocation_source` marcas de tiempo obsoletas رپورٹ کرے تو alerta کریں۔ Operadores کو CLI کے ذریعے Norito
   archivo de revocación rotar کرنا چاہئے جب کوئی token retirar ہو تاکہ یہ punto final درست رہے۔
 - **Estado del servicio:** `/healthz` کو معمول کی cadencia de vida پر sonda کریں اور alerta کریں اگر
-  `/v1/puzzle/mint` Respuestas HTTP 500 دے (discordancia de parámetros de Argon2 یا fallas de RNG کی نشاندہی).
-  Errores de acuñación de tokens `/v1/token/mint` en respuestas HTTP 4xx/5xx کے ذریعے نظر آتے ہیں؛ fracasos repetidos
+  `/v2/puzzle/mint` Respuestas HTTP 500 دے (discordancia de parámetros de Argon2 یا fallas de RNG کی نشاندہی).
+  Errores de acuñación de tokens `/v2/token/mint` en respuestas HTTP 4xx/5xx کے ذریعے نظر آتے ہیں؛ fracasos repetidos
   کو condición de paginación سمجھیں۔
 
 ## Cumplimiento y registro de auditoríaLos eventos de relé estructurados `handshake` emiten razones de aceleración y duraciones de tiempo de reutilización.

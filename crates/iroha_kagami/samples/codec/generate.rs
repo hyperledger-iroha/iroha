@@ -28,9 +28,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     domain_metadata.insert("Is_Jabberwocky_alive".parse()?, norito::json!(true));
     let domain = Domain::new("wonderland".parse()?)
         .with_logo(
-            "/ipfs/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
+            "sorafs://bafybeigdyrztk/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
                 .parse()
-                .expect("valid IPFS path"),
+                .expect("valid SoraFS URI"),
         )
         .with_metadata(domain_metadata)
         .build(&account_id);

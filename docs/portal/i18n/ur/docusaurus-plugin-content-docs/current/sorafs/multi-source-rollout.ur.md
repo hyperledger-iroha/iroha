@@ -33,7 +33,7 @@ description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگا
 ## 1. قبل از عمل توثیق
 
 1. **گورننس ان پٹس کی تصدیق کریں۔**
-   - تمام امیدوار پرووائیڈرز کو range capability payloads اور stream budgets کے ساتھ `ProviderAdvertV1` envelopes شائع کرنے چاہئیں۔ `/v1/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capability فیلڈز سے موازنہ کریں۔
+   - تمام امیدوار پرووائیڈرز کو range capability payloads اور stream budgets کے ساتھ `ProviderAdvertV1` envelopes شائع کرنے چاہئیں۔ `/v2/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capability فیلڈز سے موازنہ کریں۔
    - latency/failure rates فراہم کرنے والے telemetry snapshots ہر canary رن سے پہلے 15 منٹ سے کم پرانے ہونے چاہئیں۔
 2. **کنفیگریشن اسٹیج کریں۔**
    - آرکسٹریٹر کی JSON کنفیگریشن کو layered `iroha_config` ٹری میں محفوظ کریں:

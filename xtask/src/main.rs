@@ -10548,7 +10548,7 @@ mod space_directory_tests {
         "dataspace": 11,
         "program": "cbdc.transfer",
         "method": "transfer",
-        "asset": "CBDC#centralbank",
+        "asset": "aid:6e156b5010e645f883eb831946b88db8",
         "role": "Initiator"
       },
       "effect": {

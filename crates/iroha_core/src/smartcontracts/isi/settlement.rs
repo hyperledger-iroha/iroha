@@ -771,8 +771,14 @@ mod tests {
             Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
-        let delivery_asset_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-        let payment_asset_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
+        let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "bond".parse().unwrap(),
+        );
+        let payment_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
 
         let delivery_def = AssetDefinition::numeric(delivery_asset_id.clone()).build(&ALICE_ID);
         let payment_def = AssetDefinition::numeric(payment_asset_id.clone()).build(&ALICE_ID);
@@ -811,8 +817,14 @@ mod tests {
             Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
 
-        let delivery_asset_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-        let payment_asset_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
+        let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "bond".parse().unwrap(),
+        );
+        let payment_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
 
         let delivery_def = AssetDefinition::new(delivery_asset_id.clone(), NumericSpec::integer())
             .build(&ALICE_ID);

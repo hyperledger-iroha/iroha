@@ -6,7 +6,7 @@ source: docs/portal/docs/sdks/recipes/javascript-connect-preview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
 translator: machine-google-reviewed
 translation_last_reviewed: 2026-02-07
 ---

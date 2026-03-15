@@ -53,7 +53,7 @@ summary: Outline for SF-8a pricing tiers, collateral, and settlement windows.
 - Hedging service (see `sorafs_hedging_plan.md`) publishes XOR/USD rate. Dashboards show:
   - `effective_price_usd = storage_price_xor * xor_usd_rate`.
   - Historical chart combining rate + usage (per tier).
-- Provide `GET /v1/pricing/current?currency=USD` API returning converted prices. CLI uses this for human-readable output.
+- Provide `GET /v2/pricing/current?currency=USD` API returning converted prices. CLI uses this for human-readable output.
 - Finance dashboards integrate with hedging logs to reconcile XOR revenue vs USD equivalents.
 
 ## Promotional Credits & Incentives

@@ -66,7 +66,7 @@ A cobertura de regressão vive em
 ## Ferramentas e acessórios
 
 - Payloads de anúncios de provedor devem incluir metadados `range_capability`,
-  `stream_budget` e `transport_hints`. Valide via respostas de `/v1/sorafs/providers`
+  `stream_budget` e `transport_hints`. Valide via respostas de `/v2/sorafs/providers`
   e luminárias de admissão; resumos JSON devem incluir uma capacidade analisada, o stream
   orçamento e matrizes de dicas para ingestão de telemetria.
 - `cargo xtask sorafs-admission-fixtures` mostra orçamentos de fluxo e dicas de transporte dentro
@@ -76,7 +76,7 @@ A cobertura de regressão vive em
   - `multi_fetch_plan.json` para que suítes de SDK reproduzam um plano de busca
     determinístico multi-ponto.
 
-## Integração com orquestrador e Torii- Torii `/v1/sorafs/providers` retorna metadados do intervalo analisado junto com
+## Integração com orquestrador e Torii- Torii `/v2/sorafs/providers` retorna metadados do intervalo analisado junto com
   `stream_budget` e `transport_hints`. Avisos de downgrade disparam quando
   provedores omitem a novos metadados, e endpoints de range do gateway aplicam as
   mesmas restrições para clientes diretos.

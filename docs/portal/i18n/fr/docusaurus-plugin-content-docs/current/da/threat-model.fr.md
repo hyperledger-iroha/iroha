@@ -231,7 +231,7 @@ conservation, liste blanche des fournisseurs malveillants ou suppression des ale
 **Ou regarder ensuite:**- Le replay cache et la persistance des curseurs atterrissent en DA-2. Voir
   l'implémentation dans `crates/iroha_core/src/da/replay_cache.rs` (logique de
   cache) et l'intégration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui thread
-  les contrôles d'empreintes digitales via `/v1/da/ingest`.
+  les contrôles d'empreintes digitales via `/v2/da/ingest`.
 - Les simulations de streaming PDP/PoTR sont exercées via le harnais proof-stream
   dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de demande
   PoR/PDP/PoTR et les scénarios de échec animés dans le modèle de menaces.

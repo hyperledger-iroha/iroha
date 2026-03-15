@@ -34,12 +34,19 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let owner = AccountId::new(KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -90,7 +97,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     assert_eq!(got_after, hex::encode(latest));
 
     // 2) ZkTransfer appends outputs and emits root_before/after and outputs_commitments
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let att = iroha_data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), pr, vk);

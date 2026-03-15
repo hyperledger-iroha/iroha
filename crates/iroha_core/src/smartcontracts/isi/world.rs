@@ -406,24 +406,24 @@ pub mod isi {
         if trimmed.is_empty() {
             return None;
         }
-        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
+        if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
             return (!rest.is_empty()).then(|| trimmed.to_string());
         }
         if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
         }
         if let Some(rest) = trimmed.strip_prefix(crate::zk::ZK_BACKEND_HALO2_IPA) {
             if let Some(rest) = rest.strip_prefix("::") {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
             if let Some(rest) = rest.strip_prefix(':') {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
             if let Some(rest) = rest.strip_prefix('/') {
-                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
+                return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
             }
         }
-        Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
+        Some(format!("halo2/pasta/ipa/{trimmed}"))
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -448,15 +448,15 @@ pub mod isi {
         }
     }
 
-    const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot-v1";
-    const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally-v1";
+    const VOTING_BALLOT_CIRCUIT_ID: &str = "vote-ballot";
+    const VOTING_TALLY_CIRCUIT_ID: &str = "vote-tally";
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
         if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical STARK vote circuit roles to avoid swapping ballot/tally VKs.
             circuit_id_matches(backend, record_circuit_id, expected_id)
         } else {
-            // Preserve existing Halo2 and legacy backend behavior for backwards compatibility.
+            // Preserve existing Halo2 and historical backend behavior for backwards compatibility.
             true
         }
     }
@@ -1370,7 +1370,7 @@ pub mod isi {
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "verifying key id backend must target stark/fri-v1".into(),
+                                "verifying key id backend must target stark/fri".into(),
                             ),
                         ));
                     }
@@ -1420,7 +1420,7 @@ pub mod isi {
                         } else {
                             return Err(InstructionExecutionError::InvalidParameter(
                                 InvalidParameterError::SmartContract(
-                                    "unsupported stark/fri-v1 backend variant".into(),
+                                    "unsupported stark/fri backend variant".into(),
                                 ),
                             ));
                         };
@@ -5214,7 +5214,7 @@ pub mod isi {
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "verifying key id backend must target stark/fri-v1".into(),
+                            "verifying key id backend must target stark/fri".into(),
                         ),
                     ));
                 }
@@ -5262,7 +5262,7 @@ pub mod isi {
                     } else {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "unsupported stark/fri-v1 backend variant".into(),
+                                "unsupported stark/fri backend variant".into(),
                             ),
                         ));
                     };
@@ -8011,7 +8011,7 @@ pub mod isi {
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
+                // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -8282,7 +8282,7 @@ pub mod isi {
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-                // For `stark/fri-v1` we require the canonical OpenVerifyEnvelope wrapper so the
+                // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
                 let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
@@ -11288,45 +11288,45 @@ pub mod isi {
         #[test]
         fn normalize_halo2_circuit_id_and_match_variants() {
             assert_eq!(
-                normalize_halo2_circuit_id(" halo2/pasta/ipa-v1/foo "),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                normalize_halo2_circuit_id(" halo2/pasta/ipa/foo "),
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(
                 normalize_halo2_circuit_id("halo2/pasta/foo"),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(
                 normalize_halo2_circuit_id("halo2/ipa:foo"),
-                Some("halo2/pasta/ipa-v1/foo".to_string())
+                Some("halo2/pasta/ipa/foo".to_string())
             );
             assert_eq!(normalize_halo2_circuit_id(""), None);
 
             assert!(circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:zk-vote"
             ));
             assert!(!circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:other"
             ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
             assert!(voting_circuit_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa-v1/any-circuit",
-                "vote-ballot-v1"
+                "halo2/pasta/ipa/any-circuit",
+                "vote-ballot"
             ));
             assert!(voting_circuit_matches(
-                "stark/fri-v1/sha256-goldilocks-v1",
-                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
-                "vote-ballot-v1"
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:vote-ballot",
+                "vote-ballot"
             ));
             assert!(!voting_circuit_matches(
-                "stark/fri-v1/sha256-goldilocks-v1",
-                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
-                "vote-ballot-v1"
+                "stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks:vote-tally",
+                "vote-ballot"
             ));
         }
 
@@ -11336,7 +11336,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut vk_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/test-circuit",
+                "halo2/pasta/ipa/test-circuit",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11390,7 +11390,7 @@ pub mod isi {
             let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&schema).into();
             let mut vk_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/test-circuit",
+                "halo2/pasta/ipa/test-circuit",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11423,7 +11423,7 @@ pub mod isi {
         fn enforce_vk_max_proof_bytes_rejects_too_large() {
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/max-proof",
+                "halo2/pasta/ipa/max-proof",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11481,7 +11481,7 @@ pub mod isi {
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
 
-            let parsed = extract_vote_public_inputs("stark/fri-v1/sha256-goldilocks-v1", &payload)
+            let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &payload)
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
@@ -11491,14 +11491,13 @@ pub mod isi {
         fn decode_open_verify_envelope_accepts_stark_backend() {
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Stark,
-                "stark/fri-v1/sha256-goldilocks-v1:dummy-circuit",
+                "stark/fri/sha256-goldilocks:dummy-circuit",
                 [0u8; 32],
                 vec![1, 2, 3],
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            let proof_box =
-                ProofBox::new("stark/fri-v1/sha256-goldilocks-v1".into(), bytes.clone());
+            let proof_box = ProofBox::new("stark/fri/sha256-goldilocks".into(), bytes.clone());
             let decoded = decode_open_verify_envelope(&proof_box).expect("decode");
             assert_eq!(decoded.backend, BackendTag::Stark);
             assert_eq!(decoded.circuit_id, envelope.circuit_id);
@@ -11521,7 +11520,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/tiny-add2inst-public-v1",
+                "halo2/pasta/ipa/tiny-add2inst-public",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11541,7 +11540,7 @@ pub mod isi {
             let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                "halo2/ipa:tiny-add2inst-public-v1",
+                "halo2/ipa:tiny-add2inst-public",
                 commitment,
                 Vec::new(),
                 Vec::new(),
@@ -11600,7 +11599,7 @@ pub mod isi {
             let commitment = hash_vk(&vk_box);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "halo2/pasta/ipa-v1/vk-ok",
+                "halo2/pasta/ipa/vk-ok",
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
@@ -11647,13 +11646,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_ok");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![9, 8, 7, 6, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:vote-ballot-v1",
+                "stark/fri/sha256-goldilocks:vote-ballot",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11674,7 +11673,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:vote-tally-v1",
+                "stark/fri/sha256-goldilocks:vote-tally",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11723,13 +11722,13 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let backend = "stark/fri-v1/sha256-goldilocks-v1";
+            let backend = "stark/fri/sha256-goldilocks";
             let ballot_vk_id = VerifyingKeyId::new(backend, "vk_stark_ballot_bad");
             let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let mut ballot_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:not-a-ballot-circuit",
+                "stark/fri/sha256-goldilocks:not-a-ballot-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11748,7 +11747,7 @@ pub mod isi {
             let tally_commitment = hash_vk(&tally_vk_box);
             let mut tally_rec = VerifyingKeyRecord::new_with_owner(
                 1,
-                "stark/fri-v1/sha256-goldilocks-v1:not-a-tally-circuit",
+                "stark/fri/sha256-goldilocks:not-a-tally-circuit",
                 None,
                 "test",
                 BackendTag::Stark,
@@ -11806,7 +11805,7 @@ pub mod isi {
             dataspace: DataSpaceId,
         ) {
             let manifest = AssetPermissionManifest {
-                version: ManifestVersion::V1,
+                version: ManifestVersion::default(),
                 uaid,
                 dataspace,
                 issued_ms: 0,
@@ -11892,13 +11891,18 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world.track_asset_holder(&asset_id);
 
             let mut metadata = Metadata::default();
             let key: iroha_data_model::name::Name = "tag".parse().unwrap();
@@ -11982,14 +11986,19 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
             let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world.track_asset_holder(&asset_id);
             stx.world
                 .asset_metadata
                 .insert(asset_id.clone(), Metadata::default());
@@ -12047,9 +12056,13 @@ pub mod isi {
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register foreign asset definition");
             stx.world
                 .asset_definition_mut(&asset_def_id)
                 .expect("foreign asset definition exists")
@@ -12252,9 +12265,13 @@ pub mod isi {
                 .expect("register foreign counterparty");
 
             let cash_def = AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(cash_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = cash_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
 
             let collateral_def =
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
@@ -12318,9 +12335,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let voting_def = AssetDefinitionId::new(domain_id.clone(), "vote".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(voting_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = voting_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.gov.voting_asset_id = voting_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12361,9 +12382,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let reward_def = AssetDefinitionId::new(domain_id.clone(), "viral".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.gov.viral_incentives.reward_asset_definition_id = reward_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12403,9 +12428,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let reward_def = AssetDefinitionId::new(domain_id.clone(), "oracle".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.oracle.economics.reward_asset = reward_def.clone();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12443,9 +12472,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let fee_def = AssetDefinitionId::new(domain_id.clone(), "nexusfee".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(fee_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = fee_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.nexus.fees.fee_asset_id = fee_def.to_string();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12483,9 +12516,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let stake_def = AssetDefinitionId::new(domain_id.clone(), "stake".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(stake_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = stake_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.nexus.staking.stake_asset_id = stake_def.to_string();
 
             let err = Unregister::domain(domain_id.clone())
@@ -12525,9 +12562,13 @@ pub mod isi {
 
             let collateral_def =
                 AssetDefinitionId::new(domain_id.clone(), "collateral".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(collateral_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup-domain asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = collateral_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain asset definition");
             stx.settlement.repo.eligible_collateral = vec![collateral_def.clone()];
 
             let err = Unregister::domain(domain_id.clone())
@@ -12573,12 +12614,20 @@ pub mod isi {
 
             let base_def = AssetDefinitionId::new(foreign_domain, "base".parse().unwrap());
             let substitute_def = AssetDefinitionId::new(domain_id.clone(), "sub".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(base_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign base asset definition");
-            Register::asset_definition(AssetDefinition::numeric(substitute_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup substitute asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = base_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register foreign base asset definition");
+            Register::asset_definition({
+                let __asset_definition_id = substitute_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup substitute asset definition");
             stx.settlement
                 .repo
                 .collateral_substitution_matrix
@@ -12628,6 +12677,9 @@ pub mod isi {
             );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
+                name: "offline".to_owned(),
+                description: None,
+                alias: None,
                 spec: NumericSpec::integer(),
                 mintable: Mintable::Infinitely,
                 logo: None,
@@ -12697,18 +12749,34 @@ pub mod isi {
                 AssetDefinitionId::new(external_domain.clone(), "fee".parse().unwrap());
             let offline_def =
                 AssetDefinitionId::new(external_domain.clone(), "coin".parse().unwrap());
-            Register::asset_definition(AssetDefinition::numeric(cash_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external cash definition");
-            Register::asset_definition(AssetDefinition::numeric(collateral_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external collateral definition");
-            Register::asset_definition(AssetDefinition::numeric(reward_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external reward definition");
-            Register::asset_definition(AssetDefinition::numeric(offline_def.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register external offline definition");
+            Register::asset_definition({
+                let __asset_definition_id = cash_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external cash definition");
+            Register::asset_definition({
+                let __asset_definition_id = collateral_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external collateral definition");
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external reward definition");
+            Register::asset_definition({
+                let __asset_definition_id = offline_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register external offline definition");
 
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "repoguard".parse().expect("repo agreement id");
@@ -14099,7 +14167,7 @@ pub mod isi {
         }
 
         #[test]
-        fn register_domain_rejects_labels_failing_norm_v1() {
+        fn register_domain_rejects_labels_failing_norm_current() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);

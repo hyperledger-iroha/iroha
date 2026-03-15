@@ -31,7 +31,7 @@ Previamente, esta orquestación está instalada en los módulos SF-6, utilizando
 > **См. Etiqueta:** [Runbook по эксплуатации оркестратора](./orchestrator-ops.md) подробно описывает процедуры на прогон (снятие marcador, переключатели поэтапного implementación, reversión). Utilice todas las prendas adecuadas para su uso.
 
 ## 1. Validación previa1. **Подтвердить входные данные gobernanza.**
-   - Все кандидаты-провайдеры должны публиковать конверты `ProviderAdvertV1` с payload'ами дапазонных возможностей и бюджетами потоков. Pruebe через `/v1/sorafs/providers` y сверяйте с ожидаемыми полями возможностей.
+   - Все кандидаты-провайдеры должны публиковать конверты `ProviderAdvertV1` с payload'ами дапазонных возможностей и бюджетами потоков. Pruebe через `/v2/sorafs/providers` y сверяйте с ожидаемыми полями возможностей.
    - Los televisores con métricas latentes/sboevs no deben tardar más de 15 minutos antes del programa canario.
 2. **Подготовить конфигурацию.**
    - Configure la configuración JSON del operador en el directorio `iroha_config`:

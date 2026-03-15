@@ -30,7 +30,7 @@ requerido de épocas y réplicas sin depender de la intención del emisor.
 | `nexus_lane_sidecar` | 6 horas | 7 días | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 horas | 180 días | 3 | `cold` | `da.governance` |
 | _Predeterminado (todas como clases anteriores)_ | 6 horas | 30 días | 3 | `warm` | `da.default` |Esses valores sao embutidos em `torii.da_ingest.replication_policy` e aplicados
-a todas las presentaciones `/v1/da/ingest`. Torii reescreve manifiesta con el perfil
+a todas las presentaciones `/v2/da/ingest`. Torii reescreve manifiesta con el perfil
 de retencao imposto e emite una advertencia cuando las personas que llaman necesitan valores divergentes
 para que los operadores detectem SDKs desatualizados.
 
@@ -147,5 +147,5 @@ automática.
    que SRE puede hacer referencia al mesmo resumen y evidencia PDP.
 
 A cobertura de regressao vive em `integration_tests/tests/da/replication_policy.rs`;
-a suite envia uma politica de retencao divergente para `/v1/da/ingest` e verifica
+a suite envia uma politica de retencao divergente para `/v2/da/ingest` e verifica
 que o manifiesto buscado expoe o perfil imposto em vez da intencao do llamante.

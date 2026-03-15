@@ -2,6 +2,1270 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: Swift docs builder-ID alignment
+- Updated Swift-facing builder examples to match the current encoded-only validator contract:
+  - `IrohaSwift/README.md` transfer/shield/unshield snippets now use canonical
+    `aid:<32-lower-hex-no-dash>` asset-definition IDs.
+  - `docs/source/sdk/swift/index*.md` snippets now use `AccountId.make(publicKey:)`
+    and canonical `aid:...` asset-definition IDs instead of removed/legacy forms.
+- Added explicit documentation notes that transaction builders require canonical
+  `aid:<32-lower-hex-no-dash>` asset-definition IDs.
+- Validation (this follow-up):
+  - `rg -n 'AccountId\.make\(publicKey: keypair\.publicKey, domain: "wonderland"\)|assetDefinitionId: "rose#wonderland"|assetDefinitionId: "jpy#xst"' docs/source/sdk/swift/index*.md IrohaSwift/README.md` (no matches)
+
+## 2026-03-15 Follow-up: pagination integration test canonical asset-definition IDs
+- Fixed `integration_tests/tests/pagination.rs` setup to stop parsing legacy
+  `<name>#<domain>` literals for asset definitions.
+  - `register_assets(...)` now constructs IDs via
+    `AssetDefinitionId::new("wonderland".parse()?, name.parse()?)`, which
+    produces canonical `aid:<32-lower-hex>` IDs expected by current parsing.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test pagination -- --nocapture` (pass; includes new canonical-ID regression test; network startup path is skipped in sandbox due loopback bind restrictions)
+
+## 2026-03-14 Follow-up: address canonicalisation permit-timeout stabilization
+- Fixed `integration_tests/tests/address_canonicalisation.rs` suite-local network startup
+  throttling to align with the effective `iroha_test_network` file-permit ceiling:
+  - `install_network_parallelism_override()` now computes the effective permit limit from
+    `IROHA_TEST_SERIALIZE_NETWORKS`, `IROHA_TEST_NETWORK_PARALLELISM`, or the default
+    core-scaled cap, then applies `min(limit, 2)` for the suite override.
+  - This prevents over-admitting local starts when the global permit lock only allows one
+    network, which previously could starve queued tests and trigger 300s permit wait timeouts.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_legacy_dotted_i105_literals -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
+
+## 2026-03-14 Follow-up: Norito burn/mint fixture parity re-sync
+- Fixed stale Norito instruction fixtures under `fixtures/norito_instructions` that no
+  longer matched canonical Rust encoding:
+  - `burn_asset_numeric.json`
+  - `burn_asset_fractional.json`
+  - `mint_asset_numeric.json`
+- Updated both fixture payload fields per file:
+  - `instruction` (canonical Norito JSON/base64 string)
+  - `encoded_hex` (canonical `InstructionBox` bytes)
+- This restores parity for `integration_tests/tests/norito_burn_fixture.rs`.
+
+### Validation (this follow-up)
+- `cargo test -p integration_tests --test norito_burn_fixture -- --nocapture` (pass)
+
+## 2026-03-14 Follow-up: workspace strict-clippy stabilization and sidecar API alignment
+- Resolved strict workspace lint and compile failures surfaced by
+  `cargo clippy --workspace --all-targets -- -D warnings`:
+  - Fixed `clippy::unnested_or_patterns` and `clippy::option_if_let_else` in
+    account/address parsing paths.
+  - Fixed multiple `clippy::doc_markdown`, `clippy::items_after_statements`,
+    and `clippy::useless_conversion` findings in `iroha_data_model`.
+  - Removed stale `FromStr` imports in test modules that were failing under
+    `-D unused-imports`.
+  - Fixed `clippy::redundant_closure_call` and `clippy::question_mark` in
+    multisig account execution flow.
+- Kept existing public error-surface types intact and added targeted
+  `clippy::result_large_err` allowances where API-level `ValidationFail`/query
+  error types are intentional (notably in `iroha_executor` and `iroha::query`).
+- Aligned sidecar constructor call sites/tests to the current
+  `PipelineRecoverySidecar::new(...)` API and updated format-label assertions
+  from `"pipeline.recovery.v1"` to `"pipeline.recovery"`.
+- Validation (this follow-up):
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --test pipeline_recovery_endpoint` (pass)
+  - `cargo test -p iroha_kagami sidecar_prints_to_file` (pass)
+
+## 2026-03-14 Follow-up: account-address strict parser error normalization
+- Fixed `AccountAddress::parse_encoded` (`crates/iroha_data_model/src/account/address.rs`)
+  to normalize unsupported/non-I105 parser input back to
+  `AccountAddressError::UnsupportedAddressFormat` instead of leaking low-level
+  lexical errors like `InvalidI105Char`.
+  - Normalized variants: `MissingI105Sentinel`, `I105TooShort`,
+    `InvalidI105Char`, `InvalidI105Base`, `InvalidI105Digit`,
+    and `UnsupportedAddressFormat`.
+  - Preserved semantic decode errors (for example, `ChecksumMismatch` and
+    `UnexpectedNetworkPrefix`) unchanged.
+- Updated the `parse_encoded` doc comment to reflect the normalized
+  error-contract for strict parser callers and FFI consumers.
+- Validation (this follow-up):
+  - `cargo test -p iroha_data_model parse_encoded_rejects_unknown_format -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model parse_encoded_accepts_only_i105 -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge account_address_parse_render_via_ffi -- --nocapture` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-14 Follow-up: offline app API account domain-link compile fix
+- Fixed `crates/iroha_torii/tests/offline_app_api.rs` account fixtures that failed
+  to compile after `Account::linked_domains` became an explicit field.
+  - Added `linked_domains` initialization for `controller`, `receiver`, and
+    `operator` seeded from the fixture allowance domain.
+  - Added `std::collections::BTreeSet` import for deterministic set construction.
+- Validation (this follow-up):
+  - `cargo test -p iroha_torii --test offline_app_api --no-run` (pass)
+  - `cargo test -p iroha_torii --test offline_app_api` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-13 Follow-up: cross-dataspace localnet runtime stabilization
+- Stabilized `integration_tests/tests/nexus/cross_dataspace_localnet.rs` setup so the
+  multilane atomic-swap scenario converges reliably in real localnet runs:
+  - `leader_targeted_client_for_account(...)` now prefers a peer from the expected lane
+    slice (`alice -> ds1`, `bob -> ds2`, default -> nexus) instead of a single global
+    highest-height leader.
+  - Seed balances (`ds1coin` for Alice and `ds2coin` for Bob) are provisioned in
+    multilane genesis post-topology bootstrap instructions and verified at runtime via
+    balance assertions (instead of flaky runtime register+mint submissions).
+- Runtime validation (not CI-only):
+  - `IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod nexus::multilane_router::multilane_router_provisions_storage_and_routes_rules -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod nexus::multilane_pipeline::multilane_catalog_sets_up_storage_and_routing -- --exact --nocapture` (pass)
+
+## 2026-03-13 Follow-up: address canonicalisation integration suite stability
+- Mitigated `integration_tests/tests/address_canonicalisation.rs` SIGKILL instability by
+  installing a process-wide network-parallelism override for this test binary:
+  - wrapped `start_network_async_or_skip(...)` in-file and pinned
+    `override_network_parallelism(None, Some(2))` via `OnceLock`.
+  - this keeps startup concurrency bounded while avoiding long serialized queues that can trip
+    external watchdog kills.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation --no-run` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
+
+## 2026-03-13 Follow-up: FASTPQ stage2 balanced backend fixture refresh
+- Refreshed stale Stage 2 backend regression fixtures to match current canonical
+  prover output:
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+- This resolves fixture parity failures in:
+  - `stage2_artifact_balanced_1k_matches_fixture`
+  - `stage2_artifact_balanced_5k_matches_fixture`
+  - `golden_stage2_proof_matches_fixture`
+- Validation (this follow-up):
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture` (pass)
+
+## 2026-03-13 Follow-up: fastpq trace-commitment transfer fixture refresh
+- Fixed `crates/fastpq_prover/tests/trace_commitment.rs` regression that was
+  failing with `TransferMetadataDecode` for `AssetDefinitionId` by refreshing
+  the stale `transfer.norito` fixture to the current Norito layout.
+- Updated transfer golden vectors to match the refreshed canonical fixture:
+  - `crates/fastpq_prover/tests/fixtures/ordering_hash.json` (`transfer`)
+  - `crates/fastpq_prover/tests/trace_commitment.rs` (`commitment transfer`)
+- Validation (this follow-up):
+  - `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass)
+
+## 2026-03-13 Follow-up: `fastpq_row_bench` canonical asset-definition IDs
+- Fixed `crates/fastpq_prover/src/bin/fastpq_row_bench.rs` transfer-row generation to stop
+  parsing legacy `name#domain` asset-definition literals.
+  - `RowGenerator` now builds transfer asset definitions with
+    `AssetDefinitionId::new(domain, name)` so emitted keys use canonical
+    `aid:<32-lower-hex>` IDs.
+- Added regression coverage:
+  - `tests::transfer_keys_use_canonical_aid_literals` verifies generated transfer keys
+    start with `asset/aid:` and do not contain legacy `#` literals.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --bin fastpq_row_bench` (pass)
+
+## 2026-03-13 Follow-up: `connect_norito_bridge` asset-definition parsing compatibility
+- Restored bridge compatibility for asset-definition literals in
+  `crates/connect_norito_bridge/src/lib.rs`:
+  - `parse_asset_definition(...)` now accepts both canonical
+    `aid:<32-lower-hex>` and legacy `<name>#<domain>` forms.
+  - this unblocked transfer/mint/burn/zk-transfer encoder paths that were
+    failing with `ERR_ASSET_DEFINITION_PARSE` (`-5`) before quantity/nonce checks.
+- Extended regression coverage in bridge unit tests:
+  - `accel_tests::parse_asset_definition_accepts_legacy_literal`
+  - `accel_tests::parse_asset_definition_accepts_canonical_aid_literal`
+- Synced the fixture generator parser in
+  `crates/connect_norito_bridge/src/bin/swift_parity_regen.rs`:
+  - added `parse_asset_definition_argument(...)` with the same dual-format
+    behavior to keep payload-fixture tests aligned with bridge FFI expectations.
+  - added `tests::parse_asset_definition_argument_accepts_canonical_literal`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p connect_norito_bridge accel_tests:: -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge` (pass)
+## 2026-03-13 Follow-up: multilane endpoint alignment and runtime verification
+- Fixed client/API version drift that was breaking live multilane runs after stake-ID canonicalization:
+  - `crates/iroha/src/client.rs` now uses `/v2` for:
+    - `sumeragi/status` (all status helpers),
+    - `nexus/public_lanes/{lane}/(validators|stake|rewards/pending)`,
+    - `sumeragi/collectors`,
+    - `sumeragi/rbc/sessions`,
+    - `node/capabilities`.
+- Normalized integration tests to the active `/v2` Sumeragi telemetry/status/session paths where stale `/v1` URLs caused 404 polling loops:
+  - `integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `integration_tests/tests/sumeragi_prf_collectors.rs`
+  - `integration_tests/tests/sumeragi_da.rs`
+  - `integration_tests/tests/sumeragi_localnet_smoke.rs`
+  - `integration_tests/tests/sumeragi_npos_performance.rs`
+- Validation (runtime, not CI-only checks):
+  - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_stake_activation npos_election_filters_stake_and_applies_after_margin -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_happy_path_enforces_da_and_metrics_bounds -- --exact --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_prf_collectors npos_prf_collectors_track_endpoint -- --exact --nocapture` (pass)
+
+## 2026-03-13 Follow-up: stored sorted fast-start with deferred continuation
+- Implemented a prepared-start path for stored metadata-sorted iterable queries:
+  - `crates/iroha_core/src/smartcontracts/isi/query.rs` now computes stored batch one via a bounded-prefix heap strategy and returns that first batch directly when parameters are within the streaming prefix limit.
+  - the same file now defers full sorted continuation materialization for stored queries until first `Continue`, while preserving ordering/pagination/cursor semantics and external response/cursor shapes.
+- Added deferred continuation plumbing in the live query store:
+  - `crates/iroha_core/src/query/store.rs` adds `PreparedQueryStart` + `DeferredQueryContinuation` and a prepared insertion API (`handle_iter_start_prepared`) so stored batch one is not re-batched/re-projected through a full iterator cycle.
+  - live query IDs now use a monotonic `AtomicU64` internal generator encoded into existing string `QueryId` payloads.
+  - capacity + per-authority quota checks are folded into the insertion path.
+  - `crates/iroha_core/src/query/cursor.rs` adds `ErasedQueryIterator::new_with_cursor(...)` for deferred iterators that start after the precomputed batch.
+- Bench + test coverage updates:
+  - `crates/iroha_core/benches/queries.rs` adds `snapshot_stored_sorted_asset_defs_first_continue`.
+  - `crates/iroha_core/src/smartcontracts/isi/query.rs` adds:
+    - `stored_sorted_fast_start_matches_legacy_first_batch_variants`
+    - `deferred_stored_start_first_continue_preserves_global_order`
+  - `crates/iroha_core/src/query/store.rs` adds:
+    - `query_ids_are_monotonic_decimal_strings`
+    - `capacity_limit_is_enforced_with_monotonic_ids`
+    - `dropping_prepared_query_does_not_materialize_deferred_state`
+- Validation (this follow-up):
+  - `cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::stored_sorted_fast_start_matches_legacy_first_batch_variants -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::query::tests::deferred_stored_start_first_continue_preserves_global_order -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::query_ids_are_monotonic_decimal_strings -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::capacity_limit_is_enforced_with_monotonic_ids -- --exact --nocapture` (pass)
+  - `cargo test -p iroha_core --lib query::store::tests::dropping_prepared_query_does_not_materialize_deferred_state -- --exact --nocapture` (pass)
+  - `cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings remain)
+  - `cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` rerun spot checks:
+    - run A: ephemeral `[1.7408 ms 1.8339 ms 1.9485 ms]`, stored `[2.9138 ms 3.0254 ms 3.1472 ms]`
+    - run B: ephemeral `[1.5724 ms 1.6032 ms 1.6421 ms]`, stored `[2.8262 ms 2.8643 ms 2.9031 ms]`
+    - run C (noisy host outlier): ephemeral `[1.9372 ms 2.2100 ms 2.5627 ms]`, stored `[10.180 ms 11.412 ms 12.702 ms]`
+  - `cargo bench -p iroha_core --bench queries -- 'snapshot_stored_sorted_asset_defs_first_continue$'`:
+    - `[4.7476 ms 4.8255 ms 4.9098 ms]`
+  - `cargo test -p iroha_core` (failed in current worktree with unrelated baseline failures; summary: `3629 passed; 77 failed`; examples include `block::prefetch_tests::parse_account_literal_rejects_ambiguous_encoded_subject` and `state::tests::detached_can_modify_account_metadata_allows_domain_owner`)
+
+## 2026-03-13 Follow-up: streaming prefix for ephemeral sorted snapshot queries
+- Tightened `crates/iroha_core/src/smartcontracts/isi/query.rs` again for metadata-sorted ephemeral iterable queries:
+  - when `offset + first_batch_len` stays small, ephemeral sorted queries now keep only that bounded prefix in a `BinaryHeap` while counting total results, instead of materializing the full sorted candidate set before returning batch one.
+  - kept the existing full-collection fallback for large pagination windows, so wide offsets/limits still use the previous selection path.
+  - added `smartcontracts::isi::query::tests::ephemeral_sorted_query_respects_offset_and_limit` to lock the bounded-prefix path across offset + limit pagination.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::ephemeral_sorted_query_respects_offset_and_limit -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` (pass)
+  - benchmark spot checks:
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[1.4408 ms 1.4573 ms 1.4767 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[3.4591 ms 3.5806 ms 3.7059 ms]`
+
+## 2026-03-13 Follow-up: snapshot sorted-query first-batch fast paths
+- Tightened sorted iterable postprocessing in `crates/iroha_core/src/smartcontracts/isi/query.rs`:
+  - ephemeral iterable queries with metadata sorting now compute only the prefix needed for `offset + first_batch_len` using `select_nth_unstable_by(...)`, then sort that prefix and return the first batch directly as `QueryOutput`.
+  - stored cursor queries now use an incremental sorted-prefix iterator that prepares only the prefix needed for the current batch and extends it as cursors continue, instead of sorting the full result set up front before batch one.
+  - both sorted paths now cache metadata sort keys once per item and compare indices against that cache instead of re-reading metadata during every selection/sort comparison.
+  - added `query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor` and `query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order` to lock both ephemeral and stored sorted snapshot behavior.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_returns_first_batch_without_cursor -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib query::snapshot::tests::snapshot_sorted_asset_definitions_stored_cursor_continues_in_order -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_desc_batched -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo check -p iroha_core --benches -q` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch'` (pass)
+  - benchmark spot checks:
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[2.9423 ms 2.9672 ms 2.9945 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[3.3374 ms 3.5143 ms 3.7178 ms]`
+
+## 2026-03-13 Follow-up: direct asset-by-definition iteration for `FindAssets`
+- Tightened the definition/domain filter paths in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `FindAssets` no longer materializes `AssetId`s from `asset_definition_assets` and then does a second `world.assets().get(...)` lookup for each match.
+  - definition/domain query paths now pull owned `Asset` values directly through `world.assets_by_definition_iter(...)`, which reuses the exact asset-definition index without the extra map lookup hop.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex_qsort cargo bench -p iroha_core --bench queries -- 'find_assets_filter_(definition_literal|domain_literal)'` (pass)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[695.35 µs 700.54 µs 706.01 µs]`
+    - `find_assets_filter_domain_literal`: `[1.1634 ms 1.1709 ms 1.1776 ms]`
+
+## 2026-03-13 Follow-up: snapshot bench cleanup + cheaper metadata-sort tie-breaks
+- Fixed the stored snapshot benchmark harness in `crates/iroha_core/benches/queries.rs`:
+  - `snapshot_stored_find_domains_first_batch`
+  - `snapshot_stored_find_assets_first_batch`
+  - `snapshot_stored_sorted_asset_defs_first_batch`
+  - each benchmark now drops the returned stored cursor after consuming batch one, so repeated iterations do not accumulate live queries and trip `Execution(CapacityLimit)`.
+- Tightened generic query postprocessing in `crates/iroha_core/src/smartcontracts/isi/query.rs`:
+  - `SortableQueryOutput` now returns typed tie-break keys instead of forcing every sortable item through canonical-byte `Vec<u8>` materialization.
+  - `Account`, `Domain`, `AssetDefinition`, `Asset`, `Nft`, `Role`, `Trigger`, `RepoAgreement`, and several offline/proof outputs now use cheaper native id-based tie-break keys where available.
+  - this reduces allocation pressure in metadata-sorted iterable queries, especially the snapshot asset-definition first-batch lane.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_accounts_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::query::tests::iter_dispatch_asset_definitions_sort_ties_stable_by_id -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- 'snapshot_(stored|ephemeral|live).*'` (pass; full snapshot slice now runs end to end)
+  - benchmark spot checks:
+    - `find_asset_defs_iter_10k`: `[477.47 µs 482.39 µs 487.11 µs]`
+    - `snapshot_ephemeral_sorted_asset_defs_first_batch`: `[6.1489 ms 6.2070 ms 6.2636 ms]`
+    - `snapshot_stored_sorted_asset_defs_first_batch`: `[6.0003 ms 6.0505 ms 6.1010 ms]`
+
+## 2026-03-13 Multisig registration opened to arbitrary accounts
+- Removed the built-in multisig registration authority gate in `crates/iroha_core/src/smartcontracts/isi/multisig.rs`, so `MultisigRegister` no longer rejects non-owners/non-grantees with `not qualified to register multisig`.
+- Kept upgraded-executor parity in `crates/iroha_executor/src/default/isi/multisig/account.rs` by performing the controller account registration under the multisig home-domain owner context before materializing signatories and roles.
+- Updated multisig coverage and docs:
+  - `integration_tests/tests/multisig.rs` now exercises successful registration by an arbitrary outside account in the main multisig flow and by a same-domain non-signatory in both pre-upgrade and post-upgrade paths.
+  - `crates/iroha_cli/docs/multisig.md` now documents that any account may submit the registration transaction.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib register_allows_non_owner_without_permission -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p integration_tests --test multisig multisig_normal -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_by_non_signatory_materializes_missing_signatory_account -- --nocapture` (pass; matched both normal and executor-upgrade variants)
+
+## 2026-03-13 Follow-up: adaptive scan fast path for simple `FindAssets` predicates
+- Tightened `crates/iroha_core/src/smartcontracts/isi/asset.rs` for simple `definition` and `domain` predicates:
+  - added an adaptive materialization heuristic that compares the exact indexed match count against total asset count.
+  - when the selected asset set is large, `FindAssets` now scans `world.assets_iter()` directly and filters by definition/domain instead of paying `asset_id -> storage lookup` for every match.
+  - retained the existing exact-id/index walk for selective predicates, so sparse lookups still avoid full scans.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[576.19 µs 580.76 µs 586.33 µs]`
+    - `find_assets_filter_domain_literal`: `[998.02 µs 1.0028 ms 1.0073 ms]`
+
+## 2026-03-13 Follow-up: trigger query direct iteration + `PASS` fast path
+- Tightened `crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`:
+  - `FindActiveTriggerIds` now iterates triggers through `inspect_by_action(...)` instead of `ids_iter() -> inspect_by_id(...)`, removing an avoidable extra lookup per trigger.
+  - `FindTriggers` now uses the same direct action traversal and short-circuits `CompoundPredicate::PASS`.
+  - added regression coverage:
+    - `smartcontracts::isi::triggers::tests::find_triggers_returns_registered_triggers_for_pass_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib active_trigger_ids_excludes_depleted_after_burn -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib find_triggers_returns_registered_triggers_for_pass_predicate -- --nocapture` (pass)
+  - benchmark spot checks:
+    - `find_triggers_iter_10k`: `[2.8245 ms 2.8305 ms 2.8367 ms]`
+    - `find_active_trigger_ids_iter_10k`: `[882.56 µs 884.54 µs 886.64 µs]`
+
+## 2026-03-13 Follow-up: exact domain-to-definition index for `FindAssets`
+- Fixed an invalid asset-definition domain lookup in `crates/iroha_core/src/state.rs`:
+  - added a derived `domain_asset_definitions` index keyed by `DomainId` and storing exact `AssetDefinitionId`s.
+  - rebuilt it alongside the other asset-definition indexes, skipped it from serialization, and maintained it on asset-definition register/unregister paths and direct test/setup insertions.
+  - replaced `asset_definitions_in_domain_iter(...)`’s borrowed-key `BTreeMap::range(...)` with index-backed iteration, removing the old comparator shim.
+- Tightened the domain query hot path in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - domain filters now read definition ids directly from `domain_asset_definitions` instead of materializing full asset definitions just to recover their ids.
+  - this also removes the extra domain recheck in the simple domain path because the iterator is now exact.
+- Added regression coverage:
+  - `state::tests::asset_definition_domain_index_tracks_exact_membership`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_domain_index_tracks_exact_membership -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[4.0273 ms 4.0364 ms 4.0458 ms]`
+    - `find_assets_filter_domain_literal`: `[8.2203 ms 8.2674 ms 8.3175 ms]`
+
+## 2026-03-13 Follow-up: definition-to-asset index for `FindAssets`
+- Added a derived `asset_definition_assets` index in `crates/iroha_core/src/state.rs`:
+  - keyed by `AssetDefinitionId` and storing concrete `AssetId`s, including scoped partitions.
+  - rebuilt alongside `asset_definition_holders`, skipped from serialization, and maintained in the same asset insert/remove mutation hooks.
+- Switched definition scans to the new index:
+  - `assets_by_definition_iter(...)` now walks exact asset ids for the definition and fetches values directly, instead of traversing `holder -> account+definition range` for every holder.
+  - this directly reduces the fan-out cost for `FindAssets` definition/domain plans and simple paths.
+- Added regression coverage:
+  - `state::tests::assets_by_definition_iter_includes_all_tracked_partitions`
+  - extended holder-index lifecycle tests to assert the concrete asset-id index is updated on insert and partition removal.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::assets_by_definition_iter_includes_all_tracked_partitions -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_assets_filter_definition_literal`: `[4.1008 ms 4.1216 ms 4.1430 ms]`
+    - `find_assets_filter_domain_literal`: `[9.7780 ms 9.9473 ms 10.122 ms]`
+
+## 2026-03-13 Follow-up: `PASS` short-circuit for full account/asset scans
+- Removed generic predicate overhead when queries are unconstrained:
+  - `crates/iroha_core/src/smartcontracts/isi/account.rs`
+    - `FindAccounts` now returns `world.accounts_iter()` directly when the predicate is `CompoundPredicate::PASS`.
+    - `FindAccountsWithAsset` now traverses holder/index state directly for `PASS` instead of paying JSON/predicate setup costs before the non-zero balance check.
+  - `crates/iroha_core/src/smartcontracts/isi/asset.rs`
+    - `FindAssets` now returns `world.assets_iter()` directly for `CompoundPredicate::PASS`.
+- Added regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_returns_registered_accounts_for_pass_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_accounts_iter_10k`: `[284.62 µs 285.80 µs 287.10 µs]`
+    - `find_assets_iter_10k`: `[418.83 µs 420.65 µs 422.70 µs]`
+
+## 2026-03-13 Follow-up: alias-planner closure + ID hot-path recovery
+- Closed remaining planner alias gaps in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `AssetPredicateView` now extracts planner keys from alias forms:
+    - account: `id.account`
+    - definition: `id.definition`
+    - domain: `definition.domain`, `id.definition.domain`
+- Refined `FindAssets` execution for constrained subject/definition plans:
+  - subject+definition plans now use `assets_in_account_by_definition_iter(...)` instead of scanning every subject asset partition.
+  - removed per-definition `collect::<Vec<_>>()` materialization in `Domains`/`Definitions` plan branches by aggregating once per branch.
+- Refined account-id narrowing in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - preserved mixed-predicate candidate narrowing (`equals`/`in_values` on `id|account|account_id`).
+  - restored dedicated simple-id shortcut (`equals`/`in_values` id-only) so hot-path latency stays in microsecond range.
+  - added `PublicKey` parsing fallback in `parse_account_id_value(...)` to handle domainless account literal forms used by benches.
+- Added regression coverage:
+  - `asset_predicate_view_extracts_alias_fields_for_planner`
+  - `find_assets_filters_by_id_account_alias_predicate`
+  - `find_assets_filters_by_id_definition_alias_predicate`
+  - `find_assets_filters_by_definition_domain_alias_predicate`
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::asset_predicate_view_extracts_alias_fields_for_planner -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - benchmark spot checks:
+    - `find_accounts_filter_id_literal_10k`: `[21.573 µs 21.629 µs 21.688 µs]`
+    - `find_accounts_with_asset_id_literal_10k`: `[22.018 µs 22.274 µs 22.639 µs]`
+    - `find_assets_filter_definition_literal`: `[7.3978 ms 7.4408 ms 7.4839 ms]`
+    - `find_assets_filter_domain_literal`: `[13.311 ms 13.376 ms 13.442 ms]` (sequential rerun; change within noise threshold)
+
+## 2026-03-13 Follow-up: candidate-ID narrowing + account-definition range scans
+- Tightened account/asset lookup paths:
+  - `crates/iroha_core/src/state.rs` now exposes `AssetByAccountDefinitionBounds` +
+    `AsAssetIdAccountDefinitionCompare` and `assets_in_account_by_definition_iter(...)`.
+  - `WorldTransaction::untrack_asset_holder_if_empty` now checks remaining partitions with the
+    account+definition range instead of scanning all account assets.
+  - `assets_by_definition_iter` now uses the account+definition range per holder.
+  - `FindAccountsWithAsset` non-zero checks now use `assets_in_account_by_definition_iter(...)`.
+- Refined account query filtering in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - added candidate-ID extraction from JSON predicates (`equals`/`in` on `id|account|account_id`).
+  - `FindAccounts` and `FindAccountsWithAsset` now narrow work to candidate IDs when available.
+  - added strict `id`-only short-circuit in candidate paths to avoid redundant predicate evaluation.
+- Added/validated regression coverage:
+  - `state::tests::asset_account_definition_range_includes_all_scopes`.
+  - `smartcontracts::isi::account::query::tests::find_accounts_applies_id_in_literal_predicate`.
+  - `smartcontracts::isi::account::query::tests::find_accounts_with_asset_applies_id_in_literal_predicate`.
+  - mixed predicate checks:
+    `find_accounts_applies_mixed_id_and_metadata_predicate` and
+    `find_accounts_with_asset_applies_mixed_id_and_metadata_predicate`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib state::tests::asset_account_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib state::tests::asset_definition_holder_index_waits_for_last_partition_removal -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+  - `cargo bench -p iroha_core --bench queries -- find_accounts_with_asset_id_literal_10k --noplot`
+    (`[22.403 µs 22.574 µs 22.749 µs]`, improved from immediate prior regression run)
+
+## 2026-03-13 Follow-up: `FindAccountsWithAsset` ID fast-path
+- Extended account query optimization in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - `FindAccountsWithAsset` now applies the same simple-ID fast path used by `FindAccounts`.
+  - for `equals`/`in` filters on `id|account|account_id`, execution now intersects requested IDs with `asset_definition_holders` and performs keyed account lookup instead of scanning all holders.
+  - non-fast-path behavior remains unchanged (holder traversal + alias/full-predicate evaluation).
+- Added regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_with_asset_applies_id_literal_predicate`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+  - `cargo bench -p iroha_core --bench queries -- find_accounts_with_asset_id_literal_10k --noplot` (`[21.586 µs 21.647 µs 21.709 µs]`)
+
+## 2026-03-13 Follow-up: `FindAssets` subject-index plan for account predicates
+- Optimized `FindAssets` planning/execution in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - added `AssetQueryPlan::Subjects` for predicates that constrain account subjects (`account|account_id|owner`/`id` extraction).
+  - account-constrained asset queries now traverse only `assets_in_account_iter(subject)` and then apply optional domain/definition narrowing.
+  - removed prior fallback that could hit `Full` scan even when account subjects were known.
+- Added mixed-predicate regression coverage:
+  - `smartcontracts::isi::asset::query::tests::find_assets_filters_by_account_and_domain_predicate`.
+- Updated benchmark harness to measure query-level account filtering directly:
+  - `crates/iroha_core/benches/queries.rs`:
+    - replaced manual post-filter benchmark with `find_assets_filter_account_literal` using `CompoundPredicate::<Asset>::build(|p| p.equals("account", ...))`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo check -p iroha_core --benches -q` (pass; existing unrelated warnings only)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_account_literal --noplot` (`[25.555 µs 25.640 µs 25.724 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_iter_10k --noplot` (`[480.25 µs 482.57 µs 484.82 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_definition_literal --noplot` (`[7.7347 ms 7.7673 ms 7.8015 ms]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_assets_filter_domain_literal --noplot` (`[12.885 ms 12.941 ms 12.995 ms]`)
+
+## 2026-03-13 Follow-up: `FindAccounts` ID fast-path + holder-index regression coverage
+- Optimized `FindAccounts` in `crates/iroha_core/src/smartcontracts/isi/account.rs` for simple ID predicates:
+  - added a direct keyed lookup fast path for `equals`/`in` filters on `id|account|account_id`.
+  - preserves existing alias/fallback semantics for complex predicates.
+- Added account query regression coverage:
+  - `smartcontracts::isi::account::query::tests::find_accounts_applies_id_literal_predicate`.
+- Added holder-index edge coverage and multisig rekey migration coverage:
+  - `state::tests::asset_definition_holder_index_waits_for_last_partition_removal`.
+  - `smartcontracts::isi::multisig::tests::rekey_account_id_moves_asset_holder_index_to_new_account`.
+- Stabilized domain unregister fixture in `crates/iroha_core/src/smartcontracts/isi/domain.rs`:
+  - set valid test literals for `nexus.fees.fee_sink_account_id`,
+    `nexus.staking.stake_escrow_account_id`,
+    `nexus.staking.slash_sink_account_id`
+    in `unregister_account_removes_owned_nfts_and_asset_metadata`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib state::tests::asset_definition_holder_index_waits_for_last_partition_removal -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::multisig::tests::rekey_account_id_moves_asset_holder_index_to_new_account -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo test -p iroha_core --lib smartcontracts::isi::domain::tests::unregister_account_removes_owned_nfts_and_asset_metadata -- --exact --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_accounts_iter_10k --noplot` (`[308.94 µs 309.58 µs 310.26 µs]`)
+  - `CARGO_TARGET_DIR=target_codex cargo bench -p iroha_core --bench queries -- find_accounts_filter_id_literal_10k --noplot` (`[20.502 µs 20.538 µs 20.572 µs]`, improved from earlier ~`[22.250 ms 22.286 ms 22.322 ms]`)
+
+## 2026-03-13 Follow-up: `FindAssets` domain/definition index traversal
+- Refined `FindAssets` plan execution in `crates/iroha_core/src/smartcontracts/isi/asset.rs`:
+  - `Domains + Definitions` now traverses selected definitions via `assets_by_definition_iter` instead of global `assets_iter()` scanning.
+  - `Domains` (without explicit definitions) now expands definitions per domain via `asset_definitions_in_domain_iter` and then traverses definition holders/assets.
+  - `Definitions` plan now traverses via `assets_by_definition_iter` rather than filtering all assets.
+- Preserved `domain` predicate semantics as asset-definition domain (not account-domain links).
+- Validation (follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::asset::query::tests::find_assets_filters_by_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib smartcontracts::isi::account::query::tests::find_accounts -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing unrelated warnings only)
+
+## 2026-03-12 Account/domain performance pass (domain links + holder index)
+- Added `StorageReadOnly::get_key_value` in `crates/mv/src/storage.rs` for keyed lookups that return stable key/value refs.
+- Extended world state indexing in `crates/iroha_core/src/state.rs`:
+  - added `asset_definition_holders` storage wiring across `World`, `WorldBlock`, `WorldTransaction`, and `WorldView`.
+  - threaded the index through block/transaction/view builders, read-only trait accessors, commit/apply paths, constructors, and world JSON rebuild.
+  - added holder index rebuild logic from stored assets.
+  - added holder tracking helpers (`track_asset_holder`, `untrack_asset_holder_if_empty`) and integrated them into asset insert/remove helper paths.
+  - optimized domain traversal methods to use domain-subject index iteration (`accounts_in_domain_iter`, `assets_in_domain_iter`) and moved definition traversal to holder-index-backed `assets_by_definition_iter`.
+- Optimized account queries in `crates/iroha_core/src/smartcontracts/isi/account.rs`:
+  - added alias-field predicate short-circuiting (`id`, `account`, `account_id`, `uaid`) before full JSON predicate fallback.
+  - updated `FindAccountsWithAsset` to iterate holder candidates from `asset_definition_holders` before balance checks and predicate evaluation.
+- Synced direct asset-move/seed call sites that bypass `asset_or_insert` to keep holder index consistent:
+  - `crates/iroha_core/src/smartcontracts/isi/multisig.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `crates/iroha_core/src/nexus/portfolio.rs`
+  - `crates/iroha_core/src/sumeragi/penalties.rs`
+- Benchmark updates:
+  - registered `queries` benchmark target in `crates/iroha_core/Cargo.toml`.
+  - added `find_accounts_filter_id_literal_10k` in `crates/iroha_core/benches/queries.rs`.
+- Added regression test in `crates/iroha_core/src/state.rs`:
+  - `state::tests::asset_definition_holder_index_tracks_asset_lifecycle`.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p mv` (pass)
+  - `cargo test -p iroha_core find_accounts_with_asset_ignores_zero_holdings -- --nocapture` (pass)
+  - `cargo test -p iroha_core asset_definition_holder_index_tracks_asset_lifecycle -- --nocapture` (pass)
+  - `cargo check -p iroha_core --benches` (pass; existing warnings in unrelated test modules)
+
+## 2026-03-12 aid/name/alias gap closure (constructor hard-cut + targeted docs refresh)
+- Completed the asset-definition constructor hard-cut in `crates/iroha_data_model/src/asset/definition.rs`:
+  - `AssetDefinition::new(id, spec)` and `AssetDefinition::numeric(id)` no longer auto-derive `name` from `id`.
+  - constructor docs now state explicit `.with_name(...)` is required before registration.
+- Migrated remaining `crates/*/src` and `integration_tests/tests` registration/build paths to explicit naming:
+  - applied explicit `.with_name(...)` across remaining `AssetDefinition::new/numeric` call sites used for registration/build.
+  - left one intentional negative test path without `.with_name(...)` to assert rejection.
+- Added/updated hard-cut tests:
+  - `asset::definition::validation_tests::constructors_leave_name_empty_without_explicit_with_name`
+  - `smartcontracts::isi::domain::tests::register_asset_definition_rejects_missing_explicit_name`
+- Extended `scripts/translate_i18n_google.py`:
+  - added `--refresh-mode` (`source-identical`/`stale`/`all`) including stale-translation refresh support.
+  - added repeatable `--path-glob` filtering to constrain regeneration scope.
+  - improved markdown frontmatter parsing to preserve leading HTML comment preambles.
+  - apply phase now refreshes `source_hash`, `source_last_modified`, and `translation_last_reviewed`.
+- Regenerated only the targeted data-model docs family (40 localized files):
+  - `docs/source/data_model.*.md`
+  - `docs/source/data_model_and_isi_spec.*.md`
+  - enforced canonical wording checks (`aid:<32-lower-hex-no-dash>`, both alias forms, no `asset#domain`/`IpfsPath`/`ipfs://` guidance).
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model constructors_leave_name_empty_without_explicit_with_name --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core register_asset_definition_rejects_missing_explicit_name --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii parse_asset_definition_id_accepts_alias_literals_only --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii resolve_asset_definition_selector_rejects_legacy_aid_literal --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli -p integration_tests` (pass)
+
+## 2026-03-12 Default-executor multisig register signatory materialization parity
+- Removed default-executor `MultisigRegister` validation dependency on preexisting signatory accounts in:
+  - `crates/iroha_executor/src/default/isi/multisig/account.rs`
+  - dropped `ensure_signatories_exist(...)` from registration validation.
+- Added execution-time auto-materialization of missing signatory accounts for `MultisigRegister`:
+  - runs under home-domain owner authority before role wiring.
+  - tags auto-created accounts with `iroha:created_via = "multisig"`.
+  - skips self-subject entries for the multisig account being registered.
+- Added executor unit coverage:
+  - `signatory_materialization_skips_multisig_subject`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_executor --lib signatory_materialization_skips_multisig_subject -- --nocapture` (pass)
+  - `cargo test -p iroha_executor --lib signatories_from_multiple_domains_are_allowed -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib register_materializes_missing_signatory_accounts -- --nocapture` (pass; warnings only)
+
+## 2026-03-12 aid/alias hard-cut continuation (remaining runtime `name#domain` constructor migration)
+- Removed remaining runtime/test helper construction that still derived `AssetDefinitionId` via legacy `format!("name#domain").parse()` patterns:
+  - `crates/iroha_genesis/src/lib.rs`
+  - `crates/iroha_core/src/executor.rs`
+  - `crates/izanami/src/instructions.rs`
+  - `crates/izanami/src/faults.rs`
+- Replaced all of the above with canonical constructor form:
+  - `AssetDefinitionId::new(domain_id, name.parse()?)`
+- Ensured updated executor fixtures set explicit asset display names when registering migrated definitions.
+- Re-verified alias-only Torii selector behavior and CLI legacy-literal rejection in targeted tests.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib resolve_asset_definition_selector_rejects_legacy_aid_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib initial_executor_denies_transfer_asset_definition -- --nocapture` (pass)
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/testResolveAssetAliasAsync|ToriiClientTests/testResolveAssetAliasReturnsNilOnNotFound|TransactionInputValidatorTests'` (selected tests pass; runner exits with environment signal code 5 after execution)
+  - `cargo check -p iroha_genesis -p izanami -p iroha_core --tests` (pass; warnings only)
+  - `cargo check -p iroha_data_model -p iroha_core -p integration_tests -p iroha_genesis -p izanami --tests` (pass; warnings only)
+
+## 2026-03-12 Explorer instruction account-filter: custom multisig parity fix
+- Closed a remaining `/v1/explorer/instructions?account=...` gap for `Custom` envelopes carrying multisig instructions.
+- Updated `crates/iroha_torii/src/routing.rs`:
+  - `instruction_matches_account_id(...)` now decodes multisig `CustomInstruction` payloads and matches:
+    - `MultisigRegister.account`
+    - `MultisigApprove.account`
+    - `MultisigPropose.account`
+    - nested `MultisigPropose.instructions` recursively (so embedded Mint/Burn account targets are matched).
+  - `instruction_matches_asset_id(...)` now recursively checks nested `MultisigPropose.instructions`.
+  - `append_asset_ids_from_instruction(...)` now extracts asset ids recursively from nested `MultisigPropose.instructions`.
+- Added targeted tests:
+  - `instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset`
+  - `instruction_matches_account_id_matches_multisig_custom_propose_account`
+  - `instruction_matches_account_id_matches_multisig_custom_propose_nested_accounts`
+  - `explorer_instructions_endpoint_account_filter_includes_multisig_custom_propose`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_account_id_matches_multisig_custom_propose -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_multisig_custom_propose -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_mint_and_burn -- --nocapture` (pass)
+
+## 2026-03-12 Explorer instruction account-filter follow-up: public-lane rewards + OpenAPI parity
+- Closed another `/v1/explorer/instructions?account=...` matcher gap in `crates/iroha_torii/src/routing.rs`:
+  - `instruction_matches_account_id(...)` now matches `staking::RecordPublicLaneRewards` via `reward_asset().account()`.
+- Added unit coverage:
+  - `instruction_matches_account_id_matches_public_lane_rewards_asset_account`
+- Updated OpenAPI text for explorer instruction `account` query parameter to match actual behavior beyond transfer-only filtering.
+- Added OpenAPI regression coverage:
+  - `explorer_instructions_account_param_description_mentions_non_transfer_matches`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib instruction_matches_account_id_matches_public_lane_rewards_asset_account -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_endpoint_account_filter_includes_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib explorer_instructions_account_param_description_mentions_non_transfer_matches -- --nocapture` (pass)
+
+## 2026-03-12 aid/alias completion pass (Torii selector parity + CLI help sync + fixture sweep)
+- Restored Torii app-API selector parity in `crates/iroha_torii/src/lib.rs`:
+  - `parse_asset_definition_id(...)` now accepts canonical `aid:<32-lower-hex-no-dash>` and strict alias literals (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+  - Added/updated test coverage with `parse_asset_definition_id_accepts_aid_or_alias_literals`.
+- Regenerated static CLI help from live clap configuration:
+  - `crates/iroha_cli/CommandLineHelp.md` now reflects aid/alias surfaces for asset-definition and asset commands, including `iroha tools encode asset-id`.
+  - Updated regeneration command in `crates/iroha_cli/README.md` to `cargo run -p iroha_cli --bin iroha -- tools markdown-help`.
+- Completed remaining legacy fixture migration in integration/Torii/bench harnesses:
+  - Replaced legacy asset-definition textual parses (`\"name#domain\".parse()`) with explicit `AssetDefinitionId::new(domain, name)` construction across migrated test files.
+  - Removed remaining dynamic `format!(\"name#{domain}\").parse()` asset-definition construction from:
+    - `integration_tests/tests/domain_links.rs`
+    - `integration_tests/tests/extra_functional/seven_peer_consistency.rs`
+    - `integration_tests/tests/scheduler_teu.rs`
+    - `crates/iroha_torii/tests/accounts_portfolio.rs`
+    - `crates/iroha_core/benches/queries.rs`
+- Validation (this pass):
+  - `CARGO_TARGET_DIR=target_tmp_aid_alias cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_aid_or_alias_literals -- --nocapture` (pass)
+  - `cargo check -p integration_tests --tests` (pass)
+  - `cargo check -p iroha_torii --tests` (pass)
+  - `cargo check -p iroha_core --benches` (pass; warnings only)
+
+## 2026-03-12 Torii alias-only ingress gap closure (`name#issuer@dataspace` / `name#dataspace` only)
+- Closed remaining legacy `aid:` acceptance paths for public asset-definition selectors:
+  - `crates/iroha_torii/src/lib.rs::parse_asset_definition_id(...)` now rejects all `aid:` literals and resolves aliases only.
+  - `crates/iroha_torii/src/routing.rs` handlers now resolve `{definition_id}` via alias selector helper (holders GET/query + confidential transitions), matching `/v1/zk/roots` behavior.
+- Updated wrapper flow in `crates/iroha_torii/src/lib.rs` so holders/confidential routes forward alias literals to routing handlers instead of rewriting to canonical `aid:...`.
+- Updated Torii tests to assert alias-only path usage (`rose%23sbp`) and seeded fixture aliases where required.
+- Updated ZK selector docs/tests to remove canonical-`aid` acceptance language and keep only:
+  - `<name>#<domain>@<dataspace>`
+  - `<name>#<dataspace>`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib resolve_asset_definition_selector_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_holders_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib confidential_asset_transitions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration zk_roots_endpoint_returns_bounded_recent_roots -- --nocapture` (pass)
+
+## 2026-03-12 Multisig unregistered-signatory admission fix
+- Confirmed explorer rejection root cause for tx `ef3eb7fb6bdd4a852c838bb0dcb349ad75fa18e7ecd05e9d7b5408304c1a1537`: `Account does not exist` was raised at transaction validation before multisig authorization paths.
+- Updated `crates/iroha_core/src/tx.rs`:
+  - Added `allows_unregistered_authority(...)` to permit missing-authority admission only for `MultisigPropose` / `MultisigApprove` custom envelopes.
+  - Kept existing account-existence rejection unchanged for all other transaction kinds.
+  - Skips data-trigger DFS dispatch for this unregistered multisig-only path to avoid authority-account lookup failures after instruction execution.
+- Added regression tests in `tx::tests`:
+  - `missing_authority_rejected_for_non_multisig_transaction`
+  - `missing_authority_multisig_approve_reaches_instruction_validation`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib missing_authority_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib multisig_account_direct_signing_rejected_in_validation -- --nocapture` (pass)
+
+## 2026-03-12 Torii asset selector completion (aid + strict alias forms) + cleanup
+- Completed Torii API selector behavior to match the v1 break plan:
+  - `crates/iroha_torii/src/lib.rs::parse_asset_definition_id(...)` now accepts canonical `aid:<32-lower-hex-no-dash>` and strict aliases:
+    - `<name>#<domain>@<dataspace>`
+    - `<name>#<dataspace>`
+  - invalid `aid:` literals and malformed aliases are rejected.
+- Added/updated Torii coverage:
+  - `tests::parse_asset_definition_id_accepts_aid_or_alias_literals` now validates:
+    - long/short alias acceptance
+    - canonical `aid` acceptance
+    - invalid `aid` rejection
+    - unknown alias => `NotFound`
+- Extended ZK roots convenience API selector semantics in `crates/iroha_torii/src/routing.rs`:
+  - `ZkRootsGetRequestDto.asset_id` now accepts canonical `aid` or strict alias forms.
+  - Added helper `resolve_asset_definition_selector(...)` with focused unit tests for canonical aid, alias resolve, invalid aid rejection, and unknown alias handling.
+- Removed post-migration warning-only residue in `fastpq_prover`:
+  - dropped unused `std::str::FromStr` test imports in:
+    - `crates/fastpq_prover/src/digest.rs`
+    - `crates/fastpq_prover/src/gadgets/transfer.rs`
+    - `crates/fastpq_prover/src/trace.rs`
+- Continued CLI test migration away from legacy `name#domain` parsing in `crates/iroha_cli/src/main_shared.rs` by replacing `format!(\"ad{i}#land\").parse()` with explicit `AssetDefinitionId::new(domain, name)` construction in paginated asset-definition query harnesses.
+
+## 2026-03-12 Torii asset-definition literal hard cut: alias-only API ingress
+- Enforced alias-only parsing for public Torii asset-definition inputs at API ingress (`crates/iroha_torii/src/lib.rs`):
+  - `parse_asset_definition_id(...)` now accepts only `AssetDefinitionAlias` literals:
+    - `<name>#<domain>@<dataspace>`
+    - `<name>#<dataspace>`
+  - canonical `aid:...` literals are rejected on these external paths.
+- All affected handlers now resolve alias literals through world-state alias index (`asset_definition_id_by_alias`) before dispatch:
+  - explorer account/asset filters and explorer asset-definition detail/snapshot/econometrics routes
+  - asset holders (`GET` and `POST query`) routes
+  - confidential asset transitions route
+  - `/v1/zk/roots` request parsing now accepts alias literals only and resolves through alias index
+- Kept auth/rate-limit ordering intact for holders/confidential handlers: access checks still run before alias resolution in gated branches.
+- Added targeted coverage:
+  - `tests::parse_asset_definition_id_accepts_alias_literals_only` verifies:
+    - long + short alias acceptance
+    - `aid:...` rejection
+    - unknown alias => `NotFound`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib parse_asset_definition_id_accepts_alias_literals_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_holders_get_pagination_preserves_total -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration zk_roots_endpoint_returns_bounded_recent_roots -- --nocapture` (pass)
+
+## 2026-03-12 aid/name hard-cut continuation (static `name#domain` migration + explicit-name runtime paths + docs)
+- Removed implicit constructor fallback naming in `AssetDefinition::new` / `AssetDefinition::numeric` (no auto-`id.to_string()` anymore).
+- Migrated static Rust literals from legacy `\"name#domain\".parse()` to canonical constructor form:
+  - `iroha_data_model::asset::AssetDefinitionId::new(<domain>, <name>)`
+  - applied across data-model/core/cli/torii/ivm/SDK-adjacent Rust sources and tests.
+- Patched runtime genesis/localnet builders to set explicit asset names when registering definitions:
+  - `iroha_kagami` genesis/localnet bootstrap assets.
+  - `iroha_test_network` bootstrap/genesis fixture definitions.
+  - `iroha_genesis` domain builder now sets definition name from provided asset name.
+  - `izanami` genesis scenario definitions now set explicit names.
+- Updated docs with explicit aid/alias UX:
+  - `docs/source/data_model.md`
+  - `docs/source/data_model_and_isi_spec.md`
+  - added both alias forms (`<name>#<domain>@<dataspace>`, `<name>#<dataspace>`) and a CLI/Torii migration note.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_cli -p iroha_torii -p iroha_kagami -p iroha_test_network -p iroha_genesis -p izanami -p ivm -p iroha` (pass)
+  - `cargo test -p iroha_core --lib set_asset_definition_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass; 3 targeted tests, remaining bins filtered/no-op)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli parse_asset_definition_aid_literal_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_parses_valid_short_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals -- --nocapture` (pass)
+
+## 2026-03-12 aid/Alias hard-cut follow-up (CLI alias resolve strict path + constructor test alignment)
+- Removed the CLI compatibility fallback in `resolve_asset_definition_id_by_alias`:
+  - `iroha_cli` now resolves aliases only through `POST /v1/assets/aliases/resolve`.
+  - no client-side fallback scan over `FindAssetsDefinitions` remains.
+  - HTTP `404` now maps directly to “alias not bound” in CLI UX.
+- Updated `crates/iroha_data_model/tests/id_of_constructors.rs` to stop parsing legacy `name#domain` literals for `AssetDefinitionId`; parity test now round-trips canonical `aid:...` text.
+- Removed remaining internal “legacy name” wording from synthetic aid-component helper text in `crates/iroha_data_model/src/asset/id.rs`.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_cli -p iroha_torii` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testResolveAssetAliasAsync --filter ToriiClientTests/testResolveAssetAliasReturnsNilOnNotFound --filter TransactionInputValidatorTests` (selected tests pass; process exits with environment signal code 5 after execution)
+
+## 2026-03-12 Torii explorer account instruction filter: account-bearing instruction parity fix
+- Expanded `instruction_matches_account_id()` in `crates/iroha_torii/src/routing.rs` to account-match all relevant asset-account instructions in this path:
+  - `MintBox::Asset` / `BurnBox::Asset` by `destination().account()`
+  - `SetAssetKeyValue` / `RemoveAssetKeyValue` by `asset().account()`
+- Added endpoint-level coverage for `GET /v1/explorer/instructions?account=...`:
+  - `explorer_instructions_endpoint_account_filter_includes_mint_and_burn`
+  - verifies account filtering returns only the expected Mint/Burn instructions for that account.
+- Removed legacy `name#domain` asset-definition literals from `crates/iroha_torii/src/routing.rs` test surfaces and replaced them with canonical `aid:...` IDs.
+- Added unit coverage in `tx_query_filter_tests`:
+  - `instruction_matches_account_id_matches_mint_asset_destination_account`
+  - `instruction_matches_account_id_matches_burn_asset_destination_account`
+  - `instruction_matches_account_id_matches_set_asset_key_value_asset_account`
+  - `instruction_matches_account_id_matches_remove_asset_key_value_asset_account`
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii instruction_matches_account_id_matches_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii explorer_instructions_endpoint_account_filter_includes_mint_and_burn -- --nocapture` (pass)
+  - `cargo test -p iroha_torii explorer_transaction_filters_match_asset_id -- --nocapture` (pass)
+  - `cargo test -p iroha_torii instruction_matches_asset_id_handles_mint_assets -- --nocapture` (pass)
+  - `rg -n '#wonderland|%23wonderland' crates/iroha_torii/src/routing.rs` (no matches)
+
+## 2026-03-12 aid-only Assets + required name + alias literal rollout (v1 break plan implementation slice)
+- Implemented canonical `aid`-first asset identity and removed legacy `name#domain` textual parsing from `AssetDefinitionId::from_str`.
+- Added first-class asset alias literal model (`<name>#<domain>@<dataspace>`) in `iroha_data_model`:
+  - new `AssetDefinitionAlias` type + parsing/validation/tests.
+  - `AssetDefinition` / `NewAssetDefinition` now include optional `alias`.
+  - validation enforces alias left segment must match the required human asset name exactly.
+- Extended asset alias literal support to allow exactly two on-chain forms:
+  - `<name>#<domain>@<dataspace>`
+  - `<name>#<dataspace>`
+  - and reject malformed multi-separator variants.
+- Updated CLI alias UX for asset-definition registration:
+  - `--alias-dataspace` alone now derives short-form alias `<name>#<dataspace>`.
+  - `--alias-domain` + `--alias-dataspace` derives long form `<name>#<domain>@<dataspace>`.
+- Removed component-derived legacy asset-id construction paths from CLI runtime flows:
+  - `iroha tools encode asset-id` now accepts only canonical `--definition aid:...` or `--alias ...`.
+  - `iroha ledger asset {id,mint,burn,transfer}` resolution no longer accepts `--asset/--domain` fallback paths.
+- Enforced required human-readable asset name path in registration flow and tests; added duplicate-alias rejection in core registration logic.
+- Updated config defaults and consumers to stop using legacy `name#domain` constants:
+  - governance/oracle/nexus defaults now emit canonical IDs via helper functions.
+  - replaced removed string constants with default functions in config/core/torii tests.
+- Expanded CLI UX to make manual asset workflows usable without hand-crafted Rust:
+  - `ledger asset` operations now accept canonical ID or alias+account (no component construction fallback).
+  - `tools encode asset-id` supports canonical definition IDs and alias literals.
+  - asset-definition commands accept alias-based input; register can derive alias from `name + alias-dataspace` or `name + alias-domain + alias-dataspace`.
+- Added cross-feature test compatibility helpers in core state:
+  - `State::new_with_chain_for_testing(...)`
+  - `WorldBlock::transaction_without_telemetry(...)`
+  - migrated Torii tests to these helpers to avoid feature-gating drift with `iroha_core` telemetry feature.
+- Updated test fixtures and harnesses across `iroha_torii` and integration paths for new required `alias` field and aid-safe asset-id construction.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_config -p iroha_core -p iroha_cli` (pass)
+  - `cargo check --tests -p iroha_kagami -p iroha_torii -p integration_tests` (pass)
+  - `cargo test -p iroha_data_model asset_alias_parses_valid_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_validation_requires_name_segment_match -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_definition_id_from_str_rejects_legacy_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_core register_asset_definition_rejects_duplicate_alias -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_from_name_domain_and_dataspace -- --nocapture` (pass)
+  - `cargo test -p iroha_torii offline_bundle_proof_status_reports_match -- --nocapture` (pass)
+  - `cargo test -p iroha_torii vk_list_filters_by_backend_and_status -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model asset_alias_ -- --nocapture` (pass)
+  - `cargo test -p iroha_cli register_alias_derives_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii asset_alias_resolve_ -- --nocapture` (pass)
+  - `cargo check -p iroha_data_model -p iroha_cli -p iroha_torii` (pass)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Repo-wide completion pass)
+- Closed remaining hard-cut cleanup gaps across prover tests, integration tests, docs wording, and lint gates:
+  - `integration_tests/tests/sumeragi_npos_stake_activation.rs` now provisions NPoS stake/bootstrap state through custom genesis (`genesis_factory_with_post_topology`) instead of stale runtime registration paths that repeated domainless `AccountId` registration.
+  - Verified `fastpq_prover` deterministic account helpers are restored to the intended hard-cut-safe structure in:
+    - `crates/fastpq_prover/src/bin/fastpq_row_bench.rs`
+    - `crates/fastpq_prover/tests/{realistic_flows,backend_regression,proof_fixture,perf_production,transcript_replay}.rs`
+  - Fixed stale strict-parser wording in all `docs/account_structure*.md` variants:
+    - replaced incorrect `reject canonical I105 and any @domain suffix` text with `reject compressed and any @domain suffix`.
+  - Fixed `clippy -D warnings` doc lint fallout in:
+    - `crates/iroha_data_model/src/account/address/vectors.rs` (`i105_default` in docs now wrapped in backticks).
+- Search acceptance sweeps (this pass):
+  - `integration_tests/tests`: no stale bare `*_ID.domain()` callsites; `Account::new(...)` callsites are scoped via `to_account_id(...)` (plus existing `ScopedAccountId` callsites).
+  - docs sweeps for stale strict-input phrases (`reject canonical I105`, `optional @domain hint`, `compressed accepted`, `second-best compressed`, strict parser accepting compressed/@domain) returned no active matches in docs surfaces.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo check -p fastpq_prover --bins --tests --message-format short` (pass)
+  - `cargo check -p integration_tests --tests --message-format short` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` (pass, 24 passed)
+  - `cargo test -p integration_tests --test multisig -- --nocapture` (pass, 11 passed)
+  - `cargo test -p integration_tests --test domain_links -- --nocapture` (pass, 5 passed)
+  - `cargo test -p integration_tests --test sumeragi_commit_certificates npos_commit_quorum_requires_stake -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_stake_activation -- --nocapture` (pass, 2 passed)
+  - `cargo check -p iroha_torii --tests --message-format short` (pass)
+  - `cargo check -p iroha_cli --tests --message-format short` (pass)
+  - `cargo build --workspace --message-format short` (pass)
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - `cargo test --workspace` (interrupted by execution environment with exit code `-1` before final summary; long-running run passed broad workspace suites up through large `integration_tests/tests/mod.rs` sections without reporting a concrete test failure before interruption).
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Explorer QR single-format API/docs cleanup)
+- Removed the legacy Rust QR options marker from the client surface:
+  - deleted `ExplorerAccountQrOptions` from `crates/iroha/src/client.rs`.
+  - simplified `Client::get_explorer_account_qr` to `(&self, account_id: &str)`.
+  - updated in-crate call sites/tests accordingly and renamed stale test names:
+    - `get_public_lane_validators_omits_query_params`
+    - `get_explorer_account_qr_parses_payload_and_omits_query_params`
+- Removed `ExplorerAccountQrOptions` references from SDK docs and i18n mirrors:
+  - dropped imports/usages in Rust snippets under:
+    - `docs/source/nexus_sdk_quickstarts*.md`
+    - `docs/portal/docs/sdks/rust*.md`
+    - `docs/portal/i18n/*/docusaurus-plugin-content-docs/{current,version-2025-q2}/sdks/rust*.md`
+  - normalized QR helper prose to canonical-I105-only wording (no format knob).
+- Removed stale JS internal naming to match the new single-format surface:
+  - `javascript/iroha_js/{src,dist}/toriiClient.js`:
+    - `normalizeExplorerAccountQrOptions` -> `normalizeExplorerRequestOptions`
+- Verification (this pass):
+  - `cargo test -p iroha --no-run` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js test/toriiIterators.parity.test.js` (fails with 6 existing JS test failures in governance/iterator feature areas; not in Explorer QR option-removal paths)
+  - `rg -n 'ExplorerAccountQrOptions|AccountAddressFormat::I105|ih58|IH58' crates javascript python mochi docs/source docs/portal examples integration_tests` (no matches)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (SDK/example legacy option spelling purge)
+- Removed remaining stale option-name usage from active SDK/example surfaces:
+  - `examples/android/retail-wallet/.../WalletPreviewViewModel.kt` no longer calls `.addressFormat("canonical")` on `OfflineListParams.Builder`.
+  - `docs/source/sdk/android/offline_signing*.md` no longer show `.addressFormat("canonical")`.
+  - removed `AddressFormat` imports from Rust quickstart/docs families:
+    - `docs/source/nexus_sdk_quickstarts*.md`
+    - `docs/portal/docs/sdks/rust*.md`
+    - `docs/portal/i18n/*/docusaurus-plugin-content-docs/{current,version-2025-q2}/sdks/rust*.md`
+- Normalized JS negative-option tests away from legacy camel-case naming:
+  - `javascript/iroha_js/test/toriiClient.test.js` now uses a generic unsupported key (`legacyFormat`) in option-rejection coverage.
+- Validation (this pass):
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern 'getUaidBindings uses canonical query parameters|getUaidManifests appends canonical dataspace filter|listAccounts rejects unsupported legacy option|queryAccounts rejects unsupported legacy option|getExplorerAccountQr rejects unsupported option fields' test/toriiClient.test.js` (pass)
+  - `rg -n 'AddressFormat,|\\.addressFormat\\(\"canonical\"\\)|addressFormat' docs examples javascript/iroha_js/test/toriiClient.test.js --glob '!status*.md' --glob '!roadmap*.md'` (no stale option-name matches in active docs/examples/tests; remaining global occurrences are canonical `UnsupportedAddressFormat` error identifiers and changelog history)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (SDK docs/examples stale format knobs)
+- Removed stale format-knob artifacts from docs/examples that still implied multi-format selection:
+  - removed `AddressFormat` imports from:
+    - `docs/source/nexus_sdk_quickstarts*.md`
+    - `docs/portal/docs/sdks/rust*.md`
+    - `docs/portal/i18n/*/docusaurus-plugin-content-docs/{current,version-2025-q2}/sdks/rust*.md`
+  - removed `.addressFormat("canonical")` from:
+    - `examples/android/retail-wallet/src/main/java/org/hyperledger/iroha/samples/wallet/WalletPreviewViewModel.kt`
+    - `docs/source/sdk/android/offline_signing*.md`
+- Verification (this pass):
+  - `rg -n 'AddressFormat,|\\.addressFormat\\(\"canonical\"\\)|addressFormat\\(\"canonical\"\\)' docs examples --glob '!status*.md' --glob '!roadmap*.md'` (no matches)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (legacy token zero-out outside status/roadmap)
+- Completed a repo-wide cleanup pass to remove remaining active `address_format` legacy-token references.
+- Test/docs updates:
+  - `javascript/iroha_js/test/{toriiClient.test.js,toriiIterators.parity.test.js}`:
+    - switched removed-format assertions from `address_format` fields to `canonical_i105`-absence checks.
+  - `python/iroha_python/tests/test_address_format.py`:
+    - rewrote removed-format assertions/negative kwargs from `address_format` to `canonical_i105`.
+  - prior pass already removed stale `address_format` prose from:
+    - `docs/source/torii/kaigi_telemetry_api*.md`
+    - `docs/source/sns/address_display_guidelines*.md`
+    - `ops/runbooks/settlement-buffers.md`
+- Validation (this pass):
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern 'listAccounts encodes iterable params|getUaidManifests includes canonical dataspace query options|queryNfts posts Norito envelope|queryAccountAssets posts filters and options as a Norito envelope' test/toriiClient.test.js test/toriiIterators.parity.test.js` (pass)
+  - `cd python/iroha_python && python3 -m pytest tests/test_address_format.py` (environment failure: `No module named pytest`)
+  - repo sweep:
+    - `rg -n 'ih58|IH58|AddressFormatOption|AccountAddressFormat::I105|AddressFormat::Compressed|fromCompressedSora|toCompressedSora|to_compressed_sora|from_compressed_sora|compressed_address|\\baddress_format\\b|Copy Compressed|Compressed Sora alphabet|Compressed I105 literals|\"canonical_i105\"s\\*:s\\*true|address_format=compressed|address_format=i105\\|compressed|--address-format \\{i105,compressed\\}' --glob '!status*.md' --glob '!roadmap*.md'`
+    - result: no matches outside historical status/roadmap logs.
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Kaigi docs + runbook parameter purge)
+- Removed stale `address_format` parameter guidance from Kaigi telemetry API docs:
+  - updated `docs/source/torii/kaigi_telemetry_api*.md` to describe canonical-I105-only relay literal output (`relay_id`, `reported_by`) with no format override parameter.
+- Removed stale runbook wording that implied an address-format query flag:
+  - `ops/runbooks/settlement-buffers.md` now references canonical-I105 receipts directly.
+- Removed residual `address_format` wording from SNS address-display guideline variants:
+  - updated `docs/source/sns/address_display_guidelines*.md` phrasing from back-compat parameter naming to generic “format-override fields removed” language.
+- Verification (this pass):
+  - `rg -n '\\baddress_format\\b' docs/source/torii/kaigi_telemetry_api*.md docs/source/sns/address_display_guidelines*.md ops/runbooks/settlement-buffers.md` (no matches)
+  - `rg -n '\\baddress_format\\b' docs ops --glob '!status*.md' --glob '!roadmap*.md'` (no matches)
+  - repo-wide `address_format` remains only in SDK negative tests that assert removed-parameter rejection paths.
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Explorer DTO + SNS/contract docs final sweep)
+- Closed the remaining runtime naming gap on Explorer account payloads:
+  - `crates/iroha_torii/src/explorer.rs`: renamed `compressed_address` to `i105_default_address`.
+  - `mochi/mochi-core/src/torii.rs`: aligned parser/model/tests/fixtures to `i105_default_address`.
+- Cleared residual legacy wording from final SNS/contract docs and static illustrations:
+  - `docs/source/torii_contracts_api*.md`: strict parser sentence now says canonical I105 only (no `@<domain>` suffix), without `reject compressed` artifact text.
+  - `docs/source/sns/address_display_guidelines*.md`: replaced `Compressed Sora alphabet`/`Compressed I105 literals` phrasing with `i105-default` wording and removed stale `address_format` toggle block drift in Torii response knobs.
+  - `docs/source/references/address_norm_v1*.md`: replaced `compressed-Sora` with `i105-default-Sora`.
+  - `docs/source/sns/images/address_copy_*.svg` + `docs/portal/static/img/sns/address_copy_*.svg`: updated remaining “Compressed (`sora`)”/“Copy Compressed” labels to `i105-default`.
+- Validation (this pass):
+  - `cargo test -p mochi-core explorer_account_record_decodes_payload -- --nocapture` (pass)
+  - `cargo test -p mochi-core fetch_explorer_accounts_page_applies_filters -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --no-run` (pass)
+  - `cargo fmt --all` (pass)
+  - focused grep sweeps report no remaining `compressed_address`, `Compressed Sora alphabet`, `reject compressed`, `Copy Compressed`, or `"canonical_i105"s*:s*true` strings in active Explorer/SNS/Torii-contract docs surfaces.
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (example apps + docs alias purge)
+- Finished another hard-cut cleanup sweep focused on remaining user-facing legacy wording and stale alias docs:
+  - iOS demo (`examples/ios/NoritoDemo`):
+    - renamed preview fields from `compressed`/`compressedWarning` to `i105Default`/`i105Warning`.
+    - updated copy mode telemetry label from `compressed` to `i105_default`.
+    - updated UI copy to “i105-default Sora-only”.
+  - Android retail-wallet sample:
+    - updated `strings.xml` labels/tooltips/content descriptions from “compressed” wording to `i105-default`.
+    - renamed layout IDs/bindings from `address_*_compressed*` to `address_*_i105_default*` in:
+      - `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`
+      - `examples/android/retail-wallet/src/main/java/org/hyperledger/iroha/samples/wallet/MainActivity.kt`
+  - JS tests:
+    - removed legacy QR payload `address_format` fixture fields and dropped the “ignores payload address_format field” compatibility test.
+    - renamed `maybeTestCompressed` helper in validation tests to `maybeTestI105Default`.
+  - Swift/Android test wording:
+    - normalized local variable/error message wording from `compressed` to `i105-default` in:
+      - `IrohaSwift/Tests/IrohaSwiftTests/{AccountAddressTests,AccountAddressFixtureTests,OfflineNoritoEncodingTests,TransactionInputValidatorTests}.swift`
+      - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`
+  - docs + portal surfaces:
+    - removed stale alias list text (`i105`, `compressed`, `ih-b32`, `sora`) from `docs/source/sdk/python/connect_end_to_end*.md` in favor of canonical-I105 wording.
+    - removed obsolete CLI docs option `--address-format {i105,compressed}` from `docs/source/nexus_public_lanes*.md`.
+    - replaced remaining account-address-status wording (`I105, compressed ('sora'...)`) with `I105 and i105-default ('sora'...)` across `docs/source`, `docs/portal/docs/reference`, and `docs/portal/i18n/.../reference`.
+    - updated portal UI copy surfaces:
+      - `docs/portal/src/components/ExplorerAddressCard.jsx`
+      - `docs/portal/static/img/sns/address_copy_android.svg`
+    - removed remaining `to_compressed_sora` and `compressed` address-literal wording from key docs families:
+      - `docs/account_structure*.md`
+      - `docs/source/data_model*.md`
+      - `docs/account_structure_sdk_alignment*.md`
+      - `docs/fraud_playbook*.md`
+      - `docs/source/fraud_monitoring_system*.md`
+      - `docs/source/sdk/js/validation*.md`
+      - `docs/source/sdk/android/samples/retail_wallet*.md`
+- Verification snapshots (this pass):
+  - strict grep: no `ih58`/`IH58` anywhere in repository content.
+  - strict grep (excluding historical status/roadmap): no `AddressFormatOption`, `fromCompressedSora`, `toCompressedSora`, `AccountAddressFormat::I105`, `AddressFormat::Compressed`, `format: AccountAddressFormat::I105`.
+  - runtime/source grep: no remaining `address_format` field usage in active source paths (`crates/*`, SDK sources, examples), only negative/assertion coverage in tests.
+- Validation (this pass):
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/validationError.test.js` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern 'getExplorerAccountQr normalizes payloads|getExplorerAccountQr rejects unsupported option fields' test/toriiClient.test.js` (pass)
+  - `cd IrohaSwift && swift test --filter AccountAddressFixtureTests/testNegativeVectorsReject` (build ok; test runner exits with unexpected signal code 5 in this environment after launching XCTest; no assertion failure output)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (OpenAPI + SNS docs/test naming)
+- Removed remaining hard-cut aliases/tokens from active API/test surfaces in this pass:
+  - dropped `MissingCompressedSentinel` fallback branches in vector consumer tests:
+    - `crates/iroha_data_model/tests/account_address_vectors.rs`
+    - `crates/iroha_torii/tests/account_address_vectors.rs`
+    - `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`
+    - `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressFixtureTests.swift`
+    - `javascript/iroha_js/test/address.test.js`
+  - Android sample parity update:
+    - `java/iroha_android/samples-android/src/test/java/org/hyperledger/iroha/android/samples/SampleAddressTest.java` now asserts `formats.i105Default`.
+  - JavaScript test naming/fixtures normalized away from `compressed` property labels in active suites:
+    - `javascript/iroha_js/test/address.test.js`
+    - `javascript/iroha_js/test/validationError.test.js`
+    - `javascript/iroha_js/test/instructionBuilders.test.js`
+    - `javascript/iroha_js/test/toriiClient.test.js`
+    - `javascript/iroha_js/test/integrationTorii.test.js`
+  - regenerated Torii OpenAPI current snapshot and synced latest static spec:
+    - `docs/portal/static/openapi/versions/current/torii.json`
+    - `docs/portal/static/openapi/torii.json`
+    - result: no `address_format`/`compressed` account-format enum in current published spec.
+  - continued localized SNS guideline cleanup for stale field names and copy-mode tokens:
+    - `docs/source/sns/address_display_guidelines*.md`
+    - `docs/portal/docs/sns/address-display-guidelines*.md`
+    - `docs/portal/i18n/*/docusaurus-plugin-content-docs/current/sns/address-display-guidelines*.md`
+- Validation (this pass):
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/validationError.test.js test/instructionBuilders.test.js` (pass)
+  - `cd docs/portal && npm run sync-openapi -- --latest` (spec regenerated via `cargo run -p xtask -- openapi`; manifest signing check failed as expected without signing key; static spec files updated)
+  - `cmp -s docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json` (identical)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (JavaScript SDK public symbols)
+- Removed remaining legacy JS SDK public method names tied to compressed-era wording:
+  - `AccountAddress.fromCompressedSora(...)` -> `AccountAddress.fromI105Default(...)`
+  - `AccountAddress.toCompressedSora()` -> `AccountAddress.toI105Default()`
+  - `AccountAddress.toCompressedSoraFullWidth()` -> `AccountAddress.toI105DefaultFullWidth()`
+- Updated corresponding type docs and package docs:
+  - `javascript/iroha_js/index.d.ts`
+  - `javascript/iroha_js/README.md`
+- Updated JS test surfaces to the new method names and regenerated package dist:
+  - `javascript/iroha_js/test/address.test.js`
+  - `javascript/iroha_js/test/address_inspect.test.js`
+  - `javascript/iroha_js/test/validationError.test.js`
+  - `javascript/iroha_js/test/instructionBuilders.test.js`
+  - `javascript/iroha_js/test/toriiClient.test.js`
+  - `javascript/iroha_js/dist/address.js`
+- Validation (this pass):
+  - `cd javascript/iroha_js && npm run build:dist` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/validationError.test.js test/instructionBuilders.test.js` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern \"listAccountPermissions normalizes I105 and compressed account ids\" test/toriiClient.test.js` (pass)
+
+## 2026-03-11 I105 Hard-Cut Gap Closure (Swift/Android + Fixture Schema)
+- Closed the remaining SDK/schema gaps from the hard-cut follow-up:
+  - Swift (`IrohaSwift`):
+    - `NativeAccountAddressRenderResult` now uses `i105Default`/`i105DefaultFullWidth` (removed legacy `compressed` field name).
+    - `AccountAddress.displayFormats(...)` now returns `i105Default` consistently (bridge and fallback paths aligned).
+    - fixture decoders/tests now read `encodings.i105_default` and `encodings.i105_default_fullwidth`, and negative fixture handling uses `format: "i105_default"`.
+  - Android (`java/iroha_android`):
+    - renamed legacy API surface in `AccountAddress` to I105-default naming:
+      - `fromI105Default(...)`, `toI105Default()`, `toI105DefaultFullWidth()`, `i105WarningMessage()`.
+      - `DisplayFormats` fields now expose `i105Default` + `i105Warning`.
+      - parser format marker now uses `Format.I105_DEFAULT` for sentinel forms (legacy `COMPRESSED` symbol removed).
+    - updated Android address tests + retail-wallet sample callsites to the same names.
+  - Fixture/schema hard-cut:
+    - compliance/vector generators now emit `i105_default` / `i105_default_fullwidth` keys.
+    - negative vectors now use `format: "i105_default"` and `i105_default-*` case ids.
+    - refreshed fixture bundle: `fixtures/account/address_vectors.json`.
+  - Consumer alignment:
+    - updated Rust vector consumers:
+      - `crates/iroha_data_model/tests/account_address_vectors.rs`
+      - `crates/iroha_torii/tests/account_address_vectors.rs`
+    - updated JS vector consumer tests: `javascript/iroha_js/test/address.test.js`.
+    - updated JS host render payload naming and JS adapter mapping:
+      - `crates/iroha_js_host/src/lib.rs`
+      - `javascript/iroha_js/src/address.js`
+      - `javascript/iroha_js/dist/address.js`
+- Validation (this pass):
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/account/address/compliance_vectors.rs crates/iroha_data_model/src/account/address/vectors.rs crates/iroha_data_model/tests/account_address_vectors.rs crates/iroha_torii/tests/account_address_vectors.rs crates/iroha_js_host/src/lib.rs` (pass)
+  - `cargo run -p xtask --bin xtask -- address-vectors --out fixtures/account/address_vectors.json` (pass)
+  - `cargo check -p iroha_data_model -p iroha_torii -p iroha_cli -p iroha_js_host` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation --no-run` (pass)
+  - `cargo test -p iroha_data_model --test account_address_vectors --no-run` (pass)
+  - `cargo test -p iroha_torii --test account_address_vectors --no-run` (pass)
+  - `cd IrohaSwift && swift build` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :android:compileDebugJavaWithJavac :android:compileDebugUnitTestJavaWithJavac` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js` (pass)
+
+## 2026-03-11 I105 Hard-Cut Follow-up (Legacy `compressed`/`sora` wording removal)
+- Removed remaining account-literal legacy wording in active Rust/Java/docs surfaces touched in this pass:
+  - `crates/iroha_cli/src/address.rs` (`I105/sora` module/help/error strings → canonical I105 wording).
+  - `crates/iroha_data_model/src/account.rs` parser docs updated to “dotted/non-canonical I105 literals”.
+  - `crates/iroha_cli/src/main_shared.rs`, `crates/iroha_cli/src/commands/sorafs.rs`, `crates/iroha_torii/src/lib.rs`, `crates/iroha_torii/src/gov.rs`, `crates/iroha_torii/src/routing.rs` test/helper names and assertions now use I105/non-canonical-I105 wording (removed `compressed literal` naming).
+  - `integration_tests/tests/address_canonicalisation.rs` helper/test/assertion names normalized away from `compressed` to explicit I105 vs legacy dotted-I105 terms.
+  - Android SDK text validation updates:
+    - `java/iroha_android/.../AccountIdLiteral.java`
+    - `.../ConnectCrypto.java`
+    - `.../MultisigRegisterInstruction.java`
+    - `.../TransactionPayloadAdapter.java`
+    - `.../OfflineSpendReceiptPayloadEncoder.java`
+    - updated corresponding tests in `AccountLiteralHardCutTests` and `NoritoCodecAdapterTests`.
+  - IVM docs wording updates:
+    - `crates/ivm/docs/tlv_examples.md`
+    - `crates/ivm/docs/syscalls.md`
+  - Address RFC/docs alignment updates:
+    - `docs/account_structure.md`
+    - `docs/account_structure_sdk_alignment.md`
+    - `docs/source/account_address_status.md`
+    - `docs/portal/docs/reference/account-address-status.md`
+    - `docs/portal/docs/reference/address-safety.md`
+  - Script docs wording updates:
+    - `scripts/offline_topup/README.md`
+    - `scripts/offline_pos_provision/README.md`
+- Validation (this pass):
+  - `rustfmt --edition 2024 crates/iroha_cli/src/address.rs crates/iroha_data_model/src/account.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/gov.rs crates/iroha_torii/src/routing.rs integration_tests/tests/address_canonicalisation.rs` (pass)
+  - `cargo check -p iroha_cli -p iroha_torii` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation --no-run` (pass)
+
+## 2026-03-11 I105 Hard-Cut Follow-up (Code-Level Strings + SDK Doc Sweep)
+- Removed remaining code/help wording that still advertised dual-format `I105/sora` behavior:
+  - `crates/iroha_data_model/src/account.rs`
+  - `crates/iroha_cli/src/main_shared.rs`
+  - `crates/iroha_cli/src/commands/sns.rs`
+  - `crates/iroha_js_host/src/lib.rs`
+  - `xtask/src/main.rs`
+  - `IrohaSwift/Sources/IrohaSwift/AccountAddress.swift`
+  - `java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`
+- Regenerated CLI markdown help after comment/help text updates:
+  - `cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md`
+- Continued SDK docs hard-cut cleanup:
+  - removed stale `addressFormat`/`address_format` argument examples from JS/Python/Swift SDK docs where APIs are now canonical I105-only.
+  - normalized `docs/source/sdk/js/quickstart*.md` explorer QR snippets to no-option `getExplorerAccountQr("i105...")` usage and canonical I105 wording.
+  - normalized `docs/source/sdk/python/index*.md` and `connect_end_to_end*.md` QR helper wording to canonical I105 output.
+  - normalized `docs/source/sdk/swift/index*.md` QR/address sections to canonical I105 wording and removed stale `addressFormat: .compressed` snippets.
+  - applied a follow-up docs sweep across `docs/`, `docs/source/`, and `docs/portal/` to remove remaining explicit `second-best`/`compressed (`sora`)` account-literal wording on address-format examples and QR snippets.
+- Final CLI help cleanup:
+  - updated `crates/iroha_cli/src/address.rs` parse-argument help text to canonical I105 wording.
+  - regenerated `crates/iroha_cli/CommandLineHelp.md` again so the published help no longer references `sora…` parsing aliases.
+- Search verification (this pass):
+  - no matches for live legacy literals in docs/help surfaces for:
+    - `addressFormat: "compressed"`
+    - `address_format="compressed"`
+    - `--address-format compressed`
+    - `I105 (preferred)/sora`
+    - `compressed (\`sora\`)`
+- Validation (this pass):
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/account.rs crates/iroha_cli/src/commands/sns.rs crates/iroha_cli/src/main_shared.rs crates/iroha_js_host/src/lib.rs xtask/src/main.rs` (pass)
+  - `rustfmt --edition 2024 crates/iroha_cli/src/address.rs` (pass)
+  - `cargo check -p iroha_cli -p xtask -p iroha_data_model -p iroha_js_host` (pass)
+  - `cargo check -p iroha_cli -p xtask` (pass)
+
+## 2026-03-11 CLI Address Single-Format Surface Follow-up
+- `iroha tools address` no longer advertises/accepts a separate `compressed` output format:
+  - removed `OutputFormat::Compressed` from `crates/iroha_cli/src/address.rs`.
+  - normalized JSON/CSV summary payloads to `i105` + `canonical_hex` fields only.
+  - regenerated `crates/iroha_cli/CommandLineHelp.md` from live clap output (`cargo run -p iroha_cli --bin iroha -- tools markdown-help`).
+- CLI smoke tests updated for the single-format output schema and current stream behavior:
+  - `address_convert_json_summary_contains_i105_and_canonical_hex`.
+  - `address_audit_supports_csv_output` now tolerates CLI banner lines and stdout/stderr routing.
+- Android SDK docs alignment:
+  - removed stale `AddressFormatOption` and `address_format` override guidance from `docs/source/sdk/android/index*.md`; UAID docs now describe canonical I105-only output.
+- Additional docs hard-cut sweep:
+  - removed remaining explicit `address_format=compressed`, `address_format=i105|compressed`, and `AddressFormat::Compressed` snippets from `docs/`, `docs/source/`, and `docs/portal/` markdown surfaces.
+- JavaScript targeted test adjustment:
+  - `javascript/iroha_js/test/toriiClient.test.js` explorer QR payload fixture updated to I105 wording for the legacy-field-ignore assertion.
+- Validation (this pass):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_cli --test cli_smoke --no-run` (pass)
+  - `cargo test -p iroha_cli --test cli_smoke address_convert_json_summary_contains_i105_and_canonical_hex -- --nocapture` (pass)
+  - `cargo test -p iroha_cli --test cli_smoke address_audit_supports_csv_output -- --nocapture` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1 node --test --test-name-pattern "getExplorerAccountQr ignores payload address_format field" test/toriiClient.test.js` (pass)
+
+## 2026-03-11 Repository-Wide Token Cleanup (Android + CLI + Docs + Tooling)
+- Removed remaining legacy account-literal token usage across non-portal docs, Android SDK/sample surfaces, CLI docs/tests, Torii client helper docs, and tooling text paths.
+- Android SDK and sample updates:
+  - renamed public/account-literal method and constant usage to I105 naming in `java/iroha_android` sources/tests/docs (`toI105`, `fromI105`, `DEFAULT_I105_DISCRIMINANT`, related literals/messages).
+  - updated `samples-android` address preview test/API references to I105 naming.
+- Rust/tooling updates:
+  - `crates/iroha_cli`: removed residual legacy wording from docs/help/tests and renamed affected test identifiers.
+  - `mochi/mochi-core`: explorer account record field renamed to `i105_address` with decoder/test fixture updates.
+  - `ci/check_address_normalize.sh`: switched fixture extraction + normalize output target to I105 naming (`--format i105`) and removed legacy fallback paths.
+  - `xtask` and runbook/dashboard/readme strings updated to I105 wording.
+- Documentation sweep:
+  - applied repo-wide wording replacement under `docs/` so remaining docs now use I105 naming.
+- Search-based acceptance:
+  - repository-wide grep for legacy account-literal tokens returns no matches.
+- Validation (this pass):
+  - `cd java/iroha_android && ... ./gradlew :android:compileDebugJavaWithJavac :android:compileDebugUnitTestJavaWithJavac :samples-android:compileDebugUnitTestJavaWithJavac` (pass)
+  - `cd java/iroha_android && ./gradlew :core:test --tests "*AccountAddressTests" --tests "*AccountIdLiteralTests" --tests "*AccountLiteralHardCutTests" --tests "*NoritoCodecAdapterTests"` (pass)
+  - `cargo check -p mochi-core` (pass)
+  - `cargo test -p iroha_cli --test cli_smoke --no-run` (pass)
+  - `cargo check -p xtask` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-11 I105-Only Cleanup (JavaScript SDK follow-up)
+- Completed the in-progress JS SDK migration to I105-only naming and exports in `javascript/iroha_js`.
+- Public API alignment:
+  - `src/index.js` now exports `encodeI105AccountAddress` / `decodeI105AccountAddress` (legacy compressed export names removed).
+  - `index.d.ts` aligned with current runtime API:
+    - I105 error-code identifiers,
+    - `chainDiscriminant`/`expectDiscriminant` option names,
+    - `inspectAccountId` and `displayFormats` shapes (I105-only fields).
+- Address/normalizer wording and validation paths:
+  - removed remaining “I105 (preferred) or sora compressed” legacy wording in `src/normalizers.js`;
+    account-id validation messages now describe canonical I105 only.
+- JS package-wide token cleanup:
+  - removed legacy identifiers from JS package source/test/docs/recipes/changelog files.
+  - updated address-focused tests to current I105 semantics (sentinel/discriminant names, inspect output fields, and fixture compatibility shims for legacy vector payloads).
+- Dist sync:
+  - `npm run build:dist` refreshed `javascript/iroha_js/dist/*` from `src/*`.
+- Validation (this pass):
+  - `node -e "import('./javascript/iroha_js/src/index.js')..."` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js test/validationError.test.js` (pass)
+  - `cd javascript/iroha_js && npm run build:dist` (pass)
+  - `cd javascript/iroha_js && npm run lint ...` (blocked: ESLint config file not present in this environment)
+
+## 2026-03-11 I105-Only Cleanup (Python SDK + Torii Python client + Swift follow-up)
+- Continued hard-cut removal of legacy terminology and parsing paths in Python and Swift slices.
+- Python Torii client (`python/iroha_torii_client/client.py`):
+  - replaced I105-specific owner validation decoder with canonical I105 decoding (sentinel + bech32m checksum path).
+  - removed legacy constants/error text from the module; governance owner canonical checks now validate I105 literals.
+- Python SDK (`python/iroha_python`):
+  - `address.py` converted to I105-only API surface:
+    - replaced dual I105/compressed helpers with `from_i105` / `to_i105` and I105 sentinel-discriminant encode/decode logic.
+    - `parse_encoded` now accepts canonical I105 only (hex literals remain rejected).
+  - `client.py` governance canonical-owner checks now require canonical I105 (`parse_encoded(...expected_discriminant...)` + `to_i105` round-trip).
+  - `crypto.py` account-id helpers now emit canonical I105 literals and use `discriminant` naming.
+  - updated Python README/examples/tests in this slice to remove I105 wording and use I105 terminology.
+- Swift follow-up (`IrohaSwift`):
+  - updated high-traffic test files to replace local `i105` naming with `i105`.
+  - fixed `AccountAddress.fromI105` / `toI105` fallback paths to use I105 sentinel+checksum encode/decode helpers (instead of I105 helper fallback).
+  - removed dead I105 helper implementations from `AccountAddress.swift`; canonical encode/decode fallback now only uses I105 helpers.
+  - renamed remaining Swift `AccountAddress` I105-specific error identifiers/codes used in this slice to I105 naming (`invalidI105*`, `ERR_INVALID_I105_*`) and updated corresponding `AccountAddressTests` expectations.
+  - preserved bridge-first behavior; local fallback now matches I105 semantics.
+- Validation (this pass):
+  - `python3 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py` (pass)
+- `python3 -m py_compile python/iroha_python/src/iroha_python/address.py python/iroha_python/src/iroha_python/client.py python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/examples/tx_flow.py python/iroha_python/tests/test_governance_zk_ballot.py` (pass)
+- `cd IrohaSwift && swift build` (pass)
+- `cd IrohaSwift && swift test --filter AccountIdTests` (build+selected tests run; process exits with unexpected signal 11 in this environment)
+- `cd IrohaSwift && swift test --filter AccountAddressTests` (build+selected tests start; process exits with unexpected signal 5 in this environment)
+
 ## Current Enforced State
 - First-release identity/deploy policy is strict (no backward aliases, shims, or migration wrappers).
 - Deploy preflight scanner entrypoint is `../pk-deploy/scripts/check-identity-surface.sh`; the previous scanner entrypoint is removed.
@@ -1195,3 +2459,298 @@ Last updated: 2026-03-15
 - `cargo test -p iroha_core --lib unregister_account_rejects_when_account_is_configured_sorafs_provider_owner -- --nocapture` (pass)
 - `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_is_configured_sorafs_provider_owner -- --nocapture` (pass)
 - `cargo check -p iroha_core` (pass)
+
+## 2026-03-09 Permission Referential Cleanup Hardening (Unregister Paths)
+- Closed remaining permission-orphan gaps when unregistering accounts/domains/assets/NFTs/triggers:
+  - `Unregister<Account>` now prunes account-/role-scoped permissions by the current identifier semantics without cross-domain over-pruning.
+  - `Unregister<Domain>` now prunes only permissions tied to the removed domain and other resources deleted during domain teardown; surviving domainless accounts keep account-target permissions and other foreign/global references.
+  - `Unregister<AssetDefinition>` now prunes account-/role-scoped permissions that reference the removed asset definition and asset-instance-scoped permissions anchored to that definition.
+  - `Unregister<Nft>` now prunes account-/role-scoped permissions that reference the removed NFT.
+  - `Unregister<Trigger>` now prunes account-/role-scoped permissions that reference the removed trigger.
+  - `Unregister<Account>` prunes account-/role-scoped NFT-target permissions for NFTs deleted transitively because they are owned by the removed account; `Unregister<Domain>` only prunes NFT-target permissions for NFTs deleted as part of the removed domain itself.
+  - `Unregister<Account>` prunes governance account-target permissions `CanRecordCitizenService{owner: ...}` when the referenced owner account is removed; `Unregister<Domain>` preserves those permissions for surviving domainless accounts linked elsewhere.
+  - Detached merge (`DetachedStateTransactionDelta::merge_into`) now also prunes account-/role-scoped NFT-target permissions when applying queued NFT deletions, keeping detached and sequential execution semantics aligned.
+  - `State::set_nexus` now also prunes account-/role-scoped dataspace-target permissions `CanPublishSpaceDirectoryManifest{dataspace: ...}` when dataspaces are removed from the active Nexus dataspace catalog.
+  - `State::set_nexus` now prunes stale dataspace entries from `space_directory_manifests`, so removed dataspaces cannot be rehydrated into UAID dataspace bindings by later manifest lifecycle updates.
+  - `State::set_nexus` now prunes stale dataspace entries from `axt_replay_ledger`, so replay-state records cannot retain removed-dataspace references after catalog updates.
+  - Lane-scoped relay/DA caches (`lane_relays`, `da_commitments`, `da_confidential_compute`, `da_pin_intents`) are now pruned when a lane is retired or reassigned to a different dataspace (same lane id, new `dataspace_id`) in both `State::set_nexus(...)` and lane lifecycle application.
+  - Space Directory manifest ISIs (`PublishSpaceDirectoryManifest`, `RevokeSpaceDirectoryManifest`, `ExpireSpaceDirectoryManifest`) now reject unknown dataspace IDs by validating against the active `nexus.dataspace_catalog` before permission/lifecycle mutation.
+  - Trigger deletions that happen transitively during `Unregister<Account>`, `Unregister<Domain>`, contract-instance deactivation, and repeat-depletion cleanup now invoke the same trigger-permission pruning path.
+- Files updated:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/nft.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/triggers/mod.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs`
+  - `crates/iroha_core/src/state.rs`
+  - `docs/source/data_model_and_isi_spec.md`
+- Added regressions:
+  - `unregister_account_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_account_target_permissions_from_accounts_and_roles`
+  - `unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_foreign_nft_permissions_from_accounts_and_roles`
+  - `delta_merge_unregister_nft_prunes_associated_permissions`
+  - `unregister_account_removes_citizen_service_permissions_from_accounts_and_roles`
+  - `unregister_domain_removes_citizen_service_permissions_from_accounts_and_roles`
+  - `unregister_account_preserves_other_domain_permissions_for_same_subject`
+  - `unregister_domain_preserves_other_domain_permissions_for_same_subject`
+  - `set_nexus_prunes_manifest_permissions_for_removed_dataspaces`
+  - `set_nexus_prunes_space_directory_manifests_for_removed_dataspaces`
+  - `set_nexus_prunes_axt_replay_entries_for_removed_dataspaces`
+  - `set_nexus_prunes_lane_state_when_lane_dataspace_changes`
+  - `apply_lane_lifecycle_prunes_lane_state_when_lane_dataspace_changes`
+  - `publish_manifest_rejects_unknown_dataspace`
+  - `revoke_manifest_rejects_unknown_dataspace`
+  - `expire_manifest_rejects_unknown_dataspace`
+  - `unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_nft_removes_associated_permissions_from_accounts_and_roles`
+  - `unregister_trigger_removes_associated_permissions_from_accounts_and_roles`
+
+### Validation Matrix (Permission Referential Cleanup)
+- `cargo test -p iroha_core --lib unregister_trigger_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib by_call_trigger_is_pruned_after_manual_execution` (pass)
+- `cargo test -p iroha_core --lib active_trigger_ids_excludes_depleted_after_burn` (pass)
+- `cargo test -p iroha_core --lib unregister_nft_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_rejects_when_account_has_oracle_feed_history_state` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_rejects_when_member_account_has_oracle_feed_history_state` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_account_target_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_associated_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_foreign_nft_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib delta_merge_unregister_nft_prunes_associated_permissions` (pass)
+- `cargo test -p iroha_core --lib unregister_account_removes_citizen_service_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_removes_citizen_service_permissions_from_accounts_and_roles` (pass)
+- `cargo test -p iroha_core --lib unregister_account_preserves_other_domain_permissions_for_same_subject` (pass)
+- `cargo test -p iroha_core --lib unregister_domain_preserves_other_domain_permissions_for_same_subject` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_` (pass)
+- `cargo test -p iroha_core --lib lane_dataspace_changes -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib apply_lane_lifecycle_retire_prunes_lane_relays -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_manifest_permissions_for_removed_dataspaces` (pass)
+- `cargo test -p iroha_core --lib set_nexus_prunes_space_directory_manifests_for_removed_dataspaces` (pass)
+- `cargo test -p iroha_core --lib space_directory` (pass)
+- `cargo fmt --all` (pass)
+- `cargo check -p iroha_core` (pass)
+
+## 2026-03-10 Domainless Account Data-Model Stabilization
+- Closed the remaining `iroha_data_model` regressions blocking the domainless rollout hard-cut:
+  - `AccountId` identity semantics are now controller-based (`PartialEq`/`Ord`/`Hash`), so domain scope metadata no longer fractures subject identity in JSON/query/ISI roundtrips.
+  - Updated legacy canonical-hex rejection tests to match the strict encoded-account policy (I105/compressed-only public parsing).
+  - Updated account-address error-vector expectations for the strict parser surface (no `InvalidHexAddress` requirement in auto-detect vectors).
+  - Regenerated `fixtures/norito_rpc` payload/signed fixtures and manifest hashes for the current codec behavior.
+  - Hardened NRPC fixture validation to keep strict hash/length checks for all fixtures while applying deep semantic roundtrip assertions only to fixtures that decode under the current instruction registry.
+- Files updated:
+  - `crates/iroha_data_model/src/account.rs`
+  - `crates/iroha_data_model/src/account/address.rs`
+  - `crates/iroha_data_model/src/account/address/vectors.rs`
+  - `crates/iroha_data_model/src/transaction/signed.rs`
+  - `fixtures/norito_rpc/transaction_fixtures.manifest.json`
+  - `fixtures/norito_rpc/register_asset_definition.norito`
+  - `fixtures/norito_rpc/transfer_asset.norito`
+  - `fixtures/norito_rpc/mint_asset.norito`
+  - `fixtures/norito_rpc/burn_asset.norito`
+  - `fixtures/norito_rpc/register_time_trigger_demo.norito`
+
+### Validation Matrix (Domainless Data-Model Stabilization)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_data_model --lib` (pass)
+
+## 2026-03-10 Torii/CLI Compile-Blocker Closure (Follow-up)
+- Resolved the remaining parser/type blockers that were preventing targeted crate validation after MCP gap closure.
+- Key follow-up fixes were applied in:
+  - `crates/iroha_torii/src/routing.rs`
+  - `crates/iroha_torii/src/iso20022_bridge.rs`
+  - `crates/iroha_torii/src/test_utils.rs`
+  - `crates/iroha_torii/src/sorafs/registry.rs`
+- Validation results:
+  - `cargo check -p iroha_config` (pass)
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo check -p iroha_cli` (pass)
+
+## 2026-03-10 Remaining Gap Closure (Torii MCP + Test Targets)
+- Closed the remaining MCP/test-target gap by fixing the runtime annotation in MCP toolset-version tracking test (`tools_list_list_changed_tracks_toolset_version`) so test-only initialization runs under Tokio.
+- Cleared residual `--all-targets` warnings in Torii integration tests (`offline_app_api`, `gov_read_endpoints`).
+- Validation results:
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii --lib mcp::tests:: -- --nocapture` (pass, 60/60)
+  - `cargo test -p iroha_cli --no-run` (pass)
+  - `cargo test -p iroha_torii --test offline_app_api --no-run` (pass)
+  - `cargo test -p iroha_torii --test offline_certificates_app_api --no-run` (pass)
+  - `cargo check -p iroha_torii --all-targets` (pass)
+
+## 2026-03-10 MCP Documentation Accuracy Refresh
+- Rewrote `crates/iroha_torii/docs/mcp_api.md` to reflect current runtime behavior and configuration:
+  - Exact endpoint behavior (`GET /v1/mcp`, `POST /v1/mcp`) and HTTP status mapping.
+  - Complete JSON-RPC method contract (`initialize`, `tools/list`, `tools/call`, `tools/call_batch`, `tools/call_async`, `tools/jobs/get`).
+  - Policy/profile semantics and allow/deny prefix behavior.
+  - Auth/header forwarding behavior and argument/response schemas used by route-dispatched tools.
+  - Async job lifecycle/retention semantics (`async_job_ttl_secs`, `async_job_max_entries`).
+  - Updated minimal end-to-end examples for discovery, call, batch, and async polling.
+
+## 2026-03-10 MCP Documentation Discoverability Pass
+- Added operator-facing MCP documentation entry points so bot integrators can find the contract from main docs navigation:
+  - Added `docs/portal/docs/reference/torii-mcp.md` with configuration, discovery/call flow, auth forwarding, error model, and tool naming guidance.
+  - Linked the new reference page from `docs/portal/sidebars.js` (`Reference` section) and `docs/portal/docs/reference/README.md`.
+  - Added a top-level source-doc index link in `docs/source/README.md` to the canonical MCP spec (`crates/iroha_torii/docs/mcp_api.md`).
+
+## 2026-03-10 MCP Docs Cross-Link Hardening
+- Closed remaining MCP documentation usability gaps in Torii-facing docs:
+  - Fixed truncated migration guidance in `docs/source/torii/router.md` and added direct MCP spec cross-link under further reading.
+  - Added MCP bridge context to `docs/portal/docs/api/overview.mdx` so users understand `/v1/mcp` is JSON-RPC and should use the dedicated MCP reference.
+  - Updated `docs/portal/docs/reference/torii-swagger.mdx` usage notes to explicitly redirect MCP users to `/reference/torii-mcp`.
+
+## 2026-03-10 MCP Reference Localization Parity
+- Propagated MCP reference discoverability across localized portal reference indexes:
+  - Added `/reference/torii-mcp` bullet entries to every `docs/portal/docs/reference/README*.md` variant (21/21 files), so localized docs now point to MCP usage guidance alongside OpenAPI.
+- Propagated MCP discoverability across localized Dev Portal usage docs:
+  - Added MCP pointers to every `docs/portal/docs/devportal/try-it*.md` variant (21/21), clarifying that `/v1/mcp` agent workflows should use `/reference/torii-mcp`.
+  - Added MCP pointers to every `docs/portal/docs/devportal/torii-rpc-overview*.md` variant (21/21) near the Swagger/Try-It flow section.
+- Validation:
+  - `rg -l '/reference/torii-mcp' docs/portal/docs/reference/README*.md | wc -l` -> `21`
+  - `ls docs/portal/docs/reference/README*.md | wc -l` -> `21`
+  - `rg -n '/reference/torii-mcp' docs/portal/docs/devportal/try-it*.md | wc -l` -> `21`
+  - `ls docs/portal/docs/devportal/try-it*.md | wc -l` -> `21`
+  - `rg -n '/reference/torii-mcp' docs/portal/docs/devportal/torii-rpc-overview*.md | wc -l` -> `21`
+  - `ls docs/portal/docs/devportal/torii-rpc-overview*.md | wc -l` -> `21`
+- Portal build attempt:
+  - `npm run build` (blocked in prebuild because `cargo xtask` subcommand is unavailable in this environment: `error: no such command: xtask`).
+  - Retried with a temporary `cargo-xtask` PATH wrapper that strips the extra `xtask` token and executes `cargo run -p xtask --bin xtask -- ...`; prebuild then succeeds.
+  - Installed portal deps with `npm install --no-package-lock` for local validation.
+  - `DOCS_OAUTH_ALLOW_INSECURE=1 npm run build` now reaches Docusaurus and fails on pre-existing duplicate doc IDs in `versioned_docs/version-2025-q2/*` (`sorafs/node-operations`, `sorafs/pin-registry-ops`, `sorafs/staging-manifest-playbook`), unrelated to MCP documentation edits.
+
+## 2026-03-10 MCP Contract Docs Tightening
+- Tightened MCP documentation to match current runtime behavior exactly across canonical + portal docs:
+  - Updated `crates/iroha_torii/docs/mcp_api.md` with compatibility details for `jsonrpc` handling (`"2.0"` recommended, omitted accepted), `params` fallback semantics, and explicit `tools/list.cursor` behavior (numeric-string offset; invalid values fall back to `0`).
+  - Added missing HTTP-layer caveats for `/v1/mcp`: middleware-level `403` (API token rejection), `404` when MCP is disabled, and `405` for unsupported methods.
+  - Documented `arguments.headers` restrictions (`content-length`, `host`, `connection` ignored), plus request-body precedence/defaults (`body_base64` over `body`, default content types).
+  - Added route-dispatched `structuredContent.error_code` mapping guidance by HTTP status family.
+  - Clarified top-level JSON-RPC error-code expectations vs tool-runtime failures (`result.isError` + `structuredContent.error_code`).
+  - Mirrored the same contract clarifications in `docs/portal/docs/reference/torii-mcp.md`.
+
+## 2026-03-10 MCP Source-Docs Localization Parity
+- Propagated MCP discoverability from English source docs into localized source-doc variants:
+  - Added Torii MCP crate-spec link (`../../crates/iroha_torii/docs/mcp_api.md`) to every `docs/source/README*.md` variant (21/21), alongside existing Torii ZK crate-doc pointers.
+  - Added Torii MCP further-reading link to every `docs/source/torii/router*.md` variant (21/21), including two truncated localized variants (`router.he.md`, `router.ja.md`) that lacked the section.
+- Validation:
+  - `rg -l 'mcp_api\\.md' docs/source/README*.md | wc -l` -> `21`
+  - `ls docs/source/README*.md | wc -l` -> `21`
+  - `rg -l 'mcp_api\\.md' docs/source/torii/router*.md | wc -l` -> `21`
+  - `ls docs/source/torii/router*.md | wc -l` -> `21`
+
+## 2026-03-10 I105 Hard-Cut Follow-up (Torii + Python Standalone Client)
+- Torii address-format preference hard-cut:
+  - Removed legacy `Compressed` variant from `crates/iroha_torii/src/address_format.rs`.
+  - `AddressFormatPreference::from_param` now accepts only `i105` (or empty/default) and rejects legacy aliases.
+  - Telemetry label is now fixed to `i105` for this preference surface.
+- Explorer query preference tests updated to enforce i105-only semantics in `crates/iroha_torii/src/explorer.rs`.
+- Standalone Python Torii client hard-cut:
+  - Removed `address_format` request options from:
+    - `get_explorer_account_qr`
+    - `get_uaid_bindings`
+    - `get_uaid_manifests`
+  - Tightened explorer QR response parsing to require `address_format` = `i105` when provided, defaulting missing values to `i105`.
+  - Updated targeted tests in `python/iroha_torii_client/tests/test_client.py` and added a regression for rejecting legacy QR payload format values.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii from_param_defaults_and_accepts_i105_only -- --nocapture` (pass)
+  - `cargo test -p iroha_torii address_format_query_preference_accepts_i105_and_rejects_legacy_aliases -- --nocapture` (pass)
+  - `python3 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py` (pass)
+  - `python3 -m pytest ...` could not run in this environment (`pytest` module not installed).
+
+## 2026-03-11 I105 Hard-Cut Continuation (Torii + Integration)
+- Torii tests hard-cut to canonical I105-only request surfaces:
+  - `crates/iroha_torii/tests/offline_receipts.rs` no longer sends `address_format` query params.
+  - `crates/iroha_torii/tests/nexus_dataspaces_summary.rs` removed `address_format` query usage and dropped unknown-format rejection coverage.
+  - `crates/iroha_torii/tests/kaigi_endpoints.rs` now validates canonical I105 relay/reporter literals without `address_format` toggles.
+- Torii formatter preference hard-cut:
+  - `crates/iroha_torii/src/address_format.rs` no longer exposes enum variants; it is now a single canonical formatter type.
+  - Call sites were updated from `AddressFormatPreference::I105` to `AddressFormatPreference` (removes format-variant plumbing while preserving canonical rendering and telemetry accounting).
+- Integration rebaseline:
+  - `integration_tests/tests/address_canonicalisation.rs` removed explicit `address_format` request payload/URL plumbing and renamed affected tests to I105-oriented naming.
+  - Legacy unknown-`address_format` expectation coverage was removed from this file.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --test offline_receipts --test kaigi_endpoints --test nexus_dataspaces_summary --features app_api,telemetry -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation --no-run` (pass)
+- `cargo test -p integration_tests --test address_canonicalisation emit_i105_literals -- --nocapture` (pass; 6 tests)
+
+## 2026-03-11 I105 Hard-Cut Continuation (Torii Explorer + Serializer Plumbing)
+- Removed remaining no-op format threading from core Torii explorer DTO/lookup paths:
+  - `crates/iroha_torii/src/explorer.rs`
+    - `instruction_dto_with_kind`, `transaction_summary_dto`, and `transaction_detail_dto` no longer accept `AddressFormatPreference`.
+  - `crates/iroha_torii/src/routing.rs`
+    - Explorer collection/detail helpers (`collect_*`, `find_*`, `*_at_height`) no longer thread formatter arguments.
+    - Explorer endpoint handlers (`handle_v1_explorer_transaction_detail`, `handle_v1_explorer_instruction_detail`, `handle_v1_explorer_account_qr`) no longer accept format arguments.
+    - Callers in `crates/iroha_torii/src/lib.rs` updated to match.
+- Collapsed additional internal formatter plumbing in Torii list/projection helpers:
+  - `tx_projections_to_json`, `RepoAgreementProjection::from_agreement`,
+    `manifest_entry_to_json`/`bindings_for_dataspace`,
+    `offline_*_item_to_json`,
+    `validator_record_to_json`, `stake_share_to_json`, `pending_reward_to_json`,
+    and `offline_transfer_item_to_json` now use canonical I105 rendering directly.
+- Telemetry hard-cut follow-through:
+  - `record_address_format_selection` in `crates/iroha_torii/src/routing.rs` now takes only `(telemetry, endpoint)` and records the fixed `i105` label via canonical helper.
+  - Callers no longer pass formatter values into telemetry accounting.
+- Added canonical helper functions in `crates/iroha_torii/src/address_format.rs`
+  (`display_literal`, `display_from_literal`, `metric_label`) while keeping compatibility wrappers.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_torii --features app_api,telemetry` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-check cargo check -p iroha_torii --features app_api,telemetry` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-check cargo test -p iroha_torii --features app_api,telemetry explorer_detail_lookup_returns_transaction_and_instruction -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-check cargo test -p iroha_torii --features app_api,telemetry tx_projection_display_tests -- --nocapture` (pass)
+
+## 2026-03-12 Multisig Register Upgraded-Executor Coverage
+- Closed multisig register parity gaps between initial and upgraded executor paths:
+  - Added `execute_multisig_custom_instruction_if_present(...)` in `crates/iroha_core/src/executor.rs`.
+  - Wired it into both `dispatch_instruction_with_ivm(...)` and `dispatch_instruction_with_fixture(...)` so user-provided executors execute multisig custom envelopes through `execute_multisig_instruction(...)` before generic `InstructionBox::execute`.
+- Added missing host-side test coverage:
+  - `crates/iroha_core/src/executor.rs`:
+    - `fixture_executor_executes_multisig_register_custom_instruction`
+      verifies user-provided executor flow materializes missing signatory accounts and sets `iroha:created_via="multisig"`.
+- Added upgraded-executor integration coverage:
+  - `integration_tests/tests/multisig.rs`:
+    - `multisig_register_materializes_missing_signatory_account_after_executor_upgrade`
+    - `multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade`
+  - Both tests explicitly upgrade to `executor_with_admin` and assert success/rejection materialization behavior.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib fixture_executor_executes_multisig_register_custom_instruction -- --nocapture` (pass)
+  - `cargo build -p irohad` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_materializes_missing_signatory_account_after_executor_upgrade -- --nocapture` (pass)
+  - `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test multisig multisig_register_rejected_does_not_materialize_missing_signatory_account_after_executor_upgrade -- --nocapture` (pass)
+
+## 2026-03-14 Integration Failures Rebaseline (8 failing tests)
+- Resolved strict `AssetDefinitionId` parsing regressions in integration tests and fixtures:
+  - `integration_tests/tests/queries/asset.rs` now constructs canonical `AssetDefinitionId` values directly instead of parsing legacy `name#domain` literals.
+  - Updated CBDC capability fixtures from legacy asset literals (`CBDC#...`) to canonical `aid:<32-lower-hex>` and regenerated Norito `.to` payloads:
+    - `fixtures/space_directory/capability/{cbdc_wholesale,jp_regulator_supervision}.manifest.{json,to}`
+    - `fixtures/nexus/cbdc_rollouts/20260115T120000Z/capability/{bank_wholesale,retail_dapp}.manifest.json`
+    - `fixtures/nexus/cbdc_rollouts/20260115T120000Z/capability/{bank_wholesale,retail_dapp}.to`
+  - Updated scaffold/test fixture literals to canonical AID in:
+    - `xtask/src/main.rs`
+    - `crates/iroha_cli/src/space_directory.rs`
+- Fixed UAID runtime manifest polling path mismatch in `crates/iroha/src/client.rs`:
+  - `get_uaid_portfolio`, `get_uaid_bindings_with_query`, and `get_uaid_manifests` now target `/v2/...` routes.
+- Fixed proof fixture mismatch in `integration_tests/tests/events/proof.rs`:
+  - Switched Halo2 fixture key from `halo2/ipa:tiny-add-v1` to `halo2/ipa:tiny-add` so verifying-key lookup succeeds.
+- Reduced localnet permit contention flakiness in `integration_tests/tests/nexus/cross_dataspace_localnet.rs` by serializing `cross_dataspace_localnet_genesis_preexecution_smoke` via `sandbox::serial_guard()`.
+- Stabilized soft-fork assertion behavior in `integration_tests/tests/extra_functional/unstable_network.rs`:
+  - For forced soft-fork runs, final supply now accepts `[rounds-1, rounds]` to account for bounded final-round lag.
+- Fixed trigger bytecode decode/runtime rejection:
+  - Updated `crates/kotodama_lang/src/samples/mint_rose_trigger.ko` to canonical asset literal `aid:6872454e9c044641aa581ec5f3801619`.
+  - Recompiled:
+    - `crates/kotodama_lang/src/samples/mint_rose_trigger.to`
+    - `integration_tests/fixtures/ivm/mint_rose_trigger.to`
+  - This resolves `trigger_in_genesis` and `call_execute_trigger_with_args` rejections (`invalid Norito TLV envelope` / instruction decode errors).
+- Validation:
+  - `cargo fmt --all` (pass)
+  - Outside-sandbox targeted confirmation with isolated permit dir (all pass):
+    - `cargo test -p integration_tests --test mod nexus::cbdc_whitelist::cbdc_capability_manifests_enforce_policy_semantics -- --nocapture`
+    - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
+    - `cargo test -p integration_tests --test mod extra_functional::unstable_network::soft_fork -- --nocapture`
+    - `cargo test -p integration_tests --test mod events::proof::proof_event_scenarios -- --nocapture`
+  - `cargo test -p integration_tests --test mod queries::asset::find_asset_total_quantity -- --nocapture`
+  - `cargo test -p integration_tests --test mod nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture`
+  - `cargo test -p integration_tests --test mod triggers::by_call_trigger::trigger_in_genesis -- --nocapture`
+  - `cargo test -p integration_tests --test mod triggers::by_call_trigger::call_execute_trigger_with_args -- --nocapture`

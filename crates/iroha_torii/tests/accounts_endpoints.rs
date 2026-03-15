@@ -98,12 +98,12 @@ async fn accounts_endpoints_exist() {
     };
     let app = torii.api_router_for_tests();
 
-    // GET /v1/accounts
+    // GET /v2/accounts
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/accounts?offset=0")
+                .uri("/v2/accounts?offset=0")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -114,13 +114,13 @@ async fn accounts_endpoints_exist() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // POST /v1/accounts/query
+    // POST /v2/accounts/query
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/accounts/query")
+                .uri("/v2/accounts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
@@ -132,14 +132,14 @@ async fn accounts_endpoints_exist() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // GET /v1/accounts/{account}/permissions
+    // GET /v2/accounts/{account}/permissions
     let canonical_account = &fixtures::TX_QUERY_ACCOUNT.canonical;
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/accounts/{canonical_account}/permissions?offset=0"
+                    "/v2/accounts/{canonical_account}/permissions?offset=0"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),

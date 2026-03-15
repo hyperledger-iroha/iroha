@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
+- L'helper emet un `POST /v2/sns/registrations` par requete et s'arrete au premier
   שגיאה ב-HTTP. התשובות נשלחות לכניסה לרישום NDJSON.
-- `--poll-status` תחקור מחדש `/v1/sns/registrations/{selector}` אפר צ'אק
+- `--poll-status` תחקור מחדש `/v2/sns/registrations/{selector}` אפר צ'אק
   soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
   הרישום נראה לעין. Fournissez `--suffix-map` (JSON de `suffix_id`
   vers des valeurs "סיומת") pour que l'outil derive les litteraux

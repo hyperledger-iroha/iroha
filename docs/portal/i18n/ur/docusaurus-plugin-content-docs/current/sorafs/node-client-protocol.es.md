@@ -71,7 +71,7 @@ SoraFS فراہم کرنے والے `ProviderAdvertV1` پے لوڈ کو پھیل
 گیٹ وے ڈٹرمینسٹک HTTP درخواستوں کو قبول کرتے ہیں جو کے میٹا ڈیٹا کی عکاسی کرتے ہیں
 اشتہارات
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | ضرورت | تفصیلات |
 | ----------- | ------------ |
@@ -79,7 +79,7 @@ SoraFS فراہم کرنے والے `ProviderAdvertV1` پے لوڈ کو پھیل
 | ** جوابات ** | `206` `Content-Type: application/vnd.ipld.car` کے ساتھ ، `Content-Range` ونڈو کی وضاحت کرتے ہوئے ، میٹا ڈیٹا `X-Sora-Chunk-Range` اور بازگشت چنکر/ٹوکن ہیڈرز کی بازگشت۔ |
 | ** ناکامی کے طریقوں ** | `416` غلط سلیگینڈ حدود کے لئے ، `401` گمشدہ یا غلط ٹوکن کے لئے ، `429` جب اسٹریم/بائٹ بجٹ سے تجاوز کیا جاتا ہے۔ |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ایک ہی ہیڈر کے ساتھ ایک ہی حصہ لائیں نیز
 ٹکڑے جب سلائسوں کی ضرورت نہیں ہوتی ہے تو دوبارہ کوششوں یا فرانزک ڈاؤن لوڈ کے ل useful مفید ہے
@@ -132,12 +132,12 @@ SoraFS فراہم کرنے والے `ProviderAdvertV1` پے لوڈ کو پھیل
 - `iroha app sorafs pin list|show` ، `alias list` اور `replication list` لپیٹ کر
   پن رجسٹری سے آرام کے اختتامی نکات اور Norito را json کے بلاکس کے ساتھ پرنٹ کریں
   آڈٹ شواہد کی تصدیق۔
-- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` ظاہر قبول کریں
+- `iroha app sorafs storage pin` اور `torii /v2/sorafs/pin/register` ظاہر قبول کریں
   Norito یا JSON کے علاوہ اختیاری عرفی اور جانشینوں کے ثبوت ؛ خراب ثبوت
   `400` کو بڑھاؤ ، متروک ثبوت `503` کو `Warning: 110` کے ساتھ بے نقاب کریں ، اور ثبوت
   میعاد ختم ہونے والی واپسی `412`۔
-- باقی اختتامی مقامات (`/v1/sorafs/pin` ، `/v1/sorafs/aliases` ،
-  `/v1/sorafs/replication`) تصدیق کے ڈھانچے شامل کریں تاکہ
+- باقی اختتامی مقامات (`/v2/sorafs/pin` ، `/v2/sorafs/aliases` ،
+  `/v2/sorafs/replication`) تصدیق کے ڈھانچے شامل کریں تاکہ
   کلائنٹ اداکاری سے پہلے آخری بلاک کے ہیڈر کے خلاف ڈیٹا کی تصدیق کرتے ہیں۔
 
 ## حوالہ جات

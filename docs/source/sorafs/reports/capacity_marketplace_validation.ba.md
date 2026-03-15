@@ -26,7 +26,7 @@ The checklist below must be reviewed before enabling the marketplace for externa
 
 | Check | Validation | Evidence |
 |-------|------------|----------|
-| Registry accepts canonical capacity declarations | Integration test exercises `/v1/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registry accepts canonical capacity declarations | Integration test exercises `/v2/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
 | Smart contract rejects mismatched payloads | Unit test ensures provider IDs and committed GiB fields match the signed declaration before persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI emits canonical onboarding artefacts | CLI harness writes deterministic Norito/JSON/Base64 outputs and validates round-trips so operators can stage declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Operator guide captures admission workflow and governance guardrails | Documentation enumerates declaration schema, policy defaults, the onboarding/exit runbook, and review steps for the council. | `docs/source/sorafs/storage_capacity_marketplace.md:1`,`docs/source/sorafs/capacity_onboarding_runbook.md:1` |

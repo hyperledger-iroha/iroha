@@ -64,7 +64,7 @@ La couverture de regression se trouve dans
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Outils et fixtures- Les payloads d'annonces de fournisseurs doivent כוללים les metadonnees `range_capability`,
-  `stream_budget` et `transport_hints`. Validez via les reponses `/v1/sorafs/providers` et les
+  `stream_budget` et `transport_hints`. Validez via les reponses `/v2/sorafs/providers` et les
   מתקני כניסה; קורות החיים של JSON אינם כוללים ניתוח קיבול, תקציב זרם
   et les tableaux de hints pour l'ingestion telemetrique.
 - `cargo xtask sorafs-admission-fixtures` לחשוף את תקציבי הזרימה ורמזים לתחבורה
@@ -76,7 +76,7 @@ La couverture de regression se trouve dans
 
 ## אינטגרציה עם תזמורת ו-Torii
 
-- Torii `/v1/sorafs/providers` renvoie les metadonnees de capacite de plage parsees avec
+- Torii `/v2/sorafs/providers` renvoie les metadonnees de capacite de plage parsees avec
   `stream_budget` et `transport_hints`. Des adertissements de downgrade se declenchent quand
   les fournisseurs omettent la nouvelle metadonnee, et les endpoints de plage du gateway
   appliquent les memes contraintes pour les לקוחות מכוון.

@@ -39,20 +39,20 @@ use crate::{
     routing::{MaybeTelemetry, parse_account_literal},
 };
 
-const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v1/gov/proposals/deploy-contract#authority";
-const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v1/gov/ballots/zk#authority";
-const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v1/gov/ballots/zk-v1#authority";
+const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v2/gov/proposals/deploy-contract#authority";
+const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v2/gov/ballots/zk#authority";
+const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v2/gov/ballots/zk-v1#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY: &str =
-    "/v1/gov/ballots/zk-v1/ballot-proof#authority";
-const CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY: &str = "/v1/gov/ballots/plain#authority";
-const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
-const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
-const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v1/gov/enact#authority";
+    "/v2/gov/ballots/zk-v1/ballot-proof#authority";
+const CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY: &str = "/v2/gov/ballots/plain#authority";
+const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v2/gov/ballots/plain#owner";
+const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v2/gov/finalize#authority";
+const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v2/gov/enact#authority";
 const CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT: &str =
-    "/v1/gov/council/persist#candidate.account_id";
-const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v1/gov/council/persist#authority";
-const CONTEXT_GOV_COUNCIL_REPLACE_MISSING: &str = "/v1/gov/council/replace#missing";
-const CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY: &str = "/v1/gov/council/replace#authority";
+    "/v2/gov/council/persist#candidate.account_id";
+const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v2/gov/council/persist#authority";
+const CONTEXT_GOV_COUNCIL_REPLACE_MISSING: &str = "/v2/gov/council/replace#missing";
+const CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY: &str = "/v2/gov/council/replace#authority";
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, crate::Error> {
     let s = s.trim_start_matches("0x");
@@ -490,7 +490,7 @@ pub struct ZkBallotV1BallotProofDto {
 }
 
 #[cfg(feature = "zk-ballot")]
-/// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
+/// POST /v2/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
 /// If `private_key` is provided, Torii signs and submits the ballot transaction.
 ///
@@ -590,7 +590,7 @@ pub async fn handle_gov_ballot_zk_v1(
         &authority_id,
         body.private_key.as_deref(),
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        "/v1/gov/ballots/zk-v1",
+        "/v2/gov/ballots/zk-v1",
     )
     .await?;
     Ok(JsonBody(BallotSubmitResponse {
@@ -609,7 +609,7 @@ pub async fn handle_gov_ballot_zk_v1(
 }
 
 #[cfg(feature = "zk-ballot")]
-/// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
+/// POST /v2/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
 ///
 /// If `private_key` is provided, Torii signs and submits the ballot transaction.
 ///
@@ -699,7 +699,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         &authority_id,
         body.private_key.as_deref(),
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "/v2/gov/ballots/zk-v1/ballot-proof",
     )
     .await?;
     Ok(JsonBody(BallotSubmitResponse {
@@ -867,7 +867,7 @@ pub struct CouncilDeriveVrfRequest;
 pub struct CouncilDeriveVrfResponse;
 
 #[cfg(feature = "gov_vrf")]
-/// POST /v1/gov/council/derive-vrf — derive the council roster from VRF candidates.
+/// POST /v2/gov/council/derive-vrf — derive the council roster from VRF candidates.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when candidate account identifiers, variants, or base64 payloads
@@ -1224,7 +1224,7 @@ fn compute_proposal_id(
 }
 
 #[derive(Debug, JsonSerialize)]
-/// Response payload for GET /v1/gov/proposals/{id}
+/// Response payload for GET /v2/gov/proposals/{id}
 pub struct ProposalGetResponse {
     /// Whether the proposal exists.
     pub found: bool,
@@ -1234,7 +1234,7 @@ pub struct ProposalGetResponse {
 }
 
 #[derive(Debug, JsonSerialize)]
-/// Response payload for GET /v1/gov/locks/{rid}
+/// Response payload for GET /v2/gov/locks/{rid}
 pub struct LocksGetResponse {
     /// Whether locks exist for the given referendum id.
     pub found: bool,
@@ -1245,7 +1245,7 @@ pub struct LocksGetResponse {
     pub locks: Option<iroha_core::state::GovernanceLocksForReferendum>,
 }
 
-/// Response payload for GET /v1/gov/referenda/{id}
+/// Response payload for GET /v2/gov/referenda/{id}
 /// Response payload for referendum lookup by id.
 #[derive(Copy, Clone, Debug, JsonSerialize)]
 pub struct ReferendumGetResponse {
@@ -1257,7 +1257,7 @@ pub struct ReferendumGetResponse {
 }
 
 #[derive(Debug, JsonSerialize)]
-/// Response payload for GET /v1/gov/tally/{id}
+/// Response payload for GET /v2/gov/tally/{id}
 pub struct TallyGetResponse {
     /// Referendum id.
     pub referendum_id: String,
@@ -1617,7 +1617,7 @@ pub struct ProtectedNamespacesApplyResponse {
     pub applied: usize,
 }
 
-/// POST /v1/gov/protected-namespaces — apply the custom parameter directly.
+/// POST /v2/gov/protected-namespaces — apply the custom parameter directly.
 /// Requires API token (if configured) and rate-limit key.
 ///
 /// # Errors
@@ -1699,7 +1699,7 @@ pub struct ProtectedNamespacesGetResponse {
     pub namespaces: Vec<String>,
 }
 
-/// GET /v1/gov/protected-namespaces — read current setting from custom parameters.
+/// GET /v2/gov/protected-namespaces — read current setting from custom parameters.
 ///
 /// # Errors
 /// This handler never returns an error; absent parameters yield `found = false`.
@@ -1752,7 +1752,7 @@ pub struct InstancesByNamespaceResponse {
     pub limit: u32,
 }
 
-/// GET /v1/gov/instances/{ns} — lists active contract instances for a namespace.
+/// GET /v2/gov/instances/{ns} — lists active contract instances for a namespace.
 ///
 /// # Errors
 /// This handler never returns an error; filters and pagination only affect the response content.
@@ -1833,7 +1833,7 @@ pub struct InstancesQuery {
     pub order: Option<String>,
 }
 
-/// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
+/// POST /v2/gov/propose-deploy — build a proposal id and instruction skeleton.
 ///
 /// If `authority` and `private_key` are provided, Torii signs and submits the
 /// transaction before returning the draft instructions.
@@ -1985,7 +1985,7 @@ pub async fn handle_gov_propose_deploy(
     }))
 }
 
-/// POST /v1/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
+/// POST /v2/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
 ///
 /// If `private_key` is provided, Torii signs and submits the ballot transaction.
 ///
@@ -2084,7 +2084,7 @@ pub async fn handle_gov_ballot_zk(
     }))
 }
 
-/// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
+/// POST /v2/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
 /// If `private_key` is provided, Torii signs and submits the ballot transaction.
 ///
@@ -2185,7 +2185,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     }))
 }
 
-/// GET /v1/gov/council/current — derive or fetch the current council membership.
+/// GET /v2/gov/council/current — derive or fetch the current council membership.
 ///
 /// # Errors
 /// This handler never returns an error; empty councils are represented with an empty member list.
@@ -2471,7 +2471,7 @@ pub async fn handle_gov_council_persist(
             state,
             tx,
             telemetry,
-            "/v1/gov/council/persist",
+            "/v2/gov/council/persist",
         )
         .await?;
     } else {
@@ -2613,7 +2613,7 @@ pub async fn handle_gov_council_replace(
             state,
             tx,
             telemetry,
-            "/v1/gov/council/replace",
+            "/v2/gov/council/replace",
         )
         .await?;
     } else {
@@ -2691,7 +2691,7 @@ pub struct CouncilAuditResponse {
     pub chain_id: String,
 }
 
-/// GET /v1/gov/council/audit — expose the seed/epoch used for council derivation and members count.
+/// GET /v2/gov/council/audit — expose the seed/epoch used for council derivation and members count.
 ///
 /// # Errors
 /// This handler never returns an error; absent council data yields zero counts.
@@ -2762,6 +2762,7 @@ mod tests {
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::{Domain, DomainId},
+        name::Name,
         permission::Permission,
         smart_contract::manifest::ContractManifest,
     };
@@ -2882,9 +2883,16 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let escrow_account =
             Account::new(escrow.clone().to_account_id(domain_id.clone())).build(&escrow);
-        let asset_def_id: AssetDefinitionId =
-            "vote#wonderland".parse().expect("asset definition id");
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("vote").expect("asset definition name"),
+        );
+        let asset_def = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority);
         let asset = Asset::new(
             AssetId::new(asset_def_id.clone(), authority.clone()),
             Numeric::from(1_000u32),
@@ -2911,12 +2919,7 @@ mod tests {
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
             let mut world_block = world.block();
-            let mut world_tx = world_block.trasaction(
-                #[cfg(feature = "telemetry")]
-                None,
-                LaneConfig::default(),
-                0,
-            );
+            let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);
@@ -3854,7 +3857,7 @@ mod tests {
         let chain_id_str = chain_id.as_str().to_string();
         // Route for zk-v1
         let app = Router::new().route(
-            "/v1/gov/ballots/zk-v1",
+            "/v2/gov/ballots/zk-v1",
             post({
                 let state = state.clone();
                 let queue = queue.clone();
@@ -3889,7 +3892,7 @@ mod tests {
         };
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/gov/ballots/zk-v1")
+            .uri("/v2/gov/ballots/zk-v1")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(
                 norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap(),
@@ -4095,7 +4098,7 @@ mod tests {
         let chain_id_str = chain_id.as_str().to_string();
         // Route for zk-v1/ballot-proof
         let app = Router::new().route(
-            "/v1/gov/ballots/zk-v1/ballot-proof",
+            "/v2/gov/ballots/zk-v1/ballot-proof",
             post({
                 let state = state.clone();
                 let queue = queue.clone();
@@ -4133,7 +4136,7 @@ mod tests {
         };
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/gov/ballots/zk-v1/ballot-proof")
+            .uri("/v2/gov/ballots/zk-v1/ballot-proof")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(
                 norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap(),

@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     domain_metadata.insert("Is_Jabberwocky_alive".parse().unwrap(), true);
     let domain = Domain::new(domain_id)
         .with_logo(
-            "/ipfs/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
+            "sorafs://bafybeigdyrztk/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
                 .parse()
                 .unwrap(),
         )

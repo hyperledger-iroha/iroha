@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-02-07
 
 |检查 |验证 |证据|
 |--------|------------|----------|
-|注册管理机构接受规范的容量声明 |集成测试通过应用程序 API 练习 `/v1/sorafs/capacity/declare`，验证签名处理、元数据捕获以及移交给节点注册表。 | `crates/iroha_torii/src/routing.rs:7654` |
+|注册管理机构接受规范的容量声明 |集成测试通过应用程序 API 练习 `/v2/sorafs/capacity/declare`，验证签名处理、元数据捕获以及移交给节点注册表。 | `crates/iroha_torii/src/routing.rs:7654` |
 |智能合约拒绝不匹配的有效负载 |单元测试确保提供者 ID 和提交的 GiB 字段在持久化之前与签名的声明匹配。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI 发出规范的入门工件 | CLI 工具写入确定性 Norito/JSON/Base64 输出并验证往返，以便操作员可以离线进行声明。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |操作员指南捕获准入工作流程和治理护栏 |文档列举了理事会的声明模式、默认策略和审查步骤。 | `../storage-capacity-marketplace.md` |

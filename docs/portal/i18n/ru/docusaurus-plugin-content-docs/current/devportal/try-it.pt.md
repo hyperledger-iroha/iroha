@@ -160,7 +160,7 @@ eles apenas definem `Content-Type: application/x-norito` и enviam o payload Nor
 1. Крепление Escolha как `fixtures/norito_rpc/transfer_asset.norito`. Эссес
    arquivos sao конверты Norito brutos; **нао** faca base64.
 2. Используя Swagger или RapiDoc, локализуйте конечную точку NRPC (например,
-   `POST /v1/pipeline/submit`) и измените селектор **Content-Type** для
+   `POST /v2/pipeline/submit`) и измените селектор **Content-Type** для
    `application/x-norito`.
 3. Работайте с редактором корпуса для **двоичного** файла (режим «Файл» для Swagger или
    выберите «Двоичный файл/Двоичный файл» в RapiDoc) и завидуйте архиву `.norito`. О виджет
@@ -184,11 +184,11 @@ com захватывайте снимки экрана и отвечайте. П
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```Тройка или приспособление для того, чтобы войти в список `transaction_fixtures.manifest.json`
 или закодировать свою собственную полезную нагрузку с помощью `cargo xtask norito-rpc-fixtures`. Когда есть Torii
 em modo canary voce pode pode o `curl` для прокси-сервера, попробуйте
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) для упражнений
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) для упражнений
 Виджеты infraestrutura usada pelos делают портал.
 
 ## Наблюдение и работа
@@ -204,7 +204,7 @@ entao voce pode encaminhar stdout для центрального коллекц
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Ручки окружения:

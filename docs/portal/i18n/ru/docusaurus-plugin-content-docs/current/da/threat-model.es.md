@@ -243,7 +243,7 @@ Cadencia de mantenimiento: Рабочая группа по доступност
 **Не удивлюсь:**- Кэш повторов и сохранение курсоров в DA-2. Вер ла
   реализация в `crates/iroha_core/src/da/replay_cache.rs` (логика кэша)
   и интеграция Torii и `crates/iroha_torii/src/da/ingest.rs`, que enhebra las
-  проверки отпечатков пальцев на пути `/v1/da/ingest`.
+  проверки отпечатков пальцев на пути `/v2/da/ingest`.
 - Моделирование потоковой передачи PDP/PoTR выполняется через протокол проверки потока
   en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flujos de solicitud
   PoR/PDP/PoTR и сценарии падения животных в модели аменаза.

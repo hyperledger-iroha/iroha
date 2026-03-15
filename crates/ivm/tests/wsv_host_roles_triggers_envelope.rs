@@ -156,7 +156,10 @@ fn envelope_roles_permissions_triggers() {
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
     assert!(host.wsv.has_permission(
         &alice,
-        &PermissionToken::MintAsset("rose#domain".parse().unwrap())
+        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
+            "domain".parse().unwrap(),
+            "rose".parse().unwrap()
+        ))
     ));
 
     let revoke_perm_env = json_object([
@@ -180,7 +183,10 @@ fn envelope_roles_permissions_triggers() {
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
     assert!(!host.wsv.has_permission(
         &alice,
-        &PermissionToken::MintAsset("rose#domain".parse().unwrap())
+        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
+            "domain".parse().unwrap(),
+            "rose".parse().unwrap()
+        ))
     ));
 
     // 3) Trigger lifecycle: create -> disable -> remove

@@ -32,7 +32,7 @@ This specification completes **SFM-4 — Gateway compliance & transparency modul
 
 ## Denylist Ingestion
 - **Sources** (extensible):
-  - BadBits canonical feed (`https://badbits.sora.net/v1/list.json`)
+  - BadBits canonical feed (`https://badbits.sora.net/v2/list.json`)
   - Regional compliance feeds (EU DSA, DMCA, etc.)
   - Internal governance actions (manual takedowns).
   - AI pre-screen quarantine (from SFM-4a service).
@@ -88,7 +88,7 @@ This specification completes **SFM-4 — Gateway compliance & transparency modul
   actions = ["block_content"]
   ```
 - **Operator toggles**:
-  - API `POST /v1/moderation/toggle` accepts `ToggleRequestV1` (gateway_id, policy_id, enabled, expires_at, reason, operator_signature).
+  - API `POST /v2/moderation/toggle` accepts `ToggleRequestV1` (gateway_id, policy_id, enabled, expires_at, reason, operator_signature).
   - Requires quorum: default 2-of-3 for production; toggles stored in `moderation_toggles` table with full audit record.
   - Gateways poll for toggles; apply union of global policy + per-gateway overrides.
 - **Categories**: content types (illegal, copyright, sensitive), network-level toggles (denylist-only, manual), feature toggles (Proof tokens on/off for testing).

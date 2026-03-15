@@ -94,7 +94,7 @@ que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Suportado | Valida o handle canonico + aliases, faz stream de relatorios via `--json-out=-` e aplica o charter do registro via `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ Retirado | Builder de manifest fora de suporte; use `iroha app sorafs toolkit pack` para empacotamento CAR/manifest e mantenha `--plan=-` para revalidacao deterministica. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao offline apenas; provider adverts devem ser produzidos pelo pipeline de publicacao e validados via `/v1/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao offline apenas; provider adverts devem ser produzidos pelo pipeline de publicacao e validados via `/v2/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ Suportado | Le `chunk_fetch_specs`, entende payloads de capacidade `range` e monta saida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ Suportado | Regeneradas via `export_vectors`; o handle canonico aparece primeiro em cada lista de aliases e e assinado por envelopes do conselho. |
 | Negociacao de perfil no gateway Torii | ✅ Suportado | Implementa a gramatica completa de `Accept-Chunker`, inclui headers `Content-Chunker` e expoe o bridge CARv1 apenas em solicitacoes explicitas de downgrade. |
@@ -102,7 +102,7 @@ que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
 Rollout de telemetria:
 
 - **Telemetria de fetch de chunks** - o CLI Iroha `sorafs toolkit pack` emite digests de chunk, metadados CAR e raizes PoR para ingestao em dashboards.
-- **Provider adverts** - os payloads de adverts incluem metadados de capacidade e aliases; valide cobertura via `/v1/sorafs/providers` (ex., presenca da capacidade `range`).
+- **Provider adverts** - os payloads de adverts incluem metadados de capacidade e aliases; valide cobertura via `/v2/sorafs/providers` (ex., presenca da capacidade `range`).
 - **Monitoramento de gateway** - operadores devem reportar os pareamentos `Content-Chunker`/`Content-Digest` para detectar downgrades inesperados; espera-se que o uso do bridge tenda a zero antes da deprecacao.
 
 Politica de deprecacao: uma vez que um perfil sucessor seja ratificado, agende uma janela de publicacao dupla

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/receipts{,/query}` endpoints.
+//! Integration tests for the `/v2/offline/receipts{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -54,7 +54,7 @@ use tower::ServiceExt as _;
 #[tokio::test]
 async fn offline_receipts_list_returns_flattened_receipts() {
     let harness = build_receipt_harness();
-    let uri = "/v1/offline/receipts";
+    let uri = "/v2/offline/receipts";
 
     let resp = harness
         .app
@@ -121,7 +121,7 @@ async fn offline_receipts_query_filters_by_invoice_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/receipts/query")
+                .uri("/v2/offline/receipts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -159,16 +159,7 @@ fn build_receipt_harness() -> ReceiptHarness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = cfg.common.chain.clone();
-    #[cfg(feature = "telemetry")]
-    let state = Arc::new(State::new_with_chain(
-        World::default(),
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    ));
-    #[cfg(not(feature = "telemetry"))]
-    let state = Arc::new(State::new_with_chain(
+    let state = Arc::new(State::new_with_chain_for_testing(
         World::default(),
         Arc::clone(&kura),
         query,
@@ -432,6 +423,9 @@ fn seed_offline_receipts(state: &Arc<State>, fixtures: &ReceiptFixtures) {
         }
         Register::asset_definition(NewAssetDefinition {
             id: asset_definition_id.clone(),
+            name: "OfflineAsset".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::default(),
             mintable: Mintable::Infinitely,
             logo: None,

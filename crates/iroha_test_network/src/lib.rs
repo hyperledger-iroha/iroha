@@ -4504,8 +4504,7 @@ impl NetworkBuilder {
 
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
-        let genesis_account_literal =
-            AccountId::new(genesis_key_pair.public_key().clone()).to_string();
+        let genesis_account_literal = ALICE_ID.to_string();
         let has_fee_sink_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "fees", "fee_sink_account_id"]).is_some()
         });
@@ -4782,8 +4781,10 @@ impl NetworkBuilder {
             let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
             let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
             let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-            let stake_asset_id: AssetDefinitionId =
-                "xor#nexus".parse().expect("stake asset definition");
+            let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "nexus".parse().unwrap(),
+                "xor".parse().unwrap(),
+            );
             let bootstrap_gas_keypair = KeyPair::from_seed(
                 b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
                 Algorithm::Ed25519,
@@ -4810,6 +4811,7 @@ impl NetworkBuilder {
             config_layers.push(bootstrap_layer);
 
             let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+                .with_name("NPOS Stake".to_owned())
                 .with_metadata(Metadata::default());
 
             let mut bootstrap_tx = vec![

@@ -55,7 +55,7 @@ portal preview build ကို ချန်မထားဘဲ အထောက်
 | `taikai_ingest_segment_latency_ms` | CMAF သည် အစုအစည်း/စီးကြောင်းတစ်ခုစီတွင် တုံ့ပြန်နေချိန် ဟစ်စတိုဂရမ် (ပစ်မှတ်- p95<750ms၊ p99<900ms)။ |
 | `taikai_ingest_live_edge_drift_ms` | ကုဒ်ပြောင်းကိရိယာနှင့် ကျောက်ဆူးလုပ်သားများကြားတွင် တိုက်ရိုက်ပျံ့လွင့်နေသည် (စာမျက်နှာ 99>1.5 စက္ကန့်တွင် 10 မိနစ်)။ |
 | `taikai_ingest_segment_errors_total{reason}` | အကြောင်းပြချက်ဖြင့် အမှားကောင်တာများ (`decode`၊ `manifest_mismatch`၊ `lineage_replay`၊ …)။ မည်သည့်တိုးမြှင့်မှုမဆို `TaikaiIngestFailure` ကို အစပျိုးသည်။ |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v1/da/ingest` သည် နာမည်တူတစ်ခုအတွက် TRM အသစ်ကို လက်ခံသည့်အခါတိုင်း တိုးများ; rotation cadence ကိုအတည်ပြုရန် `rate()` ကိုသုံးပါ။ |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v2/da/ingest` သည် နာမည်တူတစ်ခုအတွက် TRM အသစ်ကို လက်ခံသည့်အခါတိုင်း တိုးများ; rotation cadence ကိုအတည်ပြုရန် `rate()` ကိုသုံးပါ။ |
 | `/status → telemetry.taikai_alias_rotations[]` | `window_start_sequence`၊ `window_end_sequence`၊ `manifest_digest_hex`၊ `rotations_total` နှင့် အထောက်အထားအတွဲများအတွက် အချိန်တံဆိပ်ရိုက်နှိပ်ထားသော JSON လျှပ်တစ်ပြက်။ |
 | `taikai_viewer_*` (rebuffer၊ CEK လည်ပတ်မှုအသက်၊ PQ ကျန်းမာရေး၊ သတိပေးချက်များ) | ကျောက်ဆူးများအတွင်း CEK လည်ပတ်မှု + PQ ဆားကစ်များ ကျန်းမာနေစေရန် ကြည့်ရှုသူဘက်မှ KPI များ။ |
 

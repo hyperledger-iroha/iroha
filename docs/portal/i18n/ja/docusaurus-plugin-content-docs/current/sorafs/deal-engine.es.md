@@ -61,12 +61,12 @@ SLO のアプリケーション。斬撃の自動化機能を失う
 Torii エンドポイントのデディカドス パラケ ロス 証明のレポートが使用され、コンドゥスカン エル シクロを説明します
 あなたの罪の配線のカスタマイズ:
 
-- `POST /v1/sorafs/deal/usage` アセプタ テレメトリア `DealUsageReport` とレトルナ
+- `POST /v2/sorafs/deal/usage` アセプタ テレメトリア `DealUsageReport` とレトルナ
   感染の確定結果 (`UsageOutcome`)。
-- `POST /v1/sorafs/deal/settle` 最終的なイベントの実際、送信エル
+- `POST /v2/sorafs/deal/settle` 最終的なイベントの実際、送信エル
   `DealSettlementRecord` 結果の junto con un `DealSettlementV1` en Base64
   DAG デ ゴベルナンザの出版リスト。
-- `/v1/events/sse` から Torii への送信レジストリ `SorafsGatewayEvent::DealUsage`
+- `/v2/events/sse` から Torii への送信レジストリ `SorafsGatewayEvent::DealUsage`
   私たちの再開の情報 (エポック、GiB ホラ メディドス、チケットのコンタドール、
   貨物決定者)、登録者 `SorafsGatewayEvent::DealSettlement`
   スナップショットのキャッシュを含めるには、ダイジェスト/タマニョ/base64 の液体元帳が含まれます

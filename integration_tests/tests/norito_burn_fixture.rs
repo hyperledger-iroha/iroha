@@ -16,7 +16,10 @@ fn fixture_asset_id() -> AssetId {
         .parse()
         .expect("valid fixture public key");
     let account = AccountId::new(public_key);
-    let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid asset definition");
+    let definition: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("valid asset definition"),
+        "rose".parse().expect("valid asset definition"),
+    );
     AssetId::new(definition, account)
 }
 

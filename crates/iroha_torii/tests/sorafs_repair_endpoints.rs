@@ -219,7 +219,7 @@ async fn get_json(app: &Router, uri: &str) -> Vec<u8> {
 
 async fn post_report(app: &Router, report: &RepairReportV1) -> RepairTaskRecordV1 {
     let body = json::to_vec(report).expect("encode repair report");
-    let response = post_json(app, "/v1/sorafs/audit/repair/report", body).await;
+    let response = post_json(app, "/v2/sorafs/audit/repair/report", body).await;
     decode_record_body(&response)
 }
 
@@ -230,19 +230,19 @@ async fn post_value(app: &Router, uri: &str, request: json::Value) -> RepairTask
 }
 
 async fn post_claim(app: &Router, request: json::Value) -> RepairTaskRecordV1 {
-    post_value(app, "/v1/sorafs/audit/repair/claim", request).await
+    post_value(app, "/v2/sorafs/audit/repair/claim", request).await
 }
 
 async fn post_heartbeat(app: &Router, request: json::Value) -> RepairTaskRecordV1 {
-    post_value(app, "/v1/sorafs/audit/repair/heartbeat", request).await
+    post_value(app, "/v2/sorafs/audit/repair/heartbeat", request).await
 }
 
 async fn post_complete(app: &Router, request: json::Value) -> RepairTaskRecordV1 {
-    post_value(app, "/v1/sorafs/audit/repair/complete", request).await
+    post_value(app, "/v2/sorafs/audit/repair/complete", request).await
 }
 
 async fn post_fail(app: &Router, request: json::Value) -> RepairTaskRecordV1 {
-    post_value(app, "/v1/sorafs/audit/repair/fail", request).await
+    post_value(app, "/v2/sorafs/audit/repair/fail", request).await
 }
 
 async fn fetch_status(
@@ -251,7 +251,7 @@ async fn fetch_status(
 ) -> Vec<(RepairTaskRecordV1, Vec<RepairTaskEventV1>)> {
     let response = get_json(
         app,
-        &format!("/v1/sorafs/audit/repair/status/{manifest_hex}"),
+        &format!("/v2/sorafs/audit/repair/status/{manifest_hex}"),
     )
     .await;
     decode_snapshots_body(&response)
@@ -551,7 +551,7 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
         json_entry("signature", bad_sig),
     ]);
     let body = json::to_vec(&claim_req).expect("encode request");
-    let (status, _body) = post_json_with_status(&app, "/v1/sorafs/audit/repair/claim", body).await;
+    let (status, _body) = post_json_with_status(&app, "/v2/sorafs/audit/repair/claim", body).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     drop(temp_dir);
 }

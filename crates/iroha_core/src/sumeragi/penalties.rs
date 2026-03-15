@@ -1693,7 +1693,10 @@ mod tests {
         let validator: AccountId = AccountId::new(key_pair.public_key().clone());
         let escrow_key_pair = KeyPair::random();
         let escrow_account: AccountId = AccountId::new(escrow_key_pair.public_key().clone());
-        let stake_asset_id: AssetDefinitionId = "xor#test".parse().expect("asset definition id");
+        let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "test".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let slash_amount = Numeric::new(100, 0);
         {
             let mut block = state.world.block();
@@ -1712,9 +1715,17 @@ mod tests {
                 stake_asset_id.clone(),
                 AssetDefinition::numeric(stake_asset_id.clone()).build(&validator),
             );
-            block.assets.insert(
-                AssetId::new(stake_asset_id.clone(), escrow_account.clone()),
-                Owned::new(slash_amount.clone()),
+            block
+                .domain_asset_definitions
+                .insert(domain.clone(), BTreeSet::from([stake_asset_id.clone()]));
+            let escrow_stake_asset_id =
+                AssetId::new(stake_asset_id.clone(), escrow_account.clone());
+            block
+                .assets
+                .insert(escrow_stake_asset_id, Owned::new(slash_amount.clone()));
+            block.asset_definition_holders.insert(
+                stake_asset_id.clone(),
+                BTreeSet::from([escrow_account.clone()]),
             );
             block.commit();
         }

@@ -65,7 +65,7 @@ translation_last_reviewed: 2026-01-30
 ## الأدوات وfixtures
 
 - يجب أن تتضمن payloads إعلانات المزود `range_capability` و`stream_budget` و`transport_hints`.
-  تحقّق عبر استجابات `/v1/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
+  تحقّق عبر استجابات `/v2/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
   ملخصات JSON القدرة المحللة وميزانية البث ومصفوفات hints لابتلاع التليمترية.
 - `cargo xtask sorafs-admission-fixtures` يعرض stream budgets وtransport hints داخل
   artefacts JSON كي تتابع لوحات المراقبة تبني الميزة.
@@ -75,7 +75,7 @@ translation_last_reviewed: 2026-01-30
 
 ## تكامل المُنسق وTorii
 
-- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
+- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` و`transport_hints`. تُطلق تحذيرات downgrade عندما يحذف
   المزودون البيانات الجديدة، وتطبق نقاط نطاق البوابة القيود نفسها للعملاء المباشرين.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

@@ -106,11 +106,11 @@ pub const ERR_VK_INACTIVE: u64 = 13;
 pub const ERR_NAMESPACE: u64 = 14;
 pub const ERR_DOMAIN_TAG: u64 = 15;
 
-pub const LABEL_TRANSFER: &str = "zk_verify_transfer/v1";
-pub const LABEL_UNSHIELD: &str = "zk_verify_unshield/v1";
-pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v1";
-pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v1";
-pub const LABEL_BATCH: &str = "zk_verify_batch/v1";
+pub const LABEL_TRANSFER: &str = "zk_verify_transfer/v2";
+pub const LABEL_UNSHIELD: &str = "zk_verify_unshield/v2";
+pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
+pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
+pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
 
 const PUBLIC_INPUT_GAS_BASE: u64 = 16;
 const PUBLIC_INPUT_GAS_PER_BYTE: u64 = 1;

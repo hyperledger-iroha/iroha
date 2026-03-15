@@ -74,7 +74,7 @@ translator: machine-google-reviewed
    каталогы I18NI000000020X тарафынан һылтанма яһаны.
 3. Тикшерергә провайдер реклама аша таралыу асыш API:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Күнекмәләр манифест/план остары менән идара итеү башлыҡтары:
    ```bash

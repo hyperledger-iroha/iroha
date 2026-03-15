@@ -64,7 +64,7 @@ La couverture de repression se trouve dans
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Уборка и сантехника- Les payloads d'annonces de fournisseurs doivent включают метадоннеи `range_capability`,
-  `stream_budget` и `transport_hints`. Подтвердите через ответы `/v1/sorafs/providers` и др.
+  `stream_budget` и `transport_hints`. Подтвердите через ответы `/v2/sorafs/providers` и др.
   приспособления для приема; Резюме JSON doivent включают анализ емкости, бюджет потока
   и таблицы подсказок для телеметрии приема пищи.
 - `cargo xtask sorafs-admission-fixtures` раскрывает бюджеты потоков и подсказки по транспортировке в них.
@@ -76,7 +76,7 @@ La couverture de repression se trouve dans
 
 ## Интеграция с оркестратором и Torii
 
-- Torii `/v1/sorafs/providers` отправка метадонов в емкость пляжа с парами
+- Torii `/v2/sorafs/providers` отправка метадонов в емкость пляжа с парами
   `stream_budget` и `transport_hints`. Предупреждения о переходе на более раннюю версию исчезают, когда
   les fournisseurs omettent la nouvelle метадонне и конечные точки пляжа дю шлюза
   применение мемов против клиентов.

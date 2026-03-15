@@ -33,7 +33,7 @@ réplicas sem dependência com a intenção do emissor.
 | _Default (todas as outras classes)_ | 6 horas | 30 horas | 3 | `warm` | `da.default` |
 
 Esses valores são integrados em `torii.da_ingest.replication_policy` e apliques
-para todos os envios `/v1/da/ingest`. Torii escreve os manifestos com o arquivo
+para todos os envios `/v2/da/ingest`. Torii escreve os manifestos com o arquivo
 perfil de retenção impõe e emet un avertissement quand les callers fornissent
 valores incoerentes porque os operadores detectam SDKs obsoletos.
 
@@ -155,5 +155,5 @@ hors conforme automaticamente.1. **Vigie o desvio.** Torii emet
    Os SREs podem fazer referência ao resumo do meme e ao PDP anterior.
 
 A cobertura de regressão vit em `integration_tests/tests/da/replication_policy.rs`;
-la suite recebeu uma política de retenção não conforme `/v1/da/ingest` e verificou
+la suite recebeu uma política de retenção não conforme `/v2/da/ingest` e verificou
 que o manifesto se recupere, exponha o perfil, imponha tanto quanto a intenção do chamador.

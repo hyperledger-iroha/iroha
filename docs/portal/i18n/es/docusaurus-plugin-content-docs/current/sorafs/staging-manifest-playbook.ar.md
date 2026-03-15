@@ -75,11 +75,11 @@ Utilice el código `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. A
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. استعلم عن نقطة descubrimiento y تأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Utilice el `profile_aliases` y el `"sorafs.sf1@1.0.0"`.

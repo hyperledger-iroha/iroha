@@ -47,7 +47,7 @@ SPDX-License-Identifier: Apache-2.0
 Les enveloppes de memo confidentiel livrent desormais un fixture canonique a `fixtures/confidential/encrypted_payload_v1.json`. ללכידת מערך הנתונים היא מעטפת v1 חיובית בתוספת פגמים של ה-Echantillons על מנת לאשר את הניתוח של SDK. Les tests du data-model Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) et la suite Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) chargent direction le fixture, garantissant que l קידוד Norito, les surfaces d erreur et la couverture de regression pendant restencalignant.Les SDKs Swift peuvent Maintenant Emettre des הוראות מגן ללא דבק JSON בהזמנה אישית: Construire un
 `ShieldRequest` עם התחייבות של 32-בתים, מטען מטען ו-metadata debit,
 puis appeler `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) pour signer et relayer la
-עסקה באמצעות `/v1/pipeline/transactions`. Le helper valide les longueurs de commitment,
+עסקה באמצעות `/v2/pipeline/transactions`. Le helper valide les longueurs de commitment,
 הכנס את `ConfidentialEncryptedPayload` לקודד Norito, ופריסה מחדש `zk::Shield`
 ci-dessous afin que les ארנקים restent סינכרון עם חלודה.
 
@@ -76,7 +76,7 @@ ci-dessous afin que les ארנקים restent סינכרון עם חלודה.
 - גילויי בראשית ושטף CLI חשופים לפוליטיקה ותלויות. La logique d admission lit la politique au moment de l execution pour confirmer que chaque instruction confidentielle est autorisee.
 - Checklist de migration - voir "רצף הגירה" ci-dessous pour le plan d upgrade par etapes suivi par le Milestone M0.
 
-#### ניטור של מעברים באמצעות Toriiארנקים et auditeurs interrogent `GET /v1/confidential/assets/{definition_id}/transitions` pour inspecter l `AssetConfidentialPolicy` actif. Le payload JSON inclut toujours l asset id canonique, la derniere hauteur de bloc observee, le `current_mode` de la politique, le mode effectif a cette hauteur (les fenetres de conversion reportt temporairement `Convertible`), et de les identifiants attendus `vk_set_hash`/פוסידון/פדרסן. Quand une transition de governance est en attente la reponse embed aussi:
+#### ניטור של מעברים באמצעות Toriiארנקים et auditeurs interrogent `GET /v2/confidential/assets/{definition_id}/transitions` pour inspecter l `AssetConfidentialPolicy` actif. Le payload JSON inclut toujours l asset id canonique, la derniere hauteur de bloc observee, le `current_mode` de la politique, le mode effectif a cette hauteur (les fenetres de conversion reportt temporairement `Convertible`), et de les identifiants attendus `vk_set_hash`/פוסידון/פדרסן. Quand une transition de governance est en attente la reponse embed aussi:
 
 - `transition_id` - לטפל d audit renvoye par `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -120,7 +120,7 @@ Une reponse `404` indique qu aucune definition d actif correspondante n existe. 
 
 1. **מכין את הרשומים:** פעילים יותר מפרסמים את המנות הראשונות אימות ופרמטרי ההתייחסות לפוליטיקה. Les noeuds annoncent le `conf_features` התוצאה pour que les peers לאמת את הקוהרנטיות.
 2. **Planifier la transition:** soumettre `ScheduleConfidentialPolicyTransition` avec un `effective_height` respectant `policy_transition_delay_blocks`. En allant vers `ShieldedOnly`, יחידה מדויקת יותר של המרה (`window >= policy_transition_window_blocks`).
-3. **מפרסם את מפעיל ההדרכה:** רושם את `transition_id` חזרה ותפזר עם ספר הפעלה/יציאה. ארנקים וביקורת נוכחים ב-`/v1/confidential/assets/{id}/transitions` pour connaitre la hauteur d ouverture de fenetre.
+3. **מפרסם את מפעיל ההדרכה:** רושם את `transition_id` חזרה ותפזר עם ספר הפעלה/יציאה. ארנקים וביקורת נוכחים ב-`/v2/confidential/assets/{id}/transitions` pour connaitre la hauteur d ouverture de fenetre.
 4. **יישום של חלון:** ליצירת קשר, זמן ריצה בסיסי לפוליטיקה ב-`Convertible`, אמט `PolicyTransitionWindowOpened { transition_id }`, והתחל בסירוב לדרישות ממשל.
 5. **מסיים או מחליף:** `effective_height`, זמן ריצה מאמת את התנאים המוקדמים (אספקת אפס שקוף, דחיפות חוזרת וכו'). En success, la politique passe au mode demande; en echec, `PolicyTransitionPrerequisiteFailed` est emis, la transition pendante est nettoyee et la politique reste inchangee.
 6. **שדרוגי סכימה:** לאחר המעבר מחדש, הממשל גדל בגרסה של סכימת האקטיב (בדוגמה `asset_definition.v2`) ו-CLI כלי עבודה נוסעים `confidential_policy` למידע על סדרת מניפסטים. Les docs d upgrade genesis instruisent les operators and ajouter les settings de politique et emreintes registry avant de redmarrer les validateurs.
@@ -227,7 +227,7 @@ Documentez les עוקף את locaux dans le runbook d operations; les politiques
 - חשבון היררכיה של גזירה:
   - `sk_spend` -> `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - מטענים משותפים הם שימושיים ב-AEAD עם מפתחות משותפים שמקורם ב-ECDH; des view keys d auditeur optionnelles peuvent etre attachees aux outputs selon la politique de l actif.
-- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, מבקר כלי עבודה pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes I0108030X offline. Torii לחשוף את ה-meme flux de derivation דרך `POST /v1/confidential/derive-keyset`, retournant des formes hex et base64 pour que les wallets puissent recuperer les hierarchies de cles programtiquement.## גז, מגבלות ושליטה ב-DoS
+- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, מבקר כלי עבודה pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes I0108030X offline. Torii לחשוף את ה-meme flux de derivation דרך `POST /v2/confidential/derive-keyset`, retournant des formes hex et base64 pour que les wallets puissent recuperer les hierarchies de cles programtiquement.## גז, מגבלות ושליטה ב-DoS
 - לוח זמנים לקביעת גז:
   - Halo2 (Plonkish): בסיס `250_000` גז + `2_000` גז בשווי קלט ציבורי.
   - `5` בייט חסין גז, בתוספת חיובים פרטניים (`300`) והתחייבות ממוצעת (`500`).

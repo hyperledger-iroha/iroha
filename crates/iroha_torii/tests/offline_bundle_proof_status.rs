@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/bundle/proof_status` endpoint.
+//! Integration tests for the `/v2/offline/bundle/proof_status` endpoint.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -81,7 +81,7 @@ struct ExpectedSummary {
 async fn offline_bundle_proof_status_reports_match() {
     let harness = build_harness(true);
     let uri = format!(
-        "/v1/offline/bundle/proof_status?bundle_id_hex={}",
+        "/v2/offline/bundle/proof_status?bundle_id_hex={}",
         harness.fixtures.bundle_hex
     );
 
@@ -145,7 +145,7 @@ async fn offline_bundle_proof_status_reports_match() {
 async fn offline_bundle_proof_status_reports_missing() {
     let harness = build_harness(false);
     let uri = format!(
-        "/v1/offline/bundle/proof_status?bundle_id_hex={}",
+        "/v2/offline/bundle/proof_status?bundle_id_hex={}",
         harness.fixtures.bundle_hex
     );
 
@@ -176,16 +176,7 @@ fn build_harness(include_proof: bool) -> Harness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = cfg.common.chain.clone();
-    #[cfg(feature = "telemetry")]
-    let state = Arc::new(State::new_with_chain(
-        World::default(),
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    ));
-    #[cfg(not(feature = "telemetry"))]
-    let state = Arc::new(State::new_with_chain(
+    let state = Arc::new(State::new_with_chain_for_testing(
         World::default(),
         Arc::clone(&kura),
         query,
@@ -491,6 +482,9 @@ fn seed_state(state: &Arc<State>, fixtures: &Fixtures) {
         }
         Register::asset_definition(NewAssetDefinition {
             id: asset_definition_id.clone(),
+            name: "OfflineAsset".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::default(),
             mintable: Mintable::Infinitely,
             logo: None,

@@ -25,17 +25,17 @@ və konfiqurasiya edildikdə, kənar relelər adından brokerlər ML-DSA qəbul 
 O, beş HTTP son nöqtəsini ifşa edir:
 
 - `GET /healthz` – canlılıq zondu.
-- `GET /v1/puzzle/config` – çəkilmiş effektiv PoW/pazl parametrlərini qaytarır
+- `GET /v2/puzzle/config` – çəkilmiş effektiv PoW/pazl parametrlərini qaytarır
   JSON relesindən (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – Arqon2 bileti zərb edir; isteğe bağlı JSON orqanı
+- `POST /v2/puzzle/mint` – Arqon2 bileti zərb edir; isteğe bağlı JSON orqanı
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   daha qısa TTL tələb edir (siyasət pəncərəsinə bərkidilir), bileti a ilə bağlayır
   transkript hash və relay imzalı bilet + imza barmaq izini qaytarır
   imzalama açarları konfiqurasiya edildikdə.
-- `GET /v1/token/config` – `pow.token.enabled = true`, aktivi qaytardıqda
+- `GET /v2/token/config` – `pow.token.enabled = true`, aktivi qaytardıqda
   Qəbul nişanı siyasəti (emitentin barmaq izi, TTL/saat əyri sərhədləri, relay ID,
   və birləşdirilmiş ləğv dəsti).
-- `POST /v1/token/mint` - təchiz edilmiş ML-DSA qəbul nişanını çıxarır
+- `POST /v2/token/mint` - təchiz edilmiş ML-DSA qəbul nişanını çıxarır
   resume hash; sorğu orqanı `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` qəbul edir.
 
 Xidmət tərəfindən istehsal edilən biletlər təsdiqlənir
@@ -78,19 +78,19 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex`, sirri diapazondan kənar bir şəxs tərəfindən idarə edildikdə də mövcuddur.
-alət boru kəməri. Ləğv faylı izləyicisi `/v1/token/config` cari saxlayır;
+alət boru kəməri. Ləğv faylı izləyicisi `/v2/token/config` cari saxlayır;
 geridə qalmamaq üçün yeniləmələri `soranet-admission-token revoke` əmri ilə əlaqələndirin
 ləğv vəziyyəti.
 
 ML-DSA-44 ictimaiyyətini reklam etmək üçün JSON relesində `pow.signed_ticket_public_key_hex` seçin
-imzalanmış PoW biletlərini yoxlamaq üçün istifadə edilən açar; `/v1/puzzle/config` açarı və onun BLAKE3-ü əks etdirir
+imzalanmış PoW biletlərini yoxlamaq üçün istifadə edilən açar; `/v2/puzzle/config` açarı və onun BLAKE3-ü əks etdirir
 barmaq izi (`signed_ticket_public_key_fingerprint_hex`) beləliklə müştərilər doğrulayıcını pin edə bilsinlər.
 İmzalanmış biletlər relay ID-si və transkript bağlamaları ilə təsdiqlənir və eyni şəkildə paylaşılır
 geri götürmə mağazası; xam 74 baytlıq PoW biletləri imzalanmış bilet yoxlayıcısı olduqda etibarlı qalır
 konfiqurasiya edilmişdir. İmzalayan sirrini `--signed-ticket-secret-hex` və ya vasitəsilə ötürün
 Puzzle xidmətini işə salarkən `--signed-ticket-secret-path`; başlanğıc uyğunsuzluğu rədd edir
 sirr `pow.signed_ticket_public_key_hex`-ə qarşı doğrulanmazsa, açar cütləri.
-`POST /v1/puzzle/mint` `"signed": true` (və isteğe bağlı `"transcript_hash_hex"`) qəbul edir
+`POST /v2/puzzle/mint` `"signed": true` (və isteğe bağlı `"transcript_hash_hex"`) qəbul edir
 xam bilet baytları ilə yanaşı Norito kodlu imzalanmış bileti qaytarın; cavablar daxildir
 Barmaq izlərini təkrar izləməyə kömək etmək üçün `signed_ticket_b64` və `signed_ticket_fingerprint_hex`.
 İmzalayan sirri konfiqurasiya edilmədikdə, `signed = true` ilə sorğular rədd edilir.
@@ -108,10 +108,10 @@ Barmaq izlərini təkrar izləməyə kömək etmək üçün `signed_ticket_b64` 
 3. **Yenidən işə salın.** İdarəetmədən sonra sistem vahidini və ya konteyneri yenidən yükləyin
    fırlanmanın kəsilməsini elan edir. Xidmətin isti yenidən yükləmə dəstəyi yoxdur; a
    Yeni deskriptor öhdəliyini götürmək üçün yenidən başlama tələb olunur.
-4. **Validate edin.** `POST /v1/puzzle/mint` vasitəsilə bilet verin və təsdiq edin
+4. **Validate edin.** `POST /v2/puzzle/mint` vasitəsilə bilet verin və təsdiq edin
    qaytarılmış `difficulty` və `expires_at` yeni siyasətə uyğun gəlir. Islatma hesabatı
    (`docs/source/soranet/reports/pow_resilience.md`) gözlənilən gecikməni çəkir
-   istinad üçün sərhədlər. Tokenlər aktivləşdirildikdə, `/v1/token/config`-i əldə edin
+   istinad üçün sərhədlər. Tokenlər aktivləşdirildikdə, `/v2/token/config`-i əldə edin
    reklam edilən emitentin barmaq izi və ləğvetmə sayının uyğun olduğundan əmin olun
    gözlənilən dəyərlər.
 
@@ -123,7 +123,7 @@ Barmaq izlərini təkrar izləməyə kömək etmək üçün `signed_ticket_b64` 
    Argon2 qapısı oflayndır.
 3. Dəyişikliyi tətbiq etmək üçün həm releyi, həm də tapmaca xidmətini yenidən başladın.
 4. Çətinliyin aşağı düşməsini təmin etmək üçün `soranet_handshake_pow_difficulty`-ə nəzarət edin
-   gözlənilən hashcash dəyərini və `/v1/puzzle/config` hesabatlarını yoxlayın
+   gözlənilən hashcash dəyərini və `/v2/puzzle/config` hesabatlarını yoxlayın
    `puzzle = null`.
 
 ## Monitorinq və xəbərdarlıq
@@ -135,16 +135,16 @@ Barmaq izlərini təkrar izləməyə kömək etmək üçün `signed_ticket_b64` 
   `pow.quotas` soyutma müddətini tənzimləmək üçün (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Bulmacanın düzülməsi:** `soranet_handshake_pow_difficulty` uyğun olmalıdır
-  çətinlik `/v1/puzzle/config` tərəfindən qaytarıldı. Divergensiya köhnəlmiş röleyi göstərir
+  çətinlik `/v2/puzzle/config` tərəfindən qaytarıldı. Divergensiya köhnəlmiş röleyi göstərir
   konfiqurasiya və ya uğursuz yenidən başladın.
-- **Token hazırlığı:** `/v1/token/config` `enabled = false` səviyyəsinə düşərsə xəbərdarlıq
+- **Token hazırlığı:** `/v2/token/config` `enabled = false` səviyyəsinə düşərsə xəbərdarlıq
   gözlənilmədən və ya `revocation_source` köhnə vaxt ştamplarını bildirirsə. Operatorlar
   Token olduqda Norito ləğvetmə faylını CLI vasitəsilə çevirməlidir.
   bu son nöqtəni dəqiq saxlamaq üçün təqaüdə çıxdı.
 - **Xidmət sağlamlığı:** `/healthz` zondunu adi canlılıq tempi və siqnalı ilə yoxlayın
-  əgər `/v1/puzzle/mint` HTTP 500 cavablarını qaytarırsa (Argon2 parametrini göstərir
+  əgər `/v2/puzzle/mint` HTTP 500 cavablarını qaytarırsa (Argon2 parametrini göstərir
   uyğunsuzluq və ya RNG xətaları). Token zərb xətaları HTTP 4xx/5xx vasitəsilə görünür
-  `/v1/token/mint`-də cavablar; təkrar uğursuzluqları peyqinq vəziyyəti kimi qəbul edin.
+  `/v2/token/mint`-də cavablar; təkrar uğursuzluqları peyqinq vəziyyəti kimi qəbul edin.
 
 ## Uyğunluq və audit qeydi
 

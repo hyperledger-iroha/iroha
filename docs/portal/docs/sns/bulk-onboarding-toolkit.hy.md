@@ -125,7 +125,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -145,10 +145,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Օգնականը թողարկում է մեկ `POST /v1/sns/registrations` մեկ հարցում և ընդհատում է
+- Օգնականը թողարկում է մեկ `POST /v2/sns/registrations` մեկ հարցում և ընդհատում է
   առաջին HTTP սխալը. Պատասխանները կցվում են գրանցամատյանում որպես NDJSON
   գրառումներ.
-- `--poll-status` կրկին հարցում է անում `/v1/sns/registrations/{selector}` յուրաքանչյուրից հետո
+- `--poll-status` կրկին հարցում է անում `/v2/sns/registrations/{selector}` յուրաքանչյուրից հետո
   ներկայացում (մինչև `--poll-attempts`, լռելյայն 5)՝ հաստատելու, որ գրառումը
   տեսանելի. Տրամադրեք `--suffix-map` (JSON-ից `suffix_id`-ից մինչև `"suffix"` արժեքներ), որպեսզի
   Գործիքը կարող է ստանալ `{label}.{suffix}` բառացի քվեարկության համար:

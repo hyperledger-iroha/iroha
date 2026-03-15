@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for GET /v1/zk/vk/{backend}/{name} (`app_api`).
+//! Integration tests for GET /v2/zk/vk/{backend}/{name} (`app_api`).
 #![allow(clippy::similar_names)]
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
@@ -28,15 +28,7 @@ async fn zk_vk_get_returns_record_with_key() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
 
     // Insert a verifying key record directly into WSV via a block transaction
@@ -68,7 +60,7 @@ async fn zk_vk_get_returns_record_with_key() {
 
     let state = Arc::new(state);
     let app = Router::new().route(
-        "/v1/zk/vk/{backend}/{name}",
+        "/v2/zk/vk/{backend}/{name}",
         get({
             let state = state.clone();
             move |path: axum::extract::Path<(String, String)>| async move {
@@ -79,7 +71,7 @@ async fn zk_vk_get_returns_record_with_key() {
 
     // Encode backend with '/'
     let backend_enc = urlencoding::encode(backend);
-    let uri = format!("/v1/zk/vk/{backend_enc}/{name}");
+    let uri = format!("/v2/zk/vk/{backend_enc}/{name}");
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)
@@ -140,18 +132,10 @@ async fn zk_vk_get_returns_record_with_key() {
 async fn zk_vk_get_not_found() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let state = Arc::new(state);
     let app = Router::new().route(
-        "/v1/zk/vk/{backend}/{name}",
+        "/v2/zk/vk/{backend}/{name}",
         get({
             let state = state.clone();
             move |path: axum::extract::Path<(String, String)>| async move {
@@ -160,7 +144,7 @@ async fn zk_vk_get_not_found() {
         }),
     );
     let backend_enc = urlencoding::encode("halo2/ipa");
-    let uri = format!("/v1/zk/vk/{}/{}", backend_enc, "missing");
+    let uri = format!("/v2/zk/vk/{}/{}", backend_enc, "missing");
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)

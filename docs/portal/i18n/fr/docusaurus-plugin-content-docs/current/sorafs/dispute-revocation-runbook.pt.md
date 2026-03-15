@@ -26,7 +26,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
 ## 1. Avaliar ou incident
 
 - **Conditions de sécurité :** détection de violation de SLA (uptime/falha de PoR), déficit de réplication ou divergence de cobranca.
-- **Confirmer la télémétrie :** capturez des instantanés de `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` du fournisseur.
+- **Confirmer la télémétrie :** capturez des instantanés de `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` du fournisseur.
 - **Notificar parts interessadas:** Storage Team (operacoes do provenor), Governance Council (orgao decisor), Observability (actualisation des tableaux de bord).
 
 ## 2. Préparez le paquet de preuves1. Colete artefatos brutos (télémétrie JSON, journaux de CLI, notes d'auditoire).
@@ -72,7 +72,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
    ```
 
 3. Révisez `dispute_summary.json` (confirmez le type, digérez les preuves et les horodatages).
-4. Envie du JSON requis pour Torii `/v1/sorafs/capacity/dispute` via le fil des transactions de gouvernance. Capturer la valeur de la réponse `dispute_id_hex` ; ele ancora comme acoes de revogacao posteriores et os relatorios de auditoria.
+4. Envie du JSON requis pour Torii `/v2/sorafs/capacity/dispute` via le fil des transactions de gouvernance. Capturer la valeur de la réponse `dispute_id_hex` ; ele ancora comme acoes de revogacao posteriores et os relatorios de auditoria.
 
 ## 4. Évacuation et révocation1. **Janela de graca:** notifique o provenor sobre a revogacao iminente; permettez l'évacuation des données fixées lorsque la politique autorise.
 2. **Voir `ProviderAdmissionRevocationV1` :**

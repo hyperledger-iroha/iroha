@@ -200,7 +200,7 @@ struct AdversarialPerceptualVariantV1 {
   - የመግቢያ ነጥብ I18NI0000059X (ወይም ዝገት አቻ) HTTP/gRPC ኤፒአይን የሚያጋልጥ።
 - ቅርሶችን ወደ `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` ያትሙ።
 - ሯጭ ሁለትዮሽ መርከቦች እንደ `sorafs_ai_runner` crate አካል። የግንባታ ቧንቧ መስመር
-  አንጸባራቂ hash በሁለትዮሽ ውስጥ (በ`/v1/info` የተጋለጠ) ያስገባል።
+  አንጸባራቂ hash በሁለትዮሽ ውስጥ (በ`/v2/info` የተጋለጠ) ያስገባል።
 
 ## 8. ቴሌሜትሪ እና ታዛቢነት
 - Prometheus መለኪያዎች፡

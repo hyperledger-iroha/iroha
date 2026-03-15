@@ -52,7 +52,8 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = format!("zcoin#{domain_id}").parse().unwrap();
+    let asset_def_id =
+        AssetDefinitionId::new(domain_id.clone(), "zcoin".parse().expect("asset name"));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -65,7 +66,10 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
             domain_id.clone(),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, asset_id).into(),
         RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -155,7 +159,7 @@ fn shield_emits_confidential_event() {
 #[test]
 fn transfer_emits_confidential_event() {
     let (state, account_id, keypair, asset_def_id) = setup_state();
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let attachment =
@@ -247,7 +251,7 @@ fn unshield_emits_confidential_event() {
     let rho = [11u8; 32];
     let chain = "iroha-test-chain";
     let nullifier = derive_test_nullifier(&nk, &rho, &asset_def_id.to_string(), chain);
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof_box = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let attachment =

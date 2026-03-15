@@ -995,6 +995,15 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native multisig state",
+                    isi.key()
+                ))
+            );
+        }
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {
@@ -1023,6 +1032,15 @@ pub mod account {
         executor: &mut V,
         isi: &RemoveKeyValue<Account>,
     ) {
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native multisig state",
+                    isi.key()
+                ))
+            );
+        }
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {
@@ -2558,8 +2576,8 @@ pub mod trigger {
             let trigger_id =
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
             let domain_id = DomainId::from_str("test").expect("domain id must be valid");
-            let asset_definition_id = AssetDefinitionId::from_str("token#test")
-                .expect("asset definition id must be valid");
+            let asset_definition_id =
+                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
             let account_id = sample_account_id(0x11, &domain_id);
             let asset_id = AssetId::new(asset_definition_id.clone(), account_id);
 
@@ -2600,8 +2618,8 @@ pub mod trigger {
         fn sora_permissions_not_domain_account_or_definition_associated() {
             let domain_id = DomainId::from_str("test").expect("domain id must be valid");
             let account_id = sample_account_id(0x12, &domain_id);
-            let asset_definition_id = AssetDefinitionId::from_str("token#test")
-                .expect("asset definition id must be valid");
+            let asset_definition_id =
+                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
 
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
@@ -2629,8 +2647,8 @@ pub mod trigger {
             let sponsor = sample_account_id(0x21, &domain_id);
             let other_account = sample_account_id(0x22, &domain_id);
             let other_domain = DomainId::from_str("other").expect("domain id must be valid");
-            let asset_definition_id = AssetDefinitionId::from_str("token#test")
-                .expect("asset definition id must be valid");
+            let asset_definition_id =
+                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
 

@@ -60,7 +60,7 @@ snippet یہ دکھاتا ہے کہ dApp ایک session کیسے کھولتی ہ
 derive کرتی ہے، اور approval response کا انتظار کرتی ہے۔
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)

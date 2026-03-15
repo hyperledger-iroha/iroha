@@ -30,7 +30,7 @@ DA-3 كتلة التنسيق الموسع Nexus لذلك يتم إنشاء كل 
   توافر الظروف دون الخضوع للتخزين خارج دفتر الأستاذ.
 - التعرف على إثباتات العضوية المحددة حتى يتمكن العملاء الخفيفون من التحقق،
   ما هو بيان التجزئة النهائي في الكتلة المحددة.
-- تصدير Torii للقضايا (`/v1/da/commitments/*`) والأثباتات الداعمة
+- تصدير Torii للقضايا (`/v2/da/commitments/*`) والأثباتات الداعمة
   تعمل المرحلات وحزم SDK وحوكمة الأتمتة على التحقق من التوفر دون إعادة نشر أي شيء
   كتل.
 - حفظ المغلف الكنسي `SignedBlockWire`، الهياكل الجديدة المنشورة
@@ -45,7 +45,7 @@ DA-3 كتلة التنسيق الموسع Nexus لذلك يتم إنشاء كل 
 3. **الثبات/الفهارس** التي تتجاهل WSV استعلامات الالتزام
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii إضافات RPC** للقائمة/الاستعلام/إثبات نقاط النهاية
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. ** اختبارات التكامل + التركيبات ** للتحقق من تخطيط الأسلاك وإثبات التدفق
    `integration_tests/tests/da/commitments.rs`.
 
@@ -136,9 +136,9 @@ pub struct DaCommitmentBundle {
 
 | الطريق | الطريقة | الحمولة | ملاحظات |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (نطاق النطاق على المسار/العصر/التسلسل، ترقيم الصفحات) | قم بتأكيد `DaCommitmentPage` مع العدد الإجمالي والالتزامات وكتلة التجزئة. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + تجزئة البيان أو البطاقة `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (سجل + مسار Merkle + كتلة التجزئة). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية، كتلة تجزئة مكررة، وإدراج محقق؛ مفيد لمجموعات SDK دون الوصول المباشر إلى `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (نطاق النطاق على المسار/العصر/التسلسل، ترقيم الصفحات) | قم بتأكيد `DaCommitmentPage` مع العدد الإجمالي والالتزامات وكتلة التجزئة. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + تجزئة البيان أو البطاقة `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (سجل + مسار Merkle + كتلة التجزئة). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية، كتلة تجزئة مكررة، وإدراج محقق؛ مفيد لمجموعات SDK دون الوصول المباشر إلى `iroha_crypto`. |
 
 جميع الحمولات تصل إلى `iroha_data_model::da::commitment`. أجهزة التوجيه Torii
 تعمل معالجات الرصد بشكل جيد مع أجهزة DA لاستيعاب نقاط النهاية لاستخدامها

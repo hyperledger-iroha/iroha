@@ -113,7 +113,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     let chain_id_bytes = state.chain_id.to_string().into_bytes();
     host.set_chain_id_bytes(chain_id_bytes.clone());
     let backend_label = "halo2/ipa";
-    let circuit_id = "halo2/ipa:tiny-add2inst-public-v1";
+    let circuit_id = "halo2/ipa:tiny-add2inst-public";
     let fixture_seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
     let vk_bytes = fixture_seed.vk_bytes.clone().expect("fixture vk bytes");
     let mut hasher = Sha256::new();

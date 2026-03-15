@@ -36,7 +36,7 @@ Adaptadores de corriente Norito؛ Aquí hay un respaldo en serde/JSON.
 ## API API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -199,7 +199,7 @@ Este es el `compression` que está conectado al sistema. Incluye Torii `identity
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه الى manifiesto de artefactos + plan de fragmentos
   (`--manifest`, `--plan`, `--manifest-id`) **او** تمرير ticket de almacenamiento de Torii
   Ver `--storage-ticket`. عند استخدام مسار ticket, تقوم CLI بجلب manifiesto من
-  `/v1/da/manifests/<ticket>`, y las funciones de `artifacts/da/fetch_<timestamp>/`
+  `/v2/da/manifests/<ticket>`, y las funciones de `artifacts/da/fetch_<timestamp>/`
   (anulación de `--manifest-cache-dir`), y un hash de blob en `--manifest-id`,
   ثم تشغل Orchestrator مع قائمة `--gateway-provider` المعطاة. تبقى جميع perillasالمتقدمة من جالب SoraFS كما هي (sobres manifiestos, تسميات العميل، guardia
   cachés, anula el marcador del marcador (y el `--output`), y
@@ -207,7 +207,7 @@ Este es el `compression` que está conectado al sistema. Incluye Torii `identity
   تعيش فحوصات disponibilidad من النهاية للنهاية ضمن مساحة `da` دون تكرار منطق
   orquestador.
 - `iroha app da get-blob` يسحب manifiesta القياسية مباشرة من Torii عبر
-  `GET /v1/da/manifests/{storage_ticket}`. يكتب الامر
+  `GET /v2/da/manifests/{storage_ticket}`. يكتب الامر
   `manifest_{ticket}.norito` y `manifest_{ticket}.json` y `chunk_plan_{ticket}.json`
   تحت `artifacts/da/fetch_<timestamp>/` (او `--output-dir` يحدده المستخدم) مع
   طباعة امر `iroha app da get` الدقيق (بما في ذلك `--manifest-id`) المطلوب لجلب

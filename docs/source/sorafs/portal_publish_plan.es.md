@@ -124,7 +124,7 @@ este archivo se centra en el runbook multi-equipo vinculado a DOCS-7.
      que omita los flags de alias salvo que la gobernanza solicite un namespace
      dedicado (p. ej., `docs:portal-sbom`).
    - Ajuste `${SUBMITTED_EPOCH}` al epoch de consenso actual (obtenible con
-     `curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` o su dashboard
+     `curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` o su dashboard
      de ops) para que el registro rastree cuándo el manifiesto entró al ledger.
 
 2. **Alternativa: `iroha app sorafs pin register`**
@@ -142,7 +142,7 @@ este archivo se centra en el runbook multi-equipo vinculado a DOCS-7.
      --alias-proof "${ALIAS_PROOF}"
      ```
 
-   - Este wrapper golpea el mismo endpoint `/v1/sorafs/pin/register` pero
+   - Este wrapper golpea el mismo endpoint `/v2/sorafs/pin/register` pero
      depende de un digest precomputado.
 
 3. **Verificar el estado del registro**

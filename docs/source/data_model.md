@@ -26,7 +26,7 @@ This document explains the structures, identifiers, traits, and protocols that f
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
-- `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
+- `AssetDefinitionId`: canonical `aid:<32-lower-hex-no-dash>` (UUID-v4 bytes).
 - `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
@@ -35,7 +35,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 
 ### Domain
 - `DomainId { name: Name }` – unique name.
-- `Domain { id, logo: Option<IpfsPath>, metadata: Metadata, owned_by: AccountId }`.
+- `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
@@ -45,10 +45,15 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.
 
 ### Asset Definitions and Assets
-- `AssetDefinitionId { domain: DomainId, name: Name }`.
-- `AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as `aid:<32-hex-no-dash>`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+  - `name` is required human-facing display text and must not contain `#`/`@`.
+  - `alias` is optional and must be one of:
+    - `<name>#<domain>@<dataspace>`
+    - `<name>#<dataspace>`
+    with the left segment exactly matching `AssetDefinition.name`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; setters for `metadata`, `mintable`, `owned_by`.
+  - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; `name` is required and must be set via `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
 - `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
 - `AssetBalanceScope`: `Global` for unrestricted balances and `Dataspace(DataSpaceId)` for dataspace-restricted balances.
@@ -197,8 +202,9 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
+    .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
 let asset = Asset::new(asset_id.clone(), Numeric::from(100));
@@ -239,6 +245,39 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .with_bytecode(bytecode)
     .sign(kp.private_key());
 ```
+
+`aid` / alias quick reference (CLI + Torii):
+
+```bash
+# Register an asset definition with canonical aid + explicit name + alias
+iroha ledger asset definition register \
+  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --name pkr \
+  --alias pkr#ubl@sbp
+
+# Short alias form (no owner segment): <name>#<dataspace>
+iroha ledger asset definition register \
+  --id aid:550e8400e29b41d4a7164466554400dd \
+  --name pkr \
+  --alias pkr#sbp
+
+# Mint using alias + account components (no manual norito hex copy/paste)
+iroha ledger asset mint \
+  --definition-alias pkr#ubl@sbp \
+  --account sorauﾛ1P... \
+  --quantity 500
+
+# Resolve alias to canonical aid via Torii
+curl -sS http://127.0.0.1:8080/v2/assets/aliases/resolve \
+  -H 'content-type: application/json' \
+  -d '{"alias":"pkr#ubl@sbp"}'
+```
+
+Migration note:
+- Old `name#domain` asset-definition IDs are not accepted in v1.
+- Asset IDs for mint/burn/transfer remain canonical `norito:<hex>`; build them with:
+  - `iroha tools encode asset-id --definition aid:... --account <i105>`
+  - or `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 
 ## Versioning
 

@@ -34,7 +34,7 @@ utilice códecs Norito; no se permiten alternativas de serde/JSON.
 ## Superficie API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ La carga útil es un `DaIngestRequest` codificado con Norito. Uso de respuestas
 | 500 Error interno | Fallo inesperado (registrado + alerta). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ paquete de hash. Los puntos finales de lista de compromiso/prueba llevan el mism
 No es necesario un viaje de ida y vuelta adicional para vincular una prueba al conjunto de políticas activas.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ hash, fragmentación y verificación de manifiestos opcionales.
 - `iroha app da get` agrega un alias centrado en DA para el orquestador de fuentes múltiples que ya impulsa
   `iroha app sorafs fetch`. Los operadores pueden apuntar a artefactos de manifiesto + plan de fragmentos (`--manifest`,
   `--plan`, `--manifest-id`) **o** simplemente pase un ticket de almacenamiento Torii a través de `--storage-ticket`. cuando el
-  Se utiliza la ruta del ticket, la CLI extrae el manifiesto de `/v1/da/manifests/<ticket>` y persiste el paquete.
+  Se utiliza la ruta del ticket, la CLI extrae el manifiesto de `/v2/da/manifests/<ticket>` y persiste el paquete.
   bajo `artifacts/da/fetch_<timestamp>/` (anular con `--manifest-cache-dir`), deriva el **manifiesto
   hash** para `--manifest-id` y luego ejecuta el orquestador con el `--gateway-provider` suministrado.
   lista. La verificación de la carga útil aún depende del resumen CAR/`blob_hash` integrado mientras que la identificación de la puerta de enlace es
@@ -248,7 +248,7 @@ hash, fragmentación y verificación de manifiestos opcionales.
   anulaciones, exportación de marcadores y rutas `--output`), y el punto final del manifiesto se puede anular mediante
   `--manifest-endpoint` para hosts Torii personalizados, por lo que las comprobaciones de disponibilidad de un extremo a otro se encuentran completamente bajo el
   Espacio de nombres `da` sin duplicar la lógica del orquestador.
-- `iroha app da get-blob` extrae manifiestos canónicos directamente desde Torii a través de `GET /v1/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` extrae manifiestos canónicos directamente desde Torii a través de `GET /v2/da/manifests/{storage_ticket}`.
   El comando ahora etiqueta los artefactos con el hash de manifiesto (blob id), escribiendo
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` y `chunk_plan_{manifest_hash}.json`
   bajo `artifacts/da/fetch_<timestamp>/` (o un `--output-dir` proporcionado por el usuario) mientras se repite exactamente
@@ -259,7 +259,7 @@ hash, fragmentación y verificación de manifiestos opcionales.
   `ToriiClient.getDaManifestBundle(...)`. Ambos devuelven los bytes Norito decodificados, el JSON del manifiesto, el hash del manifiesto,y plan de fragmentos para que las personas que llaman al SDK puedan hidratar las sesiones de Orchestrator sin tener que gastar en la CLI y Swift
   Los clientes también pueden llamar a `fetchDaPayloadViaGateway(...)` para canalizar esos paquetes a través del sistema nativo.
   Envoltorio del orquestador SoraFS. 【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- Las respuestas `/v1/da/manifests` ahora aparecen `manifest_hash` y ambos asistentes CLI + SDK (`iroha app da get`,
+- Las respuestas `/v2/da/manifests` ahora aparecen `manifest_hash` y ambos asistentes CLI + SDK (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway` y los contenedores de puerta de enlace Swift/JS) tratan este resumen como el
   identificador de manifiesto canónico mientras continúa verificando las cargas útiles con el hash CAR/blob integrado.
 - `iroha app da rent-quote` calcula el alquiler determinista y los desgloses de incentivos para un tamaño de almacenamiento suministrado
@@ -277,7 +277,7 @@ hash, fragmentación y verificación de manifiestos opcionales.
 - La paridad del registro de PIN ahora se extiende a los SDK: `ToriiClient.registerSorafsPinManifest(...)` en el
   JavaScript SDK crea la carga útil exacta utilizada por `iroha app sorafs pin register`, haciendo cumplir canónico
   metadatos fragmentados, políticas de fijación, pruebas de alias y resúmenes de sucesores antes de PUBLICAR en
-  `/v1/sorafs/pin/register`. Esto evita que los robots de CI y la automatización desembolsen la CLI cuando
+  `/v2/sorafs/pin/register`. Esto evita que los robots de CI y la automatización desembolsen la CLI cuando
   grabar registros de manifiesto, y el ayudante se envía con cobertura TypeScript/README para que el DA-8
   La paridad de herramientas “enviar/obtener/probar” se cumple completamente en JS junto con Rust/Swift. 【javascript/iroha_js/src/toriiClient.js:1045】 【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` encadena todo lo anterior: toma un ticket de almacenamiento, descarga el
@@ -334,7 +334,7 @@ Se han implementado y verificado todos los TODO de ingesta previamente bloqueado
   versiones desconocidas, lo que garantiza actualizaciones deterministas cuando se envían nuevos diseños de manifiesto.【crates/iroha_data_model/src/da/types.rs:308】
 - **Enganches PDP/PoTR**: los compromisos de PDP se derivan directamente del almacén de fragmentos y persisten
   además de manifiestos para que los programadores DA-5 puedan lanzar desafíos de muestreo a partir de datos canónicos; el
-  El encabezado `Sora-PDP-Commitment` ahora se envía con `/v1/da/ingest` e `/v1/da/manifests/{ticket}`.
+  El encabezado `Sora-PDP-Commitment` ahora se envía con `/v2/da/ingest` e `/v2/da/manifests/{ticket}`.
   respuestas para que los SDK conozcan inmediatamente el compromiso firmado al que harán referencia futuras sondas.
 - **Diario del cursor de fragmentos**: los metadatos del carril pueden especificar `da_shard_id` (el valor predeterminado es `lane_id`), y
   Sumeragi ahora persiste el `(epoch, sequence)` más alto por `(shard_id, lane_id)` en
@@ -357,7 +357,7 @@ Se han implementado y verificado todos los TODO de ingesta previamente bloqueado
   exponer bytes de carga útil. Los recibos se hidratan de Kura durante la repetición para que los validadores recuperen los mismos
   metadatos de confidencialidad después del reinicio.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
 
-## Notas de implementación- El punto final `/v1/da/ingest` de Torii ahora normaliza la compresión de la carga útil, impone el caché de reproducción,
+## Notas de implementación- El punto final `/v2/da/ingest` de Torii ahora normaliza la compresión de la carga útil, impone el caché de reproducción,
   fragmenta de manera determinista los bytes canónicos, reconstruye `DaManifestV1` y elimina la carga útil codificada
   en `config.da_ingest.manifest_store_dir` para la orquestación SoraFS antes de emitir el recibo; el
   El controlador también adjunta un encabezado `Sora-PDP-Commitment` para que los clientes puedan capturar el compromiso codificado.
@@ -370,7 +370,7 @@ Se han implementado y verificado todos los TODO de ingesta previamente bloqueado
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` tapa Óxido, el Python `ToriiClient`
   ahora exporta `decode_pdp_commitment_header`, y `IrohaSwift` envía ayudantes coincidentes para que sean móviles
   los clientes pueden guardar el programa de muestreo codificado inmediatamente.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii también expone `GET /v1/da/manifests/{storage_ticket}` para que los SDK y los operadores puedan recuperar manifiestos
+- Torii también expone `GET /v2/da/manifests/{storage_ticket}` para que los SDK y los operadores puedan recuperar manifiestos
   y fragmentar planes sin tocar el directorio de spool del nodo. La respuesta devuelve los bytes Norito.
   (base64), JSON de manifiesto representado, un blob JSON `chunk_plan` listo para `sorafs fetch`, más el contenido relevante
   resúmenes hexadecimales (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) para que las herramientas posteriores puedan
@@ -388,7 +388,7 @@ Se han implementado y verificado todos los TODO de ingesta previamente bloqueado
   `--block-hash` anular.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### Flujo de transmisión de carga útil grandeLos clientes que necesitan ingerir activos mayores que el límite de solicitud única configurado inician una
-sesión de streaming llamando a `POST /v1/da/ingest/chunk/start`. Torii responde con un
+sesión de streaming llamando a `POST /v2/da/ingest/chunk/start`. Torii responde con un
 `ChunkSessionId` (BLAKE3-derivado de los metadatos del blob solicitado) y el tamaño del fragmento negociado.
 Cada solicitud `DaIngestChunk` posterior lleva:
 
@@ -403,7 +403,7 @@ Torii persiste los sectores validados en `config.da_ingest.manifest_store_dir/ch
 registra el progreso dentro del caché de reproducción para respetar la idempotencia. Cuando llega el último segmento, Torii
 vuelve a ensamblar la carga útil en el disco (transmitiendo a través del directorio de fragmentos para evitar picos de memoria),
 calcula el manifiesto/recibo canónico exactamente como con las cargas de un solo disparo y finalmente responde a
-`POST /v1/da/ingest` consumiendo el artefacto preparado. Las sesiones fallidas se pueden abortar explícitamente o
+`POST /v2/da/ingest` consumiendo el artefacto preparado. Las sesiones fallidas se pueden abortar explícitamente o
 se recolectan como basura después de `config.da_ingest.replay_cache_ttl`. Este diseño mantiene el formato de red.
 Compatible con Norito, evita protocolos reanudables específicos del cliente y reutiliza la canalización de manifiesto existente
 sin cambios.

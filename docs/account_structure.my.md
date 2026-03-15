@@ -671,12 +671,12 @@ JSON ကိုယ်ထည်နှင့်အတူ။ SoraFS သို့ mir
   ဖိသိပ်ထားသော `i105` ဖောင်သည် Sora သီးသန့်ဖြစ်ပြီး IME ပြန်လည်ရေးသားခြင်းကို ခံရနိုင်သော အသုံးပြုသူများ။
 - **Torii ပေါင်းစည်းခြင်း-** Cache Nexus သည် TTL ကိုလေးစားပြီး ထုတ်လွှတ်သည်
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` တိကျစွာ လည်းကောင်း၊
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii တုံ့ပြန်မှုဖော်မတ်များ
 
-- `GET /v1/accounts` သည် ရွေးချယ်နိုင်သော `canonical I105 rendering` မေးမြန်းမှု ကန့်သတ်ချက်တစ်ခုကို လက်ခံပြီး
-  `POST /v1/accounts/query` သည် JSON စာအိတ်အတွင်းရှိ တူညီသောအကွက်ကို လက်ခံသည်။
+- `GET /v2/accounts` သည် ရွေးချယ်နိုင်သော `canonical I105 rendering` မေးမြန်းမှု ကန့်သတ်ချက်တစ်ခုကို လက်ခံပြီး
+  `POST /v2/accounts/query` သည် JSON စာအိတ်အတွင်းရှိ တူညီသောအကွက်ကို လက်ခံသည်။
   ပံ့ပိုးထားသော တန်ဖိုးများမှာ-
   - `i105` (မူလ) — တုံ့ပြန်မှုများသည် canonical I105 Base58 payloads (ဥပမာ၊
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`)။
@@ -685,7 +685,7 @@ JSON ကိုယ်ထည်နှင့်အတူ။ SoraFS သို့ mir
 - မမှန်ကန်သော တန်ဖိုးများသည် `400` (`QueryExecutionFail::Conversion`) သို့ ပြန်ပေးသည်။ ဒီလိုလုပ်ပေးတယ်။
   Sora-only UX အတွက် ချုံ့ထားသော ကြိုးများကို တောင်းဆိုရန် ပိုက်ဆံအိတ်များနှင့် စူးစမ်းရှာဖွေသူများ
   I105 ကို အပြန်အလှန်လုပ်ဆောင်နိုင်သော ပုံသေအဖြစ် ထိန်းသိမ်းထားသည်။
-- ပိုင်ဆိုင်မှုကိုင်ဆောင်သူစာရင်းများ (`GET /v1/assets/{definition_id}/holders`) နှင့် ၎င်းတို့၏ JSON
+- ပိုင်ဆိုင်မှုကိုင်ဆောင်သူစာရင်းများ (`GET /v2/assets/{definition_id}/holders`) နှင့် ၎င်းတို့၏ JSON
   စာအိတ်တွဲ (`POST …/holders/query`) ကိုလည်း `canonical I105 rendering` ကို ဂုဏ်ပြုပါသည်။
   `items[*].account_id` အကွက်သည် ချုံ့ထားသော စာလုံးများကို အချိန်တိုင်း ထုတ်လွှတ်ပါသည်။
   ပါရာမီတာ/စာအိတ်အကွက်ကို `i105_default` တွင် သတ်မှတ်ထားပြီး အကောင့်များကို ထင်ဟပ်စေသည်

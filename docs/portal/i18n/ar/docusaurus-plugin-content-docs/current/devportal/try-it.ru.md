@@ -134,7 +134,7 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ### حمولة Norito من وحدة التحكم Try It
 
 1. اختر التركيب، على سبيل المثال `fixtures/norito_rpc/transfer_asset.norito`. تتضمن هذه الملفات مغلفات Norito؛ **لا** تقوم بترميزها في base64.
-2. في Swagger أو RapiDoc، ابحث عن نقطة نهاية NRPC (على سبيل المثال، `POST /v1/pipeline/submit`) وحدد محدد **Content-Type** لـ `application/x-norito`.
+2. في Swagger أو RapiDoc، ابحث عن نقطة نهاية NRPC (على سبيل المثال، `POST /v2/pipeline/submit`) وحدد محدد **Content-Type** لـ `application/x-norito`.
 3. قم بإلغاء تحديد المصحح في **binary** (اختر "File" في Swagger أو "Binary/File" في RapiDoc) وقم بتصفح الملف `.norito`. قم بعرض البايتات من خلال الوكيل دون تغيير.
 4. قم بالحل. إذا قام Torii بالتعبير عن `X-Iroha-Error-Code: schema_mismatch`، فتأكد من تحديد نقطة النهاية والحمولات الثنائية الأولية والتأكد من ذلك تم دمج تجزئة المخطط في `fixtures/norito_rpc/schema_hashes.json` مع الإصدار Torii.
 
@@ -147,10 +147,10 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-قم بتثبيت وحدة الإدخال لأي إدخال من `transaction_fixtures.manifest.json` أو قم بفك تشفير أمر الحمولة الخاص بك `cargo xtask norito-rpc-fixtures`. عند استخدام Torii في نظام الكناري، يمكنك تشغيل `curl` على وكيل Try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`)، للتحقق من ذلك. البنية التحتية لبوابة المشاهدة والمشاهدة.
+قم بتثبيت وحدة الإدخال لأي إدخال من `transaction_fixtures.manifest.json` أو قم بفك تشفير أمر الحمولة الخاص بك `cargo xtask norito-rpc-fixtures`. عند استخدام Torii في نظام الكناري، يمكنك تشغيل `curl` على وكيل Try-it (`https://docs.sora.example/proxy/v2/pipeline/submit`)، للتحقق من ذلك. البنية التحتية لبوابة المشاهدة والمشاهدة.
 
 ## إمكانية الملاحظة والعمليات
 
@@ -160,7 +160,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 زينة المقابض:

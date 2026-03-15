@@ -13,7 +13,7 @@ translator: manual
 # ‏Sumeragi — מצב פייסמייקר (Torii)
 
 נקודת קצה
-- `GET /v1/sumeragi/pacemaker`
+- `GET /v2/sumeragi/pacemaker`
 
 תגובה (דוגמה)
 ```json

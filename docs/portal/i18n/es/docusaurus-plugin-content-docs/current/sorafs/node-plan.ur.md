@@ -54,7 +54,7 @@ Plomería en tiempo de ejecución `sorafs_node::por` کے ذریعے Interaccion
 Notas de implementación:
 
 - Torii کے Pila de Axum کو `norito::json` cargas útiles کے ساتھ استعمال کریں۔
-- respuestas کے لیے Norito esquemas شامل کریں (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría) ۔- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب profundidad de trabajo pendiente کے ساتھ época/fecha límite más antigua اور ہر proveedor کے marcas de tiempo recientes de éxito/fracaso دکھاتا ہے، جو `sorafs_node::NodeHandle::por_ingestion_status` سے alimentado ہے، اور Torii tableros de instrumentos کے لیے `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` registro de medidores کرتا ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- respuestas کے لیے Norito esquemas شامل کریں (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría) ۔- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب profundidad de trabajo pendiente کے ساتھ época/fecha límite más antigua اور ہر proveedor کے marcas de tiempo recientes de éxito/fracaso دکھاتا ہے، جو `sorafs_node::NodeHandle::por_ingestion_status` سے alimentado ہے، اور Torii tableros de instrumentos کے لیے `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` registro de medidores کرتا ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Programador y aplicación de cuotas
 

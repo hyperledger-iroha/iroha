@@ -21,8 +21,8 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 
-const BACKEND: &str = "stark/fri-v1/sha256-goldilocks-v1";
-const STARK_TRANSFER_CIRCUIT: &str = "stark/fri-v1/sha256-goldilocks-v1:zk-transfer-v1";
+const BACKEND: &str = "stark/fri/sha256-goldilocks";
+const STARK_TRANSFER_CIRCUIT: &str = "stark/fri/sha256-goldilocks:zk-transfer";
 
 fn stark_vk_bytes(circuit_id: &str) -> Vec<u8> {
     use iroha_core::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
@@ -78,12 +78,19 @@ fn prepare_state() -> (State, AccountId, AssetDefinitionId) {
 
     let domain_id: DomainId = "zkd".parse().unwrap();
     let (owner, _owner_key) = gen_account_in("zkd");
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
 
     for instr in [
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         RegisterZkAsset::new(
             asset_def_id.clone(),
             ZkAssetMode::Hybrid,
@@ -130,13 +137,20 @@ fn prepare_state_with_bound_stark_vk(
 
     let domain_id: DomainId = "zkd".parse().expect("domain id");
     let (owner, _owner_key) = gen_account_in("zkd");
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().expect("asset definition id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let vk_id = VerifyingKeyId::new(BACKEND, "vk_transfer");
 
     for instr in [
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
     ] {
         executor
             .clone()

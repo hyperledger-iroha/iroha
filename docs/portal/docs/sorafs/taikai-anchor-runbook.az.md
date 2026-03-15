@@ -55,7 +55,7 @@ portalın önizləmə quruluşundan çıxmadan sübut.
 | `taikai_ingest_segment_latency_ms` | CMAF klaster/axın üçün gecikmə histoqramını qəbul edir (hədəf: p95<750ms, p99<900ms). |
 | `taikai_ingest_live_edge_drift_ms` | Kodlayıcı və lövbər işçiləri arasında canlı kənar sürüşmə (səhifələr p99>1,5s 10 dəqiqə ərzində). |
 | `taikai_ingest_segment_errors_total{reason}` | Səbəbinə görə səhv sayğacları (`decode`, `manifest_mismatch`, `lineage_replay`, …). İstənilən artım `TaikaiIngestFailure`-i tetikler. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v1/da/ingest` ləqəb üçün yeni TRM qəbul etdikdə artır; fırlanma kadansını yoxlamaq üçün `rate()` istifadə edin. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v2/da/ingest` ləqəb üçün yeni TRM qəbul etdikdə artır; fırlanma kadansını yoxlamaq üçün `rate()` istifadə edin. |
 | `/status → telemetry.taikai_alias_rotations[]` | `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` və sübut paketləri üçün vaxt ştampları ilə JSON snapshot. |
 | `taikai_viewer_*` (rebufer, CEK fırlanma yaşı, PQ sağlamlığı, xəbərdarlıqlar) | CEK fırlanma + PQ dövrələrinin lövbər zamanı sağlam qalmasını təmin etmək üçün izləyici tərəfi KPI-lər. |
 

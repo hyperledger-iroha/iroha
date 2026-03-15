@@ -117,12 +117,12 @@ translation_last_reviewed: 2026-01-01
 
 Torii と CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
-  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
-  - `GET /v1/runtime/upgrades` -> record 一覧 (implemented)。
-  - `POST /v1/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
-  - `POST /v1/runtime/upgrades/activate/:id` -> `ActivateRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
-  - `POST /v1/runtime/upgrades/cancel/:id` -> `CancelRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
+  - `GET /v2/runtime/upgrades` -> record 一覧 (implemented)。
+  - `POST /v2/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+  - `POST /v2/runtime/upgrades/activate/:id` -> `ActivateRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+  - `POST /v2/runtime/upgrades/cancel/:id` -> `CancelRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
 - CLI
   - `iroha runtime abi active` (implemented)
   - `iroha runtime abi hash` (implemented)

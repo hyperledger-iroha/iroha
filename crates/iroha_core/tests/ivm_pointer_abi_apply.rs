@@ -37,7 +37,10 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     let to =
         fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
-    let asset_def: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
@@ -125,7 +128,8 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         to.clone(),
         domain_id.clone(),
     )));
-    let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+    let new_asset_def =
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         1000u64,

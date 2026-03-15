@@ -166,9 +166,10 @@ async fn gov_council_current_uses_configured_fallback() {
     state.gov.parliament_committee_size = 1;
     state.gov.parliament_term_blocks = 5;
     state.gov.parliament_min_stake = 200;
-    state.gov.parliament_eligibility_asset_id = "stake#wonderland"
-        .parse::<AssetDefinitionId>()
-        .expect("asset id");
+    state.gov.parliament_eligibility_asset_id = AssetDefinitionId::new(
+        "wonderland".parse().expect("asset id"),
+        "stake".parse().expect("asset id"),
+    );
 
     let mut wb = state.world.block();
     let stake_def = state.gov.parliament_eligibility_asset_id.clone();

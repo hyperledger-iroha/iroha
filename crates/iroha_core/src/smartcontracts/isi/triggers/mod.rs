@@ -217,7 +217,18 @@ pub mod isi {
             // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
-            let is_domain_owner = false;
+            let mut is_domain_owner = false;
+            for domain_id in state_transaction.world.domains_for_subject(&owner) {
+                let domain_owner = state_transaction
+                    .world
+                    .domain(&domain_id)
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(Error::Find)?;
+                if &domain_owner == authority {
+                    is_domain_owner = true;
+                    break;
+                }
+            }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
             if !(is_genesis || is_domain_owner || has_permission) {
@@ -762,19 +773,18 @@ pub mod query {
             filter: CompoundPredicate<TriggerId>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = TriggerId>, Error> {
+            let triggers = state_ro.world().triggers();
+            let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
+                Box::new(triggers.active_trigger_ids_iter().cloned());
+            if filter.json_payload().is_none() {
+                return Ok(iter);
+            }
+
             // Only report triggers that are actually active (i.e., have
             // remaining executions). This makes the query resilient to any
             // edge case where a depleted trigger could temporarily remain
             // registered during a transaction before being pruned.
-            let triggers = state_ro.world().triggers();
-            Ok(triggers
-                .ids_iter()
-                .filter(move |&id| filter.applies(id))
-                .filter_map(move |id| {
-                    triggers
-                        .inspect_by_id(id, |action| !action.repeats().is_depleted())
-                        .and_then(|is_active| is_active.then_some(id.clone()))
-                }))
+            Ok(Box::new(iter.filter(move |id| filter.applies(id))))
         }
     }
 
@@ -787,14 +797,14 @@ pub mod query {
         ) -> Result<impl Iterator<Item = Self::Item>, Error> {
             let triggers = state_ro.world().triggers();
 
-            Ok(triggers
-                .ids_iter()
-                .filter_map(|id| {
-                    let action = triggers.inspect_by_id(id, |action| action.clone_and_box())?;
-                    let action = triggers.get_original_action(action)?;
-                    Some(Trigger::new(id.clone(), action.into()))
-                })
-                .filter(move |trigger| filter.applies(trigger)))
+            let iter: Box<dyn Iterator<Item = Trigger> + '_> = Box::new(triggers.triggers_iter());
+            if filter.json_payload().is_none() {
+                return Ok(iter);
+            }
+
+            Ok(Box::new(
+                iter.filter(move |trigger| filter.applies(trigger)),
+            ))
         }
     }
 }
@@ -1304,6 +1314,64 @@ mod tests {
             let ids2 = collect_active_trigger_ids(&state);
             assert!(ids2.iter().all(|id| id != &trig_id));
         }
+    }
+
+    #[test]
+    fn find_triggers_returns_registered_triggers_for_pass_predicate() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let mut state_block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(
+            ALICE_ID.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+
+        let rose_id: TriggerId = "utrig_rose".parse().unwrap();
+        let tulip_id: TriggerId = "utrig_tulip".parse().unwrap();
+        for trigger_id in [&rose_id, &tulip_id] {
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+        }
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let mut ids: Vec<_> = ValidQuery::execute(
+            FindTriggers,
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            &view,
+        )
+        .expect("trigger query should succeed")
+        .map(|trigger| trigger.id().clone())
+        .collect();
+        ids.sort();
+
+        assert_eq!(ids, vec![rose_id, tulip_id]);
     }
 
     #[test]

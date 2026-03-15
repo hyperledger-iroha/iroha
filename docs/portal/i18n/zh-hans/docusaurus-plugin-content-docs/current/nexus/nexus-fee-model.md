@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
   立即到期的 XOR、理发后预计的 XOR、已实现的
   方差 (`xor_variance_micro`) 和区块时间戳（以毫秒为单位）。
 - 块执行聚合每个通道/数据空间的收据并发布它们
-  通过 `/v1/sumeragi/status` 中的 `lane_settlement_commitments`。  总计
+  通过 `/v2/sumeragi/status` 中的 `lane_settlement_commitments`。  总计
   公开 `total_local_micro`、`total_xor_due_micro` 和
   `total_xor_after_haircut_micro` 在每晚的块上求和
   调节出口。

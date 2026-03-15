@@ -68,7 +68,7 @@ Idiomas y plataformas.
 Un nodo Iroha ejecuta varios servicios cooperativos:
 
 - **Torii (`iroha_torii`)** expone las API HTTP/WebSocket para transacciones, consultas, transmisión de eventos y
-  telemetría (puntos finales `/v1/...`).
+  telemetría (puntos finales `/v2/...`).
 - **Core (`iroha_core`)** coordina la validación, el consenso, la ejecución, la gobernanza y la gestión estatal.
 - **Sumeragi (`iroha_core::sumeragi`)** implementa el canal de consenso listo para NPoS con cambios de vista,
   disponibilidad confiable de datos de transmisión y certificados de confirmación. Ver el

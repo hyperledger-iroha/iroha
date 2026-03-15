@@ -23,15 +23,7 @@ async fn vk_register_update_return_202() {
     // Minimal state and queue
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura.clone(),
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura.clone(), query);
+    let state = State::new_for_testing(World::new(), kura.clone(), query);
     let state = Arc::new(state);
     let chain_id = Arc::new(ChainId::from("test-chain"));
     let queue_cfg = iroha_config::parameters::actual::Queue {
@@ -50,7 +42,7 @@ async fn vk_register_update_return_202() {
     // Build routes that capture the chain_id/queue/state
     let app = Router::new()
         .route(
-            "/v1/zk/vk/register",
+            "/v2/zk/vk/register",
             post({
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
@@ -69,7 +61,7 @@ async fn vk_register_update_return_202() {
             }),
         )
         .route(
-            "/v1/zk/vk/update",
+            "/v2/zk/vk/update",
             post({
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
@@ -125,7 +117,7 @@ async fn vk_register_update_return_202() {
     let body_reg = json::to_json(&body_reg_value).unwrap();
     let req_reg = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/vk/register")
+        .uri("/v2/zk/vk/register")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_reg))
         .unwrap();
@@ -154,7 +146,7 @@ async fn vk_register_update_return_202() {
     let body_upd = json::to_json(&body_upd_value).unwrap();
     let req_upd = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/vk/update")
+        .uri("/v2/zk/vk/update")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_upd))
         .unwrap();

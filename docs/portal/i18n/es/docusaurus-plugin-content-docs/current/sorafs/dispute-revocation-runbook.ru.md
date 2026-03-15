@@ -26,7 +26,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
 ## 1. Оценить инцидент
 
 - **Dispositivo de activación:** reduce el SLA (tiempo de actividad/PoR), elimina las replicaciones o las actualizaciones de facturación.
-- **Подтвердить телеметрию:** зафиксируйте instantáneas `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` para el usuario.
+- **Подтвердить телеметрию:** зафиксируйте instantáneas `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` para el usuario.
 - **Уведомить стейкхолдеров:** Equipo de almacenamiento (операции провайдера), Consejo de gobierno (орган решения), Observabilidad (обновления дашбордов).
 
 ## 2. Подготовить пакет доказательств1. Soberite сырые артефакты (telemetría JSON, logotipos CLI, заметки аудитора).
@@ -72,7 +72,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
    ```
 
 3. Проверьте `dispute_summary.json` (подтвердите тип, resumen доказательств и временные метки).
-4. Introduzca el archivo JSON en Torii `/v1/sorafs/capacity/dispute` para ver el flujo de trabajo de gobernanza. Зафиксируйте значение ответа `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
+4. Introduzca el archivo JSON en Torii `/v2/sorafs/capacity/dispute` para ver el flujo de trabajo de gobernanza. Зафиксируйте значение ответа `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
 
 ## 4. Эвакуация и отзыв1. **Окно льготы:** уведомите провайдера о грядущем отзыве; разрешите эвакуацию закрепленных данных, когда это допускает политика.
 2. **Generador `ProviderAdmissionRevocationV1`:**

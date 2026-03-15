@@ -84,8 +84,8 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     ])
     .expect("serialize contract post body");
 
-    // POST /v1/contracts/code
-    let post_url = client.torii_url.join("/v1/contracts/code").unwrap();
+    // POST /v2/contracts/code
+    let post_url = client.torii_url.join("/v2/contracts/code").unwrap();
     let http = reqwest::Client::new();
     let resp = http
         .post(post_url)
@@ -97,7 +97,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        panic!("POST /v1/contracts/code returned {status}: {body}");
+        panic!("POST /v2/contracts/code returned {status}: {body}");
     }
 
     // Poll status until we see the manifest transaction committed
@@ -150,7 +150,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     // GET by code hash
     let get_url = client
         .torii_url
-        .join(&format!("/v1/contracts/code/{}", hex32(&code_hash)))
+        .join(&format!("/v2/contracts/code/{}", hex32(&code_hash)))
         .unwrap();
     let get_deadline = Instant::now() + std::time::Duration::from_secs(120);
     let mut got_txt = None;
@@ -167,7 +167,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
             last_get_error = Some("manifest not found".to_owned());
         } else if !status.is_success() {
             return Err(eyre!(
-                "GET /v1/contracts/code/{code_hash} returned {status}: {body}"
+                "GET /v2/contracts/code/{code_hash} returned {status}: {body}"
             ));
         } else if body.trim().is_empty() {
             last_get_error = Some("empty response body".to_owned());

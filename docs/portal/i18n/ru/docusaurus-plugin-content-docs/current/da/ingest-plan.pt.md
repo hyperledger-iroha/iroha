@@ -39,7 +39,7 @@ _Регистрация: 20 февраля 2026 г. - Ответы: Рабоча
 ## API-интерфейс Superficie (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -221,7 +221,7 @@ pub struct DaIngestReceipt {
   что я ем `iroha app sorafs fetch`. Operadores podem apontar para artefatos
   манифест + план фрагмента (`--manifest`, `--plan`, `--manifest-id`) **ou**
   passar um билет хранения Torii через `--storage-ticket`. Когда ты делаешь это
-  билет и использовать CLI или манифест `/v1/da/manifests/<ticket>`,
+  билет и использовать CLI или манифест `/v2/da/manifests/<ticket>`,
   сохраняться в пакете рыданий `artifacts/da/fetch_<timestamp>/` (переопределить com
   `--manifest-cache-dir`), производное или хеш-объект для `--manifest-id`, и в целом
   выполнить или заказать в списке `--gateway-provider` fornecida. Все ОС
@@ -232,7 +232,7 @@ pub struct DaIngestReceipt {
   Сквозная доступность в полной мере в пространстве имен `da` с дубликатом
   logica do orquestrador.
 - `iroha app da get-blob` baixa манифестирует канонические ссылки Torii через
-  `GET /v1/da/manifests/{storage_ticket}`. О comando escreve
+  `GET /v2/da/manifests/{storage_ticket}`. О comando escreve
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` е
   `chunk_plan_{ticket}.json` рыдание `artifacts/da/fetch_<timestamp>/` (оу эм
   `--output-dir` fornecido pelo usuario) enquanto imprime o comando exato de

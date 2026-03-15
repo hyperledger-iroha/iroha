@@ -50,7 +50,7 @@ downgrade reason, and ticket cost without bespoke parsing.
   any new reason requires a fixture bump plus README/documentation updates.
 - The NDJSON payloads reuse the Norito types in
   `crates/iroha_data_model/src/soranet/privacy.rs`. Operators consuming
-  `/privacy/events` or Torii’s `POST /v1/soranet/privacy/event` will see
+  `/privacy/events` or Torii’s `POST /v2/soranet/privacy/event` will see
   `SoranetPrivacyEventKindV1::HandshakeFailure` with `reason="Downgrade"` plus
   an optional RTT, keeping metrics and logs aligned.
 - Proxy toggle events are the same `SoranetPrivacyEventV1` entries, but the

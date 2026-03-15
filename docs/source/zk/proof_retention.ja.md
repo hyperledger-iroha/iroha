@@ -40,7 +40,7 @@ Iroha は監査とリプレイのために、証明検証結果 (backend + hash)
 
 ## 可視化とツール
 
-- ステータスエンドポイント: `GET /v1/proofs/retention` は caps, grace, prune_batch,
+- ステータスエンドポイント: `GET /v2/proofs/retention` は caps, grace, prune_batch,
   総レコード数、剪定可能数、backend ごとの件数を返す。
 - CLI: `iroha app zk proofs retention` (ステータス) と `iroha app zk proofs prune` (手動強制)。
 - イベント: SSE/WS フィルタで `DataEvent::Proof(ProofEvent::Pruned)` を購読し、剪定アクティビティを監視する。

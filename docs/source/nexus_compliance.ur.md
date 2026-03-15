@@ -104,9 +104,9 @@ LaneCompliancePolicy {
 
 Torii فراہم کرتا ہے:
 
-- `GET /v1/lane-compliance/policies/{lane_id}` — تازہ ترین policy reference حاصل کریں۔
-- `POST /v1/lane-compliance/policies` — صرف گورننس endpoint جو ISI proposal helpers کو mirror کرتا ہے۔
-- `GET /v1/lane-compliance/decisions` — paginated آڈٹ لاگ جس میں `lane_id`, `decision`, `jurisdiction`, `reason_code` فلٹر شامل ہیں۔
+- `GET /v2/lane-compliance/policies/{lane_id}` — تازہ ترین policy reference حاصل کریں۔
+- `POST /v2/lane-compliance/policies` — صرف گورننس endpoint جو ISI proposal helpers کو mirror کرتا ہے۔
+- `GET /v2/lane-compliance/decisions` — paginated آڈٹ لاگ جس میں `lane_id`, `decision`, `jurisdiction`, `reason_code` فلٹر شامل ہیں۔
 
 CLI/SDK کمانڈز ان HTTP سرفیسز کو wrap کرتی ہیں تاکہ آپریٹرز ریویوز اسکرپٹ کر سکیں اور
 artefacts (signed policy blob + reviewer attestations) حاصل کر سکیں۔
@@ -115,7 +115,7 @@ artefacts (signed policy blob + reviewer attestations) حاصل کر سکیں۔
 
 1. **Admission (Torii)**
    - `Torii` اس وقت فعال پالیسی ڈاؤن لوڈ کرتا ہے جب lane manifest تبدیل ہو یا cached signature کی معیاد ختم ہو۔
-   - `/v1/pipeline` کیو میں آنے والی ہر ٹرانزیکشن کو `LaneComplianceContext` سے ٹیگ کیا جاتا ہے
+   - `/v2/pipeline` کیو میں آنے والی ہر ٹرانزیکشن کو `LaneComplianceContext` سے ٹیگ کیا جاتا ہے
      (participant ids، UAID، dataspace manifest metadata، policy id، اور `crates/iroha_core/src/interlane/mod.rs` میں بیان کردہ
      تازہ ترین `LanePrivacyRegistry` snapshot)۔
    - UAID رکھنے والی اتھارٹیز کے پاس routed dataspace کے لئے فعال Space Directory manifest ہونا ضروری ہے؛

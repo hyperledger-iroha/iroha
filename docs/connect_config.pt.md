@@ -19,9 +19,9 @@ relay mínimo dentro do nó quando o feature Cargo `connect` está habilitado
 configuração:
 
 - Defina `connect.enabled=false` para desativar todas as rotas Connect
-  (`/v1/connect/*`).
+  (`/v2/connect/*`).
 - Deixe como `true` (padrão) para habilitar os endpoints de sessão WS e
-  `/v1/connect/status`.
+  `/v2/connect/status`.
 
 Overrides de ambiente (config do usuário → config efetiva):
 
@@ -50,9 +50,9 @@ Notas:
   WebSocket e incrementar a métrica `connect.ping_miss_total`.
 - Quando desativado em runtime (`connect.enabled=false`), as rotas WS e de
   status do Connect não são registradas; requisições para
-  `/v1/connect/ws` e `/v1/connect/status` retornam 404.
+  `/v2/connect/ws` e `/v2/connect/status` retornam 404.
 - O servidor exige um `sid` fornecido pelo cliente em
-  `/v1/connect/session` (base64url ou hex, 32 bytes). Ele não gera mais um
+  `/v2/connect/session` (base64url ou hex, 32 bytes). Ele não gera mais um
   `sid` de fallback.
 
 Ver também:

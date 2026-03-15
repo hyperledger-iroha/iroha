@@ -56,12 +56,12 @@ operators micropayment wins اور credit carry-over کو settlement outcomes ک
 Torii dedicated endpoints expose کرتا ہے تاکہ providers usage report کر سکیں اور
 بدون bespoke wiring کے deal lifecycle drive کر سکیں:
 
-- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetry accept کرتا ہے اور
+- `POST /v2/sorafs/deal/usage` `DealUsageReport` telemetry accept کرتا ہے اور
   deterministic accounting outcomes (`UsageOutcome`) return کرتا ہے۔
-- `POST /v1/sorafs/deal/settle` current window finalize کرتا ہے، اور
+- `POST /v2/sorafs/deal/settle` current window finalize کرتا ہے، اور
   نتیجے میں بننے والا `DealSettlementRecord` base64-encoded `DealSettlementV1` کے ساتھ stream کرتا ہے
   جو governance DAG publication کے لیے تیار ہوتا ہے۔
-- Torii کا `/v1/events/sse` feed اب `SorafsGatewayEvent::DealUsage` records broadcast کرتا ہے
+- Torii کا `/v2/events/sse` feed اب `SorafsGatewayEvent::DealUsage` records broadcast کرتا ہے
   جو ہر usage submission کا خلاصہ دیتے ہیں (epoch, metered GiB-hours, ticket counters,
   deterministic charges)، `SorafsGatewayEvent::DealSettlement` records جو canonical settlement ledger snapshot کے ساتھ
   on-disk governance artifact کا BLAKE3 digest/size/base64 شامل کرتے ہیں، اور

@@ -459,7 +459,7 @@ pub struct EvidenceRecord {
     pub penalty_applied_at_height: Option<Height>,
 }
 
-/// Membership snapshot exported through `/v1/sumeragi/status`.
+/// Membership snapshot exported through `/v2/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -481,7 +481,7 @@ pub struct SumeragiMembershipStatus {
     pub view_hash: Option<[u8; 32]>,
 }
 
-/// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
+/// Membership mismatch snapshot exported through `/v2/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -731,7 +731,7 @@ pub struct SumeragiLaneGovernance {
     pub runtime_upgrade: Option<SumeragiRuntimeUpgradeHook>,
 }
 
-/// DA availability reason reported by `/v1/sumeragi/status`.
+/// DA availability reason reported by `/v2/sumeragi/status`.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -771,7 +771,7 @@ pub enum SumeragiDaGateSatisfaction {
     MissingDataRecovered,
 }
 
-/// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
+/// Snapshot of DA availability tracking counters for `/v2/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1125,7 +1125,7 @@ pub struct SumeragiBlockSyncRosterStatus {
     pub drop_unsolicited_share_blocks_total: u64,
 }
 
-/// View-change cause counters surfaced via `/v1/sumeragi/status`.
+/// View-change cause counters surfaced via `/v2/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1507,7 +1507,7 @@ pub struct SumeragiWorkerQueueDiagnostics {
     pub dropped_total: SumeragiWorkerQueueTotals,
 }
 
-/// Worker-loop diagnostics exposed by `/v1/sumeragi/status`.
+/// Worker-loop diagnostics exposed by `/v2/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1531,7 +1531,7 @@ pub struct SumeragiWorkerLoopStatus {
     pub queue_diagnostics: SumeragiWorkerQueueDiagnostics,
 }
 
-/// Commit inflight diagnostics exposed by `/v1/sumeragi/status`.
+/// Commit inflight diagnostics exposed by `/v2/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1599,7 +1599,7 @@ pub struct SumeragiCommitInflightStatus {
     pub resume_queue_depths: SumeragiWorkerQueueDepths,
 }
 
-/// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
+/// Latest commit-quorum signature tally exposed by `/v2/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1633,7 +1633,7 @@ pub struct SumeragiCommitQuorumStatus {
     pub last_updated_ms: u64,
 }
 
-/// Latest commit QC summary exposed by `/v1/sumeragi/status`.
+/// Latest commit QC summary exposed by `/v2/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1665,7 +1665,7 @@ pub struct SumeragiQcStatus {
     pub signatures_total: u64,
 }
 
-/// Effective `NPoS` timeout values (ms) exposed via `/v1/sumeragi/status`.
+/// Effective `NPoS` timeout values (ms) exposed via `/v2/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1698,7 +1698,7 @@ pub struct SumeragiNposTimeoutsStatus {
     pub witness_ms: u64,
 }
 
-/// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
+/// Compact Norito payload returned by Torii for `/v2/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -1958,7 +1958,7 @@ pub struct SumeragiStatusWire {
     pub commit_inflight: SumeragiCommitInflightStatus,
 }
 
-/// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
+/// Entry describing a QC snapshot used by `/v2/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
@@ -1974,7 +1974,7 @@ pub struct SumeragiQcEntry {
     pub subject_block_hash: Option<HashOf<BlockHeader>>,
 }
 
-/// Norito payload returned by Torii for `/v1/sumeragi/qc`.
+/// Norito payload returned by Torii for `/v2/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",

@@ -45,7 +45,7 @@ accesorios externos.
 ## Observabilidade
 
 Torii ahora expone instantáneas de crédito de proveedores junto a libros de contabilidad de tarifas para que os paneles
-possam fazer gate em saldos bajos y strikes de penalización:- REST: `GET /v1/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
+possam fazer gate em saldos bajos y strikes de penalización:- REST: `GET /v2/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
   Refleje los campos del libro mayor verificados sin prueba de remojo. Veja
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importacao Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` sistema operativo de trama

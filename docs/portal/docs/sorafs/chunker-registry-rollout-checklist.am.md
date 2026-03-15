@@ -74,7 +74,7 @@ translator: machine-google-reviewed
    ማውጫ በ I18NI0000020X የተጠቀሰ።
 3. በግኝት ኤፒአይ በኩል የአቅራቢዎች ማስታወቂያ መስፋፋትን ያረጋግጡ፡-
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. የአስተዳዳሪ አርዕስቶችን በማንፀባረቅ/እቅድ የመጨረሻ ነጥቦችን ይለማመዱ፡-
    ```bash

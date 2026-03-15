@@ -28,7 +28,7 @@ xarici biletləri təqib etmədən sübut.
 | partnyor-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 04-03-2025 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-01; orchestrator doc parite sübutlarına diqqət yetirir. |
 | partnyor-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 04-03-2025 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-02; təsdiqlənmiş Norito/temetrik keçidlər. |
 | partnyor-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 04-04-2025 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-03; çoxmənbəli əvəzetmə təlimlərini həyata keçirdi. |
-| partnyor-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04-04-2025 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Tamamlanıb 26.04.2025 | torii-int-01; Torii `/v1/pipeline` + Kulinariya kitabını nəzərdən keçirin. |
+| partnyor-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04-04-2025 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Tamamlanıb 26.04.2025 | torii-int-01; Torii `/v2/pipeline` + Kulinariya kitabını nəzərdən keçirin. |
 | partnyor-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 04-05-2025 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Tamamlanıb 26.04.2025 | torii-int-02; Cütlənmiş Skrinşot yeniləməsini sınaqdan keçirin (docs-preview/w1 #2). |
 | partnyor-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 04-05-2025 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Tamamlanıb 26.04.2025 | sdk-partner-01; JS/Swift yemək kitabı rəyi + ISO körpü ağlını yoxlayır. |
 | partnyor-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 11.04.2025 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Tamamlanıb 26.04.2025 | sdk-partner-02; uyğunluq 2025-04-11 tarixində təmizləndi, Connect/telemetri qeydlərinə fokuslanıb. |

@@ -66,7 +66,7 @@ SN13-C reviews توقع کرتی ہیں کہ ہر drill یا incident Taikai anc
    lineage window فعال تھا۔ helper
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    spool files copy کرے گا، hashes emit کرے گا، اور optional طور پر summary sign کرے گا۔
-2. `/v1/status` output کو `.telemetry.taikai_alias_rotations[]` پر filter کر کے
+2. `/v2/status` output کو `.telemetry.taikai_alias_rotations[]` پر filter کر کے
    spool files کے ساتھ اسٹور کریں۔ reviewers `manifest_digest_hex` اور window bounds
    کو copied spool state کے ساتھ compare کرتے ہیں۔
 3. اوپر دی گئی metrics کے لیے Prometheus snapshots export کریں اور viewer/cache dashboards

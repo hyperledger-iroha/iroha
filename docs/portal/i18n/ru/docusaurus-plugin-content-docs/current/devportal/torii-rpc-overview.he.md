@@ -19,7 +19,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 # Обзор Norito-RPC
 
-Norito-RPC - бинарный транспорт для API Torii. Он использует те же HTTP пути, что и `/v1/pipeline`, но обменивается Norito-фреймингом с хешами схемы и checksum. Используйте его, когда нужны детерминированные и проверенные ответы или когда JSON ответы pipeline становятся узким местом.
+Norito-RPC - бинарный транспорт для API Torii. Он использует те же HTTP пути, что и `/v2/pipeline`, но обменивается Norito-фреймингом с хешами схемы и checksum. Используйте его, когда нужны детерминированные и проверенные ответы или когда JSON ответы pipeline становятся узким местом.
 
 ## Зачем переключаться?
 - Детерминированное фреймирование с CRC64 и хешами схемы снижает ошибки декодирования.
@@ -29,7 +29,7 @@ Norito-RPC - бинарный транспорт для API Torii. Он испо
 ## Отправка запроса
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Сериализуйте payload через Norito codec (`iroha_client`, SDK helper-ы или `norito::to_bytes`).
@@ -48,7 +48,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 Портал разработчика поставляет Try It прокси, чтобы рецензенты могли воспроизводить Norito payload-ы без написания отдельных скриптов.
 
 1. [Запустите прокси](./try-it.md#start-the-proxy-locally) и задайте `TRYIT_PROXY_PUBLIC_URL`, чтобы виджеты знали, куда отправлять трафик.
-2. Откройте карточку **Try it** на этой странице или панель `/reference/torii-swagger` и выберите endpoint, например `POST /v1/pipeline/submit`.
+2. Откройте карточку **Try it** на этой странице или панель `/reference/torii-swagger` и выберите endpoint, например `POST /v2/pipeline/submit`.
 3. Переключите **Content-Type** на `application/x-norito`, выберите редактор **Binary** и загрузите `fixtures/norito_rpc/transfer_asset.norito` (или любой payload из `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Укажите bearer token через OAuth device-code widget или вручную (прокси принимает overrides `X-TryIt-Auth`, когда задан `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Отправьте запрос и убедитесь, что Torii возвращает `schema_hash`, указанный в `fixtures/norito_rpc/schema_hashes.json`. Совпадение хешей подтверждает, что заголовок Norito пережил прыжок браузер/прокси.

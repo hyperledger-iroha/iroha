@@ -82,7 +82,7 @@ wallet tooling چلانے والے آپریٹرز status docs کو scrape کئے
 
 1. JSON snapshot لوڈ کریں اور اسے operators میں تقسیم کرنے سے پہلے hash/sign کریں۔
 2. Registrar tooling کو `suffix_id`, term limits اور pricing کو catalog سے ظاہر کرنا
-   چاہئے جب کوئی درخواست `/v1/sns/*` پر پہنچے۔
+   چاہئے جب کوئی درخواست `/v2/sns/*` پر پہنچے۔
 3. DNS/Gateway helpers GAR templates بناتے وقت reserved label metadata پڑھتے ہیں
    تاکہ DNS responses governance controls کے ساتھ aligned رہیں۔
 4. KPI annex jobs dashboards کے exports کو suffix metadata کے ساتھ tag کرتے ہیں

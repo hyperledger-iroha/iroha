@@ -28,7 +28,7 @@ El flujo de trabajo de embalaje SoraFS refuerza el determinismo, ya que el paso 
 - **Politique d'admission** — revoyez les adverts de fournisseurs signés et les aliasproofs nécessaires pour `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook du pin registro** — gardez `docs/source/sorafs/runbooks/pin_registry_ops.md` à portée pour les scénarios de reprise (rotation d'alias, échecs de replication).
 
-## Configuración del entorno- Las puertas de enlace deben activar el punto final de transmisión de prueba (`POST /v1/sorafs/proof/stream`) para que la CLI pueda reproducir currículums de televisión.
+## Configuración del entorno- Las puertas de enlace deben activar el punto final de transmisión de prueba (`POST /v2/sorafs/proof/stream`) para que la CLI pueda reproducir currículums de televisión.
 - Configure la política `sorafs_alias_cache` utilizando los valores predeterminados de `iroha_config` o la CLI auxiliar (`sorafs_cli manifest submit --alias-*`).
 - Proporcionar tokens de transmisión (o identificadores Torii) a través de un administrador de secretos seguros.
 - Active los exportadores de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) y envíelos a su pila Prometheus/OTel.

@@ -99,7 +99,7 @@ Operatsion nazorat ro'yxati:
    kelib chiqishi uchun konfiguratsiya surati:
 
    ```bash
-   curl -sS "${TORII_URL}/v1/configuration" \
+   curl -sS "${TORII_URL}/v2/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
@@ -110,7 +110,7 @@ Operatsion nazorat ro'yxati:
    o'rnatilgan `RepoGovernance` qiymatlarini tekshirish. JSON javoblarini saqlang
    `artifacts/finance/repo/<agreement>/agreements_after.json` ostida; bu qadriyatlar
    `[settlement.repo]` dan olingan, shuning uchun ular ikkinchi darajali guvoh sifatida ishlaydi
-   Torii ning `/v1/configuration` surati yetarli emas.
+   Torii ning `/v2/configuration` surati yetarli emas.
 4. Har ikkala artefaktni - TOML parchasi va Torii/CLI snapshotlarini saqlang.
    boshqaruv so'rovini topshirishdan oldin dalillar to'plami. Auditorlar buni bilishlari kerak
    parchani takrorlang, uning xeshini tekshiring va uni ish vaqti ko'rinishi bilan bog'lang.
@@ -146,10 +146,10 @@ auditorlar takrorlanadi.
 
 ### 2.4 Torii API sirtlari
 
-- `GET /v1/repo/agreements` faol kelishuvlarni ixtiyoriy sahifalash, filtrlash bilan qaytaradi
+- `GET /v2/repo/agreements` faol kelishuvlarni ixtiyoriy sahifalash, filtrlash bilan qaytaradi
   (`filter={...}`), saralash va manzilni formatlash parametrlari. Buni tezkor tekshiruvlar uchun foydalaning yoki
   xom JSON foydali yuklari etarli bo'lganda asboblar paneli.
-- `POST /v1/repo/agreements/query` tuzilgan so'rov konvertini qabul qiladi (sahifalash, saralash,
+- `POST /v2/repo/agreements/query` tuzilgan so'rov konvertini qabul qiladi (sahifalash, saralash,
   `FilterExpr`, `fetch_size`) shuning uchun quyi oqim xizmatlari buxgalteriya daftarini aniq varaqlashi mumkin.
 - JavaScript SDK endi `listRepoAgreements`, `queryRepoAgreements` va iteratorni ochib beradi
   yordamchilar, shuning uchun brauzer/Node.js asboblari Rust/Python bilan bir xil yozilgan DTOlarni oladi.
@@ -199,7 +199,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    CLI boshqaruvidagi `--notes` maydoni) va kerakli tasdiqlarni to'plang
    F1 uchun. Imzolangan tasdiqlash paketini parcha biriktirilgan holda saqlang.
 3. O'zgarishlarni butun park bo'ylab o'tkazing: `[settlement.repo]` yangilang, har birini qayta ishga tushiring
-   tugunni oching, so'ngra `GET /v1/configuration` suratini oling (yoki
+   tugunni oching, so'ngra `GET /v2/configuration` suratini oling (yoki
    `ToriiClient.getConfiguration`) har bir tengdosh uchun qo'llaniladigan qiymatlarni isbotlash.
 4. `integration_tests/tests/repo.rs` plus-ni qayta ishga tushiring
    `repo_deterministic_lifecycle_proof_matches_fixture` va keyingi jurnallarni saqlang
@@ -218,11 +218,11 @@ Norito/`iroha_config` sanitariya-tesisat endi hal qilingan repo siyosatini ochib
 har bir tengdosh uchun qo'llaniladigan qiymatlar - faqat taklif qilingan TOML emas. Yechilganlarni qo'lga oling
 konfiguratsiya va uning har bir chiqarilishidan keyin hazm qilish:
 
-1. Konfiguratsiyani har bir tengdoshdan oling (`GET /v1/configuration` yoki
+1. Konfiguratsiyani har bir tengdoshdan oling (`GET /v2/configuration` yoki
    `ToriiClient.getConfiguration`) va repo stanzasini ajratib oling:
 
    ```bash
-   curl -s http://<torii-host>/v1/configuration \
+   curl -s http://<torii-host>/v2/configuration \
      | jq -cS '.settlement.repo' \
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
@@ -286,7 +286,7 @@ matritsa) ovoz berish rejalashtirilganidan oldin bir xil artefaktlarni yuborishi
   mantiqiy asos.
 
 **Tasdiqlangandan keyingi tarqatishlar**1. Tasdiqlangan `[settlement.repo]` konfiguratsiyasini qo'llang va har bir tugunni qayta ishga tushiring (yoki aylantiring)
-   bu sizning avtomatlashtirishingiz orqali). Darhol `GET /v1/configuration` raqamiga qo'ng'iroq qiling va arxivlang
+   bu sizning avtomatlashtirishingiz orqali). Darhol `GET /v2/configuration` raqamiga qo'ng'iroq qiling va arxivlang
    har bir tugun uchun javob, shuning uchun boshqaruv to'plami qaysi tengdoshlar qabul qilganligini ko'rsatadi
    o'zgartirish.【crates/iroha_torii/src/lib.rs:3225】
 2. Deterministik repo testlarini qayta ishga tushiring va yangi jurnallarni biriktiring va tuzing
@@ -467,17 +467,17 @@ ish vaqtining xatti-harakati - dalillar to'plami ichida ularning artefaktlarini 
 Boshqaruv o'zgarishlarni ma'qullagandan so'ng va `[settlement.repo]` bandi boshlanadi.
 klaster, har bir tengdoshdan autentifikatsiya qilingan konfiguratsiya oniy rasmini oling
 auditorlar tasdiqlangan qiymatlarning jonli ekanligini isbotlashlari mumkin. Torii ni ochib beradi
-Shu maqsadda `/v1/configuration` marshruti va barcha SDK sirt yordamchilari, masalan
+Shu maqsadda `/v2/configuration` marshruti va barcha SDK sirt yordamchilari, masalan
 `ToriiClient.getConfiguration`, shuning uchun suratga olish ish jarayoni stol skriptlari uchun ishlaydi,
 CI yoki qo'lda operator ishlaydi.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/Toriift:68】
 
-1. `GET /v1/configuration` (yoki SDK yordamchisi) ga darhol qo'ng'iroq qiling.
+1. `GET /v2/configuration` (yoki SDK yordamchisi) ga darhol qo'ng'iroq qiling.
    tarqatish. Toʻliq JSON ostida saqlang
    `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` va yozib oling
    `config/config_snapshot_index.md` da blok balandligi/klaster vaqt tamg'asi.
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
-   curl -fsSL https://peer01.example/v1/configuration \
+   curl -fsSL https://peer01.example/v2/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
@@ -559,7 +559,7 @@ artifacts/finance/repo/<agreement-id>/
   jabduqni qayta ishga tushirmasdan.
 - `config/settlement_repo.toml` tarkibida `[settlement.repo]` parchasi mavjud
   repo amalga oshirilganda faol bo'lgan (sochlar, almashtirish matritsasi).
-- `config/peers/*.json` har bir tengdosh uchun `/v1/configuration` suratlarini oladi,
+- `config/peers/*.json` har bir tengdosh uchun `/v2/configuration` suratlarini oladi,
   bosqichli TOML va ish vaqti qiymatlari tengdoshlari hisoboti o'rtasidagi halqani yopish
   Torii dan yuqori.
 
@@ -715,7 +715,7 @@ yoki siyosat o'zgarishi boshqaruvga yo'naltiriladi:
    hisob-kitob qiling, qo'llaniladigan `[settlement.repo]` TOML blokini tashlang va
    tegishli `AccountEvent::Repo(*)` SSE tasmasini aks ettiring
    `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. GARdan keyin
-   o'tadi, har bir tengdosh uchun `/v1/configuration` oniy rasmlarni oling (§2.9) va ularni saqlang
+   o'tadi, har bir tengdosh uchun `/v2/configuration` oniy rasmlarni oling (§2.9) va ularni saqlang
    `config/peers/` ostida, shuning uchun boshqaruv paketi tarqatish muvaffaqiyatli bo'lganligini isbotlaydi.
 4. **Dalil manifestini yarating.**
    ```bash

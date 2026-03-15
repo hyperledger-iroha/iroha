@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for GET /v1/zk/proof/{backend}/{hash} (`app_api`).
+//! Integration tests for GET /v2/zk/proof/{backend}/{hash} (`app_api`).
 #![allow(clippy::similar_names)]
 
 use std::sync::Arc;
@@ -18,15 +18,7 @@ use tower::ServiceExt as _;
 fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String, String) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
 
     let id = ProofId {
@@ -48,7 +40,7 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let app =
         Router::new().route(
-            "/v1/zk/proof/{backend}/{hash}",
+            "/v2/zk/proof/{backend}/{hash}",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -61,7 +53,7 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
         );
     let backend_enc = urlencoding::encode(backend);
     let hash_hex = hex::encode(proof_hash);
-    let uri = format!("/v1/zk/proof/{backend_enc}/{hash_hex}");
+    let uri = format!("/v2/zk/proof/{backend_enc}/{hash_hex}");
     (app, uri, hash_hex)
 }
 
@@ -148,21 +140,13 @@ async fn zk_proof_get_returns_record() {
 async fn zk_proof_get_not_found() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let state = Arc::new(state);
     let limits = iroha_torii::ProofApiLimits::default();
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let app =
         Router::new().route(
-            "/v1/zk/proof/{backend}/{hash}",
+            "/v2/zk/proof/{backend}/{hash}",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -175,7 +159,7 @@ async fn zk_proof_get_not_found() {
         );
     let backend_enc = urlencoding::encode("halo2/ipa");
     let uri = format!(
-        "/v1/zk/proof/{backend_enc}/{hash}",
+        "/v2/zk/proof/{backend_enc}/{hash}",
         hash = hex::encode([0u8; 32])
     );
     let req = http::Request::builder()

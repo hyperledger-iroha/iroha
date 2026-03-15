@@ -1202,7 +1202,7 @@ pub struct AvailabilityCollectorSnapshot {
     pub votes_ingested: u64,
 }
 
-/// Aggregated availability vote ingestion snapshot for `/v1/sumeragi/telemetry`.
+/// Aggregated availability vote ingestion snapshot for `/v2/sumeragi/telemetry`.
 #[derive(Clone, Debug, Default)]
 pub struct AvailabilitySnapshot {
     /// Total availability votes ingested by this node.
@@ -1211,7 +1211,7 @@ pub struct AvailabilitySnapshot {
     pub collectors: Vec<AvailabilityCollectorSnapshot>,
 }
 
-/// Aggregated RBC backlog metrics snapshot for `/v1/sumeragi/telemetry`.
+/// Aggregated RBC backlog metrics snapshot for `/v2/sumeragi/telemetry`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RbcBacklogSnapshot {
     /// Total missing chunks across active sessions.
@@ -5954,7 +5954,7 @@ pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
     entry.votes = entry.votes.saturating_add(1);
 }
 
-/// Snapshot availability vote ingestion counters for `/v1/sumeragi/telemetry`.
+/// Snapshot availability vote ingestion counters for `/v2/sumeragi/telemetry`.
 pub fn availability_snapshot() -> AvailabilitySnapshot {
     let stats = availability_slot().lock().unwrap();
     let mut collectors: Vec<AvailabilityCollectorSnapshot> = stats
@@ -5979,7 +5979,7 @@ pub fn record_qc_latency(kind: &'static str, ms: u64) {
     slot.insert(kind, ms);
 }
 
-/// Snapshot QC assembly latencies for `/v1/sumeragi/telemetry`.
+/// Snapshot QC assembly latencies for `/v2/sumeragi/telemetry`.
 pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
     let slot = qc_latency_slot().lock().unwrap();
     let mut out: Vec<(String, u64)> = slot.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
@@ -5997,19 +5997,19 @@ pub fn set_rbc_backlog_snapshot(total_missing: u64, max_missing: u64, pending_se
     };
 }
 
-/// Snapshot RBC backlog aggregation for `/v1/sumeragi/telemetry`.
+/// Snapshot RBC backlog aggregation for `/v2/sumeragi/telemetry`.
 pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
     *rbc_backlog_slot().lock().unwrap()
 }
 
-/// Replace the pending-RBC snapshot used by `/v1/sumeragi/status`.
+/// Replace the pending-RBC snapshot used by `/v2/sumeragi/status`.
 pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
     *pending_rbc_slot().lock().unwrap() = snapshot;
 }
 
-/// Snapshot pending-RBC aggregation for `/v1/sumeragi/status`.
+/// Snapshot pending-RBC aggregation for `/v2/sumeragi/status`.
 pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
@@ -6138,12 +6138,12 @@ fn dataspace_activity_slot() -> &'static Mutex<Vec<DataspaceActivitySnapshot>> {
     DATASPACE_ACTIVITY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Replace the lane-activity snapshot used by `/v1/sumeragi/status`.
+/// Replace the lane-activity snapshot used by `/v2/sumeragi/status`.
 pub fn set_lane_activity_snapshot(entries: Vec<LaneActivitySnapshot>) {
     *lane_activity_slot().lock().unwrap() = entries;
 }
 
-/// Replace the access-set source summary used by `/v1/sumeragi/status`.
+/// Replace the access-set source summary used by `/v2/sumeragi/status`.
 pub fn set_access_set_source_summary(summary: AccessSetSourceSummary) {
     *access_set_source_slot().lock().unwrap() = summary;
 }
@@ -6153,7 +6153,7 @@ pub fn set_pipeline_conflict_rate_bps(bps: u64) {
     PIPELINE_CONFLICT_RATE_BPS.store(bps, Ordering::Relaxed);
 }
 
-/// Replace the dataspace-activity snapshot used by `/v1/sumeragi/status`.
+/// Replace the dataspace-activity snapshot used by `/v2/sumeragi/status`.
 pub fn set_dataspace_activity_snapshot(entries: Vec<DataspaceActivitySnapshot>) {
     *dataspace_activity_slot().lock().unwrap() = entries;
 }
@@ -6178,12 +6178,12 @@ fn rbc_dataspace_backlog_slot() -> &'static Mutex<Vec<DataspaceRbcSnapshot>> {
     RBC_DATASPACE_BACKLOG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Replace the aggregated RBC lane backlog snapshot used by `/v1/sumeragi/status`.
+/// Replace the aggregated RBC lane backlog snapshot used by `/v2/sumeragi/status`.
 pub fn set_rbc_lane_backlog(entries: Vec<LaneRbcSnapshot>) {
     *rbc_lane_backlog_slot().lock().unwrap() = entries;
 }
 
-/// Replace the aggregated RBC dataspace backlog snapshot used by `/v1/sumeragi/status`.
+/// Replace the aggregated RBC dataspace backlog snapshot used by `/v2/sumeragi/status`.
 pub fn set_rbc_dataspace_backlog(entries: Vec<DataspaceRbcSnapshot>) {
     *rbc_dataspace_backlog_slot().lock().unwrap() = entries;
 }
@@ -6269,7 +6269,7 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
     }
 }
 
-/// Replace the aggregated lane/dataspace commitment snapshots used by `/v1/sumeragi/status`.
+/// Replace the aggregated lane/dataspace commitment snapshots used by `/v2/sumeragi/status`.
 pub fn set_lane_commitments(
     lane_entries: Vec<LaneCommitmentSnapshot>,
     dataspace_entries: Vec<DataspaceCommitmentSnapshot>,
@@ -6288,7 +6288,7 @@ pub fn set_lane_commitments(
     }
 }
 
-/// Replace the aggregated lane settlement commitments used by `/v1/sumeragi/status`.
+/// Replace the aggregated lane settlement commitments used by `/v2/sumeragi/status`.
 pub fn set_lane_settlement_commitments(entries: Vec<LaneBlockCommitment>) {
     let mut guard = lane_settlement_commitments_slot()
         .lock()
@@ -6349,7 +6349,7 @@ fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
     LANE_GOVERNANCE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Replace the governance manifest snapshot used by `/v1/sumeragi/status`.
+/// Replace the governance manifest snapshot used by `/v2/sumeragi/status`.
 pub fn set_lane_governance_snapshot(entries: Vec<LaneGovernanceSnapshot>) {
     *lane_governance_slot()
         .lock()

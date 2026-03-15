@@ -25,7 +25,7 @@ rolling the tooling out to real gateways and storage providers.
 
 ## Environment configuration
 
-- Gateways must enable the proof streaming endpoint (`POST /v1/sorafs/proof/stream`)
+- Gateways must enable the proof streaming endpoint (`POST /v2/sorafs/proof/stream`)
   so the CLI can emit telemetry summaries.
 - Configure `sorafs_alias_cache` policy using the defaults in
   `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).

@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-ba
   ```
 
 - Torii процесын тәьмин итеү уҡыу/яҙыу рөхсәт `data_dir`.
-- Төйөн раҫлай, көтөлгән ҡөҙрәтте реклама аша `GET /v1/sorafs/capacity/state` аша бер тапҡыр декларация теркәлгән.
+- Төйөн раҫлай, көтөлгән ҡөҙрәтте реклама аша `GET /v2/sorafs/capacity/state` аша бер тапҡыр декларация теркәлгән.
 - Ҡасан тигеҙләү өҫтөндә эшләй, приборҙар таҡталары сеймал һәм тигеҙләнгән GiB·our/PoR иҫәпләүселәрҙе фашлау өсөн дрожь-бушлай тенденцияларҙы айырып күрһәтеү өсөн тап ҡиммәттәре.
 
 ### CLI ҡоро йүгерә (Һоралы)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 Бер тапҡыр Torii тура эфирҙа һеҙ HTTP аша шул уҡ артефакттарҙы ала алаһығыҙ:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ``` X
 
 Ике ос нөктәһе лә встраиваемый һаҡлау эшсеһе тарафынан хеҙмәтләндерә, шуға күрә CLI төтөн һынауҙары һәм шлюз зондтары синхронлаша.【крат/ироха_тории/сраф/ап. #L1207】【крат/ироха_тории/срк/sorafs/aporafs/ap.#L1259】
@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестты base64 кодлауы менән тапшырығыҙ:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Ҡырҡылған мәғлүмәттәрҙе ала:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -121,7 +121,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. PoR өлгөһөн һорағыҙ:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Приборҙар таҡталары күҙәтергә тейеш:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` һәм `torii_sorafs_storage_fetch_inflight`.
-  - `/v1/sorafs/capacity/state` аша үткән PoR уңыштары/уңышһыҙлыҡҡа осраған иҫәпләүселәр
+  - `/v2/sorafs/capacity/state` аша үткән PoR уңыштары/уңышһыҙлыҡҡа осраған иҫәпләүселәр
   - Ҡасаба баҫтырып сығарыу тырышлыҡтары аша `sorafs_node_deal_publish_total{result=success|failure}`
 
 Һуңынан был күнекмәләр тәьмин итә встраиваемый һаҡлау эшсеһе мәғлүмәттәрҙе ашау, йәшәй, ҡабаттан башлау, хөрмәт конфигурацияланған квоталар, һәм генерациялау детерминистик PoR иҫбатлауҙар алдынан төйөн реклама ҡәҙерле киң селтәр.

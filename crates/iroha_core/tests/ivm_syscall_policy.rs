@@ -42,7 +42,7 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 }
 
 #[test]
-fn deny_unlisted_syscall_in_v1() {
+fn deny_unlisted_syscall_in_current() {
     // Choose a syscall number that is not in the ABI v1 allowlist.
     let prog = program_with_scall(0xAB);
     let mut vm = IVM::new(u64::MAX);
@@ -56,7 +56,7 @@ fn deny_unlisted_syscall_in_v1() {
 }
 
 #[test]
-fn allow_forwarded_alloc_in_v1() {
+fn allow_forwarded_alloc_in_current() {
     // ALLOC is forwarded by CoreHost and should be permitted.
     let prog = program_with_scall(ivm_sys::SYSCALL_ALLOC as u8);
     let mut vm = IVM::new(u64::MAX);

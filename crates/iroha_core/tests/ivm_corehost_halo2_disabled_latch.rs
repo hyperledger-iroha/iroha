@@ -85,7 +85,7 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     vm.load_program(&meta.encode()).expect("load metadata");
 
     // Prepare a ZK_VERIFY_TRANSFER envelope TLV with a compact mock payload.
-    let env = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]).proof_bytes;
+    let env = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]).proof_bytes;
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &env);
     let ptr_verify = store_tlv(&mut vm, &tlv);
     vm.memory
@@ -97,7 +97,10 @@ fn halo2_disabled_verify_does_not_set_latch_and_gates_isi() {
     assert_eq!(vm.register(10), 0, "verify must return 0 when disabled");
 
     // Now enqueue an Unshield via vendor syscall and ensure apply_queued rejects
-    let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let unshield = iroha_data_model::isi::zk::Unshield {
         asset,
         to: authority.clone(),

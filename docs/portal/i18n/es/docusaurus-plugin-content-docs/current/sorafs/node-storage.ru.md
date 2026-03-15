@@ -156,9 +156,9 @@ y cargas útiles de la API Torii.【crates/sorafs_node/tests/cli.rs:1】> Parte 
 > Torii gateway теперь предоставляет на основе того же ayudantes de solo lectura
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
 > Manifiesto Norito (base64) incluido en digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — возвращает детерминированный
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — возвращает детерминированный
 > Plantilla JSON (`chunk_fetch_specs`) para herramientas posteriores.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Estos puntos pueden acceder a la CLI, los pagos pueden realizarse desde lugares locales
@@ -198,18 +198,18 @@ y cargas útiles de la API Torii.【crates/sorafs_node/tests/cli.rs:1】> Parte 
      согласования модели gobernanza; пока дизайн предполагает строгие квоты и
      desanclar operaciones, инициируемые оператором.
 
-### Integración de declaraciones y programación- Torii vuelve a conectar la configuración `CapacityDeclarationRecord` o `/v1/sorafs/capacity/declare`
+### Integración de declaraciones y programación- Torii vuelve a conectar la configuración `CapacityDeclarationRecord` o `/v2/sorafs/capacity/declare`
   En la versión `CapacityManager`, esta es la configuración de memoria previa del usuario en memoria.
   зафиксированных fragmentador/carril аллокаций. Cómo publicar instantáneas de solo lectura en televisores
-  (`GET /v1/sorafs/capacity/state`) y presenta reservas por perfil/por carril para nuevas versiones
+  (`GET /v2/sorafs/capacity/state`) y presenta reservas por perfil/por carril para nuevas versiones
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Эндпоинт `/v1/sorafs/capacity/schedule` принимает emitido por la gobernanza `ReplicationOrderV1`
+- Эндпоинт `/v2/sorafs/capacity/schedule` принимает emitido por la gobernanza `ReplicationOrderV1`
   cargas útiles. Когда заказ нацелен на локального провайдера, менеджер проверяет дублирование
   расписаний, валидирует емкость chunker/lane, резервирует слот and возвращает `ReplicationPlan`
   с описанием оставшейся емкости, чтобы оркестрация могла продолжить la ingestión. Заказы для
   Los fabricantes de archivos adjuntos `ignored`, que mejoran flujos de trabajo multioperador. 【crates/iroha_torii/src/routing.rs:4845】
 - Ganchos de finalización (например, после успешной ingerir) вызывают
-  `POST /v1/sorafs/capacity/complete` para la reserva de agua
+  `POST /v2/sorafs/capacity/complete` para la reserva de agua
   `CapacityManager::complete_order`. Ответ включает instantánea `ReplicationRelease`
   (totales de остаточные, остатки fragmentador/carril), чтобы herramientas de orquestación могло
   ставить следующий заказ без encuestas. Дальнейшая работа подключит это к oleoducto

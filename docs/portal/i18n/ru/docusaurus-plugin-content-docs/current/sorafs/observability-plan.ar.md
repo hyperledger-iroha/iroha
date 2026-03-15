@@ -83,7 +83,7 @@ Sidebar_label: Изменение уровня доступа и SLO
 | `sorafs_node_por_failure_total` | Счетчик | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Калибр | `provider` | Установите Prometheus для получения дополнительной информации о PoR. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Калибр | `provider` | Он был выбран/предпринят для того, чтобы покончить с собой. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Он сказал, что хочет, чтобы это произошло с ним. `/v1/sorafs/por/ingestion/{manifest}` вызывает сообщение «PoR Stalles». |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Он сказал, что хочет, чтобы это произошло с ним. `/v2/sorafs/por/ingestion/{manifest}` вызывает сообщение «PoR Stalles». |
 
 ### Доказательство своевременного извлечения (PoTR) и SLA الشرائح
 

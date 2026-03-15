@@ -41,6 +41,9 @@ fn find_asset_total_quantity() -> Result<()> {
         ];
         let wonderland_domain: DomainId = "wonderland".parse()?;
         let looking_glass_domain: DomainId = "looking_glass".parse()?;
+        let quantity_definition =
+            AssetDefinitionId::new(wonderland_domain.clone(), "quantity".parse()?);
+        let fixed_definition = AssetDefinitionId::new(wonderland_domain.clone(), "fixed".parse()?);
 
         // Registering accounts
         let register_accounts = accounts
@@ -62,7 +65,7 @@ fn find_asset_total_quantity() -> Result<()> {
         test_total_quantity(
             &test_client,
             &accounts,
-            "quantity#wonderland",
+            quantity_definition,
             NumericSpec::default(),
             &numeric!(1),
             &numeric!(10),
@@ -72,7 +75,7 @@ fn find_asset_total_quantity() -> Result<()> {
         test_total_quantity(
             &test_client,
             &accounts,
-            "fixed#wonderland",
+            fixed_definition,
             NumericSpec::default(),
             &numeric!(1.0),
             &numeric!(10.0),
@@ -92,7 +95,7 @@ fn find_asset_total_quantity() -> Result<()> {
 fn test_total_quantity(
     test_client: &Client,
     accounts: &[AccountId; 5],
-    definition: &str,
+    definition_id: AssetDefinitionId,
     asset_spec: NumericSpec,
     initial_value: &Numeric,
     to_mint: &Numeric,
@@ -101,9 +104,11 @@ fn test_total_quantity(
 ) -> Result<()> {
     let context = stringify!(find_asset_total_quantity);
     // Registering new asset definition
-    let definition_id: AssetDefinitionId =
-        definition.parse().expect("Failed to parse `definition_id`");
-    let asset_definition = AssetDefinition::new(definition_id.clone(), asset_spec);
+    let asset_definition = {
+        let __asset_definition_id = definition_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), asset_spec)
+            .with_name(__asset_definition_id.name().to_string())
+    };
     test_client.submit_blocking(Register::asset_definition(asset_definition))?;
     let account_count = accounts.len();
 

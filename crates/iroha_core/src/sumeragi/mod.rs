@@ -6674,6 +6674,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_caps_drain_at_config_cap() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6782,6 +6783,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_caps_drain_at_tick_gap() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6891,6 +6893,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_preempts_drain_for_tick_deadline() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);

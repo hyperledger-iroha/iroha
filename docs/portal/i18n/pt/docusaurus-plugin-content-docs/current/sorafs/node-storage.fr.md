@@ -165,9 +165,9 @@ que manifestos e cargas úteis são corrigidos de ida e volta antes da chegada d
 > O gateway Torii expõe os ajudantes desormados em uma aula baseada apenas no mesmo
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — reenviar o manifesto
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — reenviar o manifesto
 > Norito armazenado (base64) com digest/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — reenviar o plano de pedaço
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — reenviar o plano de pedaço
 > determine JSON (`chunk_fetch_specs`) para as ferramentas downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Esses endpoints refletem a saída CLI para que os pipelines possam passar
@@ -208,18 +208,18 @@ que manifestos e cargas úteis são corrigidos de ida e volta antes da chegada d
      um foi o modelo de governo definido; para o instante, o design supõe que des
      quotas restritas e operações de liberação iniciadas pelo operador.
 
-### Declaração de capacidade e integração de agendamento- Torii relaie désormais les mises a jour `CapacityDeclarationRecord` depois de `/v1/sorafs/capacity/declare`
+### Declaração de capacidade e integração de agendamento- Torii relaie désormais les mises a jour `CapacityDeclarationRecord` depois de `/v2/sorafs/capacity/declare`
   vers le `CapacityManager` embarcado, de modo que cada um não construiu uma visão na memória de sessões
   alocações chunker/lane engajados. O gerenciador expõe os instantâneos somente leitura para a transmissão
-  (`GET /v1/sorafs/capacity/state`) e aplique reservas por perfil ou por via antes de
+  (`GET /v2/sorafs/capacity/state`) e aplique reservas por perfil ou por via antes de
   novos comandos não foram aceitos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- O endpoint `/v1/sorafs/capacity/schedule` aceita cargas úteis `ReplicationOrderV1` enviadas pelo governo.
+- O endpoint `/v2/sorafs/capacity/schedule` aceita cargas úteis `ReplicationOrderV1` enviadas pelo governo.
   Ao solicitar o provedor local, o gerente verifica o planejamento em dobro, valida o
   capacidade chunker/lane, reserve a parcela e reenvie um `ReplicationPlan` que descreva a capacidade restante
   para que as ferramentas de orquestração possam permitir a ingestão. Ordens para outros provedores
   foram adquiridos com uma resposta `ignored` para facilitar os fluxos de trabalho de vários operadores.【crates/iroha_torii/src/routing.rs:4845】
 - Des hooks de complétion (por exemplo, déclenchés após sucesso de ingestão) appellent
-  `POST /v1/sorafs/capacity/complete` para liberar reservas via `CapacityManager::complete_order`.
+  `POST /v2/sorafs/capacity/complete` para liberar reservas via `CapacityManager::complete_order`.
   A resposta inclui um instantâneo `ReplicationRelease` (todos os restos, resíduos chunker/lane) para que
   as ferramentas de orquestração podem enfileirar o comando seguinte sem votação. Um trabalho futuro confiável
   cela no pipeline de armazenamento de pedaços quando a lógica de ingestão será pronta.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】

@@ -635,7 +635,7 @@ Sev1/2 ክትትሎች እና ማስረጃዎችን በ `incident/<date>-android
 ** ምልክቶች ***
 
 - ማንቂያዎች በ`android_sdk_submission_latency`፣ `android_sdk_pending_queue_depth`፣
-  `android_sdk_offline_replay_errors`፣ እና Torii `/v1/pipeline` የስህተት መጠን።
+  `android_sdk_offline_replay_errors`፣ እና Torii `/v2/pipeline` የስህተት መጠን።
 - `operator-console` ፍርግሞች (ምሳሌዎች/አንድሮይድ) የቆመ የወረፋ ፍሳሽ ወይም
   በገለፃ ጀርባ ላይ ተጣብቆ ይሞክራል።
 
@@ -685,7 +685,7 @@ Sev1/2 ክትትሎች እና ማስረጃዎችን በ `incident/<date>-android
 ** ማገገም ***
 
 1. Torii ከተቀነሰ፣ የTorii ጥሪን ያሳትፉ እና እንደገና ማጫወትዎን ይቀጥሉ።
-   ወረፋ አንዴ `/v1/pipeline` ትራፊክ ይቀበላል።
+   ወረፋ አንዴ `/v2/pipeline` ትራፊክ ይቀበላል።
 2. የተጎዱ ደንበኞችን በተፈረመ `iroha_config` መግለጫዎች በኩል ብቻ እንደገና ማዋቀር። የ
    `ClientConfig` ትኩስ ጫን ተመልካች ክስተቱ በፊት የስኬት ምዝግብ ማስታወሻ ማውጣት አለበት
    መዝጋት ይችላል።

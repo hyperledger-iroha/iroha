@@ -398,7 +398,21 @@ fn parse_destination(value: String) -> BridgeResult<AccountId> {
 }
 
 fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
-    value.parse().map_err(|_| BridgeError::AssetDefinition)
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::AssetDefinition);
+    }
+
+    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
+        return Ok(id);
+    }
+
+    let (name, domain) = trimmed
+        .split_once('#')
+        .ok_or(BridgeError::AssetDefinition)?;
+    let name = Name::from_str(name).map_err(|_| BridgeError::AssetDefinition)?;
+    let domain = DomainId::from_str(domain).map_err(|_| BridgeError::AssetDefinition)?;
+    Ok(AssetDefinitionId::new(domain, name))
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
@@ -3054,7 +3068,7 @@ pub unsafe extern "C" fn connect_norito_connect_encrypt_envelope(
             Err(_) => return -3,
         };
         let frame =
-            connect_sdk::seal_envelope_v1(&key, &sid, direction, envelope.seq, envelope.payload);
+            connect_sdk::seal_envelope(&key, &sid, direction, envelope.seq, envelope.payload);
         let buf = match encode_connect_frame(&frame) {
             Ok(buf) => buf,
             Err(_) => return ERR_CONNECT_ENCODE,
@@ -3087,7 +3101,7 @@ pub unsafe extern "C" fn connect_norito_connect_decrypt_ciphertext(
             Ok(f) => f,
             Err(_) => return -2,
         };
-        let envelope = match connect_sdk::open_envelope_v1(&key, &frame) {
+        let envelope = match connect_sdk::open_envelope(&key, &frame) {
             Ok(env) => env,
             Err(_) => return -3,
         };
@@ -7332,6 +7346,58 @@ mod accel_tests {
     }
 
     #[test]
+    fn decode_asset_id_json_returns_canonical_fields() {
+        let _guard = chain_guard();
+        let (account_cstr, _) = sample_account("bank", 0);
+        let account_literal = account_cstr.to_str().expect("account literal");
+        let account_id = AccountId::parse_encoded(account_literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("parse account");
+        let definition = AssetDefinitionId::new(
+            "bank".parse().expect("domain"),
+            "usd".parse().expect("asset name"),
+        );
+        let asset = AssetId::new(definition.clone(), account_id.clone());
+        let asset_literal = cstring(&asset.canonical_encoded());
+
+        let mut out_json_ptr: *mut u8 = ptr::null_mut();
+        let mut out_json_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_decode_asset_id_json(
+                asset_literal.as_ptr(),
+                asset_literal.as_bytes().len() as c_ulong,
+                &mut out_json_ptr,
+                &mut out_json_len,
+            )
+        };
+        assert_eq!(status, 0, "expected successful decode");
+        assert!(
+            !out_json_ptr.is_null(),
+            "decoder should return JSON payload"
+        );
+
+        let body = unsafe { slice::from_raw_parts(out_json_ptr, out_json_len as usize) };
+        let parsed: JsonValue = norito::json::from_slice(body).expect("decode bridge payload");
+        connect_norito_free(out_json_ptr);
+
+        let object = parsed.as_object().expect("json object");
+        assert_eq!(
+            object.get("asset_id").and_then(JsonValue::as_str),
+            Some(asset.canonical_encoded().as_str())
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_id")
+                .and_then(JsonValue::as_str),
+            Some(definition.to_string().as_str())
+        );
+        assert_eq!(
+            object.get("account_id").and_then(JsonValue::as_str),
+            Some(account_id.to_string().as_str())
+        );
+    }
+
+    #[test]
     fn chain_discriminant_roundtrip() {
         let _guard = super::test_support::chain_discriminant_guard();
         let previous = unsafe { connect_norito_get_chain_discriminant() };
@@ -7507,6 +7573,32 @@ mod accel_tests {
         let signed_bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
         let signed = decode_signed_transaction(signed_bytes).expect("decode signed transaction");
         assert_eq!(out_hash, *signed.hash().as_ref());
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_legacy_literal() {
+        let parsed = parse_asset_definition("usd#bank".to_owned())
+            .expect("legacy asset definition should parse");
+        let expected = AssetDefinitionId::new(
+            DomainId::from_str("bank").expect("domain"),
+            Name::from_str("usd").expect("name"),
+        );
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_asset_definition_accepts_canonical_aid_literal() {
+        let canonical = AssetDefinitionId::new(
+            DomainId::from_str("wonderland").expect("domain"),
+            Name::from_str("rose").expect("name"),
+        )
+        .to_string();
+        let parsed = parse_asset_definition(canonical.clone())
+            .expect("canonical aid asset definition should parse");
+        let expected = canonical
+            .parse::<AssetDefinitionId>()
+            .expect("canonical aid should parse");
+        assert_eq!(parsed, expected);
     }
 
     #[test]
@@ -8297,7 +8389,10 @@ mod offline_challenge_tests {
         let invoice = CString::new("inv-ffi").expect("invoice");
         let (controller_account, controller_cstr) = account_with_cstring("bank", 21);
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
-        let asset_definition: AssetDefinitionId = "usd#bank".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "bank".parse().unwrap(),
+            "usd".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
         let asset_literal = asset_literal(&asset_id);
         let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
@@ -8448,7 +8543,7 @@ mod offline_challenge_tests {
 
 #[cfg(test)]
 mod offline_fastpq_proof_tests {
-    use std::{ptr, slice, str::FromStr};
+    use std::{ptr, slice};
 
     use curve25519_dalek::traits::Identity;
     use iroha_crypto::KeyPair;
@@ -8491,7 +8586,7 @@ mod offline_fastpq_proof_tests {
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
         let asset_definition =
-            AssetDefinitionId::from_str("xor#default").expect("asset definition");
+            AssetDefinitionId::new("default".parse().unwrap(), "xor".parse().unwrap());
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -9129,6 +9224,52 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
         }
         0
     }
+}
+
+/// Decode an encoded `AssetId` (`norito:<hex>`) into canonical readable JSON fields.
+///
+/// Response JSON object fields:
+/// - `asset_id`: canonical encoded asset id (`norito:<hex>`)
+/// - `asset_definition_id`: canonical asset definition id (`aid:<32-lower-hex>`)
+/// - `account_id`: canonical account id (I105 literal)
+///
+/// # Safety
+/// All pointer arguments must be valid and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_decode_asset_id_json(
+    asset_ptr: *const c_char,
+    asset_len: c_ulong,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| -> BridgeResult<()> {
+        if out_json_ptr.is_null() || out_json_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let asset_literal = unsafe { read_string_bridge(asset_ptr, asset_len) }?;
+        let asset =
+            AssetId::parse_encoded(&asset_literal).map_err(|_| BridgeError::OfflineAsset)?;
+        let payload = JsonValue::Object(JsonMap::from_iter([
+            (
+                "asset_id".to_owned(),
+                JsonValue::String(asset.canonical_encoded()),
+            ),
+            (
+                "asset_definition_id".to_owned(),
+                JsonValue::String(asset.definition().to_string()),
+            ),
+            (
+                "account_id".to_owned(),
+                JsonValue::String(asset.account().to_string()),
+            ),
+        ]));
+        let json_bytes =
+            norito::json::to_vec(&payload).map_err(|_| BridgeError::OfflineSerialize)?;
+        unsafe { write_bytes_bridge(out_json_ptr, out_json_len, &json_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
 }
 
 /// Decode a Norito-encoded `TransactionSubmissionReceipt` into JSON.
@@ -10115,7 +10256,10 @@ mod offline_receipt_challenge_tests {
     }
 
     fn sample_asset_id(account: &AccountId) -> AssetId {
-        let definition: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition");
+        let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         AssetId::new(definition, account.clone())
     }
 
@@ -12565,8 +12709,10 @@ mod sorafs_tests {
 
         let sender = test_account_id(1);
         let receiver = test_account_id(2);
-        let asset_def = iroha_data_model::asset::id::AssetDefinitionId::from_str("xor#default")
-            .expect("asset def");
+        let asset_def = iroha_data_model::asset::id::AssetDefinitionId::new(
+            "default".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset = AssetId::new(asset_def, sender.clone());
         let challenge_hash = Hash::new(vec![0x33; 32]);
 

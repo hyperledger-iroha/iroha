@@ -42,7 +42,7 @@ vigueur.
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` avec un `max_span` défini
      - `allow_unknown_capabilities=<true|false>` quand des TLVs GREASE sont présents
-   - Valider via `/v1/sorafs/providers` et `sorafs_fetch` ; les warnings sur des
+   - Valider via `/v2/sorafs/providers` et `sorafs_fetch` ; les warnings sur des
      capabilities inconnues doivent être triés.
 3. **Valider la readiness multi-source.**
    - Exécuter `sorafs_fetch` avec `--provider-advert=<path>` ; le CLI échoue
@@ -193,9 +193,9 @@ requiert la mise à jour de ce fichier et du ledger dans la même PR.
 - **Mailer hebdomadaire de statut.** DevRel diffuse un bref résumé des métriques
   d'admission, des warnings en cours et des deadlines à venir.
 - **Réponse incident.** Si les alertes `reject` se déclenchent, l'on-call :
-  1. Récupère l'advert fautif via discovery Torii (`/v1/sorafs/providers`).
+  1. Récupère l'advert fautif via discovery Torii (`/v2/sorafs/providers`).
   2. Relance la validation de l'advert dans le pipeline provider et compare avec
-     `/v1/sorafs/providers` pour reproduire l'erreur.
+     `/v2/sorafs/providers` pour reproduire l'erreur.
   3. Coordonne avec le provider pour faire tourner l'advert avant la prochaine
      deadline de refresh.
 - **Gel des changements.** Aucune modification du schéma de capabilities pendant

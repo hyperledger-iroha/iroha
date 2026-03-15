@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Tests for the pipeline recovery endpoint: `/v1/pipeline/recovery/{height}`.
+//! Tests for the pipeline recovery endpoint: `/v2/pipeline/recovery/{height}`.
 
 use axum::{Router, routing::get};
 use http_body_util::{BodyExt as _, Full};
@@ -37,7 +37,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
 
     // Wire only the tested route, mimicking the closure in lib.rs
     let app = Router::new().route(
-        "/v1/pipeline/recovery/{height}",
+        "/v2/pipeline/recovery/{height}",
         get({
             let kura = kura.clone();
             move |axum::extract::Path(height): axum::extract::Path<u64>| async move {
@@ -72,7 +72,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
     let block_hash_str = block_hash.to_string();
-    let sidecar = PipelineRecoverySidecar::new_v1(
+    let sidecar = PipelineRecoverySidecar::new(
         1,
         block_hash,
         PipelineDagSnapshot {
@@ -86,7 +86,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     // Query existing height
     let req_ok = http::Request::builder()
         .method("GET")
-        .uri("/v1/pipeline/recovery/1")
+        .uri("/v2/pipeline/recovery/1")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_ok = app.clone().oneshot(req_ok).await.unwrap();
@@ -95,7 +95,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     let v: norito::json::Value = norito::json::from_slice(&resp_body).unwrap();
     assert_eq!(
         v.get("format").and_then(|x| x.as_str()),
-        Some("pipeline.recovery.v1")
+        Some("pipeline.recovery")
     );
     assert_eq!(
         v.get("block_hash").and_then(|x| x.as_str()),
@@ -105,7 +105,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     // Query missing height
     let req_missing = http::Request::builder()
         .method("GET")
-        .uri("/v1/pipeline/recovery/2")
+        .uri("/v2/pipeline/recovery/2")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_missing = app.clone().oneshot(req_missing).await.unwrap();

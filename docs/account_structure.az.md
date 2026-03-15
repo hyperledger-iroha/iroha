@@ -671,12 +671,12 @@ onların dəyişmə biletləri.
   istifadəçilər sıxılmış I105 formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
 - **Torii inteqrasiyası:** Keş Nexus TTL-ə uyğun olaraq təzahür edir, yayır
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministik və
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii cavab formatları
 
-- `GET /v1/accounts` isteğe bağlı `canonical I105 rendering` sorğu parametrini qəbul edir və
-  `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
+- `GET /v2/accounts` isteğe bağlı `canonical I105 rendering` sorğu parametrini qəbul edir və
+  `POST /v2/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
   - `i105` (defolt) — cavablar kanonik I105 Base58 faydalı yükləri yayır (məsələn,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -685,7 +685,7 @@ onların dəyişmə biletləri.
 - Yanlış dəyərlər `400` (`QueryExecutionFail::Conversion`) qaytarır. Bu imkan verir
   cüzdanlar və tədqiqatçılar yalnız Sora-da UX üçün sıxılmış sətirlər tələb etsinlər
   I105-i qarşılıqlı işləyə bilən standart olaraq saxlayır.
-- Aktiv sahibi siyahıları (`GET /v1/assets/{definition_id}/holders`) və onların JSON
+- Aktiv sahibi siyahıları (`GET /v2/assets/{definition_id}/holders`) və onların JSON
   zərf həmkarı (`POST …/holders/query`) də `canonical I105 rendering`-i şərəfləndirir.
   `items[*].account_id` sahəsi hər dəfə sıxılmış hərflər buraxır
   parametr/zərf sahəsi hesabları əks etdirərək `i105_default` olaraq təyin edilib

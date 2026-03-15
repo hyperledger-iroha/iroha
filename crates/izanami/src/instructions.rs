@@ -293,8 +293,6 @@ pub fn prepare_state(
     let base_domain: DomainId = "chaosnet"
         .parse()
         .map_err(|_| eyre!("invalid base domain"))?;
-    let domain_name = base_domain.name.to_string();
-
     let treasury_key = KeyPair::random();
     let treasury_id = AccountId::new(treasury_key.public_key().clone());
     let treasury = AccountRecord {
@@ -314,12 +312,18 @@ pub fn prepare_state(
         });
     }
 
-    let asset_numeric_id: AssetDefinitionId = format!("chaos_coin#{domain_name}")
-        .parse()
-        .map_err(|_| eyre!("failed to form numeric asset id"))?;
-    let asset_nft_id: AssetDefinitionId = format!("chaos_collectible#{domain_name}")
-        .parse()
-        .map_err(|_| eyre!("failed to form nft asset id"))?;
+    let asset_numeric_id: AssetDefinitionId = AssetDefinitionId::new(
+        base_domain.clone(),
+        "chaos_coin"
+            .parse()
+            .map_err(|_| eyre!("failed to parse numeric asset name"))?,
+    );
+    let asset_nft_id: AssetDefinitionId = AssetDefinitionId::new(
+        base_domain.clone(),
+        "chaos_collectible"
+            .parse()
+            .map_err(|_| eyre!("failed to parse nft asset name"))?,
+    );
 
     let dataspaces: Vec<DataSpaceId> = nexus
         .map(|profile| {
@@ -393,7 +397,7 @@ pub fn prepare_state(
         let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
             .parse()
             .map_err(|_| eyre!("failed to parse nexus stake asset id"))?;
-        let fee_asset: AssetDefinitionId = config_defaults::nexus::fees::FEE_ASSET_ID
+        let fee_asset: AssetDefinitionId = config_defaults::nexus::fees::fee_asset_id()
             .parse()
             .map_err(|_| eyre!("failed to parse nexus fee asset id"))?;
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
@@ -408,11 +412,11 @@ pub fn prepare_state(
         ))));
         nexus_genesis.push(InstructionBox::from(Register::account(gas_account)));
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(stake_asset.clone()),
+            AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
         )));
         if fee_asset != stake_asset {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-                AssetDefinition::numeric(fee_asset.clone()),
+                AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
             )));
         }
 
@@ -467,10 +471,12 @@ pub fn prepare_state(
         base_domain.clone(),
     ))));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_numeric_id.clone()),
+        AssetDefinition::numeric(asset_numeric_id.clone()).with_name("Numeric Asset".to_owned()),
     )));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_nft_id.clone()).mintable_once(),
+        AssetDefinition::numeric(asset_nft_id.clone())
+            .with_name("NFT Asset".to_owned())
+            .mintable_once(),
     )));
 
     genesis_tx.push(InstructionBox::from(Register::account(
@@ -1308,11 +1314,13 @@ impl ChaosState {
 
     fn plan_register_asset_definition(&mut self) -> Result<TransactionPlan> {
         let suffix = self.bump_asset_definition();
-        let domain_name = self.base_domain.name().to_string();
-        let definition_id: AssetDefinitionId = format!("chaos_asset_{suffix}#{domain_name}")
+        let definition_name: Name = format!("chaos_asset_{suffix}")
             .parse()
-            .map_err(|_| eyre!("failed to build asset definition id"))?;
-        let asset_definition = AssetDefinition::numeric(definition_id.clone());
+            .map_err(|_| eyre!("failed to parse asset definition name"))?;
+        let definition_id: AssetDefinitionId =
+            AssetDefinitionId::new(self.base_domain.clone(), definition_name);
+        let asset_definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name(format!("chaos_asset_{suffix}"));
         self.asset_definitions.insert(definition_id.clone());
         self.asset_definitions_unclaimed
             .insert(definition_id.clone());
@@ -1342,11 +1350,11 @@ impl ChaosState {
                 expect_success: true,
             };
         }
-        let domain_name = self.base_domain.name().to_string();
+        let fallback_name: Name = format!("ghost_asset_{}", self.bump_invalid())
+            .parse()
+            .expect("ghost asset definition name should parse");
         let fallback: AssetDefinitionId =
-            format!("ghost_asset_{}#{domain_name}", self.bump_invalid())
-                .parse()
-                .expect("ghost asset definition id should parse");
+            AssetDefinitionId::new(self.base_domain.clone(), fallback_name);
         TransactionPlan {
             state_updates: Vec::new(),
             label: "unregister_asset_definition",

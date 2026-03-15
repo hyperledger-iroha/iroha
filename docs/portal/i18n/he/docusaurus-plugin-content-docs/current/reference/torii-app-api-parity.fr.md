@@ -18,11 +18,11 @@ translation_last_reviewed: 2026-02-07
 אחראים: Torii Platform, מוביל תוכנית SDK  
 הפניה למפת הדרכים: TORII-APP-1 - audit de parite `app_api`
 
-Cette page reflete l'audit intern `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) אפינ que les lectures en dehors du mono-repo puissent voir quelles surfaces `/v1/*` sont cablees, testees and documentees. L'audit suit les מסלולים לייצוא חוזר דרך `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` et `add_connect_routes`.
+Cette page reflete l'audit intern `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) אפינ que les lectures en dehors du mono-repo puissent voir quelles surfaces `/v2/*` sont cablees, testees and documentees. L'audit suit les מסלולים לייצוא חוזר דרך `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` et `add_connect_routes`.
 
 ## Portee et method
 
-L'audit inspecte les reexportations publiques dans `crates/iroha_torii/src/lib.rs:256-522` et les constructeurs de routes soumis au feature gating. יוצקים משטח צ'אקה `/v1/*` du מפת הדרכים, נאוס אוונס לאמת:
+L'audit inspecte les reexportations publiques dans `crates/iroha_torii/src/lib.rs:256-522` et les constructeurs de routes soumis au feature gating. יוצקים משטח צ'אקה `/v2/*` du מפת הדרכים, נאוס אוונס לאמת:
 
 - יישום של מטפל והגדרות של DTO ב-`crates/iroha_torii/src/routing.rs`.
 - רישום du routeur sous les groupes de features `app_api` או `connect`.
@@ -40,25 +40,25 @@ Les lists d'actifs/transactions de compte et les lists de détenteurs d'actifs a
 - דוגמאות:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Inventaire des endpoints
 
-### Permissions de compte (`/v1/accounts/{id}/permissions`) - Couvert
+### Permissions de compte (`/v2/accounts/{id}/permissions`) - Couvert
 - מטפל: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - כריכת נתב: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - בעלים: Torii Platform.
 - הערות: התשובה היא לגוף JSON Norito עם `items`/`total`, תואם aux helpers de pagetion des SDK.
 
-### הערכה OPRF d'alias (`POST /v1/aliases/voprf/evaluate`) - Couvert
+### הערכה OPRF d'alias (`POST /v2/aliases/voprf/evaluate`) - Couvert
 - מטפל: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -74,7 +74,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - בדיקות: בודק את המטפל המוטבע (`crates/iroha_torii/src/lib.rs:9945-9986`) בתוספת SDK לכיסוי כיסוי
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - בעלים: Torii Platform.
-- הערות: La surface de reponse impose un hex deterministe et des identifiants de backend; les SDK consomm le DTO.### Evenements de proof SSE (`GET /v1/events/sse`) - Couvert
+- הערות: La surface de reponse impose un hex deterministe et des identifiants de backend; les SDK consomm le DTO.### Evenements de proof SSE (`GET /v2/events/sse`) - Couvert
 - מטפל: `handle_v1_events_sse` avec support de filters (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) בתוספת חיווט עמיד למסנן.
 - כריכת נתב: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - בעלים: פלטפורמת Torii (זמן ריצה), בדיקות אינטגרציה WG (מתקנים).
 - הערות: Les chemins de filtere proof sont valides de bout en bout; התיעוד הזה נראה ב-`docs/source/zk_app_api.md`.
 
-### Cycle de vie des contrats (`/v1/contracts/*`) - Couvert
+### Cycle de vie des contrats (`/v2/contracts/*`) - Couvert
 - מטפלים: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - בעלים: Smart Contract WG avec Torii Platform.
 - הערות: Les endpoints mettent en file des trades signees and reutilisent des metriques de telemetrie partagees (`handle_transaction_with_metrics`).
 
-### Cycle de vie des cles de verification (`/v1/zk/vk/*`) - Couvert
+### Cycle de vie des cles de verification (`/v2/zk/vk/*`) - Couvert
 - מטפלים: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) et `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - בעלים: ZK Working Group avec support Torii Platform.
 - הערות: Les DTOs s'alignent sur les schemas Norito הפניות ל-SDK; הגבלת התעריף משוערת להטיל באמצעות `limits.rs`.
 
-### Nexus Connect (`/v1/connect/*`) - Couvert (תכונה `connect`)
+### Nexus Connect (`/v2/connect/*`) - Couvert (תכונה `connect`)
 - מטפלים: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

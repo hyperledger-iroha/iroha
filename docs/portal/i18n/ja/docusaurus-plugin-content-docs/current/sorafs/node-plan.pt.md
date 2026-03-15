@@ -61,7 +61,7 @@ O `sorafs_node::por` 経由の相互接続 PoR としてのランタイムパス
 実装上の注意点:
 
 - スタック Axum de Torii com ペイロード `norito::json` を使用します。
-- アディシオン スキーマ Norito パラ レスポスト (`PinResultV1`、`FetchErrorV1`、テレメトリア構造体)。- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` は、`sorafs_node::NodeHandle::por_ingestion_status`、Torii レジストラ OS ゲージを介して、エポカ/デッドラインの未解決の資金を事前に公開し、OS のタイムスタンプを確認し、成功/ファルハの証明を取得します。 `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` パラ ダッシュボード。 [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
+- アディシオン スキーマ Norito パラ レスポスト (`PinResultV1`、`FetchErrorV1`、テレメトリア構造体)。- `/v2/sorafs/por/ingestion/{manifest_digest_hex}` は、`sorafs_node::NodeHandle::por_ingestion_status`、Torii レジストラ OS ゲージを介して、エポカ/デッドラインの未解決の資金を事前に公開し、OS のタイムスタンプを確認し、成功/ファルハの証明を取得します。 `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` パラ ダッシュボード。 [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
 
 ### D. スケジューラとクォータの蓄積
 

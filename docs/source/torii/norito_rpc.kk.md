@@ -18,7 +18,7 @@ Canonical specification: `docs/source/torii/nrpc_spec.md`
 
 ### 1. Goals & Scope
 
-JSON `/v1/pipeline` routes. Every message is framed with the Norito header so
+JSON `/v2/pipeline` routes. Every message is framed with the Norito header so
 clients get deterministic layouts, schema hashing, and CRC protection by
 default. This RFC specifies the wire contract, negotiated encodings, control
 parity helpers without reverse-engineering Torii internals.
@@ -31,7 +31,7 @@ SoraNet handshake guide (`docs/source/soranet_handshake.md`).
 
 ### 2. Transport Summary
 
-- **Endpoint**: identical host/port as `/v1/pipeline`; TLS requirements and
+- **Endpoint**: identical host/port as `/v2/pipeline`; TLS requirements and
   reverse-proxy guidance remain unchanged.
 - **HTTP version**: Torii accepts HTTP/1.1 and HTTP/2. The `Content-Type`
   determines whether a request is treated as Norito-RPC.
@@ -116,14 +116,14 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 ### 6. Response Semantics
 
 - Successful responses honour the negotiated format and reuse the matching
   schema hash so clients can decode into the same data-model types they would
-  receive over `/v1/pipeline`.
+  receive over `/v2/pipeline`.
 - Plain-text errors (status `4xx`/`5xx`) are emitted when extraction fails
   before Torii reaches a typed handler, e.g. "invalid Norito body: checksum
   mismatch". These responses use UTF-8 text and the default Axum error content
@@ -141,11 +141,11 @@ curl \
 | Group | Representative routes | Request types | Response shape | Notes |
 | --- | --- | --- | --- | --- |
 | Signed queries | `POST /query` (aliased by the pipeline router) | `SignedQuery` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5387`](/crates/iroha_torii/src/lib.rs#L5387) | Norito or JSON `QueryResultBox` depending on `Accept` | The handler streams results through `handle_queries`/`handle_queries_with_opts`, honouring pagination and cursor overrides (`crates/iroha_torii/src/routing.rs:9472`). |
-| Contracts & verifying keys | `POST /v1/contracts/{code,deploy,instance,*}`; `POST /v1/zk/vk/{register,update,deprecate}` | `RegisterContractCodeDto`, `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v1/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
-| ZK proof orchestration | `POST /v1/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v1/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
-| SoraFS storage APIs | `/v1/sorafs/{pin,capacity,deal,replication,por}/*` | `RegisterPinManifestDto`, `RegisterCapacityDeclarationDto`, `RecordDealUsageDto`, `RecordPorChallengeDto`, `RecordPorProofDto`, etc.[`crates/iroha_torii/src/routing.rs:5624`](/crates/iroha_torii/src/routing.rs#L5624)[`crates/iroha_torii/src/routing.rs:6385`](/crates/iroha_torii/src/routing.rs#L6385) | Norito acknowledgements with policy enforcement metadata | All admissions run through shared helpers that emit deterministic telemetry and queue transactions when on-chain mutations are required. |
-| Confidential ledger helpers | `POST /v1/confidential/derive-keyset` | `ConfidentialKeyRequest`[`crates/iroha_torii/src/routing.rs:1328`](/crates/iroha_torii/src/routing.rs#L1328) | Norito `ConfidentialKeyResponse` containing derived key material | Input seeds accept hex or base64 encodings; invalid lengths are rejected before key derivation. |
-| Connect pairing | `POST /v1/connect/session` (plus `DELETE/GET` companions) | `ConnectSessionRequest`[`crates/iroha_torii/src/routing.rs:1613`](/crates/iroha_torii/src/routing.rs#L1613) | Norito `ConnectSessionResponse` / status DTOs | Sessions inherit the same Norito negotiation so wallets and dApps can reuse binary codecs while bridging to WebSocket upgrades. |
+| Contracts & verifying keys | `POST /v2/contracts/{code,deploy,instance,*}`; `POST /v2/zk/vk/{register,update,deprecate}` | `RegisterContractCodeDto`, `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v2/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
+| ZK proof orchestration | `POST /v2/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v2/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
+| SoraFS storage APIs | `/v2/sorafs/{pin,capacity,deal,replication,por}/*` | `RegisterPinManifestDto`, `RegisterCapacityDeclarationDto`, `RecordDealUsageDto`, `RecordPorChallengeDto`, `RecordPorProofDto`, etc.[`crates/iroha_torii/src/routing.rs:5624`](/crates/iroha_torii/src/routing.rs#L5624)[`crates/iroha_torii/src/routing.rs:6385`](/crates/iroha_torii/src/routing.rs#L6385) | Norito acknowledgements with policy enforcement metadata | All admissions run through shared helpers that emit deterministic telemetry and queue transactions when on-chain mutations are required. |
+| Confidential ledger helpers | `POST /v2/confidential/derive-keyset` | `ConfidentialKeyRequest`[`crates/iroha_torii/src/routing.rs:1328`](/crates/iroha_torii/src/routing.rs#L1328) | Norito `ConfidentialKeyResponse` containing derived key material | Input seeds accept hex or base64 encodings; invalid lengths are rejected before key derivation. |
+| Connect pairing | `POST /v2/connect/session` (plus `DELETE/GET` companions) | `ConnectSessionRequest`[`crates/iroha_torii/src/routing.rs:1613`](/crates/iroha_torii/src/routing.rs#L1613) | Norito `ConnectSessionResponse` / status DTOs | Sessions inherit the same Norito negotiation so wallets and dApps can reuse binary codecs while bridging to WebSocket upgrades. |
 
 The catalogue above captures every handler that extracts or emits `NoritoJson`/`NoritoVersioned` payloads today. JSON callers continue to function via the same surfaces, but SDKs should default to the Norito form to gain schema hashing and stricter validation.
 
@@ -183,7 +183,7 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   negotiation to honour `stage` and `require_mtls`, and `/rpc/ping` before
   switching transports in health checks.
 
-### 10. Coexistence With `/v1/pipeline`
+### 10. Coexistence With `/v2/pipeline`
 
 - Every Norito-enabled endpoint shares its path with the JSON pipeline. Clients
   select the transport by setting `Content-Type` and `Accept`.

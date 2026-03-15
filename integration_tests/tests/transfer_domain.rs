@@ -34,7 +34,7 @@ fn domain_owner_domain_permissions() -> Result<()> {
 
     let kingdom_id: DomainId = "kingdom".parse()?;
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = "coin#kingdom".parse()?;
+    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
     let coin = AssetDefinition::numeric(coin_id.clone());
 
     // "alice@wonderland" is owner of "kingdom" domain
@@ -136,7 +136,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     let kingdom_id: DomainId = "kingdom".parse()?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
     let (rabbit_id, _rabbit_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = "coin#kingdom".parse()?;
+    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
 
     // "alice@wonderland" is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -202,7 +202,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let alice_id = ALICE_ID.clone();
     let kingdom_id: DomainId = "kingdom".parse()?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = "coin#kingdom".parse()?;
+    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
 
     // "alice@wonderland" is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -313,7 +313,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
     test_client.submit_blocking(Register::account(bob))?;
 
-    let asset_definition_id = "rose#wonderland".parse()?;
+    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
     let asset_id = AssetId::new(asset_definition_id, alice_id.clone());
     let trigger_id: TriggerId = "my_trigger".parse()?;
 

@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -130,9 +130,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- העוזר שולח `POST /v1/sns/registrations` לכל בקשה ומפסיק בשגיאת HTTP הראשונה.
+- העוזר שולח `POST /v2/sns/registrations` לכל בקשה ומפסיק בשגיאת HTTP הראשונה.
   התגובות נצמדות ללוג כרשומות NDJSON.
-- `--poll-status` מבצע שאילתה חוזרת ל-`/v1/sns/registrations/{selector}` אחרי כל
+- `--poll-status` מבצע שאילתה חוזרת ל-`/v2/sns/registrations/{selector}` אחרי כל
   שליחה (עד `--poll-attempts`, ברירת מחדל 5) כדי לאשר שהרשומה נראית. ספקו
   `--suffix-map` (JSON ממפה `suffix_id` לערכי "suffix") כדי שהכלי יגזור
   ליטרלים `{label}.{suffix}` לצורך polling.

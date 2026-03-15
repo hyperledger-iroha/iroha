@@ -163,9 +163,9 @@ API de Torii.【crates/sorafs_node/tests/cli.rs:1】
 > El gateway Torii expose désormais les assistants de lecture solo en réponse au mismo
 > `NodeHandle` :
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — développer le manifeste
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — développer le manifeste
 > Norito sauvegardé (base64) avec résumé/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — développer le plan de chunk
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — développer le plan de chunk
 > Déterministe JSON (`chunk_fetch_specs`) pour l'outillage en aval.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Ces points de terminaison reflètent la sortie de la CLI pour que les pipelines puissent être utilisés
@@ -209,12 +209,12 @@ API de Torii.【crates/sorafs_node/tests/cli.rs:1】
      l'opérateur.
 
 ### Déclaration de capacité et intégration de planification- Torii retransmet maintenant les mises à jour de `CapacityDeclarationRecord` depuis
-  `/v1/sorafs/capacity/declare` hacia el `CapacityManager` intégré, de modo que
+  `/v2/sorafs/capacity/declare` hacia el `CapacityManager` intégré, de modo que
   chaque fois, construisez une vue en mémoire de vos attributions compromises
   chunker et voie. Le manager expose des instantanés de lecture solo pour la télémétrie
-  (`GET /v1/sorafs/capacity/state`) et applications réservées au profil ou à la voie avant
+  (`GET /v2/sorafs/capacity/state`) et applications réservées au profil ou à la voie avant
   accepter de nouvelles commandes.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Le point final `/v1/sorafs/capacity/schedule` accepte les charges utiles `ReplicationOrderV1`
+- Le point final `/v2/sorafs/capacity/schedule` accepte les charges utiles `ReplicationOrderV1`
   émis par la gouvernance. Lorsque la commande est adressée au fournisseur local et au responsable
   réviser la planification dupliquée, vérifier la capacité du chunker/lane, réserver la
   Franja et développez un `ReplicationPlan` décrivant la capacité restante pour
@@ -222,7 +222,7 @@ API de Torii.【crates/sorafs_node/tests/cli.rs:1】
   D'autres fournisseurs se reconnaissent avec une réponse `ignored` pour faciliter les flux
   multi-opérateur.【crates/iroha_torii/src/routing.rs:4845】
 - Hooks de complétude (par exemple, disparados tras el éxito de la ingestión)
-  Appelez le `POST /v1/sorafs/capacity/complete` pour libérer des réserves via
+  Appelez le `POST /v2/sorafs/capacity/complete` pour libérer des réserves via
   `CapacityManager::complete_order`. La réponse inclut un instantané
   `ReplicationRelease` (totales restantes, résiduelles de chunker/lane) pour que
   les outils d'orquestación peuvent être insérés dans l'ordre suivant sans sondage.

@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect WS as wallet
     let ws_url = format!(
-        "{}/v1/connect/ws?sid={}&role=wallet",
+        "{}/v2/connect/ws?sid={}&role=wallet",
         node.replace("http", "ws"),
         sid_b64
     );
@@ -101,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
     let frame = proto::ConnectFrameV1::decode_all(&mut cursor).context("decode frame")?;
     let env = match &frame.kind {
         proto::FrameKind::Ciphertext(_) => {
-            sdk::open_envelope_v1(&k_app, &frame).map_err(|e| anyhow::anyhow!(e))?
+            sdk::open_envelope_current(&k_app, &frame).map_err(|e| anyhow::anyhow!(e))?
         }
         _ => anyhow::bail!("expected ciphertext"),
     };
@@ -177,12 +177,13 @@ async fn send_wallet_action(
                     Signature::from_bytes(&[0xDE; 64]),
                 ),
             };
-            let frame = sdk::seal_envelope_v1(k_wallet, sid, proto::Dir::WalletToApp, 1, reply);
+            let frame =
+                sdk::seal_envelope_current(k_wallet, sid, proto::Dir::WalletToApp, 1, reply);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
             eprintln!("wallet: sent SignResultOk");
 
-            let close = sdk::encrypt_close_v1(
+            let close = sdk::encrypt_close_current(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,
@@ -197,7 +198,7 @@ async fn send_wallet_action(
             eprintln!("wallet: sent encrypted Close");
         }
         "reject" => {
-            let rej = sdk::encrypt_reject_v1(
+            let rej = sdk::encrypt_reject_current(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,
@@ -210,7 +211,7 @@ async fn send_wallet_action(
             eprintln!("wallet: sent encrypted Reject");
         }
         "close" => {
-            let close = sdk::encrypt_close_v1(
+            let close = sdk::encrypt_close_current(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,

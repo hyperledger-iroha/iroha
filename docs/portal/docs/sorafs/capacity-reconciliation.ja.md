@@ -15,7 +15,7 @@ title: SoraFS 容量リコンシリエーション
 description: 容量手数料台帳と XOR 転送エクスポートを突き合わせる夜間ワークフロー。
 ---
 
-ロードマップ項目 **SF-2c** は、トレジャリーが容量手数料台帳と毎夜実行される XOR 転送が一致することを証明することを要求します。`scripts/telemetry/capacity_reconcile.py` を使って `/v1/sorafs/capacity/state` のスナップショットを実行済み転送バッチと比較し、Alertmanager 向けの Prometheus テキストファイルメトリクスを出力してください。
+ロードマップ項目 **SF-2c** は、トレジャリーが容量手数料台帳と毎夜実行される XOR 転送が一致することを証明することを要求します。`scripts/telemetry/capacity_reconcile.py` を使って `/v2/sorafs/capacity/state` のスナップショットを実行済み転送バッチと比較し、Alertmanager 向けの Prometheus テキストファイルメトリクスを出力してください。
 
 ## 前提条件
 - Torii からエクスポートされた容量状態スナップショット (`fee_ledger` エントリ)。

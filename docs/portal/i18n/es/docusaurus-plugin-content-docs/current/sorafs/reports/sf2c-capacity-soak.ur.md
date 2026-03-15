@@ -41,7 +41,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 ## Observabilidad
 
-Torii اب instantáneas de crédito del proveedor کو libros de tarifas کے ساتھ ظاہر کرتا ہے تاکہ paneles کم saldos اور penalizaciones پر puerta کر سکیں:- RESTO: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` entradas واپس کرتا ہے جو prueba de remojo میں verificar ہونے والے
+Torii اب instantáneas de crédito del proveedor کو libros de tarifas کے ساتھ ظاہر کرتا ہے تاکہ paneles کم saldos اور penalizaciones پر puerta کر سکیں:- RESTO: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` entradas واپس کرتا ہے جو prueba de remojo میں verificar ہونے والے
   campos del libro mayor کی عکاسی کرتے ہیں۔ دیکھیں
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importación Grafana: contadores de strikes exportados `dashboards/grafana/sorafs_capacity_penalties.json`, totales de penalización,

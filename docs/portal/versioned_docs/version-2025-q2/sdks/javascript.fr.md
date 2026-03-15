@@ -89,7 +89,7 @@ Le SDK regroupe des flux spécialisés qui reflètent la CLI :
 - **Aide à la gouvernance** – `recipes/governance.mjs` démontre la mise en scène
   propositions et bulletins de vote avec les constructeurs d'instructions `governance`.
 - **Pont ISO** – `recipes/iso_bridge.mjs` montre comment soumettre `pacs.008` et
-  interroger l’état du transfert à l’aide des points de terminaison `/v1/iso20022`.
+  interroger l’état du transfert à l’aide des points de terminaison `/v2/iso20022`.
 - **SoraFS et déclencheurs** – Les aides à la pagination sous `src/toriiClient.js` exposent
   itérateurs typés pour les contrats, les actifs, les déclencheurs et les fournisseurs SoraFS.
 

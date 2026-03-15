@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Туслагч хүсэлт болгонд нэг `POST /v1/sns/registrations` гаргаад цуцлах болно
+- Туслагч хүсэлт болгонд нэг `POST /v2/sns/registrations` гаргаад цуцлах болно
   Эхний HTTP алдаа. Хариултуудыг бүртгэлийн замд NDJSON гэж хавсаргасан
   бичлэгүүд.
-- `--poll-status` тус бүрийн дараа `/v1/sns/registrations/{selector}`-г дахин асуудаг.
+- `--poll-status` тус бүрийн дараа `/v2/sns/registrations/{selector}`-г дахин асуудаг.
   Бичлэг байгаа эсэхийг баталгаажуулахын тулд илгээх (`--poll-attempts` хүртэл, анхдагч 5)
   харагдахуйц. `--suffix-map` (`suffix_id`-аас `"suffix"` хүртэлх JSON утгууд) -ийг өгнө.
   хэрэгсэл нь санал асуулгад зориулж `{label}.{suffix}` литералуудыг гаргаж авах боломжтой.

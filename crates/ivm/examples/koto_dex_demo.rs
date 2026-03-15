@@ -29,8 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "genesis",
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
     );
-    let asset_a: AssetDefinitionId = "usdc#wonderland".parse()?;
-    let asset_b: AssetDefinitionId = "eth#wonderland".parse()?;
+    let asset_a: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "usdc".parse()?);
+    let asset_b: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "eth".parse()?);
 
     // Initial balances: Alice has 1_000 USDC, pool has 10_000 USDC and 100 ETH
     let wsv = MockWorldStateView::with_balances(&[

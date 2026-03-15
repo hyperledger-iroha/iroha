@@ -137,7 +137,7 @@ bundle חתום.
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --status-url https://torii.example.com/v2/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -268,7 +268,7 @@ manifest לסט artifacts אחד כדי לפרסם עומסים ישירות ל-
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v1/sumeragi/status \
+     --status-url https://torii.example.com/v2/sumeragi/status \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -324,7 +324,7 @@ manifest לסט artifacts אחד כדי לפרסם עומסים ישירות ל-
 1. קחו snapshot של Torii status + metrics:
 
    ```bash
-   curl -sS https://torii.example.com/v1/sumeragi/status \
+   curl -sS https://torii.example.com/v2/sumeragi/status \
      > artifacts/nexus/load/payments-2026q2/torii_status.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom

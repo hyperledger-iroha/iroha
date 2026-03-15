@@ -31,16 +31,16 @@ iroha = { path = "../../crates/iroha", features = ["client"] }
 use iroha::client::{Client, ClientConfiguration};
 
 fn main() -> eyre::Result<()> {
-    let cfg = ClientConfiguration {
-        torii_url: "http://127.0.0.1:8080".parse()?,
-        telemetry_url: Some("http://127.0.0.1:8080".parse()?),
-        // account_id, key_pair and other options can be populated here or via helper builders
-        ..ClientConfiguration::default()
-    };
+ let cfg = ClientConfiguration {
+ torii_url: "http://127.0.0.1:8080".parse()?,
+ telemetry_url: Some("http://127.0.0.1:8080".parse()?),
+ // account_id, key_pair and other options can be populated here or via helper builders
+ ..ClientConfiguration::default()
+ };
 
-    let client = Client::new(cfg)?;
-    println!("Node status: {:?}", client.get_status()?);
-    Ok(())
+ let client = Client::new(cfg)?;
+ println!("Node status: {:?}", client.get_status()?);
+ Ok(())
 }
 ```
 
@@ -52,38 +52,38 @@ fn main() -> eyre::Result<()> {
 ```rust
 use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::{
-    isi::prelude::*,
-    prelude::{AccountId, ChainId, DomainId, Name},
+ isi::prelude::*,
+ prelude::{AccountId, ChainId, DomainId, Name},
 };
 use iroha_crypto::{KeyPair, PublicKey};
 
 fn submit_example() -> eyre::Result<()> {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let account_id = AccountId::new(
-        Name::from_str("alice")?,
-        DomainId::from_str("wonderland")?,
-    );
+ let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+ let account_id = AccountId::new(
+ Name::from_str("alice")?,
+ DomainId::from_str("wonderland")?,
+ );
 
-    let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
+ let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
 
-    let cfg = ClientConfiguration {
-        chain: chain_id.clone(),
-        account: account_id.clone(),
-        key_pair: key_pair.clone(),
-        ..ClientConfiguration::test()
-    };
+ let cfg = ClientConfiguration {
+ chain: chain_id.clone(),
+ account: account_id.clone(),
+ key_pair: key_pair.clone(),
+ ..ClientConfiguration::test()
+ };
 
-    let client = Client::new(cfg)?;
+ let client = Client::new(cfg)?;
 
-    let instruction = Register {
-        object: Domain::new(Name::from_str("research")?, None),
-    };
+ let instruction = Register {
+ object: Domain::new(Name::from_str("research")?, None),
+ };
 
-    let tx = client.build_transaction([instruction]);
-    let signed = tx.sign(&key_pair)?;
-    let hash = client.submit_transaction(&signed)?;
-    println!("Submitted transaction: {hash}");
-    Ok(())
+ let tx = client.build_transaction([instruction]);
+ let signed = tx.sign(&key_pair)?;
+ let hash = client.submit_transaction(&signed)?;
+ println!("Submitted transaction: {hash}");
+ Ok(())
 }
 ```
 
@@ -99,18 +99,18 @@ use iroha::da::DaIngestParams;
 use iroha_data_model::{da::types::ExtraMetadata, nexus::LaneId};
 
 fn submit_da_blob() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let mut params = DaIngestParams::default();
-    params.lane_id = LaneId::new(7);
-    params.epoch = 42;
-    let payload = std::fs::read("payload.car")?;
-    let metadata = ExtraMetadata::default();
-    let result = client.submit_da_blob(payload, &params, metadata, None)?;
-    println!(
-        "status={} duplicate={} bytes={}",
-        result.status, result.duplicate, result.payload_len
-    );
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let mut params = DaIngestParams::default();
+ params.lane_id = LaneId::new(7);
+ params.epoch = 42;
+ let payload = std::fs::read("payload.car")?;
+ let metadata = ExtraMetadata::default();
+ let result = client.submit_da_blob(payload, &params, metadata, None)?;
+ println!(
+ "status={} duplicate={} bytes={}",
+ result.status, result.duplicate, result.payload_len
+ );
+ Ok(())
 }
 ```
 
@@ -125,12 +125,12 @@ use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::query::prelude::*;
 
 fn list_domains() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let response = client.request(&FindAllDomains::new())?;
-    for domain in response {
-        println!("{}", domain.name());
-    }
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let response = client.request(&FindAllDomains::new())?;
+ for domain in response {
+ println!("{}", domain.name());
+ }
+ Ok(())
 }
 ```
 
@@ -142,29 +142,24 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    Client, ClientConfiguration, ExplorerAccountQrOptions,
+ Client, ClientConfiguration,
 };
 
 fn download_qr() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let snapshot = client.get_explorer_account_qr(
-        "i105...",
-        Some(ExplorerAccountQrOptions {
-        }),
-    )?;
-    println!("Canonical literal: {}", snapshot.literal);
-    println!("SVG payload: {}", snapshot.svg);
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let snapshot = client.get_explorer_account_qr(
+ "i105...",
+ )?;
+ println!("Canonical literal: {}", snapshot.literal);
+ println!("SVG payload: {}", snapshot.svg);
+ Ok(())
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON көрсетеді
+`ExplorerAccountQrSnapshot` `/v2/explorer/accounts/{id}/qr` JSON көрсетеді
 беті: ол канондық тіркелгі идентификаторын, әріппен көрсетілген литералды қамтиды
-сұралған пішім, желі префиксі/қателерді түзету метадеректері, QR өлшемдері және
-әмияндар/зерттеушілер тікелей ендіре алатын кірістірілген SVG пайдалы жүктемесі. Өткізіп тастаңыз
-`ExplorerAccountQrOptions` таңдаулы I105 шығысына әдепкіге немесе орнатуға
-Екінші ең жақсысын алу үшін canonical I105 output
-ADDR-6b пайдаланатын `i105` нұсқасы.
+канондық I105 literal, желі префиксі/қателерді түзету метадеректері, QR өлшемдері және
+әмияндар/зерттеушілер тікелей ендіре алатын кірістірілген SVG пайдалы жүктемесі.
 
 ## 7. Оқиғаларға жазылыңыз
 
@@ -174,15 +169,15 @@ use iroha_data_model::events::pipeline::PipelineEventFilterBox;
 use futures_lite::stream::StreamExt;
 
 async fn listen_for_blocks() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let mut stream = client
-        .listen_for_events([PipelineEventFilterBox::any()])
-        .await?;
+ let client = Client::new(ClientConfiguration::test())?;
+ let mut stream = client
+ .listen_for_events([PipelineEventFilterBox::any()])
+ .await?;
 
-    while let Some(event) = stream.next().await {
-        println!("Received event: {:?}", event?);
-    }
-    Ok(())
+ while let Some(event) = stream.next().await {
+ println!("Received event: {:?}", event?);
+ }
+ Ok(())
 }
 ```
 
@@ -192,22 +187,22 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 ## Қосымша мысалдар
 
 - `crates/iroha` ішіндегі `tests/` астында ұшып-соңғы ағындар өмір сүреді. Интеграцияны іздеу
-  бай сценарийлер үшін `transaction_submission.rs` сияқты сынақтар.
+ бай сценарийлер үшін `transaction_submission.rs` сияқты сынақтар.
 - CLI (`iroha_cli`) бірдей клиент модулін пайдаланады; шолу
-  Аутентификация, топтастыру және қайталау әрекеттерінің қалай орындалатынын көру үшін `crates/iroha_cli/src/`
-  өндірістік құрал-саймандарда өңделеді.
+ Аутентификация, топтастыру және қайталау әрекеттерінің қалай орындалатынын көру үшін `crates/iroha_cli/src/`
+ өндірістік құрал-саймандарда өңделеді.
 - Norito есте сақтаңыз: клиент ешқашан `serde_json` нұсқасына қайта оралмайды. Сіз кезде
-  SDK кеңейтіңіз, JSON соңғы нүктелері үшін `norito::json` көмекшілеріне сеніңіз және
-  `norito::codec` екілік пайдалы жүктемелер үшін.
+ SDK кеңейтіңіз, JSON соңғы нүктелері үшін `norito::json` көмекшілеріне сеніңіз және
+ `norito::codec` екілік пайдалы жүктемелер үшін.
 
 ## Қатысты Norito мысалдары
 
 - [Hajimari кіру нүктесінің қаңқасы](../norito/examples/hajimari-entrypoint) — құрастыру, іске қосу және орналастыру
-  осы жылдам іске қосудағы орнату фазасын көрсететін минималды Kotodama тірегі.
+ осы жылдам іске қосудағы орнату фазасын көрсететін минималды Kotodama тірегі.
 - [Домен мен ақша активтерін тіркеу](../norito/examples/register-and-mint) — келесімен тураланады
-  `Register` + `Mint` ағыны жоғарыда көрсетілген, осылайша келісім-шарттағы бірдей әрекеттерді қайталай аласыз.
+ `Register` + `Mint` ағыны жоғарыда көрсетілген, осылайша келісім-шарттағы бірдей әрекеттерді қайталай аласыз.
 - [Активтерді шоттар арасында тасымалдау](../norito/examples/transfer-asset) — көрсетеді
-  SDK жылдам бастаулары пайдаланатын бірдей тіркелгі идентификаторлары бар `transfer_asset` жүйесін шақыру.
+ SDK жылдам бастаулары пайдаланатын бірдей тіркелгі идентификаторлары бар `transfer_asset` жүйесін шақыру.
 
 Осы құрылыс блоктарымен Torii жүйесін Rust қызметтеріне немесе CLI қызметтеріне біріктіруге болады.
 Толық жиынтығы үшін жасалған құжаттаманы және деректер үлгісі жәшіктерін қараңыз

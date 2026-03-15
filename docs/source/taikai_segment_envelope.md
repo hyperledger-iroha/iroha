@@ -75,7 +75,7 @@ persist the indices without reassembling tuples manually.
 
 ### Required Ingest Metadata
 
-`/v1/da/ingest` expects Taikai uploads to provide the following metadata keys
+`/v2/da/ingest` expects Taikai uploads to provide the following metadata keys
 (all values encoded as UTF-8 strings inside `ExtraMetadata`):
 
 | Key | Value | Notes |
@@ -126,7 +126,7 @@ continues to track absolute magnitudes for latency bucketing.
 4. Persist the envelope in the publisher log, enqueue it for the SoraNS anchor
    service, and push it to downstream SDKs.
 5. Include the metadata keys above when submitting the CMAF payload to
-   `/v1/da/ingest`. The bundler's `--ingest-metadata-out` file can be fed into
+   `/v2/da/ingest`. The bundler's `--ingest-metadata-out` file can be fed into
    the ingest client as-is.
 
 ## Bundler CLI
@@ -164,7 +164,7 @@ The command:
 - Emits a Norito-encoded envelope to `--envelope-out`.
 - Optionally renders the JSON `TaikaiEnvelopeIndexes` bundle to `--indexes-out`.
 - Optionally renders the ingest metadata map to `--ingest-metadata-out`, matching
-  the keys documented above so the `/v1/da/ingest` request can reuse it.
+  the keys documented above so the `/v2/da/ingest` request can reuse it.
 - When using the standalone `taikai_car` binary you can also pass
   `--summary-out <path>` to capture a JSON summary (ingest fields, track
   metadata, CAR/Chunk digests, time/CID indexes, and output paths) for
@@ -354,7 +354,7 @@ Every accepted TRM now produces deterministic telemetry so operators can audit
 alias rotations without scraping the spool:
 
 - `taikai_trm_alias_rotations_total{cluster,event,stream,alias_namespace,alias_name}`
-  increments whenever `/v1/da/ingest` accepts a routing manifest. Use this
+  increments whenever `/v2/da/ingest` accepts a routing manifest. Use this
   metric in Grafana/Prometheus to confirm manifests are rolling forward per
   SN13‑C’s rollout plan.
 - The Torii `/status` payload exposes a new `taikai_alias_rotations` array
@@ -370,7 +370,7 @@ Torii persists a lineage ledger for every alias under
 `config.da_ingest.manifest_store_dir/taikai/` using files named
 `taikai-trm-state-<alias_slug>.json`. Each record captures the alias namespace,
 alias name, last `segment_window`, manifest digest, and the time the manifest
-was accepted. When `/v1/da/ingest` receives a TRM for a given alias it loads the
+was accepted. When `/v2/da/ingest` receives a TRM for a given alias it loads the
 cached record and rejects the submission if the manifest digest matches the last
 accepted digest or if the new window overlaps the stored range. This ensures
 publishers can only advance windows forward and prevents replaying stale
@@ -462,7 +462,7 @@ out-of-band, reducing ingress load during large Taikai launches.
    using the envelope hash, manifest hash, CAR digest, and publisher metadata.
    Signing keys are loaded from the `taikai.publisher_keystore` config or KMS.
 3. **Alias proof stapling** — After signing, the anchor task requests an alias
-   proof from the SoraNS service (`POST /v1/sorans/alias_proof`) scoped to the
+   proof from the SoraNS service (`POST /v2/sorans/alias_proof`) scoped to the
    Taikai alias. The returned `AliasProofBundleV1` is embedded into the SSM and
    cached so gateways can emit `Sora-Proof` headers without additional I/O.
 4. **TRM emission** — When a window completes (e.g., every 120 segments) the

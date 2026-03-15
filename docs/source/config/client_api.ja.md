@@ -46,6 +46,6 @@ allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 - **ga** — Norito-RPC は、認証されたすべての発信者が利用できます (
   通常のレートと認証前の制限）。
 
-オペレーターは、`/v1/config` を通じてこれらの値を動的に更新できます。それぞれの変化
+オペレーターは、`/v2/config` を通じてこれらの値を動的に更新できます。それぞれの変化
 `/rpc/capabilities` に即座に反映され、SDK と可観測性が可能になります。
 ダッシュボードには実際の輸送姿勢が表示されます。

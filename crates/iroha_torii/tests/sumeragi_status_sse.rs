@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Basic shape test for `/v1/sumeragi/status/sse`
+//! Basic shape test for `/v2/sumeragi/status/sse`
 #![cfg(feature = "telemetry")]
 #![allow(unexpected_cfgs)]
 
@@ -26,14 +26,14 @@ async fn sumeragi_status_sse_content_type() {
     );
 
     let app = Router::new().route(
-        "/v1/sumeragi/status/sse",
+        "/v2/sumeragi/status/sse",
         get(|| async move { iroha_torii::handle_v1_sumeragi_status_sse(200, true) }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/status/sse")
+                .uri("/v2/sumeragi/status/sse")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

@@ -47,7 +47,7 @@ SPDX-License-Identifier: Apache-2.0
 
 اغلفة memo السرية تشحن الان مع fixture قانوني في `fixtures/confidential/encrypted_payload_v1.json`. تلتقط مجموعة البيانات envelope v1 صحيحا مع عينات سلبية تالفة حتى تتمكن SDKs من اثبات تطابق التحليل. اختبارات Rust data-model (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) وسويت Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) تحمل fixture مباشرة، لضمان توافق Norito encoding وسطوح الاخطاء وتغطية الانحدار مع تطور الكودك.
 
-يمكن لـ Swift SDKs الان اصدار تعليمات shield بدون glue JSON مخصص: انشئ `ShieldRequest` مع commitment note بطول 32 بايت، payload مشفر، وdebit metadata، ثم استدع `IrohaSDK.submit(shield:keypair:)` (او `submitAndWait`) لتوقيع المعاملة وتمريرها عبر `/v1/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال commitments، ويمرر `ConfidentialEncryptedPayload` الى Norito encoder، ويعكس layout `zk::Shield` الموضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
+يمكن لـ Swift SDKs الان اصدار تعليمات shield بدون glue JSON مخصص: انشئ `ShieldRequest` مع commitment note بطول 32 بايت، payload مشفر، وdebit metadata، ثم استدع `IrohaSDK.submit(shield:keypair:)` (او `submitAndWait`) لتوقيع المعاملة وتمريرها عبر `/v2/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال commitments، ويمرر `ConfidentialEncryptedPayload` الى Norito encoder، ويعكس layout `zk::Shield` الموضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
 
 ## Commitments الاجماع و gating القدرات
 - تكشف رؤوس الكتل `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`؛ يشارك digest في hash الاجماع ويجب ان يساوي عرض السجل المحلي لقبول الكتلة.
@@ -78,7 +78,7 @@ SPDX-License-Identifier: Apache-2.0
 
 #### مراقبة الانتقالات عبر Torii
 
-تستعلم المحافظ والمدققون `GET /v1/confidential/assets/{definition_id}/transitions` لفحص `AssetConfidentialPolicy` النشطة. يحتوي payload JSON دائما على asset id القانوني، اخر ارتفاع كتلة ملاحظ، `current_mode` للسياسة، الوضع الفعال عند ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`)، ومعرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
+تستعلم المحافظ والمدققون `GET /v2/confidential/assets/{definition_id}/transitions` لفحص `AssetConfidentialPolicy` النشطة. يحتوي payload JSON دائما على asset id القانوني، اخر ارتفاع كتلة ملاحظ، `current_mode` للسياسة، الوضع الفعال عند ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`)، ومعرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
 
 - `transition_id` - audit handle المعاد من `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -126,7 +126,7 @@ SPDX-License-Identifier: Apache-2.0
 
 1. **Prepare registries:** فعّل كل مدخلات verifier والمعلمات المشار اليها في السياسة المستهدفة. تعلن العقد `conf_features` الناتجة حتى يتمكن peers من التحقق من التوافق.
 2. **Stage the transition:** قدّم `ScheduleConfidentialPolicyTransition` مع `effective_height` يراعي `policy_transition_delay_blocks`. عند الانتقال نحو `ShieldedOnly` حدد نافذة تحويل (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** سجّل `transition_id` المعاد ووزع runbook للـ on/off-ramp. تشترك المحافظ والمدققون في `/v1/confidential/assets/{id}/transitions` لمعرفة ارتفاع فتح النافذة.
+3. **Publish operator guidance:** سجّل `transition_id` المعاد ووزع runbook للـ on/off-ramp. تشترك المحافظ والمدققون في `/v2/confidential/assets/{id}/transitions` لمعرفة ارتفاع فتح النافذة.
 4. **Window enforcement:** عند فتح النافذة يحول runtime السياسة الى `Convertible`، ويصدر `PolicyTransitionWindowOpened { transition_id }` ويبدأ في رفض طلبات الحوكمة المتعارضة.
 5. **Finalize or abort:** عند `effective_height` يتحقق runtime من الشروط المسبقة (عرض شفاف صفر، عدم وجود سحب طارئ، الخ). النجاح يقلب السياسة للوضع المطلوب؛ الفشل يطلق `PolicyTransitionPrerequisiteFailed`، يمسح الانتقال المعلق، ويترك السياسة دون تغيير.
 6. **Schema upgrades:** بعد نجاح الانتقال ترفع الحوكمة نسخة مخطط الاصل (مثلا `asset_definition.v2`) وتتطلب ادوات CLI حقل `confidential_policy` عند تسلسل manifests. توجه وثائق ترقية genesis المشغلين لاضافة اعدادات السياسة وبصمات registry قبل اعادة تشغيل المدققين.
@@ -246,7 +246,7 @@ SPDX-License-Identifier: Apache-2.0
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (nullifier key)، `ivk` (incoming viewing key)، `ovk` (outgoing viewing key)، `fvk`.
 - تستخدم payloads notes المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH؛ يمكن ارفاق auditor view keys اختيارية الى outputs حسب سياسة الاصل.
-- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha app zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.
+- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha app zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v2/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.
 
 ## الغاز، الحدود، وضوابط DoS
 - جدول gas حتمي:

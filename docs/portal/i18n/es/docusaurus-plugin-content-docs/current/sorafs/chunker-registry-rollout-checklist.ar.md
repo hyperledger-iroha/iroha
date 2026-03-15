@@ -71,7 +71,7 @@ Nombre `docs/source/sorafs/chunker_registry_rollout_checklist.md`. احرص عل
    `torii.sorafs.discovery.admission.envelopes_dir`.
 3. تحقق من انتشار إعلانات المزوّد عبر واجهة descubrimiento:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. اختبر نقاط manifiesto/plan مع رؤوس الحوكمة:
    ```bash

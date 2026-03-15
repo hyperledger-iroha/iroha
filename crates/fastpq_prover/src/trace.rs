@@ -1915,8 +1915,6 @@ fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -2444,8 +2442,10 @@ mod tests {
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
-            asset_definition: AssetDefinitionId::from_str("rose#wonderland")
-                .expect("asset definition"),
+            asset_definition: AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
             amount: Numeric::from(42u32),
             from_balance_before: Numeric::from(200u32),
             from_balance_after: Numeric::from(158u32),

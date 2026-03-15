@@ -13,7 +13,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## 概要
 
-このランブックは、SoraFS の Pin Registry と複製のサービスレベル合意 (SLA) を監視し、トリアージする方法を示します。メトリクスは `iroha_torii` から収集され、Prometheus で `torii_sorafs_*` 名前空間として公開されます。Torii は 30 秒間隔でバックグラウンドに registry 状態をサンプリングするため、オペレータが `/v1/sorafs/pin/*` エンドポイントをポーリングしていない場合でもダッシュボードは最新の状態を保ちます。用意されたダッシュボード (`docs/source/grafana_sorafs_pin_registry.json`) を取り込むことで、以下のセクションに対応した Grafana レイアウトをすぐに利用できます。
+このランブックは、SoraFS の Pin Registry と複製のサービスレベル合意 (SLA) を監視し、トリアージする方法を示します。メトリクスは `iroha_torii` から収集され、Prometheus で `torii_sorafs_*` 名前空間として公開されます。Torii は 30 秒間隔でバックグラウンドに registry 状態をサンプリングするため、オペレータが `/v2/sorafs/pin/*` エンドポイントをポーリングしていない場合でもダッシュボードは最新の状態を保ちます。用意されたダッシュボード (`docs/source/grafana_sorafs_pin_registry.json`) を取り込むことで、以下のセクションに対応した Grafana レイアウトをすぐに利用できます。
 
 ## メトリクス参照
 
@@ -114,7 +114,7 @@ groups:
 
 1. **原因を特定**
    - SLA miss が増加し backlog が低い場合は、providers の性能 (PoR 失敗、遅延完了) に注力。
-   - backlog が増えて miss が安定している場合は、`/v1/sorafs/pin/*` の admission を確認し、評議会承認待ちの manifests を特定。
+   - backlog が増えて miss が安定している場合は、`/v2/sorafs/pin/*` の admission を確認し、評議会承認待ちの manifests を特定。
 2. **providers の状態を検証**
    - `iroha app sorafs providers list` を実行し、広告された能力が複製要件を満たすことを確認。
    - `torii_sorafs_capacity_*` のゲージで provisioned GiB と PoR 成功を確認。
@@ -135,7 +135,7 @@ groups:
 2. **ステージングでの dry-run**
    - 本番に近いトポロジの staging クラスタに構成変更をデプロイ。
    - `cargo xtask sorafs-pin-fixtures` を実行し、canonical alias fixtures がデコードされ round-trip することを確認。差異があれば upstream drift があるため先に解消します。
-   - `/v1/sorafs/pin/{digest}` と `/v1/sorafs/aliases` を、fresh / refresh-window / expired / hard-expired ケースの合成 proof で検証します。HTTP ステータス、ヘッダ (`Sora-Proof-Status`, `Retry-After`, `Warning`)、JSON ボディのフィールドを本 runbook と照合。
+   - `/v2/sorafs/pin/{digest}` と `/v2/sorafs/aliases` を、fresh / refresh-window / expired / hard-expired ケースの合成 proof で検証します。HTTP ステータス、ヘッダ (`Sora-Proof-Status`, `Retry-After`, `Warning`)、JSON ボディのフィールドを本 runbook と照合。
 3. **本番で有効化**
    - 標準の変更ウィンドウで新しい構成を適用。Torii を先に更新し、その後ノードのログで新ポリシーが確認されたら gateways/SDK サービスを再起動。
    - `docs/source/grafana_sorafs_pin_registry.json` を Grafana にインポート (または既存ダッシュボードを更新) し、alias cache refresh パネルを NOC ワークスペースにピン。

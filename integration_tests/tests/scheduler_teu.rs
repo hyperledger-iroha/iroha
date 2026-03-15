@@ -44,9 +44,13 @@ const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.to_account_id(domain_id.clone())).build(authority);
-    let asset_definition_id: AssetDefinitionId = format!("xor#{domain_id}").parse().unwrap();
-    let asset_definition =
-        AssetDefinition::new(asset_definition_id, NumericSpec::default()).build(authority);
+    let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().unwrap());
+    let asset_definition = {
+        let __asset_definition_id = asset_definition_id;
+        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+            .with_name(__asset_definition_id.name().to_string())
+    }
+    .build(authority);
 
     World::with([domain], [account], [asset_definition])
 }
@@ -111,8 +115,8 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
 
     let time_source = TimeSource::new_system();
 
-    let asset_definition_id: AssetDefinitionId =
-        format!("xor#{wonderland_domain}").parse().unwrap();
+    let asset_definition_id =
+        AssetDefinitionId::new(wonderland_domain.clone(), "xor".parse().unwrap());
     let asset_id = AssetId::of(asset_definition_id, account_id.clone());
 
     let mint = Mint::asset_numeric(10_u32, asset_id.clone());

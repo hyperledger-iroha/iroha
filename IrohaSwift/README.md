@@ -91,7 +91,7 @@ torii.listAttachments { result in
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "jpy#xst",
+    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
     quantity: "1.23",
     destination: "<destination_account_i105>",
     description: "demo",
@@ -113,6 +113,9 @@ sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
+
+`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
+canonical `aid:<32-lower-hex-no-dash>` asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows.
 
@@ -746,7 +749,7 @@ let payload = try ConfidentialEncryptedPayload(
 let request = try ShieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
     fromAccountId: "<account_i105>",
     amount: "42",
     noteCommitment: noteCommitmentBytes, // 32 bytes
@@ -775,7 +778,7 @@ let proof = try ProofAttachment(
 let request = try UnshieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
     toAccountId: "<recipient_account_i105>",
     publicAmount: "50",
     inputs: [Data(repeating: 0x10, count: 32)],
@@ -861,7 +864,7 @@ transition metadata via `/v1/confidential/assets/{definition_id}/transitions`:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "rose#wonderland")
+    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
     if let pending = policy.pendingTransition {
         print("Next mode:", pending.newMode, "opens at", pending.windowOpenHeight ?? pending.effectiveHeight)
     }

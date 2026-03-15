@@ -40,8 +40,10 @@ fn measure_accounts_in_world() {
 
 fn measure_assets_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
-    let asset_definition_id: AssetDefinitionId =
-        format!("mandatory#{genesis_domain}").parse().unwrap();
+    let asset_definition_id = AssetDefinitionId::new(
+        genesis_domain.id().clone(),
+        "mandatory".parse().expect("valid asset name"),
+    );
 
     let assets = (0..N).map(|_| gen_asset(asset_definition_id.clone()));
     let world = World::with_assets([], [], [], assets, []);

@@ -53,7 +53,7 @@ SoraFS 僅接受治理封裝的 `ProviderAdvertV1` 有效負載。的
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` 與已定義的 `max_span`
      - 當存在 GREASE TLV 時，`allow_unknown_capabilities=<true|false>`
-   - 通過 `/v1/sorafs/providers` 和 `sorafs_fetch` 驗證；關於未知的警告
+   - 通過 `/v2/sorafs/providers` 和 `sorafs_fetch` 驗證；關於未知的警告
      必須對能力進行分類。
 3. **驗證多源準備情況。 **
    -用`--provider-advert=<path>`執行`sorafs_fetch`； CLI 現在失敗
@@ -189,9 +189,9 @@ groups:
 - **每週狀態郵件。 ** DevRel 分發入學簡要摘要
   指標、未解決的警告和即將到來的截止日期。
 - **事件響應。 ** 如果 `reject` 發出火災警報，待命工程師：
-  1. 通過 Torii 發現 (`/v1/sorafs/providers`) 獲取違規廣告。
+  1. 通過 Torii 發現 (`/v2/sorafs/providers`) 獲取違規廣告。
   2. 在提供商管道中重新運行廣告驗證並與
-     `/v1/sorafs/providers` 重現該錯誤。
+     `/v2/sorafs/providers` 重現該錯誤。
   3. 與提供商協調，在下次刷新之前輪播廣告
      截止日期。
 - **更改凍結。 ** 在 R1/R2 期間，功能模式不會發生更改，除非

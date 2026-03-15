@@ -67,7 +67,7 @@ La région est actuellement en contact avec
 ## Instruments et luminaires
 
 - Les charges utiles fournies par les fournisseurs incluent `range_capability`, `stream_budget`
-  et `transport_hints`. Vérifiez les informations `/v1/sorafs/providers` et les conditions d'admission ;
+  et `transport_hints`. Vérifiez les informations `/v2/sorafs/providers` et les conditions d'admission ;
   JSON-резюме должны включать разобранную capacité, flux de budget et de nombreux conseils
   для телеметрического ingérer.
 - `cargo xtask sorafs-admission-fixtures` vous permet de consulter les budgets de flux et les conseils de transport
@@ -77,7 +77,7 @@ La région est actuellement en contact avec
   - `multi_fetch_plan.json`, le SDK peut vous aider à effectuer des recherches
     plan de récupération multi-pairs.
 
-## Intégration de l'opérateur et Torii- Torii `/v1/sorafs/providers` возвращает метаданные диапазонных возможностей
+## Intégration de l'opérateur et Torii- Torii `/v2/sorafs/providers` возвращает метаданные диапазонных возможностей
   Il s'agit de `stream_budget` et `transport_hints`. Le déclassement préalable est prévu, alors
   Les fournisseurs proposent de nouvelles métadonnées, des points de terminaison de plage indiquant votre organisation
   pour les clients.

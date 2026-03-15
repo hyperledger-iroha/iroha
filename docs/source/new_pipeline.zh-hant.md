@@ -155,8 +155,8 @@ Parameters (current defaults)
 - Smoothing (off by default): `smoothing_alpha` = 0.2, `max_adjust_ms_per_min` = 50
 
 Interfaces
-- Torii: `GET /v1/time/now` → `{ now, offset_ms, confidence_ms }`
-         `GET /v1/time/status` → peer statistics and recent offsets (for ops)
+- Torii: `GET /v2/time/now` → `{ now, offset_ms, confidence_ms }`
+         `GET /v2/time/status` → peer statistics and recent offsets (for ops)
 - Sumeragi: NTS provides timers/timeouts using `t_net`. Consensus validity
   never consults NTS.
 - Consensus rules: TTL is height‑based; time‑based trigger validity is checked
@@ -335,7 +335,7 @@ Runtime upgrade artifacts
 
 Sudo path (admin/multisig)
 - `RootAdminSet`: set of admin accounts (sorted, unique); `RootMultisigPolicy { threshold, members }` optional with `1 ≤ threshold ≤ |members|`.
-- `Sudo::exec(inner)` requires either: (a) signed by any `RootAdminSet` member AND approved by `RootMultisigPolicy` via `ctx_hash = H("iroha/root-approve/v1", preimage_hash, call_selector(inner), at_height_lower_bound, expiry_height)`, or (b) a multisig envelope with ≥ threshold signatures. Approvals expire at `expiry_height` and are invalidated on policy rotation (which activates next epoch).
+- `Sudo::exec(inner)` requires either: (a) signed by any `RootAdminSet` member AND approved by `RootMultisigPolicy` via `ctx_hash = H("iroha/root-approve/v2", preimage_hash, call_selector(inner), at_height_lower_bound, expiry_height)`, or (b) a multisig envelope with ≥ threshold signatures. Approvals expire at `expiry_height` and are invalidated on policy rotation (which activates next epoch).
 - Intended for emergency fixes; actions are logged with an audit event including `proposal_id`, `sig_set_hash`, `event_version`, and `at_height`.
 
 On‑chain governance (conviction voting)
@@ -395,7 +395,7 @@ GET /governance/enactments/{id}
 Multibody sortition (Parliament)
 - Bodies: Proposal, Review, Enactment Houses; members selected by deterministic sortition from eligible accounts for fixed terms.
 - Flow: Proposal House admits proposals → Review House audits preimages/manifests → Enactment House schedules and signs `ParliamentEnactmentCertificate` for the execution window.
-- Randomness: `epoch_beacon := H("iroha/beacon/v1", concat(finalized_block_hash[h−J..h]))` (blake2b‑256); `R = H("iroha/parliament/v1", chain_id, epoch_index, epoch_beacon)`. Eligibility set deduped and enumerated lexicographically.
+- Randomness: `epoch_beacon := H("iroha/beacon/v2", concat(finalized_block_hash[h−J..h]))` (blake2b‑256); `R = H("iroha/parliament/v2", chain_id, epoch_index, epoch_beacon)`. Eligibility set deduped and enumerated lexicographically.
 - Thresholds/timeouts: Proposal House admit ≥ simple majority; Review House approve ≥ 2/3 (veto on invalid manifest, reproducibility failure, or delay < minimum); Enactment House certify ≥ 2/3 within `T_sign` blocks else `ParliamentTimeout` and escalation/reselection. Track absenteeism; eject after K consecutive misses at rotation.
 
 Safety & determinism

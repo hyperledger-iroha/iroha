@@ -26,7 +26,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
-            return "Asset definition id must follow 'asset#domain' with no whitespace or reserved characters (@, #, $) in either component (received '\(value)')."
+            return "Asset definition id must use canonical 'aid:<32-lower-hex-no-dash>' UUID-v4 form (received '\(value)')."
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
@@ -52,10 +52,6 @@ struct TransactionInputValidator {
         let authorityId: String
         let assetDefinitionId: String?
         let accountIds: [String: String]
-    }
-
-    private static func containsReservedIdCharacters(_ value: String) -> Bool {
-        value.contains("@") || value.contains("#") || value.contains("$")
     }
 
     static func validate(chainId: String,
@@ -113,17 +109,26 @@ struct TransactionInputValidator {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
-        guard components.count == 2,
-              !components[0].isEmpty,
-              !components[1].isEmpty else {
+        let prefix = "aid:"
+        guard trimmed.hasPrefix(prefix) else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        if containsReservedIdCharacters(String(components[0]))
-            || containsReservedIdCharacters(String(components[1])) {
+        let payload = String(trimmed.dropFirst(prefix.count))
+        guard payload.count == 32,
+              !payload.contains("-"),
+              payload.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "0123456789abcdef").contains($0)
+              }),
+              let raw = Data(hexString: payload),
+              raw.count == 16 else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        return trimmed
+        let bytes = [UInt8](raw)
+        guard bytes[6] >> 4 == 0x4,
+              (bytes[8] & 0xC0) == 0x80 else {
+            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
+        }
+        return "\(prefix)\(payload)"
     }
 
     private static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {

@@ -15,8 +15,8 @@ fn asset_definition_id_of_matches_parse() {
     let domain: DomainId = "soramitsu".parse().unwrap();
     let name: Name = "xor".parse().unwrap();
 
-    let parsed: AssetDefinitionId = "xor#soramitsu".parse().unwrap();
     let via_of = AssetDefinitionId::of(domain.clone(), name.clone());
+    let parsed: AssetDefinitionId = via_of.to_string().parse().unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

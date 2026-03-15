@@ -11,7 +11,10 @@ fn transfer_isi_should_be_valid() {
     let _domain: DomainId = "crypto".parse().expect("domain");
     let source_account = AccountId::new(KeyPair::random().public_key().clone());
     let destination_account = AccountId::new(KeyPair::random().public_key().clone());
-    let asset_definition_id: AssetDefinitionId = "btc#crypto".parse().expect("asset definition");
+    let asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "crypto".parse().unwrap(),
+        "btc".parse().unwrap(),
+    );
     let source_asset_id = AssetId::new(asset_definition_id, source_account);
     let _instruction = Transfer::asset_numeric(source_asset_id, 12u32, destination_account);
 }

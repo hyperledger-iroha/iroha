@@ -3529,18 +3529,7 @@ mod tests {
             &TimeSource::new_system(),
         ));
 
-        let shutdown = ShutdownSignal::new();
-        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
-        let (network, _child) = IrohaNetwork::start(
-            KeyPair::random(),
-            network_cfg,
-            None,
-            None,
-            None,
-            shutdown.clone(),
-        )
-        .await
-        .expect("network starts");
+        let network = IrohaNetwork::closed_for_tests();
 
         let (known_signed, _) = build_transaction("known");
         queue
@@ -3589,8 +3578,6 @@ mod tests {
             1,
             "already-known gossip should be ignored without queue churn"
         );
-
-        shutdown.send();
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -21,7 +21,7 @@ description : SoraFS Pin Registry et réplication SLA
 
 ## جائزہ
 
-Le runbook est un gestionnaire de registre SoraFS et un registre de broches et une réplication pour un service de sauvegarde (SLA) ٹرائج کیسے کیا جائے۔ Il s'agit d'un espace de noms `iroha_torii` et d'un espace de noms Prometheus. ہیں۔ Torii Il s'agit d'un registre de 30 ans d'âge. Les points de terminaison `/v1/sorafs/pin/*` sont également disponibles pour les points de terminaison `/v1/sorafs/pin/*`. تیار شدہ ڈیش بورڈ (`docs/source/grafana_sorafs_pin_registry.json`) امپورٹ کریں تاکہ Grafana کا ایک تیار layout ملے جو نیچے کے حصوں سے براہ راست میپ ہوتا ہے۔
+Le runbook est un gestionnaire de registre SoraFS et un registre de broches et une réplication pour un service de sauvegarde (SLA) ٹرائج کیسے کیا جائے۔ Il s'agit d'un espace de noms `iroha_torii` et d'un espace de noms Prometheus. ہیں۔ Torii Il s'agit d'un registre de 30 ans d'âge. Les points de terminaison `/v2/sorafs/pin/*` sont également disponibles pour les points de terminaison `/v2/sorafs/pin/*`. تیار شدہ ڈیش بورڈ (`docs/source/grafana_sorafs_pin_registry.json`) امپورٹ کریں تاکہ Grafana کا ایک تیار layout ملے جو نیچے کے حصوں سے براہ راست میپ ہوتا ہے۔
 
 ## میٹرک حوالہ
 
@@ -120,7 +120,7 @@ groups:
 
 1. **وجہ کی شناخت**
    - Les SLA manquent le backlog des fournisseurs et les fournisseurs (échecs du PoR, achèvements tardifs)
-   - L'arriéré des demandes d'admission est manqué (`/v1/sorafs/pin/*`) et les manifestes sont affichés. منتظر ہیں واضح ہوں۔
+   - L'arriéré des demandes d'admission est manqué (`/v2/sorafs/pin/*`) et les manifestes sont affichés. منتظر ہیں واضح ہوں۔
 2. **Fournisseurs de fournisseurs de services**
    - `iroha app sorafs providers list` La réplication est une solution de réplication de base de données.
    - Les jauges `torii_sorafs_capacity_*` permettent d'évaluer le succès du GiB et du PoR provisionné.
@@ -139,7 +139,7 @@ La politique de cache d'alias est également une question de sécurité et de co
 2. **Mise en scène d'un essai à sec**
    - configuration de la mise en scène et du déploiement pour la topologie de production
    - `cargo xtask sorafs-pin-fixtures` prend en charge les appareils d'alias canoniques pour décoder et aller-retour Inadéquation de la dérive en amont
-   - Points de terminaison `/v1/sorafs/pin/{digest}` et `/v1/sorafs/aliases` pour preuves synthétiques et preuves fraîches, fenêtre d'actualisation expirée et dure-expirée. Codes d'état HTTP, en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et champs de corps JSON et runbook pour valider les fichiers.
+   - Points de terminaison `/v2/sorafs/pin/{digest}` et `/v2/sorafs/aliases` pour preuves synthétiques et preuves fraîches, fenêtre d'actualisation expirée et dure-expirée. Codes d'état HTTP, en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et champs de corps JSON et runbook pour valider les fichiers.
 3. **Production میں فعال کریں**
    - fenêtre de changement standard pour la configuration de la configuration Torii est un nœud de connexion pour les passerelles/services SDK et redémarrage کریں۔
    - `docs/source/grafana_sorafs_pin_registry.json` et Grafana pour les panneaux d'actualisation du cache (pour les tableaux de bord et les broches) et les panneaux d'actualisation du cache d'alias et la broche de l'espace de travail NOC کریں۔

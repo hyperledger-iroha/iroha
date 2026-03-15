@@ -1612,7 +1612,7 @@ mod tests {
         let token_b64 = encode_token_b64(&token);
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
@@ -1708,7 +1708,7 @@ mod tests {
         let salt_epoch = 42u32;
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
@@ -1791,7 +1791,7 @@ mod tests {
         let token_b64 = encode_token_b64(&token);
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
@@ -1862,7 +1862,7 @@ mod tests {
         let token_b64 = encode_token_b64(&token);
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
@@ -1954,7 +1954,7 @@ mod tests {
         let token_b64 = encode_token_b64(&token);
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
@@ -2048,7 +2048,7 @@ mod tests {
         let proof_key_b64 = STANDARD.encode(proof_key.as_ref());
 
         let path = format!(
-            "/v1/sorafs/storage/chunk/{}/{}",
+            "/v2/sorafs/storage/chunk/{}/{}",
             manifest_id_hex, chunk_digest_hex
         );
         let mut headers = HeaderMap::new();

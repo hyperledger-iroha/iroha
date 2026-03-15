@@ -854,7 +854,7 @@ impl Execute for ClaimPublicLaneRewards {
             .parse()
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `name#domain`".into(),
+                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
                 )
             })?;
         let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
@@ -1182,7 +1182,7 @@ fn validate_reward_sink(
             .parse()
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `name#domain`".into(),
+                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
                 )
             })?;
     if reward_asset.account() != &sink_account {
@@ -1558,7 +1558,7 @@ fn stake_context(
 ) -> Result<StakeEscrowContext, Error> {
     let asset_definition: AssetDefinitionId = staking_cfg.stake_asset_id.parse().map_err(|_| {
         Error::InvariantViolation(
-            "invalid nexus.staking.stake_asset_id; expected `name#domain`".into(),
+            "invalid nexus.staking.stake_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
         )
     })?;
     let escrow_account = parse_staking_account_literal(
@@ -1589,11 +1589,48 @@ fn parse_staking_account_literal(
     literal: &str,
     field: &'static str,
 ) -> Result<AccountId, Error> {
-    crate::block::parse_account_literal_with_world(world, literal).ok_or_else(|| {
-        Error::InvariantViolation(
-            format!("invalid nexus.staking.{field}; expected account identifier").into(),
-        )
-    })
+    if let Some(account) = crate::block::parse_account_literal_with_world(world, literal) {
+        return Ok(account);
+    }
+
+    let reason = match AccountId::parse_encoded(literal) {
+        Ok(encoded) => {
+            let account = encoded.into_account_id();
+            let linked_domains = world.domains_for_subject(&account);
+            if linked_domains.len() > 1 {
+                format!(
+                    "literal resolves to a subject linked to multiple domains ({})",
+                    linked_domains
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else if linked_domains.is_empty() {
+                let owner_domains: Vec<_> = world
+                    .domains_iter()
+                    .filter(|domain| domain.owned_by() == &account)
+                    .map(|domain| domain.id().to_string())
+                    .collect();
+                if owner_domains.len() > 1 {
+                    format!(
+                        "literal resolves to a subject that owns multiple domains ({})",
+                        owner_domains.join(", ")
+                    )
+                } else {
+                    "literal decoded but could not be resolved in the current world state"
+                        .to_owned()
+                }
+            } else {
+                "literal decoded but failed world-state disambiguation".to_owned()
+            }
+        }
+        Err(err) => format!("decode failed: {err}"),
+    };
+
+    Err(Error::InvariantViolation(
+        format!("invalid nexus.staking.{field}; expected account identifier ({reason})").into(),
+    ))
 }
 
 fn assert_stake_amount_matches_spec(
@@ -1811,11 +1848,17 @@ mod tests {
         .execute(&ALICE_ID, stx)
         .unwrap();
 
-        let asset_def_id: AssetDefinitionId =
-            "xor#wonderland".parse().expect("asset definition id");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         let reward_asset = AssetId::new(asset_def_id.clone(), sink.clone());
         let initial_stake = Numeric::new(u64::from(mint_amount.max(1)), 0);
         Mint::asset_numeric(mint_amount, reward_asset.clone())
@@ -1902,10 +1945,17 @@ mod tests {
         register_peer_for_account(stx, &delegator);
         register_peer_for_account(stx, &escrow);
 
-        let asset_def_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition id");
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "nexus".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
+        Register::asset_definition({
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&ALICE_ID, stx)
+        .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
         Mint::asset_numeric(10_000u32, validator_asset)

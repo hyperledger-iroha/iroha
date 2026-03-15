@@ -33,7 +33,7 @@ boshqaruv tekshiruvlari. Barcha foydali yuklar Norito kodlangan; SCALE yoki ad-h
   hisobdan tashqari saqlash bilan maslahatlashmasdan davlat.
 - Engil mijozlar buni tasdiqlashlari uchun deterministik a'zolik dalillarini taqdim eting
   manifest xeshi berilgan blokda yakunlandi.
-- Torii so'rovlarini (`/v1/da/commitments/*`) va o'tishga imkon beruvchi dalillarni ko'rsating,
+- Torii so'rovlarini (`/v2/da/commitments/*`) va o'tishga imkon beruvchi dalillarni ko'rsating,
   SDK'lar va boshqaruvni avtomatlashtirish auditining mavjudligi har birini takrorlamasdan
   blok.
 - Mavjud `SignedBlockWire` konvertini yangisini o'tkazish orqali kanonik saqlang
@@ -48,7 +48,7 @@ boshqaruv tekshiruvlari. Barcha foydali yuklar Norito kodlangan; SCALE yoki ad-h
 3. **Doimiylik/indekslar**, shuning uchun WSV majburiyat so'rovlariga tezda javob berishi mumkin
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii RPC qoʻshimchalari** ostidagi roʻyxat/soʻrov/tasdiqlash yakuniy nuqtalari uchun
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Integratsiya testlari + moslamalar** simning joylashuvi va o'tkazuvchanligini tasdiqlovchi
    `integration_tests/tests/da/commitments.rs`.
 
@@ -141,9 +141,9 @@ Torii uchta so'nggi nuqtani ochib beradi:
 
 | Marshrut | Usul | Yuk yuk | Eslatmalar |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (bo'lak/davr/ketma-ketlik bo'yicha diapazon filtri, sahifalash) | `DaCommitmentPage` ni umumiy hisob, majburiyatlar va blok xesh bilan qaytaradi. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (bo'lak + manifest xesh yoki `(epoch, sequence)` korteji). | `DaCommitmentProof` bilan javob beradi (yozuv + Merkle yo'li + blok xeshi). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Blok xesh hisobini takrorlaydigan va kiritishni tasdiqlovchi fuqaroligi bo'lmagan yordamchi; to'g'ridan-to'g'ri `iroha_crypto` ga ulana olmaydigan SDKlar tomonidan foydalaniladi. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (bo'lak/davr/ketma-ketlik bo'yicha diapazon filtri, sahifalash) | `DaCommitmentPage` ni umumiy hisob, majburiyatlar va blok xesh bilan qaytaradi. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (bo'lak + manifest xesh yoki `(epoch, sequence)` korteji). | `DaCommitmentProof` bilan javob beradi (yozuv + Merkle yo'li + blok xeshi). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Blok xesh hisobini takrorlaydigan va kiritishni tasdiqlovchi fuqaroligi bo'lmagan yordamchi; to'g'ridan-to'g'ri `iroha_crypto` ga ulana olmaydigan SDKlar tomonidan foydalaniladi. |
 
 Barcha foydali yuklar `iroha_data_model::da::commitment` ostida yashaydi. Torii marshrutizatorlari o'rnatiladi
 mavjud DA yonidagi ishlov beruvchilar token/mTLSni qayta ishlatish uchun oxirgi nuqtalarni qabul qiladi

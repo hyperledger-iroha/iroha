@@ -99,14 +99,14 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "asset#domain" -t Numeric`
+    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
     #[arg(short, long)]
     input: bool,
     /// Outputs instructions to stdout without submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
+    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -621,6 +621,9 @@ mod tools {
         /// Account address helpers (canonical I105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
+        /// Canonical ID encoders
+        #[command(subcommand)]
+        Encode(encode::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
         #[command(subcommand)]
         Crypto(crate::crypto::Command),
@@ -638,10 +641,62 @@ mod tools {
             use self::Command::*;
             match self {
                 Address(variant) => Run::run(variant, context),
+                Encode(variant) => Run::run(variant, context),
                 Crypto(variant) => Run::run(variant, context),
                 Ivm(variant) => Run::run(variant, context),
                 MarkdownHelp(variant) => Run::run(variant, context),
                 Version(variant) => Run::run(variant, context),
+            }
+        }
+    }
+
+    mod encode {
+        use super::*;
+        use iroha::data_model::asset::{AssetDefinitionAlias, AssetDefinitionId};
+
+        #[derive(clap::Subcommand, Debug)]
+        pub enum Command {
+            /// Encode a canonical asset id (`norito:<hex>`)
+            AssetId(AssetId),
+        }
+
+        impl Run for Command {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                match self {
+                    Command::AssetId(args) => args.run(context),
+                }
+            }
+        }
+
+        #[derive(clap::Args, Debug)]
+        pub struct AssetId {
+            /// Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
+            #[arg(long, conflicts_with = "alias")]
+            pub definition: Option<AssetDefinitionId>,
+            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            #[arg(long, conflicts_with = "definition")]
+            pub alias: Option<AssetDefinitionAlias>,
+            /// Canonical I105 account literal receiving the asset bucket.
+            #[arg(long)]
+            pub account: String,
+        }
+
+        impl AssetId {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                let account = resolve_account_id(context, &self.account)
+                    .wrap_err("failed to resolve --account")?;
+                let definition = match (self.definition, self.alias) {
+                    (Some(definition), None) => definition,
+                    (None, Some(alias)) => {
+                        let client = context.client_from_config();
+                        resolve_asset_definition_id_by_alias(&client, &alias)?
+                    }
+                    _ => eyre::bail!(
+                        "provide either `--definition aid:...` or `--alias <name>#<domain>@<dataspace>|<name>#<dataspace>`"
+                    ),
+                };
+                let asset_id = iroha::data_model::asset::AssetId::new(definition, account);
+                context.print_data(&asset_id.canonical_encoded())
             }
         }
     }
@@ -1974,6 +2029,7 @@ mod asset {
     }
 
     fn asset_transfer_instructions(
+        id: AssetId,
         args: &Transfer,
         to: &AccountId,
         policy: Option<&AccountAdmissionPolicy>,
@@ -1991,11 +2047,7 @@ mod asset {
         }
 
         instructions.push(InstructionBox::from(
-            iroha::data_model::isi::Transfer::asset_numeric(
-                args.id.clone(),
-                args.quantity.clone(),
-                to.clone(),
-            ),
+            iroha::data_model::isi::Transfer::asset_numeric(id, args.quantity.clone(), to.clone()),
         ));
         Ok(instructions)
     }
@@ -2006,6 +2058,9 @@ mod asset {
             match self {
                 Definition(cmd) => cmd.run(context),
                 Get(args) => {
+                    let id = args
+                        .resolve_asset_id(context)
+                        .wrap_err("failed to resolve asset identifier")?;
                     let client = context.client_from_config();
                     let entries = client
                         .query(FindAssets)
@@ -2013,26 +2068,35 @@ mod asset {
                         .wrap_err("Failed to get asset")?;
                     let entry = entries
                         .into_iter()
-                        .find(|e| e.id() == &args.id)
+                        .find(|e| e.id() == &id)
                         .ok_or_else(|| eyre!("Asset not found"))?;
                     context.print_data(&entry)
                 }
                 List(cmd) => cmd.run(context),
                 Mint(args) => {
+                    let id = args
+                        .resolve_asset_id(context)
+                        .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Mint::asset_numeric(args.quantity, args.id);
+                        iroha::data_model::isi::Mint::asset_numeric(args.quantity, id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to mint numeric asset")
                 }
                 Burn(args) => {
+                    let id = args
+                        .resolve_asset_id(context)
+                        .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Burn::asset_numeric(args.quantity, args.id);
+                        iroha::data_model::isi::Burn::asset_numeric(args.quantity, id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to burn numeric asset")
                 }
                 Transfer(args) => {
+                    let id = args
+                        .resolve_asset_id(context)
+                        .wrap_err("failed to resolve asset identifier")?;
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
                     let policy = if args.ensure_destination {
@@ -2042,13 +2106,37 @@ mod asset {
                         None
                     };
 
-                    let instructions = asset_transfer_instructions(&args, &to, policy.as_ref())?;
+                    let instructions =
+                        asset_transfer_instructions(id, &args, &to, policy.as_ref())?;
                     context
                         .finish(instructions)
                         .wrap_err("Failed to transfer numeric asset")
                 }
             }
         }
+    }
+
+    fn resolve_asset_id_components<C: RunContext>(
+        context: &C,
+        id: Option<AssetId>,
+        definition_alias: Option<AssetDefinitionAlias>,
+        account: Option<String>,
+    ) -> Result<AssetId> {
+        if let Some(id) = id {
+            return Ok(id);
+        }
+        let account =
+            account.ok_or_else(|| eyre!("`--account` must be provided when `--id` is omitted"))?;
+        let account =
+            resolve_account_id(context, &account).wrap_err("failed to resolve --account")?;
+        if let Some(alias) = definition_alias {
+            let client = context.client_from_config();
+            let definition = resolve_asset_definition_id_by_alias(&client, &alias)?;
+            return Ok(AssetId::new(definition, account));
+        }
+        Err(eyre!(
+            "`--definition-alias` must be provided when `--id` is omitted"
+        ))
     }
 
     mod definition {
@@ -2058,9 +2146,10 @@ mod asset {
         use iroha::{
             crypto::Hash,
             data_model::asset::{
-                AssetDefinition, AssetDefinitionId,
+                AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
                 definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
             },
+            data_model::sorafs_uri::SorafsUri,
         };
 
         use super::*;
@@ -2108,6 +2197,9 @@ mod asset {
                 match self {
                     List(cmd) => cmd.run(context),
                     Get(args) => {
+                        let id = args
+                            .resolve_id(context)
+                            .wrap_err("failed to resolve asset definition identifier")?;
                         let client = context.client_from_config();
                         let entries = client
                             .query(FindAssetsDefinitions)
@@ -2115,14 +2207,25 @@ mod asset {
                             .wrap_err("Failed to get asset definition")?;
                         let entry = entries
                             .into_iter()
-                            .find(|e| e.id() == &args.id)
+                            .find(|e| e.id() == &id)
                             .ok_or_else(|| eyre!("Asset definition not found"))?;
                         context.print_data(&entry)
                     }
                     Register(args) => {
                         let policy = confidential_policy_from_args(&args)
                             .wrap_err("invalid confidential policy arguments")?;
-                        let mut entry = AssetDefinition::new(args.id, args.scale.into());
+                        let alias = register_alias_from_args(&args)?;
+                        let mut entry =
+                            AssetDefinition::new(args.id, args.scale.into()).with_name(args.name);
+                        if let Some(description) = args.description {
+                            entry = entry.with_description(Some(description));
+                        }
+                        if let Some(alias) = alias {
+                            entry = entry.with_alias(Some(alias));
+                        }
+                        if let Some(logo) = args.logo {
+                            entry = entry.with_logo(Some(logo));
+                        }
                         if args.mint_once {
                             entry = entry.mintable_once();
                         }
@@ -2133,19 +2236,24 @@ mod asset {
                             .wrap_err("Failed to register asset")
                     }
                     Unregister(args) => {
-                        let instruction =
-                            iroha::data_model::isi::Unregister::asset_definition(args.id);
+                        let id = args
+                            .resolve_id(context)
+                            .wrap_err("failed to resolve asset definition identifier")?;
+                        let instruction = iroha::data_model::isi::Unregister::asset_definition(id);
                         context
                             .finish([instruction])
                             .wrap_err("Failed to unregister asset")
                     }
                     Transfer(args) => {
+                        let id = args
+                            .resolve_id(context)
+                            .wrap_err("failed to resolve asset definition identifier")?;
                         let from = resolve_account_id(context, &args.from)
                             .wrap_err("failed to resolve --from account")?;
                         let to = resolve_account_id(context, &args.to)
                             .wrap_err("failed to resolve --to account")?;
                         let instruction =
-                            iroha::data_model::isi::Transfer::asset_definition(from, args.id, to);
+                            iroha::data_model::isi::Transfer::asset_definition(from, id, to);
                         context
                             .finish([instruction])
                             .wrap_err("Failed to transfer asset definition")
@@ -2157,9 +2265,29 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Register {
-            /// Asset definition in the format "asset#domain"
-            #[arg(short, long)]
+            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+            #[arg(short, long, value_parser = parse_asset_definition_aid_literal)]
             pub id: AssetDefinitionId,
+            /// Human-readable asset name.
+            #[arg(long)]
+            pub name: String,
+            /// Optional human-readable description.
+            #[arg(long)]
+            pub description: Option<String>,
+            /// Optional explicit alias literal (`<name>#<domain>@<dataspace>` or
+            /// `<name>#<dataspace>`).
+            #[arg(long, conflicts_with_all = ["alias_domain", "alias_dataspace"])]
+            pub alias: Option<AssetDefinitionAlias>,
+            /// Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`.
+            #[arg(long, requires = "alias_dataspace", conflicts_with = "alias")]
+            pub alias_domain: Option<Name>,
+            /// Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or
+            /// `<name>#<dataspace>`.
+            #[arg(long, conflicts_with = "alias")]
+            pub alias_dataspace: Option<Name>,
+            /// Optional logo URI. Must use `sorafs://...`.
+            #[arg(long)]
+            pub logo: Option<SorafsUri>,
             /// Disables minting after the first instance
             #[arg(short, long)]
             pub mint_once: bool,
@@ -2186,9 +2314,12 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Transfer {
-            /// Asset definition in the format "asset#domain"
-            #[arg(short, long)]
-            pub id: AssetDefinitionId,
+            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
+            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            pub id: Option<AssetDefinitionId>,
+            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            #[arg(long, required_unless_present = "id", conflicts_with = "id")]
+            pub alias: Option<AssetDefinitionAlias>,
             /// Source account identifier (canonical I105 literal)
             #[arg(short, long)]
             pub from: String,
@@ -2199,9 +2330,12 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Id {
-            /// Asset definition in the format "asset#domain"
-            #[arg(short, long)]
-            pub id: AssetDefinitionId,
+            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
+            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            pub id: Option<AssetDefinitionId>,
+            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            #[arg(long, required_unless_present = "id", conflicts_with = "id")]
+            pub alias: Option<AssetDefinitionAlias>,
         }
 
         #[derive(clap::Subcommand, Debug)]
@@ -2312,6 +2446,55 @@ mod asset {
                 .wrap_err_with(|| format!("invalid hash literal `{trimmed}` for vk-set hash"))
         }
 
+        fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
+            match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
+                (Some(alias), None, None) => Ok(Some(alias.clone())),
+                (None, Some(domain), Some(dataspace)) => AssetDefinitionAlias::from_components(
+                    &args.name,
+                    Some(domain.as_ref()),
+                    dataspace.as_ref(),
+                )
+                .map(Some)
+                .map_err(|err| eyre!("invalid derived alias: {err}")),
+                (None, None, Some(dataspace)) => {
+                    AssetDefinitionAlias::from_components(&args.name, None, dataspace.as_ref())
+                        .map(Some)
+                        .map_err(|err| eyre!("invalid derived alias: {err}"))
+                }
+                (None, None, None) => Ok(None),
+                _ => eyre::bail!(
+                    "provide either `--alias`, `--alias-dataspace`, or both `--alias-domain` and `--alias-dataspace`"
+                ),
+            }
+        }
+
+        fn resolve_definition_id<C: RunContext>(
+            context: &C,
+            id: Option<AssetDefinitionId>,
+            alias: Option<AssetDefinitionAlias>,
+        ) -> Result<AssetDefinitionId> {
+            match (id, alias) {
+                (Some(id), None) => Ok(id),
+                (None, Some(alias)) => {
+                    let client = context.client_from_config();
+                    resolve_asset_definition_id_by_alias(&client, &alias)
+                }
+                _ => eyre::bail!("provide either `--id` or `--alias`"),
+            }
+        }
+
+        impl Id {
+            fn resolve_id<C: RunContext>(&self, context: &C) -> Result<AssetDefinitionId> {
+                resolve_definition_id(context, self.id.clone(), self.alias.clone())
+            }
+        }
+
+        impl Transfer {
+            fn resolve_id<C: RunContext>(&self, context: &C) -> Result<AssetDefinitionId> {
+                resolve_definition_id(context, self.id.clone(), self.alias.clone())
+            }
+        }
+
         #[cfg(test)]
         mod tests {
             use super::*;
@@ -2319,7 +2502,15 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: "rose#wonderland".parse().expect("valid id"),
+                    id: "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+                        .parse()
+                        .expect("valid id"),
+                    name: "Rose".to_owned(),
+                    description: None,
+                    alias: None,
+                    alias_domain: None,
+                    alias_dataspace: None,
+                    logo: None,
                     mint_once: false,
                     scale: None,
                     confidential_mode: ConfidentialPolicyModeArg::TransparentOnly,
@@ -2365,14 +2556,44 @@ mod asset {
                     "unexpected error: {err}"
                 );
             }
+
+            #[test]
+            fn register_alias_derives_from_name_domain_and_dataspace() {
+                let mut args = base_register_args();
+                args.alias_domain = Some("issuer".parse().expect("valid alias domain"));
+                args.alias_dataspace = Some("main".parse().expect("valid alias dataspace"));
+
+                let alias = register_alias_from_args(&args)
+                    .expect("alias should derive")
+                    .expect("alias should be present");
+                assert_eq!(alias.as_ref(), "Rose#issuer@main");
+            }
+
+            #[test]
+            fn register_alias_derives_short_form_from_name_and_dataspace() {
+                let mut args = base_register_args();
+                args.alias_dataspace = Some("main".parse().expect("valid alias dataspace"));
+
+                let alias = register_alias_from_args(&args)
+                    .expect("alias should derive")
+                    .expect("alias should be present");
+                assert_eq!(alias.as_ref(), "Rose#main");
+            }
         }
     }
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Encoded asset identifier (`norito:<hex>`)
-        #[arg(short, long, value_parser = parse_asset_id_literal)]
-        pub id: AssetId,
+        /// Encoded asset identifier (`norito:<hex>`).
+        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
+        pub id: Option<AssetId>,
+        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "id")]
+        pub definition_alias: Option<AssetDefinitionAlias>,
+        /// Source account identifier (canonical I105), required with `--definition-alias`.
+        #[arg(long, conflicts_with = "id")]
+        pub account: Option<String>,
         /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
@@ -2386,19 +2607,66 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Encoded asset identifier (`norito:<hex>`)
-        #[arg(short, long, value_parser = parse_asset_id_literal)]
-        pub id: AssetId,
+        /// Encoded asset identifier (`norito:<hex>`).
+        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
+        pub id: Option<AssetId>,
+        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "id")]
+        pub definition_alias: Option<AssetDefinitionAlias>,
+        /// Account identifier (canonical I105), required with `--definition-alias`.
+        #[arg(long, conflicts_with = "id")]
+        pub account: Option<String>,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Encoded asset identifier (`norito:<hex>`)
-        #[arg(short, long, value_parser = parse_asset_id_literal)]
-        pub id: AssetId,
+        /// Encoded asset identifier (`norito:<hex>`).
+        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
+        pub id: Option<AssetId>,
+        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "id")]
+        pub definition_alias: Option<AssetDefinitionAlias>,
+        /// Account identifier (canonical I105), required with `--definition-alias`.
+        #[arg(long, conflicts_with = "id")]
+        pub account: Option<String>,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
+    }
+
+    impl Id {
+        fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
+            resolve_asset_id_components(
+                context,
+                self.id.clone(),
+                self.definition_alias.clone(),
+                self.account.clone(),
+            )
+        }
+    }
+
+    impl IdQuantity {
+        fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
+            resolve_asset_id_components(
+                context,
+                self.id.clone(),
+                self.definition_alias.clone(),
+                self.account.clone(),
+            )
+        }
+    }
+
+    impl Transfer {
+        fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
+            resolve_asset_id_components(
+                context,
+                self.id.clone(),
+                self.definition_alias.clone(),
+                self.account.clone(),
+            )
+        }
     }
 
     #[derive(clap::Subcommand, Debug)]
@@ -2471,7 +2739,7 @@ mod asset {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use iroha::data_model::isi::{Instruction, RegisterBox, TransferBox};
+        use iroha::data_model::isi::{Instruction, TransferBox};
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
@@ -2481,29 +2749,20 @@ mod asset {
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
             let owner = ScopedAccountId::new(domain.clone(), src.public_key().clone());
             let to = ScopedAccountId::new(domain, dest.public_key().clone());
-            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
+            let asset_def_id = AssetDefinitionId::new(
+                "wonderland".parse().expect("domain id"),
+                "rose".parse().expect("asset name"),
+            );
             let asset_id = AssetId::new(asset_def_id, owner.clone().into());
             let args = Transfer {
-                id: asset_id,
+                id: Some(asset_id),
+                definition_alias: None,
+                account: None,
                 to: to.to_string(),
                 quantity: Numeric::new(5, 0),
                 ensure_destination,
             };
             (args, to)
-        }
-
-        fn assert_register_account(instruction: &InstructionBox, expected: &ScopedAccountId) {
-            let any: &dyn Instruction = &**instruction;
-            let reg = any
-                .as_any()
-                .downcast_ref::<RegisterBox>()
-                .expect("register instruction");
-            match reg {
-                RegisterBox::Account(account_reg) => {
-                    assert_eq!(&account_reg.object().scoped_id(), expected);
-                }
-                other => panic!("unexpected register variant: {other:?}"),
-            }
         }
 
         fn assert_transfer_destination(instruction: &InstructionBox, to: &ScopedAccountId) {
@@ -2519,23 +2778,31 @@ mod asset {
         }
 
         #[test]
-        fn explicit_policy_adds_register_instruction() {
+        fn explicit_policy_rejects_ensure_destination_without_explicit_scope() {
             let (args, to) = sample_transfer_args(true);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(&args, to.account(), Some(&policy))
-                .expect("instructions");
-            assert_eq!(instructions.len(), 2);
-            assert_register_account(&instructions[0], &to);
-            assert_transfer_destination(&instructions[1], &to);
+            let err = asset_transfer_instructions(
+                args.id.clone().expect("id"),
+                &args,
+                to.account(),
+                Some(&policy),
+            )
+            .expect_err("explicit-only admission should reject inferred destination scope");
+            assert!(
+                err.to_string()
+                    .contains("no longer infers a registration domain"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
         fn implicit_policy_skips_register_instruction() {
             let (args, to) = sample_transfer_args(true);
             let instructions = asset_transfer_instructions(
+                args.id.clone().expect("id"),
                 &args,
                 to.account(),
                 Some(&AccountAdmissionPolicy::default()),
@@ -2552,8 +2819,13 @@ mod asset {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(&args, to.account(), Some(&policy))
-                .expect("instructions");
+            let instructions = asset_transfer_instructions(
+                args.id.clone().expect("id"),
+                &args,
+                to.account(),
+                Some(&policy),
+            )
+            .expect("instructions");
             assert_eq!(instructions.len(), 1);
             assert_transfer_destination(&instructions[0], &to);
         }
@@ -6235,13 +6507,19 @@ mod settlement {
                 let receiver = account_with_seed(&domain, 0x44);
 
                 let delivery_leg = SettlementLeg::new(
-                    "bond#wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        "wonderland".parse().unwrap(),
+                        "bond".parse().unwrap(),
+                    ),
                     Numeric::new(100, 0),
                     seller,
                     buyer,
                 );
                 let payment_leg = SettlementLeg::new(
-                    "usd#wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        "wonderland".parse().unwrap(),
+                        "usd".parse().unwrap(),
+                    ),
                     Numeric::new(1000, 0),
                     payer,
                     receiver,
@@ -6267,13 +6545,19 @@ mod settlement {
                 let counter_receiver = account_with_seed(&domain, 0x88);
 
                 let primary_leg = SettlementLeg::new(
-                    "usd#wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        "wonderland".parse().unwrap(),
+                        "usd".parse().unwrap(),
+                    ),
                     Numeric::new(1000, 0),
                     payer,
                     receiver,
                 );
                 let counter_leg = SettlementLeg::new(
-                    "eur#wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(
+                        "wonderland".parse().unwrap(),
+                        "eur".parse().unwrap(),
+                    ),
                     Numeric::new(900, 0),
                     counter_payer,
                     counter_receiver,
@@ -6353,13 +6637,19 @@ mod settlement {
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        "bond#wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            "wonderland".parse().unwrap(),
+                            "bond".parse().unwrap(),
+                        ),
                         Numeric::new(100, 0),
                         account_with_seed(&domain, 0x55),
                         account_with_seed(&domain, 0x66),
                     ),
                     payment_leg: SettlementLeg::new(
-                        "doge#wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            "wonderland".parse().unwrap(),
+                            "doge".parse().unwrap(),
+                        ),
                         Numeric::new(1000, 0),
                         account_with_seed(&domain, 0x77),
                         account_with_seed(&domain, 0x88),
@@ -6517,6 +6807,41 @@ fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
 
 fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
     parse_asset_id_literal_with(literal, "asset literal")
+}
+
+fn resolve_asset_definition_id_by_alias(
+    client: &Client,
+    alias: &AssetDefinitionAlias,
+) -> Result<AssetDefinitionId> {
+    let response = client
+        .post_asset_alias_resolve(alias.as_ref())
+        .wrap_err("failed to call `/v2/assets/aliases/resolve`")?;
+    let status = response.status();
+    if !status.is_success() {
+        if status.as_u16() == 404 {
+            eyre::bail!("asset alias `{alias}` is not bound to any asset definition");
+        }
+        eyre::bail!(
+            "asset alias resolve request failed with HTTP {}",
+            status.as_u16()
+        );
+    }
+    let payload: norito::json::Value = norito::json::from_slice(response.body())
+        .wrap_err("failed to decode asset alias resolve response")?;
+    let map = payload
+        .as_object()
+        .ok_or_else(|| eyre!("asset alias resolve response must be a JSON object"))?;
+    let definition_raw = map
+        .get("asset_definition_id")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("asset alias resolve response missing `asset_definition_id` field"))?;
+    AssetDefinitionId::parse_aid_literal(definition_raw)
+        .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
+}
+
+fn parse_asset_definition_aid_literal(literal: &str) -> Result<AssetDefinitionId> {
+    AssetDefinitionId::parse_aid_literal(literal)
+        .map_err(|err| eyre!("asset definition literal: {err}"))
 }
 
 fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
@@ -6823,12 +7148,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let key_pair = KeyPair::from_seed(vec![8_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(key_pair.public_key().clone())
-            .to_account_address()
-            .expect("account address")
-            .to_i105()
-            .expect("i105 literal");
+        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
 
         let err =
             resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
@@ -6868,12 +7188,7 @@ mod tests {
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let key_pair = KeyPair::from_seed(vec![13_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(key_pair.public_key().clone())
-            .to_account_address()
-            .expect("account address")
-            .to_i105()
-            .expect("i105 literal");
+        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
         let err = parse_register_account_id(&literal, &domain)
             .expect_err("non-canonical I105 literal should fail");
         assert!(
@@ -6902,7 +7217,10 @@ mod tests {
     fn parse_asset_id_literal_accepts_encoded_literal() {
         let account = account_with_seed("wonderland", 22);
         let definition: iroha::data_model::asset::id::AssetDefinitionId =
-            "xor#wonderland".parse().expect("asset definition");
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "xor".parse().unwrap(),
+            );
         let expected = AssetId::new(definition, account);
         let encoded = format!(
             "norito:{}",
@@ -6953,6 +7271,23 @@ mod tests {
             .expect_err("invalid norito hex payload must fail");
         assert!(
             err.to_string().contains("must be valid hex"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_asset_definition_aid_literal_accepts_aid() {
+        let parsed = parse_asset_definition_aid_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+            .expect("aid literal should parse");
+        assert_eq!(parsed.to_string(), "aid:2f17c72466f84a4bb8a8e24884fdcd2f");
+    }
+
+    #[test]
+    fn parse_asset_definition_aid_literal_rejects_legacy_literal() {
+        let err = parse_asset_definition_aid_literal("xor#wonderland")
+            .expect_err("legacy literal should be rejected");
+        assert!(
+            err.to_string().contains("aid:<32-lower-hex>"),
             "unexpected error: {err}"
         );
     }
@@ -7372,8 +7707,8 @@ transaction_status_timeout = "77s"
             "unexpected hint: {hint}"
         );
         assert!(
-            hint.contains("wonderland"),
-            "hint must reference domain: {hint}"
+            hint.contains("register the destination"),
+            "hint should instruct explicit registration: {hint}"
         );
     }
 
@@ -8140,13 +8475,22 @@ mod tests {
             let domain: DomainId = "land".parse().unwrap();
             let kp = KeyPair::random();
             let owner = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-            let id1: AssetDefinitionId = "gold#land".parse().unwrap();
-            let id2: AssetDefinitionId = "silver#land".parse().unwrap();
-            let id3: AssetDefinitionId = "bronze#land".parse().unwrap();
+            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "land".parse().unwrap(),
+                "gold".parse().unwrap(),
+            );
+            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "land".parse().unwrap(),
+                "silver".parse().unwrap(),
+            );
+            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "land".parse().unwrap(),
+                "bronze".parse().unwrap(),
+            );
 
-            let mut ad1 = AssetDefinition::numeric(id1).build(&owner);
-            let mut ad2 = AssetDefinition::numeric(id2).build(&owner);
-            let ad3 = AssetDefinition::numeric(id3).build(&owner);
+            let mut ad1 = { let __asset_definition_id = id1; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
+            let mut ad2 = { let __asset_definition_id = id2; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
+            let ad3 = { let __asset_definition_id = id3; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
 
             // Insert ranks: ad1=2, ad2=1, ad3=None
             ad1.metadata_mut()
@@ -9088,11 +9432,11 @@ mod tests {
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
-                .map(|i| format!("ad{i}#land").parse().unwrap())
+                .map(|i| AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap()))
                 .collect();
             let mut defs: Vec<AssetDefinition> = ids
                 .into_iter()
-                .map(|id| AssetDefinition::numeric(id).build(&owner))
+                .map(|id| { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner))
                 .collect();
             let key: Name = "rank".parse().unwrap();
             defs[0]
@@ -9259,11 +9603,13 @@ mod tests {
                 let owner =
                     ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
                 let ids: Vec<AssetDefinitionId> = (0..5)
-                    .map(|i| format!("ad{i}#land").parse().unwrap())
+                    .map(|i| {
+                        AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap())
+                    })
                     .collect();
                 let mut defs: Vec<AssetDefinition> = ids
                     .into_iter()
-                    .map(|id| AssetDefinition::numeric(id).build(&owner))
+                    .map(|id| { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner))
                     .collect();
                 let key: Name = "rank".parse().unwrap();
                 defs[0]
@@ -10060,8 +10406,9 @@ mod tests {
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();
             for i in 0..5 {
-                let id: AssetDefinitionId = format!("ad{i}#land").parse().unwrap();
-                let mut ad = AssetDefinition::numeric(id).build(&owner);
+                let id: AssetDefinitionId =
+                    AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap());
+                let mut ad = { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
                 ad.metadata_mut()
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 defs.push(ad);
@@ -10819,9 +11166,16 @@ mod cli_integration_harness {
         let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default()).build(&owner_w),
-            AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
-                .build(&owner_w),
+            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "w".parse().unwrap(),
+                    "rose".parse().unwrap(),
+                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
+            .build(&owner_w),
+            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "w".parse().unwrap(),
+                    "tulip".parse().unwrap(),
+                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
+            .build(&owner_w),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -10840,12 +11194,12 @@ mod cli_integration_harness {
         assert_eq!(ids.len(), 2);
         assert!(
             ids.iter()
-                .any(|id| id == &AssetDefinitionId::from_str("rose#w").unwrap())
+                .any(|id| id
+                    == &AssetDefinitionId::new("w".parse().unwrap(), "rose".parse().unwrap()))
         );
-        assert!(
-            ids.iter()
-                .any(|id| id == &AssetDefinitionId::from_str("tulip#w").unwrap())
-        );
+        assert!(ids.iter().any(
+            |id| id == &AssetDefinitionId::new("w".parse().unwrap(), "tulip".parse().unwrap())
+        ));
     }
 
     #[test]
@@ -10860,11 +11214,21 @@ mod cli_integration_harness {
         let owner_w = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default()).build(&owner_w),
-            AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
-                .build(&owner_w),
-            AssetDefinition::new("peony#w".parse().unwrap(), NumericSpec::default())
-                .build(&owner_w),
+            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "w".parse().unwrap(),
+                    "rose".parse().unwrap(),
+                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
+            .build(&owner_w),
+            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "w".parse().unwrap(),
+                    "tulip".parse().unwrap(),
+                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
+            .build(&owner_w),
+            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+                    "w".parse().unwrap(),
+                    "peony".parse().unwrap(),
+                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
+            .build(&owner_w),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -10883,8 +11247,14 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::from_str("rose#w").unwrap()));
-        assert!(ids1.contains(&AssetDefinitionId::from_str("tulip#w").unwrap()));
+        assert!(ids1.contains(&AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "rose".parse().unwrap()
+        )));
+        assert!(ids1.contains(&AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "tulip".parse().unwrap()
+        )));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -10896,7 +11266,10 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::from_str("peony#w").unwrap()));
+        assert!(ids2.contains(&AssetDefinitionId::new(
+            "w".parse().unwrap(),
+            "peony".parse().unwrap()
+        )));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
@@ -11058,7 +11431,8 @@ mod cli_integration_harness {
         use std::str::FromStr;
 
         let mut server = MockQueryServer::default();
-        let asset_def_id = AssetDefinitionId::from_str("coin#wonderland").unwrap();
+        let asset_def_id =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "coin".parse().unwrap());
         let account_id = sample_account_id("wonderland", 14);
         let asset_id = AssetId::new(asset_def_id, account_id);
         let asset = Asset::new(asset_id.clone(), 77_u32);

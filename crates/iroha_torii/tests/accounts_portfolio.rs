@@ -46,7 +46,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -80,7 +80,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -108,7 +108,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -126,7 +126,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
+                    "/v2/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
                     urlencoding::encode(&asset_id)
                 ))
                 .body(axum::body::Body::empty())
@@ -228,8 +228,8 @@ where
 fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<AccountId>) {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_portfolio"));
     let domain_id: DomainId = "portfolio".parse().unwrap();
-    let cash_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
-    let points_id: AssetDefinitionId = format!("points#{domain_id}").parse().unwrap();
+    let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
+    let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
@@ -261,8 +261,8 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_fixture"));
     let domain_id: DomainId = "portfolio_fixture".parse().unwrap();
-    let cash_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
-    let points_id: AssetDefinitionId = format!("points#{domain_id}").parse().unwrap();
+    let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
+    let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_seed(&domain_id, 0x11);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),

@@ -84,7 +84,7 @@ nos ultimos 15 минут, enquanto `SorafsProofHealthCooldown` emite um aviso s
 | `sorafs_node_por_failure_total` | Счетчик | `provider_id` | Contador monotono de amostras PoR com falha. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Калибр | `provider` | Датчики Prometheus существуют для используемых байтов, глубины файла, заражения PoR em voo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Калибр | `provider` | Даты производительности/время безотказной работы могут быть успешно проверены или отсутствуют на панели управления производительностью. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Глубокие накопления накопившихся задолженностей по экспорту постоянно происходят с `/v1/sorafs/por/ingestion/{manifest}` и консультируются, продовольствием или болью/предупреждением о «остановке PoR». |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Глубокие накопления накопившихся задолженностей по экспорту постоянно происходят с `/v2/sorafs/por/ingestion/{manifest}` и консультируются, продовольствием или болью/предупреждением о «остановке PoR». |
 
 ### Доказательство своевременного извлечения (PoTR) и SLA для фрагментов
 

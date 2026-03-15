@@ -54,7 +54,7 @@ pub fn x25519_derive_keys(
 }
 
 /// Build v1 AAD: "connect:v1" || sid || dir || seq || kind=1
-pub fn aad_v1(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
+pub fn aad_current(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     let mut aad = Vec::with_capacity(8 + 32 + 1 + 8 + 1);
     aad.extend_from_slice(b"connect:v1");
     aad.extend_from_slice(sid);
@@ -67,6 +67,11 @@ pub fn aad_v1(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
     aad
 }
 
+/// Build canonical AAD for the current Connect envelope format.
+pub fn aad(sid: &[u8; 32], dir: Dir, seq: u64) -> Vec<u8> {
+    aad_current(sid, dir, seq)
+}
+
 /// Derive a 96-bit ChaCha20-Poly1305 nonce from sequence: 0x00000000 || `seq_le`.
 pub fn nonce_from_seq(seq: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
@@ -75,7 +80,7 @@ pub fn nonce_from_seq(seq: u64) -> [u8; 12] {
 }
 
 /// Seal an envelope (payload+seq) into a ciphertext frame using the provided key bytes.
-pub fn seal_envelope_v1(
+pub fn seal_envelope_current(
     key: &[u8; 32],
     sid: &[u8; 32],
     dir: Dir,
@@ -86,7 +91,7 @@ pub fn seal_envelope_v1(
     let (payload, flags) = norito::codec::encode_with_header_flags(&env);
     let pt = norito::core::frame_bare_with_header_flags::<EnvelopeV1>(&payload, flags)
         .expect("encode envelope");
-    let aad = aad_v1(sid, dir, seq);
+    let aad = aad_current(sid, dir, seq);
     let nonce = nonce_from_seq(seq);
     let encryptor =
         SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).expect("valid key length");
@@ -104,6 +109,17 @@ pub fn seal_envelope_v1(
     }
 }
 
+/// Seal an envelope using the canonical Connect envelope format.
+pub fn seal_envelope(
+    key: &[u8; 32],
+    sid: &[u8; 32],
+    dir: Dir,
+    seq: u64,
+    payload: ConnectPayloadV1,
+) -> ConnectFrameV1 {
+    seal_envelope_current(key, sid, dir, seq, payload)
+}
+
 /// Open a ciphertext frame and return the decrypted envelope. Enforces Envelope.seq == frame.seq.
 ///
 /// # Errors
@@ -111,14 +127,14 @@ pub fn seal_envelope_v1(
 /// Returns an error when the frame is not ciphertext, decryption fails,
 /// decoding fails, or when the decrypted envelope sequence does not match
 /// the frame sequence.
-pub fn open_envelope_v1(
+pub fn open_envelope_current(
     key: &[u8; 32],
     frame: &ConnectFrameV1,
 ) -> Result<EnvelopeV1, &'static str> {
     let FrameKind::Ciphertext(ct) = &frame.kind else {
         return Err("not ciphertext");
     };
-    let aad = aad_v1(&frame.sid, ct.dir, frame.seq);
+    let aad = aad_current(&frame.sid, ct.dir, frame.seq);
     let nonce = nonce_from_seq(frame.seq);
     let encryptor =
         SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).map_err(|_| "decrypt")?;
@@ -133,8 +149,19 @@ pub fn open_envelope_v1(
     Ok(env)
 }
 
+/// Open a ciphertext frame using the canonical Connect envelope format.
+///
+/// # Errors
+///
+/// Returns an error when the frame is not ciphertext, decryption fails,
+/// decoding fails, or when the decrypted envelope sequence does not match
+/// the frame sequence.
+pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
+    open_envelope_current(key, frame)
+}
+
 /// Deterministic Norito-encoded BLAKE2b-256 hash of permissions.
-pub fn hash_permissions_v1(perms: &PermissionsV1) -> [u8; 32] {
+pub fn hash_permissions_current(perms: &PermissionsV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
     let buf = perms.encode();
     let mut out = [0u8; 32];
@@ -145,7 +172,7 @@ pub fn hash_permissions_v1(perms: &PermissionsV1) -> [u8; 32] {
 }
 
 /// Deterministic Norito-encoded BLAKE2b-256 hash of sign-in proof.
-pub fn hash_signin_proof_v1(proof: &SignInProofV1) -> [u8; 32] {
+pub fn hash_signin_proof_current(proof: &SignInProofV1) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2bVar, digest::Update};
     let buf = proof.encode();
     let mut out = [0u8; 32];
@@ -173,17 +200,17 @@ pub fn build_approve_preimage(
     out.extend_from_slice(wallet_pk);
     out.extend_from_slice(account_id.as_bytes());
     if let Some(p) = perms {
-        out.extend_from_slice(&hash_permissions_v1(p));
+        out.extend_from_slice(&hash_permissions_current(p));
     }
     if let Some(pf) = proof {
-        out.extend_from_slice(&hash_signin_proof_v1(pf));
+        out.extend_from_slice(&hash_signin_proof_current(pf));
     }
     out
 }
 
 /// Convenience: encrypt a Close control as an encrypted payload.
 #[allow(clippy::too_many_arguments)]
-pub fn encrypt_close_v1(
+pub fn encrypt_close_current(
     key: &[u8; 32],
     sid: &[u8; 32],
     dir: Dir,
@@ -199,11 +226,11 @@ pub fn encrypt_close_v1(
         reason,
         retryable,
     });
-    seal_envelope_v1(key, sid, dir, seq, payload)
+    seal_envelope_current(key, sid, dir, seq, payload)
 }
 
 /// Convenience: encrypt a Reject control as an encrypted payload.
-pub fn encrypt_reject_v1(
+pub fn encrypt_reject_current(
     key: &[u8; 32],
     sid: &[u8; 32],
     dir: Dir,
@@ -217,7 +244,7 @@ pub fn encrypt_reject_v1(
         code_id,
         reason,
     });
-    seal_envelope_v1(key, sid, dir, seq, payload)
+    seal_envelope_current(key, sid, dir, seq, payload)
 }
 
 #[cfg(test)]
@@ -230,24 +257,27 @@ mod tests {
         let sid = [9u8; 32];
         let dir = Dir::AppToWallet;
         let seq = 1u64;
-        let frame = seal_envelope_v1(
+        let frame = seal_envelope_current(
             &key,
             &sid,
             dir,
             seq,
             ConnectPayloadV1::SignRequestRaw {
-                domain_tag: "iroha-connect/v1/test".into(),
+                domain_tag: "iroha-connect/v2/test".into(),
                 bytes: vec![1, 2, 3],
             },
         );
-        let env = open_envelope_v1(&key, &frame).expect("open");
+        let env = open_envelope_current(&key, &frame).expect("open");
         assert_eq!(env.seq, seq);
         // Tamper header: change seq → expect failure
         let tampered = ConnectFrameV1 {
             seq: 2,
             ..frame.clone()
         };
-        assert_eq!(open_envelope_v1(&key, &tampered).err(), Some("decrypt"));
+        assert_eq!(
+            open_envelope_current(&key, &tampered).err(),
+            Some("decrypt")
+        );
     }
 }
 

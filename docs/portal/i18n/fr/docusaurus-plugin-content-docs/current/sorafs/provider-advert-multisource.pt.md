@@ -66,7 +66,7 @@ La couverture de régression leur est vive
 ## Outillage et montages
 
 - Les charges utiles des annonces du fournisseur incluent les métadonnées `range_capability`,
-  `stream_budget` et `transport_hints`. Valide via les réponses de `/v1/sorafs/providers`
+  `stream_budget` et `transport_hints`. Valide via les réponses de `/v2/sorafs/providers`
   e les conditions d'admission ; Les résumés JSON développent une capacité d'analyse, ou de flux
   budget et tableaux d'astuces pour l'acquisition de télémétrie.
 - `cargo xtask sorafs-admission-fixtures` montre les budgets de flux et les conseils de transport à l'intérieur
@@ -76,7 +76,7 @@ La couverture de régression leur est vive
   - `multi_fetch_plan.json` pour que les suites du SDK reproduisent un plan de récupération
     déterministe multi-pairs.
 
-## Intégration de l'orchestrateur et Torii- Torii `/v1/sorafs/providers` renvoie les métadonnées de la plage analysée conjointement avec
+## Intégration de l'orchestrateur et Torii- Torii `/v2/sorafs/providers` renvoie les métadonnées de la plage analysée conjointement avec
   `stream_budget` et `transport_hints`. Les avis de rétrogradation disparam quando
   les fournisseurs ont omis les nouvelles métadonnées et les points de terminaison de la gamme d'applications de passerelle comme
   mesmas restrices para clientes directos.

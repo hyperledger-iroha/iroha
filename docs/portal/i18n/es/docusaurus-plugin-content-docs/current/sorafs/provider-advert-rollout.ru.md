@@ -45,7 +45,7 @@ Rollout согласован с вехами SF-2b/2c в
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` con el original `max_span`
      - `allow_unknown_capabilities=<true|false>` para grasa TLV
-   - Proverte через `/v1/sorafs/providers` y `sorafs_fetch`; предупреждения о
+   - Proverte через `/v2/sorafs/providers` y `sorafs_fetch`; предупреждения о
      неизвестных capacidades нужно триажить.
 3. **Preparación para múltiples fuentes.**
    - Выполните `sorafs_fetch` con `--provider-advert=<path>`; CLI теперь падает,
@@ -183,9 +183,9 @@ Sello `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admissi
 ## Коммуникация и обработка инцидентов- **Еженедельная рассылка статуса.** DevRel рассылает краткое резюме метрик
   admisión, текущих advertencias и предстоящих plazos.
 - **Respuesta a incidentes.** Если срабатывают alertas `reject`, ingenieros de guardia:
-  1. Забирают проблемный anuncio через descubrimiento Torii (`/v1/sorafs/providers`).
+  1. Забирают проблемный anuncio через descubrimiento Torii (`/v2/sorafs/providers`).
   2. Publicar anuncios válidos en la canalización del proveedor y publicarlos
-     `/v1/sorafs/providers`, чтобы воспроизвести ошибку.
+     `/v2/sorafs/providers`, чтобы воспроизвести ошибку.
   3. Coordinar con anuncios rotativos según la fecha límite de actualización.
 - **Заморозка изменений.** Никаких изменений capacidades de esquema en R1/R2, если
   lanzamiento del comité не одобрит; La aplicación de grasa debe proporcionarse en cualquier lugar

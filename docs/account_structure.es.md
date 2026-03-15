@@ -665,12 +665,12 @@ sus billetes de cambio.
   usuarios que el formulario comprimido `i105` es solo para Sora y susceptible a reescrituras de IME.
 - **Integración Torii:** Cache Nexus se manifiesta respetando TTL, emite
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` de manera determinista, y
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Formatos de respuesta Torii
 
-- `GET /v1/accounts` acepta un parámetro de consulta opcional `canonical I105 rendering` y
-  `POST /v1/accounts/query` acepta el mismo campo dentro del sobre JSON.
+- `GET /v2/accounts` acepta un parámetro de consulta opcional `canonical I105 rendering` y
+  `POST /v2/accounts/query` acepta el mismo campo dentro del sobre JSON.
   Los valores admitidos son:
   - `i105` (predeterminado): las respuestas emiten cargas útiles I105 Base58 canónicas (p. ej.,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -679,7 +679,7 @@ sus billetes de cambio.
 - Los valores no válidos devuelven `400` (`QueryExecutionFail::Conversion`). Esto permite
   billeteras y exploradores para solicitar cadenas comprimidas para UX solo de Sora mientras
   manteniendo I105 como el predeterminado interoperable.
-- Listados de titulares de activos (`GET /v1/assets/{definition_id}/holders`) y su JSON
+- Listados de titulares de activos (`GET /v2/assets/{definition_id}/holders`) y su JSON
   La contraparte del sobre (`POST …/holders/query`) también honra a `canonical I105 rendering`.
   El campo `items[*].account_id` emite literales comprimidos siempre que el
   El campo de parámetro/sobre está configurado en `i105_default`, reflejando las cuentas.

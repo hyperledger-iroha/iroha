@@ -58,7 +58,10 @@ fn non_vm_instructions_charge_fees() {
     let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let init = 100_000u128;
@@ -163,7 +166,10 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let sponsor = new_account_in_domain(&sponsor_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
@@ -301,7 +307,10 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let sponsor = new_account_in_domain(&sponsor_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let sponsor_asset = AssetId::of(asset_def_id.clone(), sponsor_id.clone());
@@ -460,7 +469,10 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let tech_asset = AssetId::of(asset_def_id.clone(), gas_id.clone());
@@ -561,7 +573,10 @@ fn non_vm_gas_limit_too_low_rejects() {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let world = World::with([dom], [alice], [ad]);
     let kura = Kura::blank_kura_for_testing();
@@ -609,7 +624,10 @@ fn ivm_syscall_charges_fees() {
     let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let init = 100_000u128;
@@ -791,7 +809,10 @@ fn ivm_gas_fees_record_settlement_receipt() {
     let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
     let init = 100_000u128;
@@ -874,7 +895,10 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
     let alice = new_account_in_domain(&alice_id, "wonderland");
     let tech = new_account_in_domain(&gas_id, "ivm");
-    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
 
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(

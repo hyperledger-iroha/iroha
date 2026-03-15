@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ယခု Torii သည် အခကြေးငွေစာရင်းဇယားများနှင့်အတူ ဝန်ဆောင်မှုပေးသူ၏ ခရက်ဒစ်လျှပ်တစ်ပြက်ပုံများကို ပြသပေးသည် ထို့ကြောင့် ဒက်ရှ်ဘုတ်များ
 အနိမ့်ဆုံး ချိန်ခွင်လျှာနှင့် ပင်နယ်တီကို ဖြတ်ထုတ်နိုင်သည်-
 
-- REST- `GET /v1/sorafs/capacity/state` သည် ၎င်း `credit_ledger[*]` တို့ကို ပြန်ပေးသည်
+- REST- `GET /v2/sorafs/capacity/state` သည် ၎င်း `credit_ledger[*]` တို့ကို ပြန်ပေးသည်
   စိမ်စမ်းသပ်မှုတွင် စစ်ဆေးထားသော လယ်ဂျာအကွက်များကို မှန်ကြည့်ပါ။ ကြည့်ပါ။
   `crates/iroha_torii/src/sorafs/registry.rs`။
 - Grafana တင်သွင်းမှု- `dashboards/grafana/sorafs_capacity_penalties.json` မြေကွက်များ၊

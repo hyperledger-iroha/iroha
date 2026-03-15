@@ -2051,7 +2051,7 @@ pub struct Governance {
     /// Asset definition id that provides voting stake eligibility.
     #[config(
         env = "GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID.to_string()"
+        default = "crate::parameters::defaults::governance::parliament_eligibility_asset_id()"
     )]
     pub parliament_eligibility_asset_id: String,
     /// Number of alternates to draw per term (None = committee size).
@@ -2176,8 +2176,8 @@ impl Default for Governance {
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
             parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
-            parliament_eligibility_asset_id: defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
-                .to_string(),
+            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
+            ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
@@ -5086,7 +5086,7 @@ pub struct Gas {
         default = "defaults::pipeline::GAS_TECH_ACCOUNT_ID.to_string()"
     )]
     pub tech_account_id: String,
-    /// Allowlist of accepted gas assets (Asset IDs strings, e.g., "asset:gas/G_exit@ivm.core/v1").
+    /// Allowlist of accepted gas assets (Asset IDs strings, e.g., "asset:gas/G_exit@ivm.core/v2").
     #[config(default)]
     pub accepted_assets: Vec<String>,
     /// Deterministic conversion: minimal asset units per one gas unit for each accepted asset.
@@ -11179,7 +11179,7 @@ pub struct NexusFees {
     /// Fee asset definition identifier (string form).
     #[config(
         env = "NEXUS_FEE_ASSET_ID",
-        default = "defaults::nexus::fees::FEE_ASSET_ID.to_string()"
+        default = "defaults::nexus::fees::fee_asset_id()"
     )]
     pub fee_asset_id: String,
     /// Account that receives collected fees.
@@ -11248,7 +11248,7 @@ impl NexusEndorsement {
 impl Default for NexusFees {
     fn default() -> Self {
         Self {
-            fee_asset_id: defaults::nexus::fees::FEE_ASSET_ID.to_string(),
+            fee_asset_id: defaults::nexus::fees::fee_asset_id(),
             fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
             base_fee: defaults::nexus::fees::BASE_FEE,
             per_byte_fee: defaults::nexus::fees::PER_BYTE_FEE,
@@ -13686,7 +13686,7 @@ pub struct Torii {
     pub zk_prover_allowed_circuits: Vec<String>,
     /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
     ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    /// Applies to the non-consensus helper endpoint `POST /v2/zk/ivm/prove`.
     #[config(
         env = "TORII_ZK_IVM_PROVE_MAX_INFLIGHT",
         default = "defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT"
@@ -13694,19 +13694,19 @@ pub struct Torii {
     pub zk_ivm_prove_max_inflight: usize,
     /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
     ///
-    /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
+    /// Applies to the non-consensus helper endpoint `POST /v2/zk/ivm/prove`.
     #[config(
         env = "TORII_ZK_IVM_PROVE_MAX_QUEUE",
         default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
     )]
     pub zk_ivm_prove_max_queue: usize,
-    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
+    /// TTL (seconds) for `/v2/zk/ivm/prove` job status entries.
     #[config(
         env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
         default = "defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS"
     )]
     pub zk_ivm_prove_job_ttl_secs: u64,
-    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
+    /// Maximum number of `/v2/zk/ivm/prove` job status entries retained in memory.
     ///
     /// Set to 0 to disable the cap (not recommended).
     #[config(
@@ -13811,7 +13811,7 @@ mod torii_peer_geo_tests {
 /// Guard rails for SoraNet privacy ingestion endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiSoranetPrivacyIngest {
-    /// Master enable switch for the `/v1/soranet/privacy/*` endpoints.
+    /// Master enable switch for the `/v2/soranet/privacy/*` endpoints.
     #[config(default = "defaults::torii::soranet_privacy_ingest::ENABLED")]
     pub enabled: bool,
     /// Require a token header before accepting telemetry.
@@ -14507,7 +14507,7 @@ impl Default for ToriiNoritoRpcTransport {
 /// Native MCP endpoint configuration parameters.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiMcp {
-    /// Master enable switch for native `/v1/mcp`.
+    /// Master enable switch for native `/v2/mcp`.
     #[config(default = "defaults::torii::mcp::ENABLED")]
     pub enabled: bool,
     /// Maximum accepted request payload size in bytes.
@@ -15441,7 +15441,7 @@ impl SorafsStorage {
     }
 }
 
-/// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
+/// Authentication and abuse controls for `/v2/sorafs/storage/pin`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize, Default)]
 pub struct SorafsStoragePin {
     /// Whether a bearer token is required to submit a pin request.
@@ -16570,7 +16570,10 @@ mod offline_cfg_tests {
         let repo = Repo {
             default_haircut_bps: 12_500,
             margin_frequency_secs: 0,
-            eligible_collateral: vec!["bond#wonderland".parse().unwrap()],
+            eligible_collateral: vec![iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            )],
             collateral_substitution_matrix: BTreeMap::new(),
         };
 
@@ -16796,11 +16799,17 @@ mod offline_cfg_tests {
         assert!(parsed.plain_voting_enabled);
         assert_eq!(
             parsed.voting_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("xor#sora").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap()
+            )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("xor#sora").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap()
+            )
         );
         assert_eq!(parsed.citizenship_bond_amount, 99);
         assert_eq!(
@@ -16828,7 +16837,10 @@ mod offline_cfg_tests {
         assert_eq!(parsed.parliament_min_stake, 456);
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::from_str("SORA#stake").unwrap()
+            iroha_data_model::asset::prelude::AssetDefinitionId::new(
+                "stake".parse().unwrap(),
+                "SORA".parse().unwrap()
+            )
         );
         assert_eq!(parsed.parliament_alternate_size, Some(13));
     }

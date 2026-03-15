@@ -94,7 +94,7 @@ translator: machine-google-reviewed
   - `issued_at_ms` (`u64`)
   - I18NI000000036X (`RiskContext`; I18NI0000000038X, གདམ་ཁ་ཅན་གྱི་ `session_id`,
     གདམ་ཁ་ཅན་ `reason`)
-- **ཉེན་ཁའི་གྲོས་ཐག་** – `POST /v1/fraud/assessment` གིས་ ཟ་སྤྱོད་འབདཝ་ཨིན།
+- **ཉེན་ཁའི་གྲོས་ཐག་** – `POST /v2/fraud/assessment` གིས་ ཟ་སྤྱོད་འབདཝ་ཨིན།
   I18NI0000042X པེ་ལོཌ་ (གཞུང་སྐྱོང་ཕྱིར་ཚོང་ནང་ཡང་མེ་ལོང་):
   - `query_id`, `engine_id`, I18NI000000045X, I18NI0000000046X,
     `decision` (I18NI000004X num), I18NI00000049.

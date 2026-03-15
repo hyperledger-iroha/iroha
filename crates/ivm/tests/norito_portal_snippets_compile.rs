@@ -200,8 +200,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let domain = caller.domain().clone();
     let mut wsv = setup_base_world(&domain, &caller);
 
-    let asset_id =
-        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
+    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
     let recipient = parse_account_literal(ACCOUNT_A_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -233,8 +232,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut wsv = setup_base_world(&domain, &caller);
 
     let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id =
-        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
+    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -291,8 +289,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);
     let bob = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id =
-        AssetDefinitionId::from_str("rose#default").expect("asset definition identifier");
+    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));

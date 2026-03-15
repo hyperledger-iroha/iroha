@@ -24,7 +24,7 @@ translator: machine-google-reviewed
 ## 1. ክስተቱን ይገምግሙ
 
 - ** ቀስቅሴ ሁኔታዎች፡** የ SLA ጥሰትን መለየት (የጊዜ/PoR ውድቀት)፣ የማባዛት እጥረት፣ ወይም የሂሳብ አከፋፈል አለመግባባት።
-- ** ቴሌሜትሪ አረጋግጥ:** ለአቅራቢው `/v1/sorafs/capacity/state` እና `/v1/sorafs/capacity/telemetry` ቅጽበተ-ፎቶዎችን ያንሱ።
+- ** ቴሌሜትሪ አረጋግጥ:** ለአቅራቢው `/v2/sorafs/capacity/state` እና `/v2/sorafs/capacity/telemetry` ቅጽበተ-ፎቶዎችን ያንሱ።
 - **ለባለድርሻ አካላት ያሳውቁ፡** የማከማቻ ቡድን (የአቅራቢዎች ስራዎች)፣ የአስተዳደር ምክር ቤት (የውሳኔ አካል)፣ ታዛቢነት (የዳሽቦርድ ዝመናዎች)።
 
 ## 2. የማስረጃ ጥቅል ያዘጋጁ
@@ -72,7 +72,7 @@ translator: machine-google-reviewed
    ```
 
 3. `dispute_summary.json` ይገምግሙ (አይነት፣ የማስረጃ መፍጨት፣ የጊዜ ማህተሞችን ያረጋግጡ)።
-4. ጥያቄውን JSON በ Torii `/v1/sorafs/capacity/dispute` በአስተዳደር ግብይት ወረፋ አስረክብ። የ `dispute_id_hex` ምላሽ እሴትን ያንሱ; ተከታታይ የመሻር እርምጃዎችን እና የኦዲት ሪፖርቶችን ያስቀምጣል.
+4. ጥያቄውን JSON በ Torii `/v2/sorafs/capacity/dispute` በአስተዳደር ግብይት ወረፋ አስረክብ። የ `dispute_id_hex` ምላሽ እሴትን ያንሱ; ተከታታይ የመሻር እርምጃዎችን እና የኦዲት ሪፖርቶችን ያስቀምጣል.
 
 ## 4. መልቀቅ እና መሻር
 

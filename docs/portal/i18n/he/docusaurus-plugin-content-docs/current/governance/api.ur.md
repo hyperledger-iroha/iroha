@@ -23,7 +23,7 @@ translation_last_reviewed: 2026-02-07
 
 נקודות קצה
 
-- POST `/v1/gov/proposals/deploy-contract`
+- POST `/v2/gov/proposals/deploy-contract`
   - בקשה (JSON):
     {
       "namespace": "אפליקציות",
@@ -38,30 +38,30 @@ translation_last_reviewed: 2026-02-07
   - תגובה (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validation: nodes فراہم کردہ `abi_version` کے لئے `abi_hash` کو canonicalize کرتے ہیں اور mismatch پر reject کرتے ہیں۔ `abi_version = "v1"` کے لئے متوقع value `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ہے۔Contracts API (פריסה)
-- POST `/v1/contracts/deploy`
+- POST `/v2/contracts/deploy`
   - בקשה: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Behavior: IVM پروگرام باڈی سے `code_hash` اور header `abi_version` سے `abi_hash` نکالتا ہے، پھر `RegisterSmartContractCode` (manifest) اور `RegisterSmartContractBytes` (مکمل `.to` bytes) `authority` کی طرف سے سبمٹ کرتا ہے۔
   - תגובה: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - קשור:
-    - GET `/v1/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
-- POST `/v1/contracts/instance`
+    - GET `/v2/contracts/code/{code_hash}` -> ذخیرہ شدہ manifest واپس کرتا ہے
+    - GET `/v2/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` واپس کرتا ہے
+- POST `/v2/contracts/instance`
   - בקשה: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Behavior: فراہم کردہ bytecode deploy کرتا ہے اور `ActivateContractInstance` کے ذریعے `(namespace, contract_id)` mapping فوراً فعال کرتا ہے۔
   - תגובה: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
 שירות כינוי
-- POST `/v1/aliases/voprf/evaluate`
+- POST `/v2/aliases/voprf/evaluate`
   - בקשה: { "blinded_element_hex": "..." }
   - תגובה: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` evaluator implementation کو ظاہر کرتا ہے۔ موجودہ value: `blake2b512-mock`۔
   - Notes: deterministic mock evaluator جو Blake2b512 کو domain separation `iroha.alias.voprf.mock.v1` کے ساتھ apply کرتا ہے۔ یہ test tooling کے لئے ہے جب تک production VOPRF pipeline Iroha میں wire نہ ہو جائے۔
   - Errors: malformed hex input پر HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` envelope اور decoder error message واپس کرتا ہے۔
-- POST `/v1/aliases/resolve`
+- POST `/v2/aliases/resolve`
   - בקשה: { "alias": "GB82 WEST 1234 5698 7654 32" }
   - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notes: ISO bridge runtime staging درکار ہے (`[iso_bridge.account_aliases]` in `iroha_config`)۔ Torii whitespace ہٹا کر اور uppercase بنا کر lookup کرتا ہے۔ alias نہ ہو تو 404 اور ISO bridge runtime بند ہو تو 503 دیتا ہے۔
-- POST `/v1/aliases/resolve_index`
+- POST `/v2/aliases/resolve_index`
   - בקשה: { "אינדקס": 0 }
   - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - Notes: alias indices configuration order کے مطابق deterministic طریقے سے assign ہوتے ہیں (0-based)۔ کلائنٹس offline cache کر کے alias attestation events کے audit trails بنا سکتے ہیں۔
@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-02-07
 - פרמטר מותאם אישית: `max_contract_code_bytes` (JSON u64)
   - אחסון קוד חוזה על-שרשרת
   - ברירת מחדל: 16 MiB. جب `.to` image حد سے بڑی ہو تو nodes `RegisterSmartContractBytes` کو invariant violation error کے ساتھ reject کرتے ہیں۔
-  - Operators `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور numeric payload دے کر ایڈجسٹ کر سکتے ہیں۔- POST `/v1/gov/ballots/zk`
+  - Operators `SetParameter(Custom)` کے ذریعے `id = "max_contract_code_bytes"` اور numeric payload دے کر ایڈجسٹ کر سکتے ہیں۔- POST `/v2/gov/ballots/zk`
   - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות:
@@ -78,12 +78,12 @@ translation_last_reviewed: 2026-02-07
     - ZK re-votes جو amount یا expiry کم کرنے کی کوشش کریں server-side `BallotRejected` diagnostics کے ساتھ reject ہوتے ہیں۔
     - Contract execution کو `SubmitBallot` enqueue کرنے سے پہلے `ZK_VOTE_VERIFY_BALLOT` کال کرنا لازم ہے؛ hosts one-shot latch enforce کرتے ہیں۔
 
-- POST `/v1/gov/ballots/plain`
+- POST `/v2/gov/ballots/plain`
   - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - Notes: re-votes extend-only ہیں - نیا ballot موجودہ lock کا amount یا expiry کم نہیں کر سکتا۔ `owner` کو transaction authority کے برابر ہونا چاہئے۔ کم از کم مدت `conviction_step_blocks` ہے۔
 
-- POST `/v1/gov/finalize`
+- POST `/v2/gov/finalize`
   - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): منظور شدہ deploy proposal کو enact کرنے سے `code_hash` keyed minimal `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposal Enacted ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` والا manifest پہلے سے ہو تو enactment reject ہوتا ہے۔
@@ -92,22 +92,22 @@ translation_last_reviewed: 2026-02-07
     - Auto-close `h_end` پر صرف Plain referenda کے لئے Approved/Rejected emit کرتا ہے؛ ZK referenda Closed رہتے ہیں جب تک finalized tally submit نہ ہو اور `FinalizeReferendum` execute نہ ہو۔
     - Turnout checks صرف approve+reject استعمال کرتی ہیں؛ abstain turnout میں شمار نہیں ہوتا۔
 
-- POST `/v1/gov/enact`
+- POST `/v2/gov/enact`
   - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
-  - Notes: جب `authority`/`private_key` فراہم ہوں تو Torii signed transaction سبمٹ کرتا ہے؛ ورنہ وہ skeleton واپس کرتا ہے جسے کلائنٹ سائن اور سبمٹ کرے۔ preimage اختیاری اور فی الحال معلوماتی ہے۔- קבל את `/v1/gov/proposals/{id}`
+  - Notes: جب `authority`/`private_key` فراہم ہوں تو Torii signed transaction سبمٹ کرتا ہے؛ ورنہ وہ skeleton واپس کرتا ہے جسے کلائنٹ سائن اور سبمٹ کرے۔ preimage اختیاری اور فی الحال معلوماتی ہے۔- קבל את `/v2/gov/proposals/{id}`
   - נתיב `{id}`: hex זיהוי הצעה (64 תווים)
   - תגובה: { "נמצא": bool, "הצעה": { ... }? }
 
-- קבל את `/v1/gov/locks/{rid}`
+- קבל את `/v2/gov/locks/{rid}`
   - נתיב `{rid}`: מחרוזת מזהה משאל עם
   - תגובה: { "נמצא": bool, "referendum_id": "לשחרר", "מנעולים": { ... }? }
 
-- קבל את `/v1/gov/council/current`
+- קבל את `/v2/gov/council/current`
   - תגובה: { "epoch": N, "members": [{ "account_id": "..." }, ...] }
   - Notes: موجودہ council موجود ہو تو واپس کرتا ہے، ورنہ configured stake asset اور thresholds استعمال کر کے deterministic fallback derive کرتا ہے (VRF specs کو اس وقت تک reflect کرتا ہے جب تک live VRF proofs on-chain persist نہ ہوں)۔
 
-- POST `/v1/gov/council/derive-vrf` (תכונה: gov_vrf)
+- POST `/v2/gov/council/derive-vrf` (תכונה: gov_vrf)
   - בקשה: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "...", "variant": "רגיל|קטן", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - Behavior: ہر امیدوار کا VRF proof `chain_id`, `epoch` اور تازہ ترین block hash beacon سے مشتق canonical input کے خلاف verify کرتا ہے؛ output bytes کو desc ترتیب میں tiebreakers کے ساتھ sort کرتا ہے؛ top `committee_size` members واپس کرتا ہے۔ Persist نہیں کرتا۔
   - תגובה: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "verified": K }
@@ -180,14 +180,14 @@ RBAC
 - Hook کی تسکین کرنے والی ٹرانزیکشنز کو metadata `gov_upgrade_id=<value>` (یا manifest-defined key) شامل کرنا ہوگا، ساتھ ہی manifest quorum کے مطابق validators کی approvals بھی درکار ہیں۔
 
 נקודת קצה של נוחות
-- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` کو براہ راست node پر apply کرتا ہے۔
+- POST `/v2/gov/protected-namespaces` - `gov_protected_namespaces` کو براہ راست node پر apply کرتا ہے۔
   - בקשה: { "מרחבי שמות": ["אפליקציות", "מערכת"] }
   - תגובה: { "בסדר": true, "applied": 1 }
   - Notes: admin/testing کے لئے ہے؛ اگر configure ہو تو API token درکار ہوگا۔ production کے لئے `SetParameter(Custom)` کے ساتھ signed transaction ترجیح دیں۔CLI עוזרי
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - namespace کے contract instances fetch کرتا ہے اور cross-check کرتا ہے کہ:
     - Torii ہر `code_hash` کے لئے bytecode ذخیرہ کرتا ہے، اور اس کا Blake2b-32 digest `code_hash` سے match کرتا ہے۔
-    - `/v1/contracts/code/{code_hash}` میں موجود manifest matching `code_hash` اور `abi_hash` values ​​رپورٹ کرتا ہے۔
+    - `/v2/contracts/code/{code_hash}` میں موجود manifest matching `code_hash` اور `abi_hash` values ​​رپورٹ کرتا ہے۔
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے enacted governance proposal موجود ہے جو اسی proposal-id hashing سے derive ہوتا ہے جو node استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (issues, manifest/code/proposal summaries) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ ہو)۔
   - Protected namespaces کے audit یا governance-controlled deploy workflows کی تصدیق کے لئے مفید۔
@@ -204,7 +204,7 @@ RBAC
   - Summary output `vote --mode zk` کی طرح encoded instruction fingerprint اور readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے signature سے پہلے فوری تصدیق ہو جاتی ہے۔
 
 רישום מופעים
-- GET `/v1/gov/instances/{ns}` - namespace کے لئے active contract instances کی فہرست۔
+- GET `/v2/gov/instances/{ns}` - namespace کے لئے active contract instances کی فہرست۔
   - פרמטרים של שאילתה:
     - `contains`: `contract_id` کی substring کے مطابق filter (case-sensitive)
     - `hash_prefix`: `code_hash_hex` کے hex prefix کے مطابق filter (lowercase)
@@ -212,10 +212,10 @@ RBAC
     - `order`: `cid_asc` (ברירת מחדל), `cid_desc`, `hash_asc`, `hash_desc`
   - תגובה: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
   - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) یا `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)۔ביטול נעילת סריקה (מפעיל/ביקורת)
-- קבל את `/v1/gov/unlocks/stats`
+- קבל את `/v2/gov/unlocks/stats`
   - תגובה: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - Notes: `last_sweep_height` سب سے حالیہ block height دکھاتا ہے جہاں expired locks sweep اور persist کئے گئے۔ `expired_locks_now` ان lock records کو scan کر کے نکلتا ہے جن میں `expiry_height <= height_current` ہو۔
-- POST `/v1/gov/ballots/zk-v1`
+- POST `/v2/gov/ballots/zk-v1`
   - בקשה (DTO בסגנון v1):
     {
       "authority": "i105...",
@@ -230,7 +230,7 @@ RBAC
     }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
 
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (תכונה: `zk-ballot`)
+- POST `/v2/gov/ballots/zk-v1/ballot-proof` (תכונה: `zk-ballot`)
   - `BallotProof` JSON براہ راست قبول کر کے `CastZkBallot` skeleton واپس کرتا ہے۔
   - בקשה:
     {
@@ -298,13 +298,13 @@ for (expected, kind) in offences.iter().enumerate() {
 
 מפעילים או עומסי כלי עבודה, בודקים או שידורים חוזרים.
 
-- Torii: `GET /v1/sumeragi/evidence` אור `GET /v1/sumeragi/evidence/count`.
+- Torii: `GET /v2/sumeragi/evidence` אור `GET /v2/sumeragi/evidence/count`.
 - CLI: `iroha ops sumeragi evidence list`, `... count`, אוור `... submit --evidence-hex <payload>`.
 
 Governance کو evidence bytes کو canonical proof کے طور پر treat کرنا چاہئے:1. **Payload جمع کریں** اس کے expire ہونے سے پہلے۔ raw Norito bytes کو height/view metadata کے ساتھ archive کریں۔
 2. **Penalty stage کریں** payload کو referendum یا sudo instruction میں embed کر کے (مثلا `Unregister::peer`)۔ Execution payload کو دوبارہ validate کرتا ہے؛ malformed یا stale evidence deterministically reject ہوتی ہے۔
 3. **Follow-up topology schedule کریں** تاکہ offending validator فوراً واپس نہ آ سکے۔ عام flows میں `SetParameter(Sumeragi::NextMode)` اور `SetParameter(Sumeragi::ModeActivationHeight)` updated roster کے ساتھ queue کئے جاتے ہیں۔
-4. **نتائج audit کریں** `/v1/sumeragi/evidence` اور `/v1/sumeragi/status` کے ذریعے تاکہ evidence counter بڑھے اور governance نے removal نافذ کیا ü.
+4. **نتائج audit کریں** `/v2/sumeragi/evidence` اور `/v2/sumeragi/status` کے ذریعے تاکہ evidence counter بڑھے اور governance نے removal نافذ کیا ü.
 
 ### רצף קונצנזוס משותף
 
@@ -319,11 +319,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Runtime اور CLI staged parameters کو `/v1/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے ظاہر کرتے ہیں، تاکہ operators activation heights اور validator rosters کی تصدیق کر سکیں۔
+- Runtime اور CLI staged parameters کو `/v2/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے ظاہر کرتے ہیں، تاکہ operators activation heights اور validator rosters کی تصدیق کر سکیں۔
 - Governance automation کو ہمیشہ:
   1. evidence پر مبنی removal (یا reinstatement) فیصلہ finalize کرنا چاہیے۔
   2. `mode_activation_height = h_current + activation_lag_blocks` کے ساتھ follow-up reconfiguration queue کرنا چاہیے۔
-  3. `/v1/sumeragi/status` کی نگرانی کرنی چاہیے جب تک `effective_consensus_mode` متوقع height پر switch نہ ہو جائے۔
+  3. `/v2/sumeragi/status` کی نگرانی کرنی چاہیے جب تک `effective_consensus_mode` متوقع height پر switch نہ ہو جائے۔
 
 جو بھی script validators rotate کرے یا slashing apply کرے اسے **zero-lag activation** یا hand-off parameters کو omit نہیں کرنا چاہیے؛ ایسی transactions reject ہو جاتی ہیں اور نیٹ ورک پچھلے mode میں رہتا ہے۔
 

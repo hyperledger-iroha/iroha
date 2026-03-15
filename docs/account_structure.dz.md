@@ -671,12 +671,12 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   ལག་ལེན་པ་ཚུ་གིས་ `i105` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།
 - **I18NT0000049X མཉམ་བསྡོམས་:** འདྲ་མཛོད་ Nexus གིས་ ཊི་ཊི་ཨེལ་ལུ་གུས་ཞབས་འབད་མི་ བཏོན་གཏང་།
   `ForeignDomain`/I18NI0000497X/`RegistryUnavailable` དང་ དེ་ལས་
-  keep strict account-literal parsing canonical-I105-only (reject canonical I105 and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
 
 ### Torii ལན་འདེབས་རྩ་སྒྲིག་ཚུ།
 
-- `GET /v1/accounts` གིས་ གདམ་ཁ་ཅན་གྱི་ `canonical I105 rendering` འདྲི་དཔྱད་ཚད་བཟུང་དང་ དང་ལེན་འབདཝ་ཨིན།
-  `POST /v1/accounts/query` གིས་ JSON ཡིག་ཤུབས་ནང་ན་ཡོད་པའི་ས་སྒོ་གཅིག་པ་ངོས་ལེན་འབདཝ་ཨིན།
+- `GET /v2/accounts` གིས་ གདམ་ཁ་ཅན་གྱི་ `canonical I105 rendering` འདྲི་དཔྱད་ཚད་བཟུང་དང་ དང་ལེན་འབདཝ་ཨིན།
+  `POST /v2/accounts/query` གིས་ JSON ཡིག་ཤུབས་ནང་ན་ཡོད་པའི་ས་སྒོ་གཅིག་པ་ངོས་ལེན་འབདཝ་ཨིན།
   རྒྱབ་སྐྱོར་ཡོད་པའི་གནས་གོང་ཚུ་:
   - I18NI000000507X (སྔོན་སྒྲིག་) — ལན་འདེབས་ཚུ་ ཁྲིམས་མཐུན་གྱི་ I105 Base58 གླ་ཆ་ (དཔེར་ན་,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -685,7 +685,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
 - ནུས་མེད་གནས་གོང་ཚུ་ `400` སླར་ལོག་འབད་ (I18NI000000512X). འདི་གིས་ ཆོག་ཐམ་
   སོ་ར་རྐྱངམ་ཅིག་ཡུ་ཨེགསི་གི་དོན་ལུ་ བསྡམ་བཞག་ཡོད་པའི་ཡིག་རྒྱུན་ཚུ་ ཞུ་བ་འབད་ནིའི་དོན་ལུ་ དངུལ་ཁུག་དང་ འཚོལ་ཞིབ་པ་ཚུ་གིས་ ཨིན།
   I105 འདི་ ཕན་ཚུན་ཁ་ཕྱེ་བཏུབ་པའི་སྔོན་སྒྲིག་སྦེ་བཞག་དོ།
-- རྒྱུ་དངོས་ཐོ་ཡིག་ (`GET /v1/assets/{definition_id}/holders`) དང་ཁོང་ཚོའི་JSON
+- རྒྱུ་དངོས་ཐོ་ཡིག་ (`GET /v2/assets/{definition_id}/holders`) དང་ཁོང་ཚོའི་JSON
   ཡིག་ཤུབས་ཀྱི་མཉམ་འབྲེལ་ (`POST …/holders/query`) ཡང་ `canonical I105 rendering` ཡང་གུས་ཞབས་ཡོད།
   I18NI000000516X ས་སྒོ་འདི་གིས་ ག་དུས་འབད་རུང་ ཚིག་དོན་ཚུ་ བཤུབ་བཏང་ཡོདཔ་ཨིན།
   པེ་ར་མི་ཊར་/ཡིག་ཤུབས་ས་སྒོ་འདི་ `i105_default` ལུ་གཞི་སྒྲིག་འབད་དེ་ རྩིས་ཐོ་ཚུ་མེ་ལོང་བཟོཝ་ཨིན།

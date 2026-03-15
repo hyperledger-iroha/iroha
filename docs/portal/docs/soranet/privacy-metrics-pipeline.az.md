@@ -119,14 +119,14 @@ yaddaşda köhnəlmiş akkumulyatorları buraxmadan görünür.
 Torii indi iki telemetriya qapalı HTTP son nöqtəsini ifşa edir, beləliklə rele və kollektorlar
 Müşahidələri sifarişli nəqliyyat daxil etmədən ötürə bilər:
 
-- `POST /v1/soranet/privacy/event` a qəbul edir
+- `POST /v2/soranet/privacy/event` a qəbul edir
   `RecordSoranetPrivacyEventDto` faydalı yük. Bədən sarılır a
   `SoranetPrivacyEventV1` və əlavə olaraq `source` etiketi. Torii təsdiqləyir
   aktiv telemetriya profilinə qarşı sorğu göndərir, hadisəni qeyd edir və cavab verir
   olan Norito JSON zərfinin yanında HTTP `202 Accepted` ilə
   hesablanmış çömçə pəncərəsi (`bucket_start_unix`, `bucket_duration_secs`) və
   rele rejimi.
-- `POST /v1/soranet/privacy/share` `RecordSoranetPrivacyShareDto` qəbul edir
+- `POST /v2/soranet/privacy/share` `RecordSoranetPrivacyShareDto` qəbul edir
   faydalı yük. Korpusda `SoranetPrivacyPrioShareV1` və isteğe bağlı var
   `forwarded_by` işarəsi operatorların kollektor axınlarını yoxlaya bilməsi üçün. Uğurlu
   təqdimatlar ümumiləşdirən Norito JSON zərfi ilə HTTP `202 Accepted` qaytarır
@@ -256,7 +256,7 @@ CI və ya operatorlar sıxılmış vedrələr icazə verilən həddi aşdıqda s
 pəncərə (standart 10%) və ya hələ heç bir vedrə olmadıqda. Tövsiyə olunan axın:
 
 1. NDJSON-u relay admin son nöqtələrindən və orkestratordan ixrac edin
-   `/v1/soranet/privacy/event|share` daxil olur
+   `/v2/soranet/privacy/event|share` daxil olur
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Siyasət büdcəsi ilə köməkçini işə salın:
 

@@ -13,11 +13,94 @@ use norito::codec::{Decode, Encode};
 use norito::json::Value;
 
 pub use self::model::*;
-use super::id::AssetDefinitionId;
+use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
 use crate::{
-    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, ipfs::IpfsPath,
-    isi::error::MintabilityError, metadata::Metadata,
+    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*,
+    isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
 };
+
+/// Maximum accepted asset human-name length.
+pub const MAX_ASSET_NAME_LEN: usize = 128;
+/// Maximum accepted asset description length.
+pub const MAX_ASSET_DESCRIPTION_LEN: usize = 2048;
+
+/// Validate human-facing asset name.
+///
+/// # Errors
+/// Returns [`crate::error::ParseError`] when `name` is blank, too long, or contains
+/// reserved alias separators (`#`/`@`).
+pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(crate::error::ParseError::new(
+            "asset name must not be blank",
+        ));
+    }
+    if trimmed.len() > MAX_ASSET_NAME_LEN {
+        return Err(crate::error::ParseError::new(
+            "asset name exceeds maximum length",
+        ));
+    }
+    if name.contains('#') || name.contains('@') {
+        return Err(crate::error::ParseError::new(
+            "asset name must not contain `#` or `@`",
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(crate::error::ParseError::new(
+            "asset name must not contain control characters",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate optional human-facing description.
+///
+/// # Errors
+/// Returns [`crate::error::ParseError`] when provided description is blank, too long,
+/// or contains control characters.
+pub fn validate_asset_description(
+    description: Option<&str>,
+) -> Result<(), crate::error::ParseError> {
+    let Some(description) = description else {
+        return Ok(());
+    };
+    if description.trim().is_empty() {
+        return Err(crate::error::ParseError::new(
+            "asset description must not be blank when provided",
+        ));
+    }
+    if description.len() > MAX_ASSET_DESCRIPTION_LEN {
+        return Err(crate::error::ParseError::new(
+            "asset description exceeds maximum length",
+        ));
+    }
+    if description.chars().any(char::is_control) {
+        return Err(crate::error::ParseError::new(
+            "asset description must not contain control characters",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate optional alias literal for an asset definition.
+///
+/// # Errors
+/// Returns [`crate::error::ParseError`] when the alias does not match the asset name.
+pub fn validate_asset_alias(
+    alias: Option<&AssetDefinitionAlias>,
+    expected_name: &str,
+) -> Result<(), crate::error::ParseError> {
+    let Some(alias) = alias else {
+        return Ok(());
+    };
+    if alias.name_segment() != expected_name {
+        return Err(crate::error::ParseError::new(
+            "asset alias name segment must match asset name exactly",
+        ));
+    }
+    Ok(())
+}
 
 #[model]
 mod model {
@@ -78,6 +161,18 @@ mod model {
     pub struct AssetDefinition {
         /// An Identification of the [`AssetDefinition`].
         pub id: AssetDefinitionId,
+        /// Human-readable asset name shown in UX surfaces.
+        #[getset(get = "pub")]
+        #[registrable_builder(default = String::new())]
+        pub name: String,
+        /// Optional human-readable description.
+        #[getset(get = "pub")]
+        #[registrable_builder(default = None)]
+        pub description: Option<String>,
+        /// Optional alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+        #[getset(get = "pub")]
+        #[registrable_builder(default = None)]
+        pub alias: Option<AssetDefinitionAlias>,
         /// Numeric spec of this asset.
         #[getset(get_copy = "pub")]
         pub spec: NumericSpec,
@@ -85,10 +180,10 @@ mod model {
         #[getset(get_copy = "pub")]
         #[registrable_builder(default = Mintable::default())]
         pub mintable: Mintable,
-        /// IPFS link to the [`AssetDefinition`] logo
+        /// `SoraFS` URI to the [`AssetDefinition`] logo.
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
-        pub logo: Option<IpfsPath>,
+        pub logo: Option<SorafsUri>,
         /// Metadata of this asset definition as a key-value store.
         #[registrable_builder(default = Metadata::default())]
         pub metadata: Metadata,
@@ -366,6 +461,9 @@ mod model {
 
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
+    ///
+    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
+    /// before registration.
     #[must_use]
     #[inline]
     pub fn new(id: AssetDefinitionId, spec: NumericSpec) -> <Self as Registered>::With {
@@ -373,6 +471,9 @@ impl AssetDefinition {
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
+    ///
+    /// Callers must provide a human-facing name with [`NewAssetDefinition::with_name`]
+    /// before registration.
     #[must_use]
     #[inline]
     pub fn numeric(id: AssetDefinitionId) -> <Self as Registered>::With {
@@ -767,6 +868,55 @@ impl HasMetadata for NewAssetDefinition {
     }
 }
 
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn constructors_leave_name_empty_without_explicit_with_name() {
+        let id: AssetDefinitionId = "aid:550e8400e29b41d4a716446655440000"
+            .parse()
+            .expect("asset definition id");
+
+        let numeric = AssetDefinition::numeric(id.clone());
+        assert!(
+            numeric.name.is_empty(),
+            "numeric constructor must not auto-fill name"
+        );
+
+        let custom = AssetDefinition::new(id, NumericSpec::fractional(2));
+        assert!(
+            custom.name.is_empty(),
+            "new constructor must not auto-fill name"
+        );
+    }
+
+    #[test]
+    fn asset_name_validation_rejects_blank_and_alias_separators() {
+        assert!(validate_asset_name("   ").is_err());
+        assert!(validate_asset_name("usd#x").is_err());
+        assert!(validate_asset_name("usd@x").is_err());
+    }
+
+    #[test]
+    fn asset_name_validation_accepts_simple_label() {
+        validate_asset_name("USD Coin").expect("valid name");
+    }
+
+    #[test]
+    fn asset_description_validation_rejects_blank_when_present() {
+        assert!(validate_asset_description(Some("  ")).is_err());
+        validate_asset_description(None).expect("none is valid");
+    }
+
+    #[test]
+    fn asset_alias_validation_requires_name_segment_match() {
+        let alias: AssetDefinitionAlias = "usd#issuer@main".parse().expect("alias");
+        validate_asset_alias(Some(&alias), "usd").expect("matching name segment");
+        assert!(validate_asset_alias(Some(&alias), "US Dollar").is_err());
+    }
+}
+
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
     use std::str::FromStr;
@@ -799,12 +949,15 @@ mod json_tests {
         };
         let new_definition = NewAssetDefinition {
             id,
+            name: "Rose".to_owned(),
+            description: Some("Flower-backed settlement unit".to_owned()),
+            alias: Some("Rose#issuer@main".parse().expect("asset alias")),
             spec: NumericSpec::fractional(4),
             mintable: Mintable::Limited(MintabilityTokens::try_new(5).expect("tokens")),
             logo: Some(
-                "/ipfs/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
+                "sorafs://bafybeigdyrztk/logo/rose.png"
                     .parse()
-                    .expect("ipfs path"),
+                    .expect("sorafs uri"),
             ),
             metadata: metadata.clone(),
             balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
@@ -817,6 +970,9 @@ mod json_tests {
             norito::json::from_json(&json).expect("deserialize asset definition builder");
 
         assert_eq!(decoded.id, new_definition.id);
+        assert_eq!(decoded.name, new_definition.name);
+        assert_eq!(decoded.description, new_definition.description);
+        assert_eq!(decoded.alias, new_definition.alias);
         assert_eq!(decoded.spec.scale(), new_definition.spec.scale());
         assert_eq!(decoded.mintable, new_definition.mintable);
         assert_eq!(decoded.logo, new_definition.logo);
@@ -834,6 +990,9 @@ mod json_tests {
         let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
         let new_definition = NewAssetDefinition {
             id,
+            name: "Rose".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::fractional(2),
             mintable: Mintable::Once,
             logo: None,

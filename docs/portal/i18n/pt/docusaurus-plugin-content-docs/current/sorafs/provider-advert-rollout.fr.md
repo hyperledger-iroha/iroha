@@ -46,7 +46,7 @@ vigor.
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` com um `max_span` definido
      - `allow_unknown_capabilities=<true|false>` quando os TLVs GREASE são apresentados
-   - Validador via `/v1/sorafs/providers` e `sorafs_fetch`; os avisos sobre des
+   - Validador via `/v2/sorafs/providers` e `sorafs_fetch`; os avisos sobre des
      capacidades inconnues doivent être triés.
 3. **Validar a prontidão multifonte.**
    - Execute `sorafs_fetch` com `--provider-advert=<path>`; a CLI ecoou
@@ -193,9 +193,9 @@ requer a atualização diária deste arquivo e do livro-razão no mesmo PR.
 - **Mailer hebdomadaire de statut.** DevRel divulga um breve currículo de métricas
   de admissão, avisos durante o curso e prazos a vencer.
 - **Resposta ao incidente.** Se os alertas `reject` forem desativados, ligue para:
-  1. Recupere o anúncio errado por meio da descoberta Torii (`/v1/sorafs/providers`).
+  1. Recupere o anúncio errado por meio da descoberta Torii (`/v2/sorafs/providers`).
   2. Verifique a validação do anúncio no provedor de pipeline e compare com
-     `/v1/sorafs/providers` para reproduzir erros.
+     `/v2/sorafs/providers` para reproduzir erros.
   3. Coordonne com o fornecedor para fazer o tourner do anúncio antes da prochaine
      prazo de atualização.
 - **Gel des changements.** Nenhuma modificação do esquema de recursos pendente

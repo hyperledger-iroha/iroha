@@ -56,7 +56,7 @@ dApp abre uma sessão, deriva as chaves de Connect e espera por uma resposta
 de aprovação.
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)

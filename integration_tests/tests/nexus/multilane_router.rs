@@ -233,7 +233,10 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &keypair,
         vec![InstructionBox::from(Mint::asset_numeric(
             1_u32,
-            AssetId::new("xor#nexus".parse()?, authority.clone()),
+            AssetId::new(
+                AssetDefinitionId::new("nexus".parse()?, "xor".parse()?),
+                authority.clone(),
+            ),
         ))],
     );
     let default_tx = build_tx(
@@ -241,7 +244,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric("xor#nexus".parse()?),
+            AssetDefinition::numeric(AssetDefinitionId::new("nexus".parse()?, "xor".parse()?)),
         ))],
     );
 

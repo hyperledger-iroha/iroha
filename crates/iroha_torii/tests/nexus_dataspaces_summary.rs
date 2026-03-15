@@ -123,7 +123,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
 
-    let asset_definition_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition");
+    let asset_definition_id = AssetDefinitionId::new(
+        "nexus".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
 
@@ -169,7 +172,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/dataspaces/accounts/{}/summary",
+                    "/v2/nexus/dataspaces/accounts/{}/summary",
                     urlencoding::encode(&account_literal)
                 ))
                 .body(Body::empty())
@@ -224,7 +227,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) = request_summary(
         router,
-        "/v1/nexus/dataspaces/accounts/not-a-valid-literal/summary",
+        "/v2/nexus/dataspaces/accounts/not-a-valid-literal/summary",
     )
     .await;
 
@@ -243,7 +246,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     let (state, kura, local_peer_id) = minimal_state(true);
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) =
-        request_summary(router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
+        request_summary(router, "/v2/nexus/dataspaces/accounts/%20%20/summary").await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
@@ -261,7 +264,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
-    let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
+    let uri = format!("/v2/nexus/dataspaces/accounts/{literal}/summary");
     let (status, _body) = request_summary(router, &uri).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -276,7 +279,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_when_nexus_disabled() {
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
-    let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
+    let uri = format!("/v2/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);

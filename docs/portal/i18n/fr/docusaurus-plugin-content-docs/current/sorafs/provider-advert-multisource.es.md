@@ -64,7 +64,7 @@ La couverture de régression vive en
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Outillage et montages- Les charges utiles des annonces du fournisseur doivent inclure les métadonnées `range_capability`,
-  `stream_budget` et `transport_hints`. Validé via les réponses de `/v1/sorafs/providers` et
+  `stream_budget` et `transport_hints`. Validé via les réponses de `/v2/sorafs/providers` et
   calendriers d'admission ; les résultats JSON doivent inclure la capacité analysée,
   le budget du flux et les tableaux d'indications pour l'ingestion de télémétrie.
 - `cargo xtask sorafs-admission-fixtures` expose les budgets de flux et les conseils de transport à l'intérieur de
@@ -77,7 +77,7 @@ La couverture de régression vive en
 
 ## Intégration avec l'orchestre et Torii
 
-- Torii `/v1/sorafs/providers` développe des métadonnées de capacité de rang analysées conjointement avec
+- Torii `/v2/sorafs/providers` développe des métadonnées de capacité de rang analysées conjointement avec
   `stream_budget` et `transport_hints`. Il existe des annonces de rétrogradation différentes lorsque vous
   Les fournisseurs ont omis les nouvelles métadonnées et les points de terminaison de la passerelle appliquée
   autres restrictions pour les clients directs.

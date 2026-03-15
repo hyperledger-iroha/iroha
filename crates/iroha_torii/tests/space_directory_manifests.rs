@@ -19,6 +19,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
+    asset::AssetDefinitionId,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,
@@ -66,7 +67,10 @@ async fn space_directory_manifest_endpoint_returns_records() {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some("cbdc#bank".parse().unwrap()),
+                asset: Some(AssetDefinitionId::new(
+                    "bank".parse().expect("domain id"),
+                    "cbdc".parse().expect("asset definition name"),
+                )),
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
@@ -166,7 +170,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{uaid}/manifests"))
+                .uri(format!("/v2/space-directory/uaids/{uaid}/manifests"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -198,7 +202,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{uaid}"))
+                .uri(format!("/v2/space-directory/uaids/{uaid}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -222,7 +226,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
+                    "/v2/space-directory/uaids/{uaid}/manifests?dataspace={}",
                     dataspace.as_u64() + 1
                 ))
                 .body(axum::body::Body::empty())
@@ -245,7 +249,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1"
+                    "/v2/space-directory/uaids/{uaid}/manifests?status=Active&limit=1"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -397,7 +401,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Inactive"
+                    "/v2/space-directory/uaids/{uaid}/manifests?status=Inactive"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -424,7 +428,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1&offset=0"
+                    "/v2/space-directory/uaids/{uaid}/manifests?status=Active&limit=1&offset=0"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -447,7 +451,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?limit=0"
+                    "/v2/space-directory/uaids/{uaid}/manifests?limit=0"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -479,7 +483,7 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
-        "/v1/space-directory/manifests",
+        "/v2/space-directory/manifests",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
@@ -515,7 +519,10 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
                 dataspace: Some(dataspace),
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
-                asset: Some("cbdc#bank".parse().unwrap()),
+                asset: Some(AssetDefinitionId::new(
+                    "bank".parse().expect("domain id"),
+                    "cbdc".parse().expect("asset definition name"),
+                )),
                 role: None,
             },
             effect: ManifestEffect::Allow(Allowance {
@@ -535,7 +542,7 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
     let body = norito::json::to_json(&value).expect("serialize publish request");
     let req = Request::builder()
         .method("POST")
-        .uri("/v1/space-directory/manifests")
+        .uri("/v2/space-directory/manifests")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
@@ -563,7 +570,7 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
-        "/v1/space-directory/manifests/revoke",
+        "/v2/space-directory/manifests/revoke",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
@@ -598,7 +605,7 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
     let body = norito::json::to_json(&value).expect("serialize revoke request");
     let req = Request::builder()
         .method("POST")
-        .uri("/v1/space-directory/manifests/revoke")
+        .uri("/v2/space-directory/manifests/revoke")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");

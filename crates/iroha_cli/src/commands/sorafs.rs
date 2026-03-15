@@ -1207,8 +1207,8 @@ pub struct ReserveLedgerArgs {
     /// Reserve escrow account receiving the reserve top-up.
     #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
     pub reserve_account: String,
-    /// Asset definition identifier used for XOR transfers (e.g., `xor#sora`).
-    #[arg(long = "asset-definition", value_name = "NAME#DOMAIN")]
+    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
 
@@ -6273,7 +6273,7 @@ fn unix_now() -> u64 {
 pub enum HandshakeCommand {
     /// Display the current `SoraNet` handshake summary as reported by Torii.
     Show,
-    /// Update one or more `SoraNet` handshake parameters via `/v1/config`.
+    /// Update one or more `SoraNet` handshake parameters via `/v2/config`.
     Update(HandshakeUpdateArgs),
     /// Admission token helpers (issuance, fingerprinting, revocation digests).
     #[command(subcommand)]
@@ -10748,7 +10748,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
@@ -10792,7 +10792,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10828,7 +10828,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            "account_id:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10845,7 +10845,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10882,7 +10882,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10923,7 +10923,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10966,7 +10966,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "account_alias": "routing@sora",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -12086,7 +12086,9 @@ mod tests {
         let i105 = address
             .to_i105_for_discriminant(address::chain_discriminant())
             .expect("i105 encode");
-        let non_canonical_i105 = address.to_i105().expect("i105 encode");
+        let non_canonical_i105 = address
+            .to_i105_for_discriminant(address::chain_discriminant().wrapping_add(1))
+            .expect("non-canonical i105 encode");
         (canonical, i105, non_canonical_i105)
     }
 
@@ -12672,7 +12674,7 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::from_str("xor#sora").expect("asset id")
+        AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
     }
 
     fn sample_budget_id_hex() -> String {
@@ -13827,7 +13829,7 @@ mod tests {
         assert_eq!(plan.provider_id_hex, hex::encode(provider));
         assert_eq!(plan.chain_id, "nexus");
         assert!(
-            plan.direct_car.canonical_url.contains("/direct/v1/car/"),
+            plan.direct_car.canonical_url.contains("/direct/v2/car/"),
             "direct car locator should reference the manifest digest"
         );
         assert!(plan.capabilities.direct_car_supported);
@@ -13922,8 +13924,8 @@ mod tests {
                 vanity: "3333.nexus.direct.sorafs".to_owned(),
             },
             DirectCarLocator {
-                canonical_url: "https://33333333.nexus.sorafs/direct/v1/car/feedface".to_owned(),
-                vanity_url: "https://3333.nexus.direct.sorafs/direct/v1/car/feedface".to_owned(),
+                canonical_url: "https://33333333.nexus.sorafs/direct/v2/car/feedface".to_owned(),
+                vanity_url: "https://3333.nexus.direct.sorafs/direct/v2/car/feedface".to_owned(),
             },
             ManifestCapabilitySummary::default(),
         );

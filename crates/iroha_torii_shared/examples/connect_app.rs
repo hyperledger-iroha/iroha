@@ -1,6 +1,6 @@
 //! Minimal Iroha Connect app-side example.
 //!
-//! - Creates a session via Torii POST /v1/connect/session
+//! - Creates a session via Torii POST /v2/connect/session
 //! - Connects to WS with Authorization bearer token as app role
 //! - Uses `connect_sdk` to seal a `SignRequestTx` payload and send as a frame
 //! - Optional: send encrypted Close/Reject instead via --action close|reject
@@ -83,7 +83,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     println!("sid={sid} token_app={token_app} token_wallet={token_wallet}");
 
     let ws_url = format!(
-        "{}/v1/connect/ws?sid={sid}&role={role}",
+        "{}/v2/connect/ws?sid={sid}&role={role}",
         node.replace("http", "ws")
     );
     let mut request = ws_url.into_client_request()?;
@@ -120,7 +120,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     if let Some(Ok(Message::Binary(bin))) = ws.next().await {
         let mut cursor = bin.as_ref();
         if let Ok(frame) = proto::ConnectFrameV1::decode_all(&mut cursor)
-            && let Ok(env) = sdk::open_envelope_v1(&k_wallet, &frame)
+            && let Ok(env) = sdk::open_envelope_current(&k_wallet, &frame)
         {
             log_app_response(&env);
         }
@@ -131,7 +131,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
 
 #[cfg(feature = "connect")]
 async fn request_session(client: &Client, node: &str) -> anyhow::Result<SessionResp> {
-    let url = format!("{node}/v1/connect/session");
+    let url = format!("{node}/v2/connect/session");
     let body = client
         .post(url)
         .header("content-type", "application/json")
@@ -157,13 +157,13 @@ async fn send_app_action(
             let payload = proto::ConnectPayloadV1::SignRequestTx {
                 tx_bytes: b"...".to_vec(),
             };
-            let frame = sdk::seal_envelope_v1(k_app, sid, proto::Dir::AppToWallet, 1, payload);
+            let frame = sdk::seal_envelope_current(k_app, sid, proto::Dir::AppToWallet, 1, payload);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
             println!("app: sent SignRequestTx");
         }
         "reject" => {
-            let rej = sdk::encrypt_reject_v1(
+            let rej = sdk::encrypt_reject_current(
                 k_app,
                 sid,
                 proto::Dir::AppToWallet,
@@ -176,7 +176,7 @@ async fn send_app_action(
             println!("app: sent encrypted Reject");
         }
         "close" => {
-            let close = sdk::encrypt_close_v1(
+            let close = sdk::encrypt_close_current(
                 k_app,
                 sid,
                 proto::Dir::AppToWallet,
@@ -195,7 +195,7 @@ async fn send_app_action(
             let payload = proto::ConnectPayloadV1::SignRequestTx {
                 tx_bytes: b"...".to_vec(),
             };
-            let frame = sdk::seal_envelope_v1(k_app, sid, proto::Dir::AppToWallet, 1, payload);
+            let frame = sdk::seal_envelope_current(k_app, sid, proto::Dir::AppToWallet, 1, payload);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
         }

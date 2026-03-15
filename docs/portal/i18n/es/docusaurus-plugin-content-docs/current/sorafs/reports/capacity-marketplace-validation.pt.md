@@ -26,7 +26,7 @@ La lista de verificación a continuación debe ser revisada antes de habilitar e
 
 ### Incorporación de proveedores| Checagem | Validacao | Pruebas |
 |-------|------------|----------|
-| O registro aceita declaracoes canónicas de capacidade | La prueba de integración ejercita `/v1/sorafs/capacity/declare` a través de la aplicación API, verificando el tratamiento de assinaturas, captura de metadatos y transferencia para el registro del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
+| O registro aceita declaracoes canónicas de capacidade | La prueba de integración ejercita `/v2/sorafs/capacity/declare` a través de la aplicación API, verificando el tratamiento de assinaturas, captura de metadatos y transferencia para el registro del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
 | O contrato inteligente rejeita cargas útiles divergentes | O teste unitario garante que ID de proveedor y campos GiB confirmados corresponden a declaracao assinada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | O CLI emite artefatos canónicos de onboarding | El arnés de CLI escribe las indicaciones Norito/JSON/Base64 determinísticas y valida viajes de ida y vuelta para que los operadores puedan preparar declaraciones fuera de línea. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | La guía del operador de cobre o el flujo de trabajo de admisión y las barandillas de gobierno | La documentación enumera los esquemas de declaración, los valores predeterminados de política y los pasos de revisión para el consejo. | `../storage-capacity-marketplace.md` |

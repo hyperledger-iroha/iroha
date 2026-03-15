@@ -459,7 +459,7 @@ mod tests {
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         );
-        let uri: crate::Uri = "/v1/configuration".parse().unwrap();
+        let uri: crate::Uri = "/v2/configuration".parse().unwrap();
         let body = b"{}";
         let ts = OperatorSignatures::now_unix_ms();
         let nonce = "nonce-1";
@@ -492,7 +492,7 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         );
 
-        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let uri: crate::Uri = "/v2/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
         let ts = OperatorSignatures::now_unix_ms();
         let mut nonce_bytes = [0u8; 12];

@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 კარიბჭე ახლა ავლენს კონკრეტულ JSON კონვერტებს, რომლებიც ასახულია ერთი-ერთზე
 Norito ტიპები დანერგილია `crates/iroha_data_model::fraud`-ში:
 
-- **რისკის მიღება** – `POST /v1/fraud/query` იღებს `RiskQuery` სქემას:
+- **რისკის მიღება** – `POST /v2/fraud/query` იღებს `RiskQuery` სქემას:
   - `query_id` (`[u8; 32]`, hex კოდირებული)
   - `subject` (`AccountId`, კანონიკური I105 ლიტერალი; სურვილისამებრ `@<domain>` მინიშნება ან მეტსახელი)
   - `operation` (მონიშნული რიცხვი შეესაბამება `RiskOperation`; JSON `type`
@@ -94,14 +94,14 @@ Norito ტიპები დანერგილია `crates/iroha_data_mode
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; ატარებს `tenant_id`, სურვილისამებრ `session_id`,
     სურვილისამებრ `reason`)
-- **რისკის გადაწყვეტილება** – `POST /v1/fraud/assessment` მოიხმარს
+- **რისკის გადაწყვეტილება** – `POST /v2/fraud/assessment` მოიხმარს
   `FraudAssessment` დატვირთვა (ასევე აისახება მმართველობით ექსპორტში):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` რიცხვი), `rule_outcomes`
     (მაივი `{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
   - `signature` (სურვილისამებრ base64 ახვევს Norito-ში კოდირებულ შეფასებას)
-- **მართვის ექსპორტი** – `GET /v1/fraud/governance/export` აბრუნებს
+- **მართვის ექსპორტი** – `GET /v2/fraud/governance/export` აბრუნებს
   `GovernanceExport` სტრუქტურა, როდესაც ჩართულია `governance` ფუნქცია, შეფუთვა
   აქტიური პარამეტრები, უახლესი ამოქმედება, მოდელის ვერსია, პოლიტიკის დაიჯესტი და
   `DecisionAggregate` ჰისტოგრამა.

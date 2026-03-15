@@ -162,9 +162,9 @@ Norito JSON 概要と標準出力、最新の情報が表示されます。 CLI
 > Torii ゲートウェイ теперь предоставляет 読み取り専用ヘルパー на основе того же
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — Созвращает сохраненный
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — Созвращает сохраненный
 > Norito マニフェスト (base64) のダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — Созвращает детерминированный
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — Созвращает детерминированный
 > JSON чанков (`chunk_fetch_specs`) ダウンストリーム ツール。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Эти эндпоинты повторяют CLI вывод, поэтому пайплайны могут перейти от локальных
@@ -207,18 +207,18 @@ Norito JSON 概要と標準出力、最新の情報が表示されます。 CLI
      統治。 пока дизайн предполагает строгие квоты и
      ピンを外して、инициируемые оператором。
 
-### スケジュールを設定する- Torii теперь ретранслирует обновления `CapacityDeclarationRecord` または `/v1/sorafs/capacity/declare`
+### スケジュールを設定する- Torii теперь ретранслирует обновления `CapacityDeclarationRecord` または `/v2/sorafs/capacity/declare`
   `CapacityManager` を使用して、メモリ内のデータを取得します。
   зафиксированных チャンカー/レーン аллокаций。読み取り専用スナップショットを取得する
-  (`GET /v1/sorafs/capacity/state`) プロファイルごと/レーンごとの処理
+  (`GET /v2/sorafs/capacity/state`) プロファイルごと/レーンごとの処理
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- ガバナンス発行 `/v1/sorafs/capacity/schedule` ガバナンス発行 `ReplicationOrderV1`
+- ガバナンス発行 `/v2/sorafs/capacity/schedule` ガバナンス発行 `ReplicationOrderV1`
   ペイロード。 Когда заказ нацелен на локального провайдера, менеджер проверяет дублирование
   チャンカー/レーン、`ReplicationPlan` のチャンカー/レーンを表示します。
   摂取する必要があります。 Заказы для
   других провайдеров подтверждаются ответом `ignored`、マルチオペレーターワークフロー。【crates/iroha_torii/src/routing.rs:4845】
 - 完了フック (インジェスト、取り込み)
-  `POST /v1/sorafs/capacity/complete` は、 освобождения резерва через
+  `POST /v2/sorafs/capacity/complete` は、 освобождения резерва через
   `CapacityManager::complete_order`。スナップショット `ReplicationRelease`
   (合計、チャンカー/レーン)、オーケストレーション ツールの機能
   投票を行ってください。パイプラインを実行する

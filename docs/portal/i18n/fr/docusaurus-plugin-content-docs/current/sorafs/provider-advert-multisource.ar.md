@@ -64,7 +64,7 @@ Il s'agit de charges utiles pour les potins.
 ## الأدوات وfixtures
 
 - Vous pouvez utiliser les charges utiles comme `range_capability` et `stream_budget` et `transport_hints`.
-  تحقّق عبر استجابات `/v1/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
+  تحقّق عبر استجابات `/v2/sorafs/providers` وfixtures القبول؛ يجب أن تتضمن
   Les astuces JSON et les astuces pour les choses à faire.
 - `cargo xtask sorafs-admission-fixtures` pour les budgets de flux et les conseils de transport ici
   artefacts JSON est un élément de référencement.
@@ -72,7 +72,7 @@ Il s'agit de charges utiles pour les potins.
   - annonces متعددة المصادر قياسية،
   - `multi_fetch_plan.json` pour le SDK de récupération de données à partir de la récupération.
 
-## تكامل المُنسق وTorii- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
+## تكامل المُنسق وTorii- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` et `transport_hints`. تُطلق تحذيرات downgrade عندما يحذف
   المزودون البيانات الجديدة، وتطبق نقاط نطاق البوابة القيود نفسها للعملاء المباشرين.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

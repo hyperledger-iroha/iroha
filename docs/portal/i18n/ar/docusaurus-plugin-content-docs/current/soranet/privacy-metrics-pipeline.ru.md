@@ -69,8 +69,8 @@ Sidebar_label: مقياس الخصوصية للناقل
 
 ## نقاط النهاية Torii
 
-Torii هناك نقطتان من نقاط اتصال HTTP العامة التي يمكن للمرحلات والمجمعات الاتصال بها بدون مراقبة النقل الذاتي:- `POST /v1/soranet/privacy/event` يوضح الحمولة `RecordSoranetPrivacyEventDto`. لقد تم قبول `SoranetPrivacyEventV1` بالإضافة إلى `source`. Torii يتحقق من خلال الملف الشخصي النشط عن بعد، ويسجل البيانات ويسجل HTTP `202 Accepted` الآن Norito JSON-convertom، содеращим очисленное окно (`bucket_start_unix`، `bucket_duration_secs`) وتتابع التتابع.
-- `POST /v1/soranet/privacy/share` يوضح الحمولة `RecordSoranetPrivacyShareDto`. هناك حاجة إلى `SoranetPrivacyPrioShareV1` ورسالة جديدة غير متوقعة إلى `forwarded_by` التي يمكن للمشغلين من خلالها مراجعة جامعي النقاط. يتم إجراء عمليات الفحص الناجحة عبر HTTP `202 Accepted` مع Norito JSON-Convertom، وجامع مملوء، ودلو أوكنو، ودعم الإيصال؛ يتم التحقق من صحة البيانات باستخدام جهاز قياس عن بعد `Conversion` من أجل تسهيل عملية تحديد أجهزة الكمبيوتر بين جامعي. بعد ذلك، يقوم المنسق الخاص بالمشاركة في معالجة المرحلات، والمزامنة المصاحبة لبطارية Prio Torii مع دلاء التتابع.
+Torii هناك نقطتان من نقاط اتصال HTTP العامة التي يمكن للمرحلات والمجمعات الاتصال بها بدون مراقبة النقل الذاتي:- `POST /v2/soranet/privacy/event` يوضح الحمولة `RecordSoranetPrivacyEventDto`. لقد تم قبول `SoranetPrivacyEventV1` بالإضافة إلى `source`. Torii يتحقق من خلال الملف الشخصي النشط عن بعد، ويسجل البيانات ويسجل HTTP `202 Accepted` الآن Norito JSON-convertom، содеращим очисленное окно (`bucket_start_unix`، `bucket_duration_secs`) وتتابع التتابع.
+- `POST /v2/soranet/privacy/share` يوضح الحمولة `RecordSoranetPrivacyShareDto`. هناك حاجة إلى `SoranetPrivacyPrioShareV1` ورسالة جديدة غير متوقعة إلى `forwarded_by` التي يمكن للمشغلين من خلالها مراجعة جامعي النقاط. يتم إجراء عمليات الفحص الناجحة عبر HTTP `202 Accepted` مع Norito JSON-Convertom، وجامع مملوء، ودلو أوكنو، ودعم الإيصال؛ يتم التحقق من صحة البيانات باستخدام جهاز قياس عن بعد `Conversion` من أجل تسهيل عملية تحديد أجهزة الكمبيوتر بين جامعي. بعد ذلك، يقوم المنسق الخاص بالمشاركة في معالجة المرحلات، والمزامنة المصاحبة لبطارية Prio Torii مع دلاء التتابع.
 
 تقوم نقطة البداية هذه بقراءة ملف تعريف أجهزة القياس عن بعد: يتم توصيلها بـ `503 Service Unavailable`، عندما يتم استبعاد المقاييس. يمكن للعملاء إجراء اتصال Norito ثنائي (`application/x.norito`) أو Norito JSON (`application/x.norito+json`)؛ يتوافق الخادم التلقائي مع التنسيق من خلال مستخرجات Torii القياسية.
 
@@ -142,7 +142,7 @@ cargo xtask soranet-privacy-report \
 
 يجب أن يؤكد الحكام الذين يتمتعون بإدارة أفضل أن أتمتة جلساتهم كانت في السابق من خلال قمع الميزانية. يبدأ المساعد في استخدام `--max-suppression-ratio <0-1>`، بحيث يمكن لـ CI أو المشغلين أن يغلقوا الشبكة عندما يتم تثبيت الدلاء المكبوتة مسبقًا انقر فوق (أكثر من 10%) أو عندما يتم إخراج الدلاء. الطريقة الموصى بها:
 
-1. قم بتصدير NDJSON من تتابع نقاط النهاية الإدارية ومنسق السرعة `/v1/soranet/privacy/event|share` إلى `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. قم بتصدير NDJSON من تتابع نقاط النهاية الإدارية ومنسق السرعة `/v2/soranet/privacy/event|share` إلى `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. تقديم المساعدة بسياسة الميزانية:
 
    ```bash

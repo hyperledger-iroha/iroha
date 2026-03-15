@@ -33,7 +33,7 @@ el numero requerido de epocas y replicas sin depender de la intencion del emisor
 | _Default (todas las demas clases)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
 
 Estos valores se incrustan en `torii.da_ingest.replication_policy` y se aplican a
-todas las solicitudes `/v1/da/ingest`. Torii reescribe manifests con el perfil de
+todas las solicitudes `/v2/da/ingest`. Torii reescribe manifests con el perfil de
 retencion impuesto y emite una advertencia cuando los callers entregan valores
 no coincidentes para que los operadores detecten SDKs desactualizados.
 
@@ -158,5 +158,5 @@ fuera de cumplimiento de forma automatica.
 
 La cobertura de regresion vive en
 `integration_tests/tests/da/replication_policy.rs`; la suite envia una politica de
-retencion no coincidente a `/v1/da/ingest` y verifica que el manifest obtenido
+retencion no coincidente a `/v2/da/ingest` y verifica que el manifest obtenido
 expone el perfil impuesto en lugar de la intencion del caller.

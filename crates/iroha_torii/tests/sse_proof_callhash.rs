@@ -13,10 +13,10 @@ use tower::ServiceExt as _;
 
 #[tokio::test]
 async fn proof_event_json_includes_call_hash() {
-    // Create a sender and build a router exposing /v1/events/sse
+    // Create a sender and build a router exposing /v2/events/sse
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let app = Router::new().route(
-        "/v1/events/sse",
+        "/v2/events/sse",
         get({
             let events = events.clone();
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
@@ -26,7 +26,7 @@ async fn proof_event_json_includes_call_hash() {
     // Spawn request to SSE endpoint
     let req = http::Request::builder()
         .method("GET")
-        .uri("/v1/events/sse")
+        .uri("/v2/events/sse")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

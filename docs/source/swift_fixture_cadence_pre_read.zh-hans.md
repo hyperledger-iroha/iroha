@@ -47,7 +47,7 @@ Add translations once localisation staffing is available.
   `scripts/swift_fixture_regen.sh`, while Python consumes the same set for CLI
   smoke tests.
 - Governance requested a formal cadence after repeated ad-hoc updates delayed
-  parity metrics (`dashboards/mobile_parity.swift`) and `/v1/pipeline`
+  parity metrics (`dashboards/mobile_parity.swift`) and `/v2/pipeline`
   migrations tracked under IOS2/AND4.
 - Cross-SDK automation now exists:
   - `scripts/swift_fixture_regen.sh` (Swift) + comparable Android tooling.

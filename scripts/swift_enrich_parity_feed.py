@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--schema-version",
-        help="Schema version string for the telemetry feed (e.g., ios_metrics/v1).",
+        help="Schema version string for the telemetry feed (e.g., ios_metrics/v2).",
     )
     parser.add_argument(
         "--note",

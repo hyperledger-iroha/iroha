@@ -27,7 +27,7 @@ use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 
 const BACKEND: &str = "halo2/ipa";
-const FIXTURE_CIRCUIT: &str = "halo2/ipa:tiny-add-v1";
+const FIXTURE_CIRCUIT: &str = "halo2/ipa:tiny-add";
 
 fn proof_fixture() -> iroha_core::zk::test_utils::FixtureEnvelope {
     halo2_fixture_envelope(FIXTURE_CIRCUIT, [0u8; 32])
@@ -60,7 +60,10 @@ fn prepare_state() -> (
 
     let (vk_transfer_id, vk_unshield_id, vk_other_id, asset_def_id, owner) = {
         let domain_id: DomainId = "zkd".parse().unwrap();
-        let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "zkd".parse().unwrap(),
+            "zcoin".parse().unwrap(),
+        );
         let owner_keypair = KeyPair::random();
         let owner: AccountId = AccountId::of(owner_keypair.public_key().clone());
 
@@ -90,8 +93,11 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                        .into(),
+                    Register::asset_definition(
+                        AssetDefinition::numeric(asset_def_id.clone())
+                            .with_name(asset_def_id.name().to_string()),
+                    )
+                    .into(),
                 )
                 .expect("register asset definition");
 

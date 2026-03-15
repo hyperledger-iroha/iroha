@@ -249,7 +249,7 @@ retenção, lista branca de provedores mal-intencionados ou suprime alertas.
 - O cache de repetição e a persistência dos cursores foram apagados no DA-2. Voir
   implementação em `crates/iroha_core/src/da/replay_cache.rs` (lógica de
   cache) e integração Torii em `crates/iroha_torii/src/da/ingest.rs`, aqui thread
-  eles verificam a impressão digital via `/v1/da/ingest`.
+  eles verificam a impressão digital via `/v2/da/ingest`.
 - As simulações de streaming PDP/PoTR são exercidas por meio do chicote de prova-stream
   em `crates/sorafs_car/tests/sorafs_cli.rs`, cobre o fluxo de recepção
   PoR/PDP/PoTR e os cenários de fracasso animes no modelo de ameaças.

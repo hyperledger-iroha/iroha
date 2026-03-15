@@ -31,7 +31,7 @@ hoc.
   דה זמינות sem consultar אחסון פורה לעשות ספר חשבונות.
 - Fornecer provas deterministics החברות עבור רמות לקוחות
   verifiquem que um manifest hash foi finalizado em um bloco.
-- ייעוץ אקספורמציה Torii (`/v1/da/commitments/*`) והוכחות שמאפשרות ממסרים,
+- ייעוץ אקספורמציה Torii (`/v2/da/commitments/*`) והוכחות שמאפשרות ממסרים,
   SDKs e automacao de governanca auditar זמינות סם משוחזר cada bloco.
 - Manter o envelope `SignedBlockWire` canonico ao enfiar as novas estruturas
   pelo header de metadata Norito e a derivacao do hash de bloco.
@@ -45,7 +45,7 @@ hoc.
 3. **Persistencia/indexes** para que o WSV responda consultas de compromissos
    rapidamente (`iroha_core/src/wsv/mod.rs`).
 4. **Adicoes RPC em Torii** עבור נקודות קצה של רשימה/consulta/prova sob
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **מבחנים אינטגראו + מתקנים** validando o פריסת תיל או fluxo de proof
    em `integration_tests/tests/da/commitments.rs`.
 
@@ -136,9 +136,9 @@ Torii נקודות קצה אקספו:
 
 | רוטה | Metodo | מטען | Notas |
 |------|--------|--------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (מסננת טווח לפי נתיב/תקופה/רצף, paginacao) | Retorna `DaCommitmentPage` כולל סה"כ, פשרות ו-hash de bloco. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (מסלול + מניפסט hash ou tupla `(epoch, sequence)`). | תגובה com `DaCommitmentProof` (תקליט + קמינהו Merkle + hash de bloco). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר אזרחות que refaz o calculo do hash de bloco e valida a inclusao; usado por SDKs que nao podem linkar direto em `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (מסננת טווח לפי נתיב/תקופה/רצף, paginacao) | Retorna `DaCommitmentPage` כולל סה"כ, פשרות ו-hash de bloco. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (מסלול + מניפסט hash ou tupla `(epoch, sequence)`). | תגובה com `DaCommitmentProof` (תקליט + קמינהו Merkle + hash de bloco). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר אזרחות que refaz o calculo do hash de bloco e valida a inclusao; usado por SDKs que nao podem linkar direto em `iroha_crypto`. |
 
 Todos OS מטענים vivem sob `iroha_data_model::da::commitment`. Os נתבים de
 Torii מטפלי montam os ao lado dos endpoints de ingestao DA existentes para

@@ -25,7 +25,7 @@ title: Nexus فیس ماڈل اپ ڈیٹس
 - ルータのアーキテクチャ、バッファ ポリシー、テレメトリ マトリックス、ロールアウト シーケンス、`docs/settlement-router.md` および `docs/settlement-router.md`パラメータ NX-3 ロードマップの成果物 SRE 本番環境 ルータ パラメータऔर देखें
 - ガス資産構成 (`pipeline.gas.units_per_gas`) `twap_local_per_xor` 10 進数 `liquidity_profile` (`tier1`、`tier2`、`tier3`) `volatility_class` (`stable`、`elevated`、`dislocated`)フラグ決済ルータ フィード ہیں تاکہ حاصل ہونے والی XOR 引用 正規 TWAP レーン کے ヘアカット層 سے میل کھائے۔
 - ガスの支払い トランザクション ایک `LaneSettlementReceipt` ریکارڈ کرتی ہے۔レシートの発信者 ソース識別子 ローカルの微額 金額 XOR ヘアカット 期待される XOR 分散 (`xor_variance_micro`)ブロックのタイムスタンプ (ミリ秒)
-- ブロック実行レシート レーン/データスペース 集計 集計 `/v1/sumeragi/status` میں `lane_settlement_commitments` ذریعے شائع کرتا ❁❁❁❁合計 `total_local_micro`、`total_xor_due_micro`、`total_xor_after_haircut_micro` ブロック数 夜間調整エクスポート数فراہم ہوتے ہیں۔
+- ブロック実行レシート レーン/データスペース 集計 集計 `/v2/sumeragi/status` میں `lane_settlement_commitments` ذریعے شائع کرتا ❁❁❁❁合計 `total_local_micro`、`total_xor_due_micro`、`total_xor_after_haircut_micro` ブロック数 夜間調整エクスポート数فراہم ہوتے ہیں۔
 - 番号 `total_xor_variance_micro` カウンター トラック 番号 番号 安全マージン番号 (XOR によるヘアカット後の期待値) `swap_metadata` 決定論的変換パラメータ (TWAP、イプシロン、流動性プロファイル、ボラティリティ クラス) 監査実行時設定 監査の実行時設定 見積入力 評価ああ
 
 消費者 `lane_settlement_commitments` レーン データスペース コミットメント スナップショット ساتھ دیکھ سکتے ہیں تاکہ یہ تصدیق ہو کہ 料金バッファー ヘアカットスワップ実行が構成された層 Nexus 料金モデル

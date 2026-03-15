@@ -84,7 +84,7 @@ Sidebar_label: Наблюдаемость и SLO
 | `sorafs_node_por_failure_total` | Счетчик | `provider_id` | Монотонный счетчик неуспешных PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Калибр | `provider` | Существующие датчик Prometheus для использованных байтов, внешняя очередь, бортовые счетчики PoR. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Калибр | `provider` | Данные об успехах провайдера по емкости/время безотказной работы отображаются на приборной панели емкости. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Глубина отставания плюс накопленные счетчики ошибок, доступные для каждого опроса `/v1/sorafs/por/ingestion/{manifest}`, питают панель/предупреждение «PoR Stalles». |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Глубина отставания плюс накопленные счетчики ошибок, доступные для каждого опроса `/v2/sorafs/por/ingestion/{manifest}`, питают панель/предупреждение «PoR Stalles». |
 
 ### Доказательство своевременного извлечения (PoTR) и SLA по чанкам
 

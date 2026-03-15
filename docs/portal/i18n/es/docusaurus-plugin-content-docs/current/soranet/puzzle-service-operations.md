@@ -19,17 +19,17 @@ del relay y, cuando esta configurado, intermedia tokens de admision ML-DSA en
 nombre de relays edge. Expone cinco endpoints HTTP:
 
 - `GET /healthz` - probe de liveness.
-- `GET /v1/puzzle/config` - devuelve los parametros efectivos de PoW/puzzle
+- `GET /v2/puzzle/config` - devuelve los parametros efectivos de PoW/puzzle
   tomados del JSON del relay (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - acuña un ticket Argon2; un body JSON opcional
+- `POST /v2/puzzle/mint` - acuña un ticket Argon2; un body JSON opcional
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   solicita un TTL mas corto (clamp al window de policy), ata el ticket a un
   transcript hash y devuelve un ticket firmado por el relay + la huella de
   la firma cuando hay claves de firmado configuradas.
-- `GET /v1/token/config` - cuando `pow.token.enabled = true`, devuelve la
+- `GET /v2/token/config` - cuando `pow.token.enabled = true`, devuelve la
   policy activa de admission-token (issuer fingerprint, limites de TTL/clock-skew,
   relay ID y el set de revocacion combinado).
-- `POST /v1/token/mint` - acuña un token de admision ML-DSA ligado al resume
+- `POST /v2/token/mint` - acuña un token de admision ML-DSA ligado al resume
   hash provisto; el body acepta `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Los tickets producidos por el servicio se verifican en la prueba de integracion
@@ -73,11 +73,11 @@ cargo run -p soranet-puzzle-service -- \
 
 `--token-secret-hex` tambien esta disponible cuando el secreto se gestiona por
 una pipeline de tooling out-of-band. El watcher del archivo de revocacion
-mantiene `/v1/token/config` actualizado; coordina actualizaciones con el comando
+mantiene `/v2/token/config` actualizado; coordina actualizaciones con el comando
 `soranet-admission-token revoke` para evitar desfases en el estado de revocacion.
 
 Configura `pow.signed_ticket_public_key_hex` en el JSON del relay para anunciar
-la clave publica ML-DSA-44 usada para verificar tickets PoW firmados; `/v1/puzzle/config`
+la clave publica ML-DSA-44 usada para verificar tickets PoW firmados; `/v2/puzzle/config`
 replica la clave y su huella BLAKE3 (`signed_ticket_public_key_fingerprint_hex`)
 para que los clients puedan fijar el verificador. Los tickets firmados se validan
 contra el relay ID y los transcript bindings y comparten el mismo store de revocacion;
@@ -85,7 +85,7 @@ los tickets PoW crudos de 74 bytes siguen siendo validos cuando el verificador d
 signed-ticket esta configurado. Pasa el secreto del firmante via `--signed-ticket-secret-hex`
 o `--signed-ticket-secret-path` al iniciar el puzzle service; el arranque rechaza
 pares de claves que no coinciden si el secreto no valida contra `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` acepta `"signed": true` (y opcional `"transcript_hash_hex"`) para
+`POST /v2/puzzle/mint` acepta `"signed": true` (y opcional `"transcript_hash_hex"`) para
 devolver un ticket firmado Norito junto con los bytes del ticket en bruto; las
 respuestas incluyen `signed_ticket_b64` y `signed_ticket_fingerprint_hex` para ayudar
 a rastrear fingerprints de replay. Las solicitudes con `signed = true` se rechazan
@@ -104,11 +104,11 @@ si el secreto del firmante no esta configurado.
 3. **Preparar el reinicio.** Recarga la unidad systemd o el contenedor una vez
    que governance anuncie el cutover de rotacion. El servicio no soporta hot-reload;
    se requiere reinicio para tomar el nuevo descriptor commit.
-4. **Validar.** Emite un ticket via `POST /v1/puzzle/mint` y confirma que los
+4. **Validar.** Emite un ticket via `POST /v2/puzzle/mint` y confirma que los
    valores `difficulty` y `expires_at` coinciden con la nueva policy. El informe
    de soak (`docs/source/soranet/reports/pow_resilience.md`) captura los limites
    de latencia esperados como referencia. Cuando los tokens estan habilitados,
-   consulta `/v1/token/config` para asegurar que el issuer fingerprint anunciado
+   consulta `/v2/token/config` para asegurar que el issuer fingerprint anunciado
    y el conteo de revocaciones coincidan con los valores esperados.
 
 ## Procedimiento de deshabilitacion de emergencia
@@ -120,7 +120,7 @@ si el secreto del firmante no esta configurado.
    obsoletos mientras la puerta Argon2 esta offline.
 3. Reinicia el relay y el puzzle service para aplicar el cambio.
 4. Monitorea `soranet_handshake_pow_difficulty` para asegurar que la dificultad
-   cae al valor hashcash esperado, y verifica que `/v1/puzzle/config` reporte
+   cae al valor hashcash esperado, y verifica que `/v2/puzzle/config` reporte
    `puzzle = null`.
 
 ## Monitoreo y alertas
@@ -132,16 +132,16 @@ si el secreto del firmante no esta configurado.
   para ajustar cooldowns de `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Puzzle alignment:** `soranet_handshake_pow_difficulty` debe coincidir con la
-  dificultad devuelta por `/v1/puzzle/config`. La divergencia indica configuracion
+  dificultad devuelta por `/v2/puzzle/config`. La divergencia indica configuracion
   stale del relay o un reinicio fallido.
-- **Token readiness:** Alerta si `/v1/token/config` cae a `enabled = false`
+- **Token readiness:** Alerta si `/v2/token/config` cae a `enabled = false`
   inesperadamente o si `revocation_source` reporta timestamps stale. Los operadores
   deben rotar el archivo de revocaciones Norito via CLI cuando se retire un token
   para mantener este endpoint preciso.
 - **Service health:** Sondea `/healthz` en la cadencia habitual de liveness y alerta
-  si `/v1/puzzle/mint` devuelve respuestas HTTP 500 (indica mismatch de parametros
+  si `/v2/puzzle/mint` devuelve respuestas HTTP 500 (indica mismatch de parametros
   Argon2 o fallas de RNG). Los errores de token minting aparecen como respuestas
-  HTTP 4xx/5xx en `/v1/token/mint`; trata fallas repetidas como condicion de paging.
+  HTTP 4xx/5xx en `/v2/token/mint`; trata fallas repetidas como condicion de paging.
 
 ## Compliance y audit logging
 

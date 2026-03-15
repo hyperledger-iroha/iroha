@@ -546,7 +546,7 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
+    use std::{collections::BTreeMap, num::NonZeroU64};
 
     use iroha_data_model::{
         Registrable,
@@ -569,14 +569,16 @@ mod tests {
         let digest = authority_digest(&ALICE_ID);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "45d1b2a0e6781b8bd07d756065fe335e18d9523d8d2e2432b41c52a75f1ade5d"
+            "0ab8515c63c9d51963d14006b34946e5d7cba4788f0b33c0f6d275bfdd81f42f"
         );
     }
 
     #[test]
     fn poseidon_digest_matches_known_vector() {
-        let asset =
-            iroha_data_model::asset::AssetDefinitionId::from_str("rose#wonderland").unwrap();
+        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -593,7 +595,7 @@ mod tests {
         let digest = poseidon_preimage_digest(&delta, &batch_hash);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "3c5d1adcd9e0679321f50c7c38db4a8f177887ca43fc5bc51f6b4c6873aee32d"
+            "349a52ad3a452c8ad7cb0e21df495d76b683d77d9dc021a470aedff2418e0801"
         );
     }
 
@@ -958,8 +960,10 @@ mod tests {
     }
 
     fn sample_transcript() -> TransferTranscript {
-        let asset =
-            iroha_data_model::asset::AssetDefinitionId::from_str("rose#wonderland").unwrap();
+        let asset = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         TransferTranscript {
             batch_hash: Hash::prehashed([0xAA; 32]),
             deltas: vec![TransferDeltaTranscript {

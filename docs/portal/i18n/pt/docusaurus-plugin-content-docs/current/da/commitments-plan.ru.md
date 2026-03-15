@@ -30,7 +30,7 @@ verificação. Essa carga útil é Norito-кодированы; sem SCALE e JSON
   A disponibilidade não é garantida pelo armazenamento off-ledger.
 - Дать детерминированные provas de adesão, чтобы clientes leves могли проверить,
   Este hash de manifesto é finalizado no bloco de concreto.
-- Teste de exportação Torii (`/v1/da/commitments/*`) e provas, verificação
+- Teste de exportação Torii (`/v2/da/commitments/*`) e provas, verificação
   relés, SDKs e governança de automação fornecem disponibilidade sem problemas
   blocos.
 - Сохранить канонический `SignedBlockWire` envelope, пропуская новые структуры
@@ -45,7 +45,7 @@ verificação. Essa carga útil é Norito-кодированы; sem SCALE e JSON
 3. **Persistência/índices** WSV foi criado para consultas de compromisso
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii Adições de RPC** para listar/consultar/comprovar endpoints
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Testes de integração + acessórios** para testar layout de fios e fluxo de prova em
    `integration_tests/tests/da/commitments.rs`.
 
@@ -134,9 +134,9 @@ Se o bloco de prova for aprovado, os recibos serão transferidos para o final do
 
 Torii fornece três endpoints:| Rota | Método | Carga útil | Notas |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range-фильтр по lane/época/sequência, paginação) | Verifique `DaCommitmentPage` com contagem total, compromissos e bloco de hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto ou curto `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (registro + caminho Merkle + hash блока). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ajudante apátrida, пересчитывающий hash блока и проверяющий inclusão; A opção para SDKs não foi fornecida para `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (range-фильтр по lane/época/sequência, paginação) | Verifique `DaCommitmentPage` com contagem total, compromissos e bloco de hash. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto ou curto `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (registro + caminho Merkle + hash блока). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ajudante apátrida, пересчитывающий hash блока и проверяющий inclusão; A opção para SDKs não foi fornecida para `iroha_crypto`. |
 
 Suas cargas úteis são colocadas em `iroha_data_model::da::commitment`. Roteador Torii
 монтируют handlers рядом с существующими DA ingest endpoints, чтобы переиспользовать

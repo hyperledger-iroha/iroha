@@ -61,13 +61,13 @@ Couverture de régression یہاں موجود ہے :
 ## Outillage et montages
 
 - Charges utiles des annonces du fournisseur telles que `range_capability`, `stream_budget`, et `transport_hints` pour votre recherche.
-  Réponses `/v1/sorafs/providers` pour les rendez-vous d'admission et validation Résumés JSON, capacité analysée, budget de flux, tableaux d'indices et informations sur l'acquisition de télémétrie et l'acquisition de télémétrie.
+  Réponses `/v2/sorafs/providers` pour les rendez-vous d'admission et validation Résumés JSON, capacité analysée, budget de flux, tableaux d'indices et informations sur l'acquisition de télémétrie et l'acquisition de télémétrie.
 - `cargo xtask sorafs-admission-fixtures` Les artefacts JSON, les budgets de flux et les conseils de transport ainsi que les tableaux de bord comportent un suivi d'adoption.
 - `fixtures/sorafs_manifest/provider_admission/` pour les luminaires de votre choix :
   - Annonces canoniques multi-sources،
   - `multi_fetch_plan.json` SDK suites replay déterministe du plan de récupération multi-peer
 
-## Orchestrator اور Torii انضمام- Torii `/v1/sorafs/providers` métadonnées de capacité de plage analysée ici `stream_budget` et `transport_hints` et `transport_hints`.
+## Orchestrator اور Torii انضمام- Torii `/v2/sorafs/providers` métadonnées de capacité de plage analysée ici `stream_budget` et `transport_hints` et `transport_hints`.
   les fournisseurs ont des métadonnées et des avertissements de rétrogradation ainsi que les points de terminaison de la gamme de passerelles pour les clients et les contraintes de sécurité.
 - Orchestrateur multi-source (`sorafs_car::multi_fetch`) pour les limites de plage, l'alignement des capacités, les budgets de flux et l'affectation des tâches pour appliquer les règles. Tests unitaires tels que des morceaux trop volumineux, une recherche clairsemée et des scénarios de limitation
 - Les signaux de rétrogradation `sorafs_car::multi_fetch` (échecs d'alignement, requêtes limitées) diffusent des flux vers les opérateurs et les fournisseurs de services et sautent ہوئے۔

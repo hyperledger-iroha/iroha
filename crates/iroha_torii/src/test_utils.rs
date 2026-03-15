@@ -1150,10 +1150,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         gov: A::Governance {
             vk_ballot: None,
             vk_tally: None,
-            voting_asset_id: defaults::governance::VOTING_ASSET_ID
+            voting_asset_id: defaults::governance::voting_asset_id()
                 .parse()
                 .expect("valid default governance asset id"),
-            citizenship_asset_id: defaults::governance::CITIZENSHIP_ASSET_ID
+            citizenship_asset_id: defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
             citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT,
@@ -1205,9 +1205,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
             parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
-            parliament_eligibility_asset_id: defaults::governance::PARLIAMENT_ELIGIBILITY_ASSET_ID
-                .parse()
-                .expect("valid default governance asset id"),
+            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
+            )
+            .parse()
+            .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,

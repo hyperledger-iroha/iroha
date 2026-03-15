@@ -52,7 +52,10 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
 
 #[test]
 fn register_and_revoke_citizenship_moves_bond() {
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -112,7 +115,10 @@ fn register_and_revoke_citizenship_moves_bond() {
 
 #[test]
 fn citizenship_gate_blocks_and_allows_governance() {
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -216,7 +222,10 @@ fn citizenship_gate_blocks_and_allows_governance() {
 
 #[test]
 fn citizenship_records_persist_across_transactions() {
-    let def_id: AssetDefinitionId = "xor#wonderland".parse().expect("asset id");
+    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "xor".parse().unwrap(),
+    );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

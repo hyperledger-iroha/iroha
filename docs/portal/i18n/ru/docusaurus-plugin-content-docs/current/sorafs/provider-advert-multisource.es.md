@@ -64,7 +64,7 @@ La cobertura de regresión vive en
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Инструменты и приспособления- Полезные данные объявлений поставщика включают метаданные `range_capability`,
-  `stream_budget` и `transport_hints`. Действительно через ответы `/v1/sorafs/providers` y
+  `stream_budget` и `transport_hints`. Действительно через ответы `/v2/sorafs/providers` y
   входное оборудование; резюме в формате JSON должны включать в себя возможность анализа,
   бюджет потока и массивы подсказок для приема телеметрии.
 - `cargo xtask sorafs-admission-fixtures` отображает бюджеты потоков и подсказки по транспортировке.
@@ -77,7 +77,7 @@ La cobertura de regresión vive en
 
 ## Интеграция с орвестором и Torii
 
-- Torii `/v1/sorafs/providers` Расширение метаданных емкости ранго синтаксического анализа
+- Torii `/v2/sorafs/providers` Расширение метаданных емкости ранго синтаксического анализа
   `stream_budget` и `transport_hints`. Вы не согласны с объявлениями о понижении рейтинга, когда
   Проверяйте новые метаданные, а также конечные точки ранго-дель-шлюза.
   неправильные ограничения для прямых клиентов.

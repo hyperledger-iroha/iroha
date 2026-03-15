@@ -34,6 +34,7 @@ const NEW_ACCOUNT_ID_RAW =
   "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
 const NEW_ACCOUNT_ID = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const NEW_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
+const REGISTER_ACCOUNT_DOMAIN_ID = "wonderland";
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
 const NODE_CAPABILITIES = {
@@ -572,7 +573,11 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        account: { accountId: NEW_ACCOUNT_ID_INPUT, metadata: { nickname: "alice" } },
+        account: {
+          accountId: NEW_ACCOUNT_ID_INPUT,
+          domainId: REGISTER_ACCOUNT_DOMAIN_ID,
+          metadata: { nickname: "alice" },
+        },
         transfer: {
           sourceAssetId: ASSET_ID,
           quantity: "4",
@@ -588,6 +593,7 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
     Register: {
       Account: {
         id: NEW_ACCOUNT_ID,
+        domain: REGISTER_ACCOUNT_DOMAIN_ID,
         metadata: { nickname: "alice" },
       },
     },
@@ -622,7 +628,10 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        account: { accountId: NEW_ACCOUNT_ID_INPUT },
+        account: {
+          accountId: NEW_ACCOUNT_ID_INPUT,
+          domainId: REGISTER_ACCOUNT_DOMAIN_ID,
+        },
         transfers: [
           { sourceAssetId: ASSET_ID, quantity: "2", destinationAccountId: NEW_ACCOUNT_ID_INPUT },
           { sourceAssetId: ASSET_ID, quantity: "1", destinationAccountId: secondAccountIdRaw },
@@ -634,6 +643,10 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
   const [{ instructions }] = captures;
   assert.equal(instructions.length, 3);
   assert.deepEqual(instructions[0].Register.Account.id, NEW_ACCOUNT_ID);
+  assert.equal(
+    instructions[0].Register.Account.domain,
+    REGISTER_ACCOUNT_DOMAIN_ID,
+  );
   assert.deepEqual(instructions[1], {
     Transfer: {
       Asset: {
@@ -660,7 +673,10 @@ test("buildRegisterAccountAndTransferTransaction rejects both transfer and trans
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        account: { accountId: NEW_ACCOUNT_ID_INPUT },
+        account: {
+          accountId: NEW_ACCOUNT_ID_INPUT,
+          domainId: REGISTER_ACCOUNT_DOMAIN_ID,
+        },
         transfer: { sourceAssetId: ASSET_ID, quantity: "1", destinationAccountId: NEW_ACCOUNT_ID_INPUT },
         transfers: [],
         privateKey: PRIVATE_KEY,
@@ -675,7 +691,10 @@ test("buildRegisterAccountAndTransferTransaction enforces sourceAssetId in trans
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        account: { accountId: NEW_ACCOUNT_ID_INPUT },
+        account: {
+          accountId: NEW_ACCOUNT_ID_INPUT,
+          domainId: REGISTER_ACCOUNT_DOMAIN_ID,
+        },
         transfers: [{ quantity: "1", destinationAccountId: NEW_ACCOUNT_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),

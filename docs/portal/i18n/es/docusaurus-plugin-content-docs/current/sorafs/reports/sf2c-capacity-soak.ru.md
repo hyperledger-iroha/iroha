@@ -44,7 +44,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ## Наблюдаемость
 
 Torii теперь показывает instantáneas кредитов proveedores вместе с libros de tarifas, чтобы
-tableros de instrumentos могли puerta по низким балансам и penaltis:- RESTO: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+tableros de instrumentos могли puerta по низким балансам и penaltis:- RESTO: `GET /v2/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
   которые отражают поля libro mayor, проверенные в remojo prueba. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importación Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` estilo

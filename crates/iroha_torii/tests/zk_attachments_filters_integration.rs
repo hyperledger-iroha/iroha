@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for /v1/zk/attachments filters and count.
+//! Integration tests for /v2/zk/attachments filters and count.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(
     unexpected_cfgs,
@@ -46,7 +46,7 @@ async fn attachments_list_filters_and_count() {
     let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
         .route(
-            "/v1/zk/attachments",
+            "/v2/zk/attachments",
             get({
                 let tenant = tenant.clone();
                 move |_headers: axum::http::HeaderMap,
@@ -59,7 +59,7 @@ async fn attachments_list_filters_and_count() {
             }),
         )
         .route(
-            "/v1/zk/attachments/count",
+            "/v2/zk/attachments/count",
             get({
                 let tenant = tenant.clone();
                 move |q: iroha_torii::NoritoQuery<
@@ -143,7 +143,7 @@ async fn attachments_list_filters_and_count() {
     // List with content_type filter json
     let req = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/attachments?content_type=application/json&ids_only=true")
+        .uri("/v2/zk/attachments?content_type=application/json&ids_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -156,7 +156,7 @@ async fn attachments_list_filters_and_count() {
     // Count all
     let req2 = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/attachments/count")
+        .uri("/v2/zk/attachments/count")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp2 = app.clone().oneshot(req2).await.unwrap();
@@ -168,7 +168,7 @@ async fn attachments_list_filters_and_count() {
     // Count one by id
     let req3 = http::Request::builder()
         .method("GET")
-        .uri(&format!("/v1/zk/attachments/count?id={id2}"))
+        .uri(&format!("/v2/zk/attachments/count?id={id2}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp3 = app.clone().oneshot(req3).await.unwrap();
@@ -180,7 +180,7 @@ async fn attachments_list_filters_and_count() {
     // List has_tag=PROF (should return only ZK1 envelope id)
     let req4 = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/attachments?has_tag=PROF&ids_only=true")
+        .uri("/v2/zk/attachments?has_tag=PROF&ids_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp4 = app.clone().oneshot(req4).await.unwrap();

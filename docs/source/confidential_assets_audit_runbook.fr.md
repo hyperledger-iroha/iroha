@@ -36,7 +36,7 @@ lors de la validation des flux d’actifs confidentiels. Il complète le playboo
   ```
 
 - Les métadonnées de politique et les transitions en attente sont disponibles via
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), reflété par le SDK Swift
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) et documenté dans
   à la fois la conception des actifs confidentiels et les guides SDK

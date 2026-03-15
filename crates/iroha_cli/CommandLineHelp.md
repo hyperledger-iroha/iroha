@@ -530,6 +530,8 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha tools address convert`↴](#iroha-tools-address-convert)
 * [`iroha tools address audit`↴](#iroha-tools-address-audit)
 * [`iroha tools address normalize`↴](#iroha-tools-address-normalize)
+* [`iroha tools encode`↴](#iroha-tools-encode)
+* [`iroha tools encode asset-id`↴](#iroha-tools-encode-asset-id)
 * [`iroha tools crypto`↴](#iroha-tools-crypto)
 * [`iroha tools crypto sm2`↴](#iroha-tools-crypto-sm2)
 * [`iroha tools crypto sm2 keygen`↴](#iroha-tools-crypto-sm2-keygen)
@@ -574,12 +576,12 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
    Example usage:
 
-   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "asset#domain" -t Numeric`
+   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
 * `-o`, `--output` — Outputs instructions to stdout without submitting them.
 
    Example usage:
 
-   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
+   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
 * `--output-format <OUTPUT_FORMAT>` — Output format for command responses
 
   Default value: `json`
@@ -1183,11 +1185,12 @@ Filter by a given predicate
 
 Retrieve details of a specific asset definition
 
-**Usage:** `iroha ledger asset definition get --id <ID>`
+**Usage:** `iroha ledger asset definition get [OPTIONS]`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1195,11 +1198,17 @@ Retrieve details of a specific asset definition
 
 Register an asset definition
 
-**Usage:** `iroha ledger asset definition register [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger asset definition register [OPTIONS] --id <ID> --name <NAME>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--name <NAME>` — Human-readable asset name
+* `--description <DESCRIPTION>` — Optional human-readable description
+* `--alias <ALIAS>` — Optional explicit alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `--alias-domain <ALIAS_DOMAIN>` — Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`
+* `--alias-dataspace <ALIAS_DATASPACE>` — Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`
+* `--logo <LOGO>` — Optional logo URI. Must use `sorafs://...`
 * `-m`, `--mint-once` — Disables minting after the first instance
 * `-s`, `--scale <SCALE>` — Numeric scale of the asset. No value means unconstrained
 * `--confidential-mode <CONFIDENTIAL_MODE>` — Confidential policy mode for this asset definition
@@ -1218,11 +1227,12 @@ Register an asset definition
 
 Unregister an asset definition
 
-**Usage:** `iroha ledger asset definition unregister --id <ID>`
+**Usage:** `iroha ledger asset definition unregister [OPTIONS]`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1230,11 +1240,12 @@ Unregister an asset definition
 
 Transfer ownership of an asset definition
 
-**Usage:** `iroha ledger asset definition transfer --id <ID> --from <FROM> --to <TO>`
+**Usage:** `iroha ledger asset definition transfer [OPTIONS] --from <FROM> --to <TO>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
 * `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
@@ -1297,11 +1308,13 @@ Delete an entry from the key-value store
 
 Retrieve details of a specific asset
 
-**Usage:** `iroha ledger asset get --id <ID>`
+**Usage:** `iroha ledger asset get [OPTIONS]`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 
 
 
@@ -1371,11 +1384,13 @@ Filter by a given predicate
 
 Increase the quantity of an asset
 
-**Usage:** `iroha ledger asset mint --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset mint [OPTIONS] --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1384,11 +1399,13 @@ Increase the quantity of an asset
 
 Decrease the quantity of an asset
 
-**Usage:** `iroha ledger asset burn --id <ID> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset burn [OPTIONS] --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1397,11 +1414,13 @@ Decrease the quantity of an asset
 
 Transfer an asset between accounts
 
-**Usage:** `iroha ledger asset transfer [OPTIONS] --id <ID> --to <TO> --quantity <QUANTITY>`
+**Usage:** `iroha ledger asset transfer [OPTIONS] --to <TO> --quantity <QUANTITY>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--account <ACCOUNT>` — Source account identifier (canonical I105), required with `--definition-alias`
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
@@ -4296,7 +4315,7 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 ###### **Options:**
 
 * `--referendum-id <REFERENDUM_ID>`
-* `--mode <MODE>` — Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}
+* `--mode <MODE>` — Voting mode override. Defaults to auto-detect via GET /v2/gov/referenda/{id}
 
   Default value: `auto`
 
@@ -4437,7 +4456,7 @@ Get current sortition council or manage council VRF flows
 
   Default value: `wonderland`
 * `--out <OUT>` — Output path; if omitted, prints JSON to stdout
-* `--from-audit` — Fetch `seed/epoch/chain_id` from /v1/gov/council/audit (overrides --epoch/--beacon-hex when set)
+* `--from-audit` — Fetch `seed/epoch/chain_id` from /v2/gov/council/audit (overrides --epoch/--beacon-hex when set)
 
   Default value: `false`
 
@@ -4455,7 +4474,7 @@ Get current sortition council or manage council VRF flows
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
 * `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
-* `--wait` — Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
+* `--wait` — Wait for `CouncilPersisted` event and verify via /v2/gov/council/current
 
   Default value: `false`
 
@@ -4672,7 +4691,7 @@ Contracts helpers (code storage)
 ###### **Subcommands:**
 
 * `code` — Contract code helpers
-* `deploy` — Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
+* `deploy` — Deploy compiled `.to` code via Torii (POST /v2/contracts/deploy)
 * `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
@@ -4707,7 +4726,7 @@ Fetch on-chain contract code bytes by code hash and write to a file
 
 ## `iroha app contracts deploy`
 
-Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
+Deploy compiled `.to` code via Torii (POST /v2/contracts/deploy)
 
 **Usage:** `iroha app contracts deploy [OPTIONS] --authority <AUTHORITY> --private-key <HEX>`
 
@@ -4824,10 +4843,10 @@ Zero-knowledge helpers (roots, etc.)
 
 ###### **Subcommands:**
 
-* `roots` — Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
-* `verify` — Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
-* `submit-proof` — Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
-* `verify-batch` — Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
+* `roots` — Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
+* `verify` — Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v2/zk/verify
+* `submit-proof` — Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submit-proof
+* `verify-batch` — Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v2/zk/verify-batch
 * `schema-hash` — Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
 * `attachments` — Manage ZK attachments in the app API
 * `register-asset` — Register a ZK-capable asset (Hybrid mode) with policy and VK ids
@@ -4844,13 +4863,13 @@ Zero-knowledge helpers (roots, etc.)
 
 ## `iroha app zk roots`
 
-Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
+Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
 
 **Usage:** `iroha app zk roots [OPTIONS] --asset-id <ASSET_ID>`
 
 ###### **Options:**
 
-* `--asset-id <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset-id <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--max <MAX>` — Maximum number of roots to return (0 = server cap)
 
   Default value: `0`
@@ -4859,7 +4878,7 @@ Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
 ## `iroha app zk verify`
 
-Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
+Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v2/zk/verify
 
 **Usage:** `iroha app zk verify [OPTIONS]`
 
@@ -4872,7 +4891,7 @@ Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /
 
 ## `iroha app zk submit-proof`
 
-Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
+Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submit-proof
 
 **Usage:** `iroha app zk submit-proof [OPTIONS]`
 
@@ -4885,7 +4904,7 @@ Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submi
 
 ## `iroha app zk verify-batch`
 
-Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
+Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v2/zk/verify-batch
 
 **Usage:** `iroha app zk verify-batch [OPTIONS]`
 
@@ -5001,7 +5020,7 @@ Register a ZK-capable asset (Hybrid mode) with policy and VK ids
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--allow-shield` — Allow shielding from public to shielded (default: true)
 
   Default value: `true`
@@ -5022,7 +5041,7 @@ Shield public funds into a shielded ledger (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--from <ACCOUNT_ID>` — Account identifier to debit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
@@ -5041,7 +5060,7 @@ Unshield funds from shielded ledger to public (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
+* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
 * `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
@@ -5319,17 +5338,17 @@ IVM prove helpers (non-consensus, app API)
 
 ###### **Subcommands:**
 
-* `derive` — Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
-* `prove` — Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
-* `get` — Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
-* `delete` — Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
+* `derive` — Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
+* `prove` — Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
+* `get` — Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
+* `delete` — Delete a prove job via `/v2/zk/ivm/prove/{job_id}`
 * `derive-pk` — Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
 
 
 
 ## `iroha app zk ivm derive`
 
-Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
+Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
 
 **Usage:** `iroha app zk ivm derive --json <PATH>`
 
@@ -5341,7 +5360,7 @@ Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
 
 ## `iroha app zk ivm prove`
 
-Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
+Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
 
 **Usage:** `iroha app zk ivm prove [OPTIONS] --json <PATH>`
 
@@ -5360,7 +5379,7 @@ Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
 
 ## `iroha app zk ivm get`
 
-Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
+Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
 
 **Usage:** `iroha app zk ivm get --job-id <JOB_ID>`
 
@@ -5372,7 +5391,7 @@ Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
 
 ## `iroha app zk ivm delete`
 
-Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
+Delete a prove job via `/v2/zk/ivm/prove/{job_id}`
 
 **Usage:** `iroha app zk ivm delete --job-id <JOB_ID>`
 
@@ -5537,7 +5556,7 @@ Bundle a Taikai segment into a CAR archive and Norito envelope
 * `--car-out <PATH>` — Where to write the generated `CARv2` archive
 * `--envelope-out <PATH>` — Where to write the Norito-encoded Taikai segment envelope
 * `--indexes-out <PATH>` — Optional path for a JSON file containing the time/CID index keys
-* `--ingest-metadata-out <PATH>` — Optional path for the ingest metadata JSON map consumed by `/v1/da/ingest`
+* `--ingest-metadata-out <PATH>` — Optional path for the ingest metadata JSON map consumed by `/v2/da/ingest`
 * `--event-id <NAME>` — Identifier of the Taikai event
 * `--stream-id <NAME>` — Logical stream identifier within the event
 * `--rendition-id <NAME>` — Rendition identifier (ladder rung)
@@ -5708,8 +5727,8 @@ Watch a directory for CMAF fragments and bundle them into CAR + Norito artifacts
 * `--da-governance-tag <DA_GOVERNANCE_TAG>` — Governance tag recorded in the retention policy (default `da.taikai.live`)
 
   Default value: `da.taikai.live`
-* `--publish-da` — Toggle automatic publishing to `/v1/da/ingest` using the CLI config
-* `--da-endpoint <URL>` — Override the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`)
+* `--publish-da` — Toggle automatic publishing to `/v2/da/ingest` using the CLI config
+* `--da-endpoint <URL>` — Override the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`)
 
 
 
@@ -5811,7 +5830,7 @@ Data availability helpers (ingest tooling)
 
 ###### **Subcommands:**
 
-* `submit` — Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
+* `submit` — Submit a raw blob to `/v2/da/ingest` and capture the signed receipt
 * `get` — Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`)
 * `get-blob` — Download manifest + chunk plan artifacts for an existing DA storage ticket
 * `prove` — Generate Proof-of-Retrievability witnesses for a manifest/payload pair
@@ -5831,7 +5850,7 @@ Data availability helpers (ingest tooling)
 
 ## `iroha app da submit`
 
-Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
+Submit a raw blob to `/v2/da/ingest` and capture the signed receipt
 
 **Usage:** `iroha app da submit [OPTIONS] --payload <PATH>`
 
@@ -5885,7 +5904,7 @@ Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
   Default value: `da.generic`
 * `--metadata-json <PATH>` — Optional metadata JSON file providing string key/value pairs
 * `--manifest <PATH>` — Optional pre-generated Norito manifest to embed in the request
-* `--endpoint <URL>` — Override for the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`)
+* `--endpoint <URL>` — Override for the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`)
 * `--client-blob-id <HEX>` — Override the caller-supplied blob identifier (hex). Defaults to BLAKE3(payload)
 * `--artifact-dir <PATH>` — Directory for storing Norito/JSON artefacts (defaults to `artifacts/da/submission_<timestamp>`)
 * `--no-submit` — Skip HTTP submission and only emit the signed request artefacts
@@ -5945,7 +5964,7 @@ Download manifest + chunk plan artifacts for an existing DA storage ticket
 
 * `--storage-ticket <HEX>` — Storage ticket identifier (hex string) issued by Torii
 * `--block-hash <HEX>` — Optional block hash used to seed deterministic sampling in the manifest response
-* `--endpoint <URL>` — Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`)
+* `--endpoint <URL>` — Optional override for the Torii manifest endpoint (defaults to `$TORII/v2/da/manifests/`)
 * `--output-dir <PATH>` — Directory for storing the fetched manifest + chunk plan artefacts
 
 
@@ -6140,7 +6159,7 @@ Quote rent/incentive breakdown for a blob size/retention combo
 
 Convert a rent quote into deterministic ledger transfer instructions
 
-**Usage:** `iroha app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app da rent-ledger --quote <PATH> --payer-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --protocol-reserve-account <ACCOUNT_ID> --provider-account <ACCOUNT_ID> --pdp-bonus-account <ACCOUNT_ID> --potr-bonus-account <ACCOUNT_ID> --asset-definition <AID>`
 
 ###### **Options:**
 
@@ -6151,7 +6170,7 @@ Convert a rent quote into deterministic ledger transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider payout account that receives the base rent remainder
 * `--pdp-bonus-account <ACCOUNT_ID>` — Account earmarked for PDP bonus payouts
 * `--potr-bonus-account <ACCOUNT_ID>` — Account earmarked for `PoTR` bonus payouts
-* `--asset-definition <NAME#DOMAIN>` — Asset definition identifier used for XOR transfers (e.g., `xor#sora`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
 
 
 
@@ -6876,7 +6895,7 @@ Show current registry state (all services or one service)
 
   Default value: `.soracloud/registry.json`
 * `--service-name <NAME>` — Optional service name filter
-* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v1/soracloud/status` from a live control plane
+* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v2/soracloud/status` from a live control plane
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
 * `--timeout-secs <SECS>` — HTTP timeout for Torii status requests
 
@@ -7063,7 +7082,7 @@ Submit an apartment wallet spend request under policy guardrails
 
   Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name issuing the spend request
-* `--asset-definition <ASSET>` — Asset definition identifier (`definition#domain`)
+* `--asset-definition <ASSET>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
 * `--amount-nanos <NANOS>` — Spend amount in nanos
 * `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/spend` instead of local registry simulation
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
@@ -8712,7 +8731,7 @@ Observe or modify the Torii `SoraNet` handshake configuration
 ###### **Subcommands:**
 
 * `show` — Display the current `SoraNet` handshake summary as reported by Torii
-* `update` — Update one or more `SoraNet` handshake parameters via `/v1/config`
+* `update` — Update one or more `SoraNet` handshake parameters via `/v2/config`
 * `token` — Admission token helpers (issuance, fingerprinting, revocation digests)
 
 
@@ -8727,7 +8746,7 @@ Display the current `SoraNet` handshake summary as reported by Torii
 
 ## `iroha app sorafs handshake update`
 
-Update one or more `SoraNet` handshake parameters via `/v1/config`
+Update one or more `SoraNet` handshake parameters via `/v2/config`
 
 **Usage:** `iroha app sorafs handshake update [OPTIONS]`
 
@@ -8960,7 +8979,7 @@ Quote reserve requirements and effective rent for a given tier/capacity
 
 Convert a reserve quote into rent/reserve transfer instructions
 
-**Usage:** `iroha app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <NAME#DOMAIN>`
+**Usage:** `iroha app sorafs reserve ledger --quote <PATH> --provider-account <ACCOUNT_ID> --treasury-account <ACCOUNT_ID> --reserve-account <ACCOUNT_ID> --asset-definition <AID>`
 
 ###### **Options:**
 
@@ -8968,7 +8987,7 @@ Convert a reserve quote into rent/reserve transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider account paying the rent and reserve top-ups
 * `--treasury-account <ACCOUNT_ID>` — Treasury account receiving the rent payment
 * `--reserve-account <ACCOUNT_ID>` — Reserve escrow account receiving the reserve top-up
-* `--asset-definition <NAME#DOMAIN>` — Asset definition identifier used for XOR transfers (e.g., `xor#sora`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
 
 
 
@@ -9285,8 +9304,8 @@ Sora Name Service helpers (registrar + policy tooling)
 
 ###### **Subcommands:**
 
-* `register` — Register a SNS name via `/v1/sns/registrations`
-* `renew` — Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
+* `register` — Register a SNS name via `/v2/sns/registrations`
+* `renew` — Renew a SNS name via `/v2/sns/registrations/{selector}/renew`
 * `transfer` — Transfer ownership of a SNS name
 * `update-controllers` — Replace controllers on a SNS name
 * `freeze` — Freeze a SNS name
@@ -9299,7 +9318,7 @@ Sora Name Service helpers (registrar + policy tooling)
 
 ## `iroha app sns register`
 
-Register a SNS name via `/v1/sns/registrations`
+Register a SNS name via `/v2/sns/registrations`
 
 **Usage:** `iroha app sns register [OPTIONS] --label <LABEL> --suffix-id <U16>`
 
@@ -9327,7 +9346,7 @@ Register a SNS name via `/v1/sns/registrations`
 
 ## `iroha app sns renew`
 
-Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
+Renew a SNS name via `/v2/sns/registrations/{selector}/renew`
 
 **Usage:** `iroha app sns renew [OPTIONS] --selector <LABEL.SUFFIX>`
 
@@ -9757,6 +9776,7 @@ Developer utilities and diagnostics
 ###### **Subcommands:**
 
 * `address` — Account address helpers (canonical I105 conversions)
+* `encode` — Canonical ID encoders
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -9847,6 +9867,32 @@ Rewrite newline-separated addresses into canonical encodings
   Possible values: `i105`, `canonical-hex`, `json`
 
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
+
+
+
+## `iroha tools encode`
+
+Canonical ID encoders
+
+**Usage:** `iroha tools encode <COMMAND>`
+
+###### **Subcommands:**
+
+* `asset-id` — Encode a canonical asset id (`norito:<hex>`)
+
+
+
+## `iroha tools encode asset-id`
+
+Encode a canonical asset id (`norito:<hex>`)
+
+**Usage:** `iroha tools encode asset-id [OPTIONS] --account <ACCOUNT>`
+
+###### **Options:**
+
+* `--definition <DEFINITION>` — Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `--account <ACCOUNT>` — Canonical I105 account literal receiving the asset bucket
 
 
 

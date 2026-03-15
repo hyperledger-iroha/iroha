@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   ҡаршы ҡабул ителгән `DeployContract` тәҡдимдәре; әгәр ҙә бер ниндәй ҙә тап килгән тәҡдим бар, был
   операцияһы `NotPermitted` менән кире ҡағыла.
 
-## Torii ос нөктәләре (функцияһы `app_api`)- `POST /v1/contracts/deploy`
+## Torii ос нөктәләре (функцияһы `app_api`)- `POST /v2/contracts/deploy`
   - Һорау органы: `DeployContractDto` X (ҡара: Баҫыу реквизиттары өсөн `docs/source/torii_contracts_api.md`).
   - Torii base64 файҙалы йөктө декодлай, ике хеш-шашын иҫәпләй, манифест төҙөй,
     һәм `RegisterSmartContractCode` плюс тапшыра
@@ -68,15 +68,15 @@ translator: machine-google-reviewed
   - `RegisterContractCodeDto` ҡабул итеү (власть, шәхси асҡыс, асыҡ) һәм тик тапшыра
     `RegisterSmartContractCode`. Ҡулланыу ҡасан манифестар айырым ҡуйыла 2013 йылдан .
     байткод.
-- `POST /v1/contracts/instance`
+- `POST /v2/contracts/instance`
   - ҡабул итеү `DeployAndActivateInstanceDto` (власть, шәхси асҡыс, исемдәр киңлеге/контракт_id, `code_b64`, опциональ манифест өҫтөнлөктәре) һәм таратыу + атомлы әүҙемләштереү.
-- `POST /v1/contracts/instance/activate`
+- `POST /v2/contracts/instance/activate`
   - Ҡабул итеү `ActivateInstanceDto` (власть, шәхси асҡыс, исемдәр киңлеге, cout_id, `code_hash`) һәм тик активация инструкцияһын тапшыра.
-- `GET /v1/contracts/code/{code_hash}`
+- `GET /v2/contracts/code/{code_hash}`
   - Ҡайтарыу `{ manifest: { code_hash, abi_hash } }`.
     Өҫтәмә асыҡ ҡырҙар эске һаҡланған, әммә бында төшөрөп ҡалдырылған өсөн
     тотороҡло API.
-- `GET /v1/contracts/code-bytes/{code_hash}`
+- `GET /v2/contracts/code-bytes/{code_hash}`
   - `{ code_b64 }` ҡайтарыу менән һаҡланған `.to` һүрәте base64 тип кодланған.
 
 Бөтә контракт тормош циклы остары бағышланған бағышланған таратыусы сикләүсе аша конфигурацияланған
@@ -91,10 +91,10 @@ translator: machine-google-reviewed
 
 ## Идара итеү интеграцияһы & һаҡланған исемдәр киңлеге- `gov_protected_namespaces` (JSON массив исемдәр киңлеге
   ҡылдар) ҡабул итеү ҡапҡаһы мөмкинлек бирә. Torii ярҙамсыларҙы фашлай.
-  `/v1/gov/protected-namespaces` һәм CLI уларҙы көҙгө аша
+  `/v2/gov/protected-namespaces` һәм CLI уларҙы көҙгө аша
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - `ProposeDeployContract` менән булдырылған тәҡдимдәр (йәки Torii X
-  `/v1/gov/proposals/deploy-contract` ос нөктәһе) тотоу
+  `/v2/gov/proposals/deploy-contract` ос нөктәһе) тотоу
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - Бер тапҡыр референдум үтә, `EnactReferendum` тәҡдимде билдәләй һәм
   ҡабул итеү ҡабул итәсәк таратыу, улар тап килгән метамағлүмәттәр һәм код йөрөтә.

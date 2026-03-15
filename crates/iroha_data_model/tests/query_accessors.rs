@@ -1,7 +1,5 @@
 //! Query accessor API coverage.
 
-use std::str::FromStr;
-
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
@@ -15,7 +13,8 @@ fn query_accessors_return_inner_values() {
     let permissions_query = FindPermissionsByAccountId::new(account_id.clone());
     assert_eq!(permissions_query.account_id(), &account_id);
 
-    let asset_definition_id = AssetDefinitionId::from_str("asset#domain").expect("valid");
+    let asset_definition_id =
+        AssetDefinitionId::new("domain".parse().unwrap(), "asset".parse().unwrap());
     let accounts_query = FindAccountsWithAsset::new(asset_definition_id.clone());
     assert_eq!(accounts_query.asset_definition_id(), &asset_definition_id);
 

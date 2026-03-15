@@ -98,7 +98,8 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 
 #[cfg(feature = "fastpq-gpu")]
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
-    let asset_definition = AssetDefinitionId::from_str("xor#fixture").expect("asset definition");
+    let asset_definition =
+        AssetDefinitionId::new("fixture".parse().unwrap(), "xor".parse().unwrap());
     let domain = DomainId::from_str("fixture").expect("domain id");
     let from_account = deterministic_account(&format!("sender_{index:04}"), &domain);
     let to_account = deterministic_account(&format!("receiver_{index:04}"), &domain);

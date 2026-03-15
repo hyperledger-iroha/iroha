@@ -26,17 +26,17 @@ Argon2 がサポートする入場チケット、которые отражают
 HTTP エンドポイントの詳細:
 
 - `GET /healthz` - 活性プローブ。
-- `GET /v1/puzzle/config` - PoW/パズル、
+- `GET /v2/puzzle/config` - PoW/パズル、
   リレー JSON (`handshake.descriptor_commit_hex`、`pow.*`) を参照してください。
-- `POST /v1/puzzle/mint` - Argon2 チケット。オプションの JSON 本文
+- `POST /v2/puzzle/mint` - Argon2 チケット。オプションの JSON 本文
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   запразывает более короткий TTL (クランプされた к ポリシー ウィンドウ)、チケット
   記録ハッシュとリレー署名チケット + 署名指紋
   署名キー。
-- `GET /v1/token/config` - когда `pow.token.enabled = true`, возвращает активную
+- `GET /v2/token/config` - когда `pow.token.enabled = true`, возвращает активную
   アドミッション トークン ポリシー (発行者のフィンガープリント、TTL/クロック スキュー境界、リレー ID、
   и マージされた失効セット)。
-- `POST /v1/token/mint` - ML-DSA アドミッション トークン、提供された
+- `POST /v2/token/mint` - ML-DSA アドミッション トークン、提供された
   ハッシュを再開します。本体は `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` です。
 
 チケット, выпущенные сервисом, проверяются в интеграционном тесте
@@ -78,19 +78,19 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` доступен、когда Secret управляется アウトオブバンド ツール
-パイプライン。失効ファイル ウォッチャー `/v1/token/config` актуальным;
+パイプライン。失効ファイル ウォッチャー `/v2/token/config` актуальным;
 координируйте обновления с командой `soranet-admission-token revoke`, чтобы
 失効状態。
 
 `pow.signed_ticket_public_key_hex` とリレー JSON、メッセージ
-ML-DSA-44 公開キーと署名済み PoW チケット。 `/v1/puzzle/config` эхо
+ML-DSA-44 公開キーと署名済み PoW チケット。 `/v2/puzzle/config` эхо
 キーと BLAKE3 指紋 (`signed_ticket_public_key_fingerprint_hex`)、
 クライアントのピン認証検証者。サイン入りチケット、リレーID、
 トランスクリプト バインディングと失効ストア。生の74バイトのPoWチケット
 署名付きチケットの検証者。署名者の秘密
 `--signed-ticket-secret-hex` または `--signed-ticket-secret-path` は、
 パズルサービス。キーペア、シークレットを確認する
-`pow.signed_ticket_public_key_hex`。 `POST /v1/puzzle/mint` です
+`pow.signed_ticket_public_key_hex`。 `POST /v2/puzzle/mint` です
 `"signed": true` (またはオプションの `"transcript_hash_hex"`)
 Norito エンコードされた署名付きチケット - 生のチケット バイト。 ответы включают
 `signed_ticket_b64` および `signed_ticket_fingerprint_hex` は、指紋を再生します。
@@ -108,10 +108,10 @@ Norito エンコードされた署名付きチケット - 生のチケット バ
 3. **Подготовьте рестарт.** systemd ユニットとコンテナーの組み合わせ
    ガバナンスによるローテーションの切り替え。ホットリロードを実行します。日
    применения нового 記述子コミット требуется 再起動。
-4. **Провалидируйте.** チケット через `POST /v1/puzzle/mint` および подтвердите、
+4. **Провалидируйте.** チケット через `POST /v2/puzzle/mint` および подтвердите、
    что `difficulty` および `expires_at` は、ポリシーを適用します。ソークレポート
    (`docs/source/soranet/reports/pow_resilience.md`) レイテンシーの限界
-   для справки. Когда トークン включены、запросите `/v1/token/config`、чтобы убедиться、
+   для справки. Когда トークン включены、запросите `/v2/token/config`、чтобы убедиться、
    公開された発行者のフィンガープリントと失効数を確認できます。
 
 ## 緊急無効化機能1. Установите `pow.puzzle.enabled = false` в общей リレー конфигурации. Оставьте
@@ -120,7 +120,7 @@ Norito エンコードされた署名付きチケット - 生のチケット バ
    記述子は Argon2 ゲートをオフラインにします。
 3. リレーとパズル サービスを利用できます。
 4. Мониторьте `soranet_handshake_pow_difficulty`、чтобы убедиться、что сложность
-   ハッシュキャッシュ значения, и проверьте, что `/v1/puzzle/config`
+   ハッシュキャッシュ значения, и проверьте, что `/v2/puzzle/config`
    `puzzle = null` です。
 
 ## モニタリングとアラート
@@ -132,16 +132,16 @@ Norito エンコードされた署名付きチケット - 生のチケット バ
   `pow.quotas` クールダウン (`soranet_abuse_remote_cooldowns`、
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **パズルの配置:** `soranet_handshake_pow_difficulty` должен совпадать с
-  難易度は`/v1/puzzle/config`です。リレー構成が古いです
+  難易度は`/v2/puzzle/config`です。リレー構成が古いです
   再起動です。
-- **トークンの準備状況:** アラート、`/v1/token/config` неожиданно падает до
+- **トークンの準備状況:** アラート、`/v2/token/config` неожиданно падает до
   `enabled = false` または `revocation_source` は、古いタイムスタンプを返します。 Операторы
   должны ротировать Norito 失効ファイル через CLI при выводе токена, чтобы
   エンドポイント оставался точным。
 - **サービスの健全性:** Пробуйте `/healthz` と liveness cadence および alert、
-  `/v1/puzzle/mint` HTTP 500 (Argon2 パラメータの不一致)
+  `/v2/puzzle/mint` HTTP 500 (Argon2 パラメータの不一致)
   または RNG の失敗)。トークンの鋳造 проявляются как HTTP 4xx/5xx на
-  `/v1/token/mint`;ページング条件を確認します。
+  `/v2/token/mint`;ページング条件を確認します。
 
 ## コンプライアンスと監査ログ
 

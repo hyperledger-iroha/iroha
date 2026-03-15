@@ -32,7 +32,7 @@ SCALE ni de JSON ad hoc.
   l'etat d'availability sans consulter le stockage hors ledger.
 - Fournir des preuves de membership deterministes afin que les clients legers
   verifient qu'un manifest hash a ete finalise dans un bloc donne.
-- Exposer des requetes Torii (`/v1/da/commitments/*`) et des preuves permettant
+- Exposer des requetes Torii (`/v2/da/commitments/*`) et des preuves permettant
   aux relays, SDKs et automatisations de gouvernance d'auditer l'availability
   sans rejouer chaque bloc.
 - Conserver l'enveloppe `SignedBlockWire` canonique en transmettant les nouvelles
@@ -47,7 +47,7 @@ SCALE ni de JSON ad hoc.
 3. **Persistence/indexes** afin que le WSV reponde rapidement aux requetes de
    commitments (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** pour les endpoints de liste/lecture/proof sous
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Tests d'integration + fixtures** validant le wire layout et le flux de proof
    dans `integration_tests/tests/da/commitments.rs`.
 
@@ -143,9 +143,9 @@ Torii expose trois endpoints:
 
 | Route | Methode | Payload | Notes |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de range lane/epoch/sequence, pagination) | Renvoie `DaCommitmentPage` avec total, commitments et hash de bloc. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (record + chemin Merkle + hash de bloc). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless qui rejoue le calcul du hash de bloc et valide l'inclusion; utilise par les SDKs qui ne peuvent pas lier directement `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de range lane/epoch/sequence, pagination) | Renvoie `DaCommitmentPage` avec total, commitments et hash de bloc. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (record + chemin Merkle + hash de bloc). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless qui rejoue le calcul du hash de bloc et valide l'inclusion; utilise par les SDKs qui ne peuvent pas lier directement `iroha_crypto`. |
 
 Tous les payloads vivent sous `iroha_data_model::da::commitment`. Les routeurs
 Torii montent les handlers a cote des endpoints d'ingest DA existants pour

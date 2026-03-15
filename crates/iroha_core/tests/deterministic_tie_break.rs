@@ -23,8 +23,14 @@ fn build_world() -> (
     let (a4, k4) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&a1);
-    let ad: AssetDefinition =
-        AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default()).build(&a1);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&a1);
     let acc1 = Account::new(a1.clone().to_account_id(domain_id.clone())).build(&a1);
     let acc2 = Account::new(a2.clone().to_account_id(domain_id.clone())).build(&a1);
     let acc3 = Account::new(a3.clone().to_account_id(domain_id.clone())).build(&a1);

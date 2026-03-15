@@ -69,8 +69,8 @@ O limite `event_buffer_capacity` también limita `/admin/privacy/events`, garant
 
 ## Puntos finales de ingesta de Torii
 
-Torii ahora exponen dos puntos finales HTTP con puerta de telemetría para que los relés y recolectores puedan encaminar observaciones sin realizar un transporte a medida:- `POST /v1/soranet/privacy/event` contiene una carga útil `RecordSoranetPrivacyEventDto`. El cuerpo incluye un `SoranetPrivacyEventV1` más una etiqueta `source` opcional. Torii valida la solicitud contra el perfil de telemetría activa, registra o evento, y responde con HTTP `202 Accepted` junto con un sobre Norito JSON conteniendo a janela calculada (`bucket_start_unix`, `bucket_duration_secs`) y el modo de retransmisión.
-- `POST /v1/soranet/privacy/share` contiene una carga útil `RecordSoranetPrivacyShareDto`. O corpo carrega um `SoranetPrivacyPrioShareV1` e uma dica `forwarded_by` opcional para que los operadores puedan auditar flujos de coleccionistas. Submissoes bem-sucedidas retornam HTTP `202 Accepted` con un sobre Norito JSON resumindo o colector, a janela de bucket y a dica de supressao; Falhas de validacao mapeiam para una respuesta de telemetría `Conversion` para preservar el tratamiento determinístico de errores entre coleccionistas. El bucle de eventos del orquestador ahora emite esas acciones para hacer el sondeo de dos relés, manteniendo o acumulador Prio do Torii sincronizado con los cubos sin relé.
+Torii ahora exponen dos puntos finales HTTP con puerta de telemetría para que los relés y recolectores puedan encaminar observaciones sin realizar un transporte a medida:- `POST /v2/soranet/privacy/event` contiene una carga útil `RecordSoranetPrivacyEventDto`. El cuerpo incluye un `SoranetPrivacyEventV1` más una etiqueta `source` opcional. Torii valida la solicitud contra el perfil de telemetría activa, registra o evento, y responde con HTTP `202 Accepted` junto con un sobre Norito JSON conteniendo a janela calculada (`bucket_start_unix`, `bucket_duration_secs`) y el modo de retransmisión.
+- `POST /v2/soranet/privacy/share` contiene una carga útil `RecordSoranetPrivacyShareDto`. O corpo carrega um `SoranetPrivacyPrioShareV1` e uma dica `forwarded_by` opcional para que los operadores puedan auditar flujos de coleccionistas. Submissoes bem-sucedidas retornam HTTP `202 Accepted` con un sobre Norito JSON resumindo o colector, a janela de bucket y a dica de supressao; Falhas de validacao mapeiam para una respuesta de telemetría `Conversion` para preservar el tratamiento determinístico de errores entre coleccionistas. El bucle de eventos del orquestador ahora emite esas acciones para hacer el sondeo de dos relés, manteniendo o acumulador Prio do Torii sincronizado con los cubos sin relé.
 
 Ambos puntos finales respetan el perfil de telemetría: emiten `503 Service Unavailable` cuando las métricas están desativadas. Los clientes pueden enviar corpos Norito binario (`application/x.norito`) o Norito JSON (`application/x.norito+json`); El servidor negocia automáticamente el formato mediante extractores padrao do Torii.
 
@@ -143,7 +143,7 @@ El asistente pasa la captura del pelo `SoranetSecureAggregator`, imprime un resu
 
 Agobernanza ainda exige provar que a primeira execucao automatizada atendeu ao presupuesto de supressao. O helper agora aceita `--max-suppression-ratio <0-1>` para que CI o los operadores falhem rápidamente cuando los cubos suprimidos exceden a janela permitida (predeterminado 10%) o cuando aún no hay cubos de carga. Flujo recomendado:
 
-1. Exporte NDJSON dos administradores de puntos finales para retransmitir más o transmitir `/v1/soranet/privacy/event|share` al orquestador para `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Exporte NDJSON dos administradores de puntos finales para retransmitir más o transmitir `/v2/soranet/privacy/event|share` al orquestador para `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Rode o helper com o presupuesto de politica:
 
    ```bash

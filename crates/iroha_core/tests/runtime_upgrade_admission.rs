@@ -94,7 +94,7 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let manifest_bytes = manifest.canonical_bytes();
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
-        .expect_err("non-v1 runtime upgrade must be rejected");
+        .expect_err("non runtime upgrade must be rejected");
 
     match err {
         InstructionExecutionError::InvariantViolation(msg) => {
@@ -443,7 +443,7 @@ fn activation_allows_v1_in_same_block() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    let prog_v1 = minimal_ivm_program(1);
+    let prog_current = minimal_ivm_program(1);
     let chain: ChainId = "chain".parse().unwrap();
 
     // Block 1: grant permission and propose upgrade [2, 10)
@@ -492,7 +492,7 @@ fn activation_allows_v1_in_same_block() {
     let tx =
         iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v1)))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_current)))
             .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -551,7 +551,7 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     block.commit().unwrap();
 
     // Submitting an ABI v1 program should be rejected due to abi_hash mismatch.
-    let prog_v1 = minimal_ivm_program(1);
+    let prog_current = minimal_ivm_program(1);
     let chain: ChainId = "chain".parse().unwrap();
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -559,7 +559,7 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     let tx =
         iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v1)))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_current)))
             .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));

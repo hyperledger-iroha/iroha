@@ -84,7 +84,7 @@ Fournisseur reste en кулдаун 5 минут. Les deux alertes vivent dans
 | `sorafs_node_por_failure_total` | Счетчик | `provider_id` | Compteur monotone des échantillons PoR échoues. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Калибр | `provider` | Датчики Prometheus существуют для используемых октетов, профондера файла, вычислений PoR и том. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Калибр | `provider` | Данные о емкости/время безотказной работы отображаются на приборной панели емкости. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Profondeur du backlog плюс совокупные экспортированные проверки по частям опроса `/v1/sorafs/por/ingestion/{manifest}`, включая панель/предупреждение «PoR Stalles». |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Калибр | `provider`, `manifest` | Profondeur du backlog плюс совокупные экспортированные проверки по частям опроса `/v2/sorafs/por/ingestion/{manifest}`, включая панель/предупреждение «PoR Stalles». |
 
 ### Предварительное восстановление временных ресурсов (PoTR) и SLA для фрагментов
 

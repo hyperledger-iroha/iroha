@@ -46,7 +46,7 @@ non [politique d'admission du fournisseur](./provider-admission-policy) ja esta 
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` avec `max_span` défini
      - `allow_unknown_capabilities=<true|false>` quando houver TLV GRAISSE
-   - Valide via `/v1/sorafs/providers` et `sorafs_fetch` ; avertissements sur les capacités
+   - Valide via `/v2/sorafs/providers` et `sorafs_fetch` ; avertissements sur les capacités
      desconhecidas devem ser triageadas.
 3. **Préparation valide multi-source.**
    - Exécuter `sorafs_fetch` avec `--provider-advert=<path>` ; o CLI agora falha quando
@@ -186,9 +186,9 @@ archiver et le grand livre dans mon PR.
 - ** Mailer de statut hebdomadaire. ** DevRel partage un résumé des mesures d'admission,
   avertissements pendants et délais proches.
 - **Réponse aux incidents.** Se alerte `reject` dispararem, ingénieurs de garde :
-  1. Buscam ou publicité ofensivo via la découverte Torii (`/v1/sorafs/providers`).
+  1. Buscam ou publicité ofensivo via la découverte Torii (`/v2/sorafs/providers`).
   2. Réexécuter la validation de l'annonce sans pipeline du fournisseur et comparaison avec
-     `/v1/sorafs/providers` pour reproduire une erreur.
+     `/v2/sorafs/providers` pour reproduire une erreur.
   3. Coordonnez le fournisseur de la rotation de l'annonce avant la date limite d'actualisation la plus proche.
 - **Le changement se fige.** Nenhuma ne modifie aucun schéma de capacités pendant R1/R2 a
   moins que le comité de déploiement approuve ; essais GREASE devem ser agendados na

@@ -184,7 +184,7 @@ available.
 
 ## Pin Registry Alignment
 
-- The `/v1/sorafs/pin` and `/v1/sorafs/pin/{digest}` endpoints hydrate each
+- The `/v2/sorafs/pin` and `/v2/sorafs/pin/{digest}` endpoints hydrate each
   alias response with `cache_evaluation.successor` (lineage head, approval
   status, anomalies) and `cache_evaluation.governance` (revocation/freeze/rotation flags) sourced
   from the pin registry snapshot.
@@ -266,7 +266,7 @@ Both transports carry the same JSON payload:
   - `mutation` — alias bound to a new manifest.
   - `revocation` — alias removed; clients should drop associated manifests.
 
-SSE delivery uses the `/torii/v1/alias/stream` endpoint with the following
+SSE delivery uses the `/torii/v2/alias/stream` endpoint with the following
 conventions:
 
 - Each message carries `id: <registry_height>-<alias>` so clients can resume
@@ -275,7 +275,7 @@ conventions:
   `Content-Type: text/event-stream; charset=utf-8`.
 - Gateways send a keep-alive comment every 20 seconds to preserve intermediaries.
 
-WebSocket delivery reuses the `/torii/v1/alias/ws` route. Frames are UTF-8 JSON
+WebSocket delivery reuses the `/torii/v2/alias/ws` route. Frames are UTF-8 JSON
 documents identical to the SSE payloads and include a `version` field when
 breaking changes are introduced. The initial `HELLO` frame echoes the current
 registry height so late joiners can decide whether they must hydrate via Torii

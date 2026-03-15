@@ -71,7 +71,7 @@ summary: Outline for SNNet-1 specification and threat model.
   - Padding flow traces: capture of cover cells over a 60 s window demonstrating compliance with the 1024-byte
     framing and target cover ratio.
   A new appendix (“Appendix B — Test Vectors”) will enumerate these artifacts and link to the canonical
-  files in `docs/assets/soranet/fixtures/v1/`.
+  files in `docs/assets/soranet/fixtures/v2/`.
 - **Generation tooling.** `cargo xtask soranet-fixtures` must be extended to emit all vectors and verify
   signatures, with CI invoking it during documentation builds.
 

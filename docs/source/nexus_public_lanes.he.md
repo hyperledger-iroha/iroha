@@ -84,7 +84,7 @@ Delegators (וכן מאמתים שמגדילים את ה‑bond שלהם) מיו
 - `metadata` מאחסן רמזי UX/back‑office (למשל מספרי התייחסות לדסק קסטודיה).
 
 `PublicLaneUnbonding` מחזיק את לוח המשיכות הדטרמיניסטי (`amount`, `release_at_ms`). Torii חושף
-כעת את ה‑shares החיים והמשיכות הממתינות דרך `GET /v1/nexus/public_lanes/{lane}/stake` כדי
+כעת את ה‑shares החיים והמשיכות הממתינות דרך `GET /v2/nexus/public_lanes/{lane}/stake` כדי
 שארנקים יציגו טיימרים בלי RPCs ייעודיים.
 
 Hooks של מחזור חיים (נאכפים ב‑runtime):
@@ -233,14 +233,14 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
     `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` משקף את
     endpoint `/stake` עם רמזי pending-unbond לכל זוג `(validator, staker)`.
   - Torii snapshots ל‑dashboards ו‑SDKs:
-    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
+    - `GET /v2/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
       `canonical I105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
-    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
+    - `GET /v2/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) בתוספת pending unbond timers. `?validator=i105...`
       מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical I105 rendering` חל על כל literals.
-  - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v1/transactions`
+  - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v2/transactions`
     או CLI instruction pipeline). דוגמאות payloads של Norito JSON:
 
     ```jsonc
@@ -264,7 +264,7 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
 
 - ✅ Runtime ו‑WSV storages מממשים את מחזור חיי המאמתים של NX-9; בדיקות רגרסיה מכסות timing של activation,
   prerequisites של peers, exits מאוחרים ו‑re-registration לאחר slashes.
-- ✅ Torii חושף `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` ב‑Norito JSON כדי ש‑SDKs
+- ✅ Torii חושף `/v2/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` ב‑Norito JSON כדי ש‑SDKs
   ו‑dashboards יעקבו אחרי מצב lane ללא custom RPCs.
 - ✅ ה‑config knobs וה‑telemetry מתועדים; deployments מעורבים משאירים lanes stake-elected ו‑admin-managed
   מבודדות כך שה‑validator rosters נשארים דטרמיניסטיים.
