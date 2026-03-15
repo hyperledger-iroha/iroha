@@ -256,6 +256,20 @@ impl Actor {
             Err(outcome) => return outcome,
         };
 
+        let has_commit_qc =
+            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
+        if !has_commit_qc && !self.slot_has_proposal_evidence(pending.height, pending.view) {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "deferring validation before voting: proposal not observed for pending block"
+            );
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            return ValidationGateOutcome::Deferred;
+        }
+
         if commit_topology.is_empty() {
             warn!(
                 height = pending.height,
@@ -809,6 +823,15 @@ impl Actor {
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
         self.qc_signer_tally
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
+        if matches!(err, BlockValidationError::PreviousRosterEvidenceInvalid(_)) {
+            let _ = self.maybe_trigger_payload_mismatch_recovery_bundle(
+                height,
+                view,
+                hash,
+                Instant::now(),
+                "validation_previous_roster_evidence",
+            );
+        }
         ValidationGateOutcome::Invalid {
             hash,
             height,

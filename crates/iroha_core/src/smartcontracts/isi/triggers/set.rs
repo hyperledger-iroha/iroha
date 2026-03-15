@@ -1222,7 +1222,7 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         metadata::Metadata,
         prelude::{
-            AccountId, DomainId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
+            AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
             TimeEventFilter, TimeInterval, TriggerId,
         },
     };
@@ -1238,8 +1238,7 @@ mod tests {
     }
 
     fn sample_authority() -> AccountId {
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
-        AccountId::new(domain_id, KeyPair::random().public_key().clone())
+        AccountId::new(KeyPair::random().public_key().clone())
     }
 
     #[test]

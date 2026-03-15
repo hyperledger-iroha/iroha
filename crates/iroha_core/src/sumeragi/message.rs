@@ -371,6 +371,7 @@ impl From<&NewBlock> for BlockCreated {
         );
         signed.set_da_proof_policies(block.da_proof_policies().cloned());
         signed.set_da_pin_intents(block.da_pin_intents().cloned());
+        signed.set_previous_roster_evidence(block.previous_roster_evidence().cloned());
         Self { block: signed }
     }
 }
@@ -463,6 +464,9 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId, Level,
+        consensus::{
+            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        },
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
@@ -521,6 +525,51 @@ mod tests {
         assert_eq!(msg_from_ref.block.hash(), msg_from_move.block.hash());
         assert_eq!(msg_from_ref.block.da_commitments(), Some(&da_bundle));
         assert_eq!(msg_from_move.block.da_commitments(), Some(&da_bundle));
+    }
+
+    #[test]
+    fn block_created_from_newblock_ref_preserves_previous_roster_evidence() {
+        let kp = KeyPair::from_seed(b"seed-seed".to_vec(), Algorithm::Ed25519);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
+        let parent_state_root = Hash::prehashed([0x12; 32]);
+        let post_state_root = Hash::prehashed([0x34; 32]);
+        let validator = PeerId::from(kp.public_key().clone());
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            0,
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            vec![validator],
+            vec![1],
+            vec![2],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        let evidence = PreviousRosterEvidence {
+            height: 1,
+            block_hash,
+            validator_checkpoint: checkpoint,
+            stake_snapshot: None,
+        };
+
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .with_previous_roster_evidence(Some(evidence.clone()))
+            .sign(kp.private_key())
+            .unpack(|_| {});
+
+        let msg = BlockCreated::from(&new_block);
+        assert_eq!(
+            msg.block.previous_roster_evidence(),
+            Some(&evidence),
+            "BlockCreated built from &NewBlock must preserve roster evidence payload",
+        );
+        assert_eq!(
+            msg.block.header().prev_roster_evidence_hash(),
+            Some(HashOf::new(&evidence)),
+            "payload and header evidence hash must stay aligned",
+        );
     }
 
     #[test]

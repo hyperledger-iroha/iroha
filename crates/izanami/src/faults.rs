@@ -1,6 +1,7 @@
 //! Fault-injection utilities used by Izanami to emulate Byzantine peers.
 
 use std::{
+    fs,
     io::{self, Write},
     ops::RangeInclusive,
     path::PathBuf,
@@ -20,7 +21,7 @@ use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use tokio::{sync::Notify, task, time::sleep};
-use toml::Table;
+use toml::{Table, Value};
 use tracing::{debug, error, info, warn};
 
 /// Configuration for periodic fault injection.
@@ -408,10 +409,13 @@ async fn network_partition<P: FaultPeer>(
         "isolating peer from trusted network"
     );
 
+    let trusted_peers_pop = peer
+        .trusted_peers_pop_entries()
+        .wrap_err("peer missing trusted_peers_pop roster required for partition restart")?;
     peer.shutdown().await;
     let overrides = Table::new()
         .write(["trusted_peers"], Vec::<String>::new())
-        .write(["trusted_peers_pop"], Table::new());
+        .write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
     let result = peer
         .restart_with_layers(config_layers, std::slice::from_ref(&overrides), genesis)
         .await;
@@ -594,6 +598,7 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     fn mnemonic(&self) -> &str;
     fn kura_store_dir(&self) -> PathBuf;
     fn client(&self) -> Self::Client;
+    fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
     fn restart_with_layers<'a>(
         &'a self,
@@ -616,6 +621,28 @@ impl FaultPeer for NetworkPeer {
 
     fn client(&self) -> Self::Client {
         NetworkPeer::client(self)
+    }
+
+    fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
+        let kura_store_dir = NetworkPeer::kura_store_dir(self);
+        let config_dir = kura_store_dir
+            .parent()
+            .ok_or_else(|| eyre!("peer kura store dir is missing a parent"))?;
+        let config = fs::read_to_string(config_dir.join("config.base.toml"))
+            .wrap_err("read peer base config for trusted_peers_pop roster")?;
+        let table: Table =
+            toml::from_str(&config).wrap_err("parse peer base config for trusted_peers_pop")?;
+        let entries = table
+            .get("trusted_peers_pop")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| eyre!("peer base config missing trusted_peers_pop roster"))?;
+        if entries.is_empty() {
+            return Err(eyre!(
+                "peer base config trusted_peers_pop roster must not be empty"
+            ));
+        }
+        Ok(entries)
     }
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -735,6 +762,21 @@ mod tests {
 
         fn client(&self) -> Self::Client {
             self.client.clone()
+        }
+
+        fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
+            Ok(vec![
+                Value::Table(
+                    Table::new()
+                        .write("public_key", "mock-partition-public-key")
+                        .write("pop_hex", "mock-partition-pop-hex"),
+                ),
+                Value::Table(
+                    Table::new()
+                        .write("public_key", "mock-partition-peer-2")
+                        .write("pop_hex", "mock-partition-peer-2-pop-hex"),
+                ),
+            ])
         }
 
         fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -1120,11 +1162,41 @@ mod tests {
                 );
                 let trusted_pop = extra_layers[0]
                     .get("trusted_peers_pop")
-                    .and_then(toml::Value::as_table)
-                    .expect("trusted_peers_pop table");
+                    .and_then(toml::Value::as_array)
+                    .expect("trusted_peers_pop array");
                 assert!(
-                    trusted_pop.is_empty(),
-                    "partition should clear trusted_peers_pop to keep config valid"
+                    trusted_pop.len() == 2,
+                    "partition should preserve the full trusted_peers_pop roster"
+                );
+                let trusted_pop_entry = trusted_pop[0]
+                    .as_table()
+                    .expect("trusted_peers_pop entry should be a table");
+                assert_eq!(
+                    trusted_pop_entry
+                        .get("public_key")
+                        .and_then(toml::Value::as_str),
+                    Some("mock-partition-public-key")
+                );
+                assert_eq!(
+                    trusted_pop_entry
+                        .get("pop_hex")
+                        .and_then(toml::Value::as_str),
+                    Some("mock-partition-pop-hex")
+                );
+                let trusted_pop_entry = trusted_pop[1]
+                    .as_table()
+                    .expect("trusted_peers_pop entry should be a table");
+                assert_eq!(
+                    trusted_pop_entry
+                        .get("public_key")
+                        .and_then(toml::Value::as_str),
+                    Some("mock-partition-peer-2")
+                );
+                assert_eq!(
+                    trusted_pop_entry
+                        .get("pop_hex")
+                        .and_then(toml::Value::as_str),
+                    Some("mock-partition-peer-2-pop-hex")
                 );
             }
             other => panic!("unexpected restart payload: {other:?}"),

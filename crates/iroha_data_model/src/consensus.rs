@@ -2,6 +2,7 @@
 use std::str::FromStr;
 
 use iroha_crypto::PublicKey;
+use iroha_primitives::numeric::Numeric;
 use iroha_schema::{Ident, IntoSchema};
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -25,7 +26,7 @@ pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 // QC types are defined in `block::consensus` and re-exported above.
 
 /// Signed validator set checkpoint used for bootstrap and audit.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -87,6 +88,59 @@ impl ValidatorSetCheckpoint {
             expires_at_height,
         }
     }
+}
+
+/// Stake snapshot entry for a single validator in a commit roster.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitStakeSnapshotEntry {
+    /// Peer identifier for the validator.
+    pub peer_id: crate::peer::PeerId,
+    /// Total stake attributed to the validator.
+    pub stake: Numeric,
+}
+
+/// Stake snapshot aligned to the validator set used for commit proof validation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitStakeSnapshot {
+    /// Stable hash of the validator set the snapshot applies to.
+    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
+    /// Stake entries aligned to validator roster order.
+    pub entries: Vec<CommitStakeSnapshotEntry>,
+}
+
+impl CommitStakeSnapshot {
+    /// Return `true` when this snapshot hash matches the provided roster.
+    #[must_use]
+    pub fn matches_roster(&self, roster: &[crate::peer::PeerId]) -> bool {
+        self.validator_set_hash == HashOf::new(&roster.to_vec())
+    }
+}
+
+/// Canonical previous-height roster evidence embedded in block payloads.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PreviousRosterEvidence {
+    /// Height of the block this evidence applies to.
+    pub height: u64,
+    /// Hash of the block this evidence applies to.
+    pub block_hash: HashOf<crate::block::BlockHeader>,
+    /// Signed validator checkpoint for the referenced block.
+    pub validator_checkpoint: ValidatorSetCheckpoint,
+    /// Optional NPoS stake snapshot aligned to the validator set.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.

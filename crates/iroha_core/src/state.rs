@@ -12775,20 +12775,11 @@ impl State {
         }
         status::record_commit_qc(commit_qc.clone());
         status::record_validator_checkpoint(checkpoint.clone());
-        let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
-        let sidecar = crate::kura::RosterSidecar::new_v1(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(commit_qc.clone()),
-            Some(checkpoint.clone()),
-            sidecar_snapshot,
-        );
-        self.kura.write_roster_metadata(&sidecar);
         true
     }
 
-    /// Record commit-roster artifacts in status caches, world storage, journal, and sidecar.
+    /// Record commit-roster artifacts in status caches, world storage, and journal.
     ///
     /// Returns `true` when the roster entry is accepted or `false` when skipped.
     pub(crate) fn record_commit_roster(
@@ -19995,19 +19986,16 @@ fn replay_roster_for_block(
         }
     }
 
-    if let Some(meta) = kura.read_roster_metadata(height) {
-        if meta.block_hash != block_hash {
-            warn!(
-                expected = %block_hash,
-                stored = %meta.block_hash,
-                height,
-                "ignoring roster sidecar with mismatched hash during replay"
-            );
-        } else if let Some(roster) = meta.roster_snapshot()
-            && !roster.is_empty()
-        {
-            return roster;
-        }
+    let successor_height = height.saturating_add(1);
+    if let Ok(successor_height_usize) = usize::try_from(successor_height)
+        && let Some(successor) = NonZeroUsize::new(successor_height_usize)
+            .and_then(|height_nz| kura.get_block(height_nz))
+        && let Some(evidence) = successor.previous_roster_evidence()
+        && evidence.height == height
+        && evidence.block_hash == block_hash
+        && !evidence.validator_checkpoint.validator_set.is_empty()
+    {
+        return evidence.validator_checkpoint.validator_set.clone();
     }
 
     let fallback_roster = fallback.as_ref().to_vec();
@@ -29917,7 +29905,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_sidecar_persisted_to_kura() {
+    fn commit_roster_record_does_not_persist_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -29991,24 +29979,9 @@ mod tests {
 
         state.record_commit_roster(&commit_cert, &checkpoint, None);
 
-        let sidecar = kura
-            .read_roster_metadata(commit_cert.height)
-            .expect("roster sidecar persisted");
-        assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
-        assert_eq!(
-            sidecar.commit_qc.as_ref(),
-            Some(&commit_cert),
-            "commit certificate should be persisted"
-        );
-        assert_eq!(
-            sidecar.validator_checkpoint.as_ref(),
-            Some(&checkpoint),
-            "validator checkpoint should be persisted"
-        );
-        assert_eq!(
-            sidecar.roster_snapshot().as_deref(),
-            Some(commit_cert.validator_set.as_slice()),
-            "roster snapshot should match commit certificate"
+        assert!(
+            kura.read_roster_metadata(commit_cert.height).is_none(),
+            "commit-roster recording should not persist sidecars"
         );
         let view = state.view();
         let stored = view

@@ -765,7 +765,18 @@ impl Actor {
                     );
                     return;
                 };
-                self.observe_new_view_highest_qc(highest);
+                if !self.observe_new_view_highest_qc(highest) {
+                    debug!(
+                        height = vote.height,
+                        view = vote.view,
+                        signer = vote.signer,
+                        highest_height = highest.height,
+                        highest_view = highest.view,
+                        highest_block = %highest.subject_block_hash,
+                        "dropping NEW_VIEW vote due to committed-edge conflicting highest certificate reference"
+                    );
+                    return;
+                }
                 crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, &signer_peer);
                 if let Some(local_view) = context.stale_view {
                     debug!(
@@ -1165,12 +1176,12 @@ impl Actor {
             );
         }
 
-        let has_obsolete_request = self
+        let obsolete_request_present = self
             .pending
             .missing_block_requests
             .get(&highest.subject_block_hash)
             .is_some();
-        let cleared_obsolete_request = self
+        let obsolete_request_actionable = self
             .pending
             .missing_block_requests
             .get(&highest.subject_block_hash)
@@ -1182,7 +1193,7 @@ impl Actor {
                     Instant::now(),
                 )
             });
-        if has_obsolete_request {
+        if obsolete_request_present {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
                 MissingBlockClearReason::Obsolete,
@@ -1191,18 +1202,110 @@ impl Actor {
         super::status::inc_committed_edge_conflict_obsolete();
         self.clear_sidecar_mismatch_for_height(highest.height);
         let now = Instant::now();
+        let contiguous_height = committed_height.saturating_add(1);
+        let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
+        let active_frontier_view = self
+            .phase_tracker
+            .current_view(contiguous_height)
+            .unwrap_or(0);
+        let new_view_entries_before = self.subsystems.propose.new_view_tracker.entries.len();
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .retain(|(entry_height, _), _| *entry_height < contiguous_height);
+        let new_view_entries_removed = new_view_entries_before
+            .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
+        let frontier_new_view_votes_removed =
+            self.clear_new_view_vote_history_at_or_above_height(contiguous_height);
+        let (
+            frontier_pending_removed,
+            frontier_missing_removed,
+            frontier_deferred_updates_removed,
+            frontier_deferred_qcs_removed,
+            frontier_hints_removed,
+            frontier_proposals_removed,
+            frontier_seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(contiguous_height);
+        if frontier_missing_removed > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(frontier_missing_removed).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = frontier_pending_removed
+            .saturating_add(frontier_deferred_updates_removed)
+            .saturating_add(frontier_deferred_qcs_removed)
+            .saturating_add(frontier_hints_removed)
+            .saturating_add(frontier_proposals_removed)
+            .saturating_add(frontier_seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        self.clear_missing_block_recovery_for_height(contiguous_height, now);
+        self.clear_sidecar_mismatch_for_height(contiguous_height);
+        self.clear_consensus_recovery_for_round(contiguous_height, active_frontier_view);
+        let frontier_state_cleared =
+            self.force_clear_frontier_reanchor_state_for_height(contiguous_height, now);
+        let frontier_cooldowns_cleared =
+            self.clear_range_pull_escalation_cooldowns_for_height(contiguous_height);
+        let phase_tracker_clamped = if self
+            .phase_tracker
+            .round_height
+            .is_some_and(|round_height| round_height > contiguous_height)
+        {
+            self.phase_tracker
+                .on_view_change(contiguous_height, active_frontier_view, now);
+            true
+        } else if active_frontier_round && active_frontier_view != 0 {
+            self.phase_tracker.on_view_change(contiguous_height, 0, now);
+            true
+        } else {
+            false
+        };
+        let forced_view_reset = self
+            .subsystems
+            .propose
+            .forced_view_after_timeout
+            .is_some_and(|(height, _)| height >= contiguous_height);
+        if forced_view_reset {
+            self.subsystems.propose.forced_view_after_timeout = None;
+        }
         let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
             highest.height,
             "highest_qc_committed_conflict",
             now,
         );
-        let contiguous_height = committed_height.saturating_add(1);
-        let recovery_reanchor_requested = recovery_allowed
-            && self.request_range_pull_from_anchor(
-                contiguous_height,
+        let actionable_frontier_dependency =
+            self.frontier_catchup_has_unresolved_dependency(contiguous_height);
+        let storm_view = self
+            .phase_tracker
+            .current_view(contiguous_height)
+            .unwrap_or(0);
+        let recovery_action = if recovery_allowed {
+            self.advance_frontier_recovery(
                 "highest_qc_committed_conflict",
+                contiguous_height,
+                storm_view,
+                false,
+                actionable_frontier_dependency,
+                true,
                 now,
-            );
+            )
+        } else {
+            super::FrontierRecoveryAdvance::None
+        };
+        let recovery_reanchor_requested =
+            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp);
+        let no_proposal_storm_count =
+            self.same_height_no_proposal_storm_count_for_height(contiguous_height);
+        let no_proposal_storm_force_break_allowed =
+            no_proposal_storm_count >= super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK;
+        let no_proposal_storm_broken =
+            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp)
+                && no_proposal_storm_force_break_allowed;
         warn!(
             height = highest.height,
             view = highest.view,
@@ -1210,10 +1313,15 @@ impl Actor {
             incoming_hash = %highest.subject_block_hash,
             committed_hash = %committed_hash,
             source,
-            cleared_obsolete_request,
+            obsolete_request_present,
+            obsolete_request_actionable,
             recovery_allowed,
+            actionable_frontier_dependency,
             contiguous_height,
             recovery_reanchor_requested,
+            no_proposal_storm_count,
+            no_proposal_storm_force_break_allowed,
+            no_proposal_storm_broken,
             votes_removed,
             qcs_removed,
             qc_tally_removed,
@@ -1228,6 +1336,19 @@ impl Actor {
             descendant_requeued,
             descendant_requeue_failures,
             descendant_requeue_duplicates,
+            frontier_pending_removed,
+            frontier_missing_removed,
+            frontier_deferred_updates_removed,
+            frontier_deferred_qcs_removed,
+            frontier_hints_removed,
+            frontier_proposals_removed,
+            frontier_seen_removed,
+            frontier_state_cleared,
+            frontier_cooldowns_cleared,
+            new_view_entries_removed,
+            frontier_new_view_votes_removed,
+            phase_tracker_clamped,
+            forced_view_reset,
             "suppressing committed-edge conflicting highest-QC reference and preserving canonical state with bounded canonical reanchor"
         );
         true
@@ -1586,9 +1707,9 @@ impl Actor {
     pub(super) fn observe_new_view_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
-    ) {
+    ) -> bool {
         if self.suppress_committed_edge_conflicting_highest_qc(highest, "new_view") {
-            return;
+            return false;
         }
         let should_update = self.highest_qc.is_none_or(|current| {
             let incoming = (highest.height, highest.view);
@@ -1604,6 +1725,7 @@ impl Actor {
             super::status::set_highest_qc_hash(highest.subject_block_hash);
         }
         self.request_missing_block_for_highest_qc(highest, "new_view");
+        true
     }
 
     pub(super) fn drop_precommit_vote_for_lock(
@@ -2923,6 +3045,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,

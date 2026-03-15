@@ -1894,11 +1894,6 @@ impl Actor {
                 super::quorum_reschedule_backoff_from_timeout(quorum_timeout),
                 Instant::now(),
             );
-            self.trigger_view_change_with_cause(
-                pending_height,
-                pending_view,
-                view_change_cause_for_quorum(vote_count, false),
-            );
         }
         if committed {
             if !self.should_retain_rbc_sessions_after_commit(block_hash, pending_height) {
@@ -2852,6 +2847,19 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
+            let has_commit_qc = pending.commit_qc_seen
+                || self.pending_block_has_qc(hash, pending_height, pending_view);
+            if !has_commit_qc && !self.slot_has_proposal_evidence(pending_height, pending_view) {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %hash,
+                    validation_status = ?pending.validation_status,
+                    "deferring commit pipeline: proposal not observed for pending block"
+                );
+                self.pending.pending_blocks.insert(hash, pending);
+                continue;
+            }
             if !pending.commit_qc_seen {
                 if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
                     matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
@@ -5237,66 +5245,13 @@ impl Actor {
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         self.quarantined_block_sync_qcs
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
-        let payload_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .payload_rebroadcast_last_sent
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
+        let orphan_keys: Vec<_> = self
+            .collect_rbc_keys_for_block(block_hash)
+            .into_iter()
             .collect();
-        for key in payload_keys {
-            self.subsystems
-                .da_rbc
-                .rbc
-                .payload_rebroadcast_last_sent
-                .remove(&key);
+        for key in orphan_keys {
+            self.purge_rbc_state(key, key.0, key.1, key.2);
         }
-        let ready_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .ready_rebroadcast_last_sent
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
-            .collect();
-        for key in ready_keys {
-            self.subsystems
-                .da_rbc
-                .rbc
-                .ready_rebroadcast_last_sent
-                .remove(&key);
-        }
-        let deferral_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .deliver_deferral
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
-            .collect();
-        for key in deferral_keys {
-            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
-            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
-        }
-        self.subsystems
-            .da_rbc
-            .rbc
-            .persisted_full_sessions
-            .retain(|(hash, _, _)| *hash != block_hash);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .persist_inflight
-            .retain(|(hash, _, _)| *hash != block_hash);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .seed_inflight
-            .retain(|(hash, _, _), _| *hash != block_hash);
 
         let telemetry_ref = self.telemetry_handle();
         if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
@@ -7071,6 +7026,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 0,
             view_change_index: view,
             confidential_features: None,

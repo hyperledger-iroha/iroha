@@ -1690,12 +1690,6 @@ impl Actor {
         });
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
-        self.observe_sidecar_mismatch_for_height(
-            block_height,
-            block_hash,
-            "block_sync_update_roster",
-        );
-        let allow_sidecar = !self.sidecar_quarantined_for_height(block_height);
         let persisted_roster = snapshot_selection.or_else(|| {
             persisted_roster_for_block(
                 self.state.as_ref(),
@@ -1706,7 +1700,7 @@ impl Actor {
                 Some(block_view),
                 &self.roster_validation_cache,
                 Some(&mut self.block_sync_roster_cache),
-                allow_sidecar,
+                false,
             )
         });
         let roster_persisted_ms =
@@ -1872,10 +1866,6 @@ impl Actor {
             }
             return Ok(());
         };
-        let local_in_roster = selection
-            .roster
-            .iter()
-            .any(|peer| peer == self.common_config.peer.id());
         super::status::inc_block_sync_roster_source(selection.source.as_str());
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry_handle() {
@@ -2944,6 +2934,9 @@ impl Actor {
                                 block_height,
                                 block_view,
                             );
+                            if self.runtime_da_enabled() {
+                                self.clean_rbc_sessions_for_block(block_hash, block_height);
+                            }
                             qc_apply_commit_ms = u64::try_from(commit_start.elapsed().as_millis())
                                 .unwrap_or(u64::MAX);
                             self.request_commit_pipeline();
@@ -2975,31 +2968,6 @@ impl Actor {
         );
         let qc_apply_ms = u64::try_from(qc_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         qc_apply_result?;
-
-        if self.runtime_da_enabled()
-            && incoming_qc_usable
-            && !local_in_roster
-            && block_known_after_creation
-        {
-            if let Some(payload_hash) = self
-                .pending
-                .pending_blocks
-                .get(&block_hash)
-                .map(|pending| pending.payload_hash)
-            {
-                let key = (block_hash, block_height, block_view);
-                if self.force_rbc_delivery_for_block_sync(key, payload_hash) {
-                    info!(
-                        height = block_height,
-                        view = block_view,
-                        block = %block_hash,
-                        "marking RBC delivered for block sync update outside commit roster"
-                    );
-                    self.request_commit_pipeline();
-                }
-            }
-        }
-
         if creation_ok && !block_known_after_creation {
             if let Some(qc) = incoming_qc.take() {
                 // Cache the QC so we can reuse it once the block becomes available locally.
