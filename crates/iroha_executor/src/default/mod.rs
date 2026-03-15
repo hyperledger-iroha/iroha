@@ -995,6 +995,15 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native multisig state",
+                    isi.key()
+                ))
+            );
+        }
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {
@@ -1023,6 +1032,15 @@ pub mod account {
         executor: &mut V,
         isi: &RemoveKeyValue<Account>,
     ) {
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+            deny!(
+                executor,
+                ValidationFail::NotPermitted(format!(
+                    "account metadata key `{}` is reserved for native multisig state",
+                    isi.key()
+                ))
+            );
+        }
         let account_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {

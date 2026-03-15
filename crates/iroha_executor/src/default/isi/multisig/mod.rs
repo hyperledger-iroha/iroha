@@ -51,6 +51,13 @@ fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {
         .unwrap()
 }
 
+pub(super) fn is_reserved_multisig_metadata_key(key: &Name) -> bool {
+    let literal = key.as_ref();
+    literal == spec_key().as_ref()
+        || literal == home_domain_key().as_ref()
+        || literal.starts_with(&format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}"))
+}
+
 fn account_id_predicate(
     account_id: &AccountId,
 ) -> Result<CompoundPredicate<Account>, ValidationFail> {

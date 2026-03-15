@@ -535,10 +535,11 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
  * Build instructions combining an account registration with a follow-up transfer.
  */
 function buildRegisterAccountInstructions({ account, transfers = [] }) {
- const instructions = [];
- instructions.push(
+  const instructions = [];
+  instructions.push(
     buildRegisterAccountInstruction({
       accountId: account.accountId,
+      domainId: account.domainId ?? account.domain,
       metadata: account.metadata,
     }),
   );

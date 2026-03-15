@@ -1648,13 +1648,19 @@ impl StateBlock<'_> {
         #[cfg(not(feature = "telemetry"))]
         let telemetry_handle: Option<&StateTelemetry> = None;
 
-        if let Some(account) = state_transaction.world.accounts.get(&authority) {
-            let multisig_spec_key = crate::smartcontracts::isi::multisig::spec_key();
+        if state_transaction.world.accounts.get(&authority).is_some() {
+            let has_multisig_state = state_transaction
+                .world
+                .smart_contract_state
+                .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(
+                    &authority,
+                ))
+                .is_some();
             let has_multisig_role = state_transaction
                 .world
                 .account_roles_iter(&authority)
                 .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
-            if has_multisig_role || account.metadata().get(&multisig_spec_key).is_some() {
+            if has_multisig_role || has_multisig_state {
                 warn!(
                     authority = %authority,
                     "multisig accounts cannot sign transactions directly"

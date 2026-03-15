@@ -319,6 +319,48 @@ pub mod multisig {
         }
     }
 
+    /// Native ledger value for a multisig account state entry.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub struct MultisigAccountState {
+        /// Canonical multisig account id for this state entry.
+        pub account_id: AccountId,
+        /// Home domain used to materialize missing signatory accounts and roles.
+        pub home_domain: DomainId,
+        /// Multisig policy specification.
+        pub spec: MultisigSpec,
+    }
+
+    /// Native ledger value for a multisig proposal state entry.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub struct MultisigProposalState {
+        /// Canonical multisig account id that owns this proposal.
+        pub multisig_account_id: AccountId,
+        /// Hash of the proposed instruction list.
+        pub instructions_hash: HashOf<Vec<InstructionBox>>,
+        /// Proposal contents.
+        pub instructions: Vec<InstructionBox>,
+        /// Time in milliseconds at which the proposal was made.
+        pub proposed_at_ms: u64,
+        /// Time in milliseconds at which the proposal will expire.
+        pub expires_at_ms: u64,
+        /// List of approvers of the proposal so far.
+        pub approvals: BTreeSet<AccountId>,
+        /// In case this proposal is some relaying approval, indicates if it has executed or not.
+        pub is_relayed: Option<bool>,
+    }
+
     /// Metadata value for a multisig account specification
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,

@@ -4382,6 +4382,7 @@ interface RegisterAccountAndTransferInputBase {
   authority: string;
   account: {
     accountId: string;
+    domainId: string;
     metadata?: object;
   };
   metadata?: MetadataLike;
@@ -7839,9 +7840,11 @@ export function buildRegisterDomainInstruction({
 
 export function buildRegisterAccountInstruction({
   accountId,
+  domainId,
   metadata,
 }: {
   accountId: string;
+  domainId: string;
   metadata?: object | null;
 }): object;
 

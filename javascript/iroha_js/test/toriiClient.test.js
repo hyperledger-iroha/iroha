@@ -5732,6 +5732,35 @@ test("submitTransaction retries transient failures via pipeline profile", async 
   assert.equal(attempts, 2);
 });
 
+test("submitTransaction tolerates missing node capabilities advert", async () => {
+  const payload = new Uint8Array([0xde, 0xad]);
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 404,
+        jsonData: { error: "not found" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+  assert.deepEqual(calls.map((call) => call.url), [
+    `${BASE_URL}/v1/node/capabilities`,
+    `${BASE_URL}/v1/pipeline/transactions`,
+  ]);
+});
+
 test("submitTransaction rejects mismatched data model version", async () => {
   const payload = new Uint8Array([0x01]);
   const fetchImpl = async (url) => {

@@ -62,12 +62,12 @@ let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
 var sdk = IrohaSDK(baseURL: torii.baseURL)
 
 let keypair = try Keypair.generate()
-let accountId = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
+let accountId = AccountId.make(publicKey: keypair.publicKey)
 
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
     quantity: "1.23",
     destination: accountId,
     description: "demo",
@@ -84,6 +84,9 @@ if #available(iOS 15.0, macOS 12.0, *) {
     }
 }
 ```
+
+`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` require
+canonical `aid:<32-lower-hex-no-dash>` asset-definition IDs.
 
 ## SM2 Cryptography
 

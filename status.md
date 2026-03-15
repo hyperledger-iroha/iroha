@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: Swift docs builder-ID alignment
+- Updated Swift-facing builder examples to match the current encoded-only validator contract:
+  - `IrohaSwift/README.md` transfer/shield/unshield snippets now use canonical
+    `aid:<32-lower-hex-no-dash>` asset-definition IDs.
+  - `docs/source/sdk/swift/index*.md` snippets now use `AccountId.make(publicKey:)`
+    and canonical `aid:...` asset-definition IDs instead of removed/legacy forms.
+- Added explicit documentation notes that transaction builders require canonical
+  `aid:<32-lower-hex-no-dash>` asset-definition IDs.
+- Validation (this follow-up):
+  - `rg -n 'AccountId\.make\(publicKey: keypair\.publicKey, domain: "wonderland"\)|assetDefinitionId: "rose#wonderland"|assetDefinitionId: "jpy#xst"' docs/source/sdk/swift/index*.md IrohaSwift/README.md` (no matches)
+
 ## 2026-03-15 Follow-up: pagination integration test canonical asset-definition IDs
 - Fixed `integration_tests/tests/pagination.rs` setup to stop parsing legacy
   `<name>#<domain>` literals for asset definitions.
