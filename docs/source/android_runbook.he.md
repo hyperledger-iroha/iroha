@@ -635,7 +635,7 @@ fi
 **אותות**
 
 - התראות על `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, ושיעור השגיאות Torii `/v2/pipeline`.
+  `android_sdk_offline_replay_errors`, ושיעור השגיאות Torii `/v1/pipeline`.
 - ווידג'טים של `operator-console` (דוגמאות/אנדרואיד) המציגים ניקוז תור תקוע או
   ניסיונות חוזרים תקועים בגיבוי אקספוננציאלי.
 
@@ -685,7 +685,7 @@ fi
 **החלמה**
 
 1. אם Torii פגום, הפעל את ה-Torii ב-Call והמשיך להפעיל מחדש את
-   תור פעם אחת `/v2/pipeline` מקבל תעבורה.
+   תור פעם אחת `/v1/pipeline` מקבל תעבורה.
 2. הגדר מחדש את הלקוחות המושפעים רק באמצעות מניפסטים חתומים של `iroha_config`. ה
    `ClientConfig` צופה בטעינה מחדש חייבת לפלוט יומן הצלחה לפני התקרית
    יכול לסגור.

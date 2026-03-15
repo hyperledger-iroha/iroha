@@ -30,7 +30,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## 1. Оценить инцидент
 
 - **Условия триггера:** выявление нарушения SLA (uptime/сбой PoR), дефицит репликации или разногласие по биллингу.
-- **Подтвердить телеметрию:** зафиксируйте snapshots `/v2/sorafs/capacity/state` и `/v2/sorafs/capacity/telemetry` для провайдера.
+- **Подтвердить телеметрию:** зафиксируйте snapshots `/v1/sorafs/capacity/state` и `/v1/sorafs/capacity/telemetry` для провайдера.
 - **Уведомить стейкхолдеров:** Storage Team (операции провайдера), Governance Council (орган решения), Observability (обновления дашбордов).
 
 ## 2. Подготовить пакет доказательств
@@ -78,7 +78,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
 
 3. Проверьте `dispute_summary.json` (подтвердите тип, digest доказательств и временные метки).
-4. Отправьте JSON запроса в Torii `/v2/sorafs/capacity/dispute` через очередь governance-транзакций. Зафиксируйте значение ответа `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
+4. Отправьте JSON запроса в Torii `/v1/sorafs/capacity/dispute` через очередь governance-транзакций. Зафиксируйте значение ответа `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
 
 ## 4. Эвакуация и отзыв
 

@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | Подделанные манифесты конфигурации | `ClientConfig` проверяет манифесты (хеш + схему) перед применением и регистрирует отказ в перезагрузке через `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Компрометация ключей подписи | Политики, необходимые для StrongBox, средства аттестации и аудит матрицы устройств выявляют отклонения; переопределения документируются для каждого инцидента. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Утечка PII в телеметрии | Авторитеты, хешированные Blake2b, сегментированные профили устройств, пропуск оператора связи, переопределение журнала. | `docs/source/sdk/android/telemetry_redaction.md`; Поддержка Playbook §8. |
-| Воспроизведите или понизьте версию Torii RPC | Построитель запросов `/v2/pipeline` обеспечивает закрепление TLS, политику шумового канала и бюджеты повторных попыток с хешированным контекстом полномочий. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (планируется). |
+| Воспроизведите или понизьте версию Torii RPC | Построитель запросов `/v1/pipeline` обеспечивает закрепление TLS, политику шумового канала и бюджеты повторных попыток с хешированным контекстом полномочий. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (планируется). |
 | Неподписанные или невоспроизводимые выпуски | Аттестации CycloneDX SBOM + Sigstore, проверенные контрольным списком AND6; Для выпусков RFC требуются доказательства в `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Неполная обработка инцидентов | Runbook + playbook определяет переопределения, упражнения по устранению хаоса и дерево эскалации; для переопределения телеметрии требуются подписанные запросы Norito. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 Контроль доступа | Политики StrongBox + переопределение рабочего процесса, требующего подписанных артефактов Norito. |
 | 7.5 Криптографический контроль | Требования к созданию, хранению и аттестации ключей от AND2 (руководство по управлению ключами). |
 | 7.6 Безопасность операций | Хеширование телеметрии, репетиции хаоса, реагирование на инциденты и раскрытие доказательств. |
-| 7.7 Безопасность связи | `/v2/pipeline` Политика TLS + хешированные полномочия (документ редактирования телеметрии). |
+| 7.7 Безопасность связи | `/v1/pipeline` Политика TLS + хешированные полномочия (документ редактирования телеметрии). |
 | 7.8 Приобретение/разработка системы | Воспроизводимые сборки Gradle, SBOM и шлюзы происхождения в планах AND5/AND6. |
 | 7.9 Отношения с поставщиками | Аттестации Buildkite + Sigstore, записанные вместе с SBOM сторонних зависимостей. |
 | 7.10 Управление инцидентами | Эскалация Runbook/Playbook, журналирование переопределения, счетчики сбоев телеметрии. |

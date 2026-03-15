@@ -15,8 +15,8 @@ translator: machine-google-reviewed
 Iroha Torii ავლენს არჩევით WalletConnect-ის სტილის WebSocket ბოლო წერტილებს და მინიმალურ რელეს
 როდესაც ჩართულია `connect` Cargo ფუნქცია (ნაგულისხმევი). გაშვების ქცევა შეზღუდულია კონფიგურაციაზე:
 
-- დააყენეთ `connect.enabled=false` კავშირის ყველა მარშრუტის გასათიშად (`/v2/connect/*`).
-- დატოვეთ ის `true` (ნაგულისხმევი), რათა ჩართოთ WS სესიის საბოლოო წერტილები და `/v2/connect/status`.
+- დააყენეთ `connect.enabled=false` კავშირის ყველა მარშრუტის გასათიშად (`/v1/connect/*`).
+- დატოვეთ ის `true` (ნაგულისხმევი), რათა ჩართოთ WS სესიის საბოლოო წერტილები და `/v1/connect/status`.
 
 გარემოს უგულებელყოფა (მომხმარებლის კონფიგურაცია → ფაქტობრივი კონფიგურაცია):
 
@@ -44,8 +44,8 @@ Iroha Torii ავლენს არჩევით WalletConnect-ის სტ
   სერვერი მოითმენს `ping_miss_tolerance` ზედიზედ გამოტოვებულ პონგებს WebSocket-ის დახურვამდე და
   ზრდის `connect.ping_miss_total` მეტრიკას.
 - როდესაც გათიშულია მუშაობის დროს (`connect.enabled=false`), დაკავშირება WS და სტატუსის მარშრუტები არ არის
-  დარეგისტრირდა; ითხოვს `/v2/connect/ws` და `/v2/connect/status` დაბრუნების 404.
-- სერვერს სჭირდება კლიენტის მიერ მოწოდებული `sid` `/v2/connect/session`-ისთვის (base64url ან hex, 32 ბაიტი).
+  დარეგისტრირდა; ითხოვს `/v1/connect/ws` და `/v1/connect/status` დაბრუნების 404.
+- სერვერს სჭირდება კლიენტის მიერ მოწოდებული `sid` `/v1/connect/session`-ისთვის (base64url ან hex, 32 ბაიტი).
   ის აღარ წარმოქმნის სარეზერვო `sid`-ს.
 
 აგრეთვე იხილე: `crates/iroha_config/src/parameters/{user,actual}.rs` და ნაგულისხმევი

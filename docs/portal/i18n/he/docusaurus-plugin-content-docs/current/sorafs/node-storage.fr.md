@@ -165,9 +165,9 @@ que manifests et payloads se תיקון הלוך ושוב avant l'arrivée des A
 > Le gateway Torii לחשוף את désormais des helpers en lecture seule basés sur le même
 > `NodeHandle` :
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — renvoie le manifest
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — renvoie le manifest
 > Norito stocké (base64) avec digest/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — renvoie le plan de chunk
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — renvoie le plan de chunk
 > déterministe JSON (`chunk_fetch_specs`) pour les outils במורד הזרם.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > נקודות קצה Ces reflètent la sortie CLI afin que les צינורות puissent passer
@@ -208,18 +208,18 @@ que manifests et payloads se תיקון הלוך ושוב avant l'arrivée des A
      une fois le modèle de governance défini; pour l'instant, le design suppose des
      quotas stricts et des operations d'unpin initiées par l'operateur.
 
-### Declaration de capacité et intégration du scheduling- Torii relaie désormais les mises à jour `CapacityDeclarationRecord` depuis `/v2/sorafs/capacity/declare`
+### Declaration de capacité et intégration du scheduling- Torii relaie désormais les mises à jour `CapacityDeclarationRecord` depuis `/v1/sorafs/capacity/declare`
   vers le `CapacityManager` embarqué, de sorte que chaque nœud construit une vue en mémoire de ses
   הקצאות chunker/lane engagées. המנהל חושף את התמונות לקריאה בלבד pour la télémétrie
-  (`GET /v2/sorafs/capacity/state`) et applique des réservations par profil ou par lane avant que de
+  (`GET /v1/sorafs/capacity/state`) et applique des réservations par profil ou par lane avant que de
   nouvelles commandes ne soient acceptées.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- L'endpoint `/v2/sorafs/capacity/schedule` accepte des payloads `ReplicationOrderV1` émis par la governance.
+- L'endpoint `/v1/sorafs/capacity/schedule` accepte des payloads `ReplicationOrderV1` émis par la governance.
   Lorsque l'ordre cible le provider local, le manager vérifie la planification en doublon, valide la
   נתיב/נתיב קיבולת, רזרב לה נתון, et renvoie un `ReplicationPlan` décrivant la capacité restante
   afin que les outils d'orchestration puissent poursuivre l'ingestion. Les ordres pour d'autres ספקים
   sont acquités avec une réponse `ignored` pour faciliter les workflows multi-operateurs.【crates/iroha_torii/src/routing.rs:4845】
 - מערער Des hooks de complétion (par ex. déclenchés après succès d'ingestion)
-  `POST /v2/sorafs/capacity/complete` pour liberer les réservations via `CapacityManager::complete_order`.
+  `POST /v1/sorafs/capacity/complete` pour liberer les réservations via `CapacityManager::complete_order`.
   התגובה כוללת תמונת מצב `ReplicationRelease` (מנוחה מוחלטת, נתיב/נתיב רזידואלים)
   les outils d'orchestration puissent queue la commande suivante sans polling. Un travail futur reliera
   cela au pipeline de chunk store lorsque la logique d'ingestion sera prête.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】

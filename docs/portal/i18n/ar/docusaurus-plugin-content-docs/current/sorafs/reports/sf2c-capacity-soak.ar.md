@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 يُعرض Torii الآن لقطات رصيد المتحكمين جنبًا إلى جنب مع دفاتر الرسوم حتى يبدأ التحميل
 من الضبط على الأرصدة المنخفضة وضربات الجزاء:
 
-- REST: `GET /v2/sorafs/capacity/state` يعيد الإرسالات `credit_ledger[*]` التي
+- REST: `GET /v1/sorafs/capacity/state` يعيد الإرسالات `credit_ledger[*]` التي
   حيازة دفتر الأستاذ الذي تم التحقق منه في اختبار نقع. إعادة النظر
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana استيراد : `dashboards/grafana/sorafs_capacity_penalties.json` يرسم

@@ -15,7 +15,7 @@ title: Réconciliation de capacité SoraFS
 description: Workflow nocturne pour faire correspondre les registres de frais de capacité aux exports de transferts XOR.
 ---
 
-L’item de roadmap **SF-2c** impose que la trésorerie prouve que le registre des frais de capacité correspond aux transferts XOR exécutés chaque nuit. Utilisez le helper `scripts/telemetry/capacity_reconcile.py` pour comparer le snapshot `/v2/sorafs/capacity/state` au lot de transferts exécuté et émettre des métriques textuelles Prometheus pour Alertmanager.
+L’item de roadmap **SF-2c** impose que la trésorerie prouve que le registre des frais de capacité correspond aux transferts XOR exécutés chaque nuit. Utilisez le helper `scripts/telemetry/capacity_reconcile.py` pour comparer le snapshot `/v1/sorafs/capacity/state` au lot de transferts exécuté et émettre des métriques textuelles Prometheus pour Alertmanager.
 
 ## Prérequis
 - Snapshot d’état de capacité (entrées `fee_ledger`) exporté depuis Torii.

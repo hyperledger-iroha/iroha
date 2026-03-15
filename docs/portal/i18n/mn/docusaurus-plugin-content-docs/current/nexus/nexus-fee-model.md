@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
   XOR нь нэн даруй, үс засалт хийсний дараа хүлээгдэж буй XOR, ойлгосон
   хэлбэлзэл (`xor_variance_micro`), миллисекундээр блокийн цагийн тэмдэг.
 - Гүйцэтгэлийг блоклох нь нэг эгнээ/өгөгдлийн орон зайд хүлээн авсан дүнг нэгтгэж, нийтэлдэг.
-  `/v2/sumeragi/status` дахь `lane_settlement_commitments`-ээр дамжуулан.  Нийт дүн
+  `/v1/sumeragi/status` дахь `lane_settlement_commitments`-ээр дамжуулан.  Нийт дүн
   `total_local_micro`, `total_xor_due_micro`, болон
   `total_xor_after_haircut_micro`-ийг шөнийн цагаар нийтэлсэн
   эвлэрүүлэх экспорт.

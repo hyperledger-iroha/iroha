@@ -24,12 +24,12 @@ Las presentaciones de pruebas de bridge pasan por la ruta estandar de instruccio
 
 ## Superficie de API Torii
 
-- `GET /v2/zk/proofs` y `GET /v2/zk/proofs/count` aceptan filtros con conocimiento de bridge:
+- `GET /v1/zk/proofs` y `GET /v1/zk/proofs/count` aceptan filtros con conocimiento de bridge:
   - `bridge_only=true` devuelve solo pruebas de bridge.
   - `bridge_pinned_only=true` limita a pruebas de bridge fijadas.
   - `bridge_start_from_height` / `bridge_end_until_height` acotan la ventana de rango del bridge.
-- `GET /v2/zk/proof/{backend}/{hash}` devuelve metadatos de bridge (rango, hash de manifest, resumen de payload) junto con el id/estado de la prueba y enlaces de VK.
-- El registro completo de pruebas Norito (incluyendo bytes del payload) sigue disponible via `GET /v2/proofs/{proof_id}` para verificadores fuera del nodo.
+- `GET /v1/zk/proof/{backend}/{hash}` devuelve metadatos de bridge (rango, hash de manifest, resumen de payload) junto con el id/estado de la prueba y enlaces de VK.
+- El registro completo de pruebas Norito (incluyendo bytes del payload) sigue disponible via `GET /v1/proofs/{proof_id}` para verificadores fuera del nodo.
 
 ## Eventos de recibos de bridge
 

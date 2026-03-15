@@ -253,7 +253,7 @@ iroha ledger asset mint \
   --quantity 500
 
 # Resolve alias to canonical aid via Torii
-curl -sS http://127.0.0.1:8080/v2/assets/aliases/resolve \
+curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
   -d '{"alias":"pkr#ubl@sbp"}'
 ```移行メモ:

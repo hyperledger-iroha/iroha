@@ -26,7 +26,7 @@ Asegúrese de que no haya productos en el mercado para operadores de máquinas d
 
 ### Proveedores de integración| Proverka | Validación | Доказательство |
 |-------|------------|----------|
-| Registro de códigos de registro canónicos | La prueba integrada incluye `/v2/sorafs/capacity/declare` con la API de la aplicación, la comprobación de datos, la actualización de metadatos y la actualización de los nuevos registros. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registro de códigos de registro canónicos | La prueba integrada incluye `/v1/sorafs/capacity/declare` con la API de la aplicación, la comprobación de datos, la actualización de metadatos y la actualización de los nuevos registros. | `crates/iroha_torii/src/routing.rs:7654` |
 | Contrato inteligente que protege las cargas útiles | La garantía de la prueba unitaria, los proveedores de ID y los GiB comprometidos cumplen con la declaración oficial previa. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI выпускает канонические artefactos integrados | El arnés CLI contiene datos de ida y vuelta válidos Norito/JSON/Base64 y los operadores pueden activar declaraciones fuera de línea. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Руководство оператора описывает flujo de trabajo primero y guardarrailes управления | La documentación sobre las declaraciones, la política de incumplimientos y las revisiones del consejo. | `../storage-capacity-marketplace.md` |

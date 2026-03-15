@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![doc = "Router-level test for GET /v2/sumeragi/phases (compact per-phase latencies)"]
+#![doc = "Router-level test for GET /v1/sumeragi/phases (compact per-phase latencies)"]
 #![cfg(feature = "telemetry")]
 
 #[tokio::test]
@@ -29,14 +29,14 @@ async fn sumeragi_phases_endpoint_shape() {
 
     // Build a tiny router with the phases endpoint handler
     let app = Router::new().route(
-        "/v2/sumeragi/phases",
+        "/v1/sumeragi/phases",
         get(|| async move { iroha_torii::handle_v1_sumeragi_phases(None).await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/phases")
+                .uri("/v1/sumeragi/phases")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

@@ -17,8 +17,8 @@ Cette note etend la feuille de route de la Phase A en petites taches d ingenieri
 - DONE: Exposer les types Norito `Proposal`/`Vote`/`Qc` dans `BlockMessage` et exercer les round-trips encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - DONE: Bloquer les frames precedents `BlockSigned/BlockCommitted`; le toggle de migration est reste a `false` avant le retrait.
 - DONE: Retirer le knob de migration qui basculait les anciens messages de bloc; le mode Vote/commit certificate est maintenant le seul chemin wire.
-- DONE: Mettre a jour les routeurs Torii, les commandes CLI et les consommateurs de telemetrie pour preferer les snapshots JSON `/v2/sumeragi/*` aux anciens frames de bloc.
-- DONE: La couverture d integration exerce les endpoints `/v2/sumeragi/*` uniquement via le pipeline Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- DONE: Mettre a jour les routeurs Torii, les commandes CLI et les consommateurs de telemetrie pour preferer les snapshots JSON `/v1/sumeragi/*` aux anciens frames de bloc.
+- DONE: La couverture d integration exerce les endpoints `/v1/sumeragi/*` uniquement via le pipeline Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - DONE: Supprimer les anciens frames une fois la parite fonctionnelle et les tests d interop en place.
 
 ### Plan de suppression des frames
@@ -59,6 +59,6 @@ Cette note etend la feuille de route de la Phase A en petites taches d ingenieri
 ### Etapes immediates
 1. DONE: Le harness de jitter borne exerce les metriques de jitter pacemaker (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. DONE: Renforcer les assertions de deferral RBC dans `npos_queue_backpressure_triggers_metrics` en amorcant une pression deterministe du store RBC (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. DONE: Etendre le soak de `/v2/sumeragi/telemetry` pour couvrir des epochs longues et des collectors adverses, en comparant les snapshots aux compteurs Prometheus sur plusieurs heights. Couvert par `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
+3. DONE: Etendre le soak de `/v1/sumeragi/telemetry` pour couvrir des epochs longues et des collectors adverses, en comparant les snapshots aux compteurs Prometheus sur plusieurs heights. Couvert par `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 
 Suivre cette liste ici permet de garder `roadmap.md` concentre sur les jalons tout en donnant a l equipe une checklist vivante. Mettre a jour les entrees (et marquer l achevement) au fil des patchs.

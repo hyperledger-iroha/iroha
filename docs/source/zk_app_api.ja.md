@@ -23,14 +23,14 @@ translator: manual
 添付ファイルは証明エンベロープや JSON DTO などのサニタイズ済みアーティファクトを保存します。識別子は決定的に決まります。
 
 エンドポイント:
-- `POST /v2/zk/attachments` — 添付ファイルを保存し、`{ id, size, content_type, created_ms }` を返す。
-- `GET  /v2/zk/attachments` — 保存済みメタデータを一覧（JSON 配列）。クエリフィルタ: `id`, `content_type`, `since_ms`, `before_ms`, `has_tag=<TAG>`（ZK1 TLV タグ、例: `PROF`, `IPAK`）、`limit`, `offset`, `order=asc|desc`, `ids_only=true`。
-- `GET  /v2/zk/attachments/:id` — ID 指定で保存済みバイトを取得。コンテントタイプ維持。
-- `DELETE /v2/zk/attachments/:id` — 添付ファイルとメタデータを削除。
-- `GET  /v2/zk/attachments/count` — 同フィルタで `{ count }` を取得。
-- `GET  /v2/zk/proof/{backend}/{hash}` — バックエンドとハッシュで証明レコードを取得（JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`）。
-- `GET  /v2/zk/proofs` — 証明レコード一覧。フィルタ: `backend`, `status=Submitted|Verified|Rejected`, `has_tag=<TAG>`（`zk-proof-tags` が必要）, `verified_from_height`, `verified_until_height`, `limit`, `offset`, `order=asc|desc`, `ids_only=true`。
-- `GET  /v2/zk/proofs/count` — 証明レコード数 `{ count }` を返す。
+- `POST /v1/zk/attachments` — 添付ファイルを保存し、`{ id, size, content_type, created_ms }` を返す。
+- `GET  /v1/zk/attachments` — 保存済みメタデータを一覧（JSON 配列）。クエリフィルタ: `id`, `content_type`, `since_ms`, `before_ms`, `has_tag=<TAG>`（ZK1 TLV タグ、例: `PROF`, `IPAK`）、`limit`, `offset`, `order=asc|desc`, `ids_only=true`。
+- `GET  /v1/zk/attachments/:id` — ID 指定で保存済みバイトを取得。コンテントタイプ維持。
+- `DELETE /v1/zk/attachments/:id` — 添付ファイルとメタデータを削除。
+- `GET  /v1/zk/attachments/count` — 同フィルタで `{ count }` を取得。
+- `GET  /v1/zk/proof/{backend}/{hash}` — バックエンドとハッシュで証明レコードを取得（JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`）。
+- `GET  /v1/zk/proofs` — 証明レコード一覧。フィルタ: `backend`, `status=Submitted|Verified|Rejected`, `has_tag=<TAG>`（`zk-proof-tags` が必要）, `verified_from_height`, `verified_until_height`, `limit`, `offset`, `order=asc|desc`, `ids_only=true`。
+- `GET  /v1/zk/proofs/count` — 証明レコード数 `{ count }` を返す。
 
 詳細:
 - ID はサニタイズ後のリクエストボディの Blake2b-32（小文字 hex）。
@@ -52,10 +52,10 @@ translator: manual
 - その他: JSON → Norito の順でデコードを試み、失敗時は `ok: false` でエラーを記録。
 
 エンドポイント:
-- `GET /v2/zk/prover/reports` — レポート一覧（フィルタ: `ok_only`, `failed_only`, `errors_only`, `id`, `content_type`, `has_tag`, `limit`, `since_ms`, `before_ms`, `order`, `offset`, `latest`, `ids_only`, `messages_only`）。
-- `GET /v2/zk/prover/reports/:id` — 単一レポート取得。
-- `DELETE /v2/zk/prover/reports` — フィルタ条件に一致するレポートを一括削除。戻り値 `{ deleted, ids }`。
-- `DELETE /v2/zk/prover/reports/:id` — 単一削除。
+- `GET /v1/zk/prover/reports` — レポート一覧（フィルタ: `ok_only`, `failed_only`, `errors_only`, `id`, `content_type`, `has_tag`, `limit`, `since_ms`, `before_ms`, `order`, `offset`, `latest`, `ids_only`, `messages_only`）。
+- `GET /v1/zk/prover/reports/:id` — 単一レポート取得。
+- `DELETE /v1/zk/prover/reports` — フィルタ条件に一致するレポートを一括削除。戻り値 `{ deleted, ids }`。
+- `DELETE /v1/zk/prover/reports/:id` — 単一削除。
 
 プローバーワーカー設定（Torii `config.json`）:
 - `torii.zk_prover_enabled` — 有効化（既定 false）。
@@ -98,10 +98,10 @@ translator: manual
 Torii にはオンチェーンの検証鍵レジストリを扱う仲介エンドポイントがあります。署名付きトランザクションの生成／送信を自動化します。
 
 エンドポイント:
-- `POST /v2/zk/vk/register` — `RegisterVerifyingKey` を送信
-- `POST /v2/zk/vk/update` — `UpdateVerifyingKey`（version を増分）
-- `POST /v2/zk/vk/deprecate` — `DeprecateVerifyingKey`
-- `GET  /v2/zk/vk/{backend}/{name}` — レコード取得
+- `POST /v1/zk/vk/register` — `RegisterVerifyingKey` を送信
+- `POST /v1/zk/vk/update` — `UpdateVerifyingKey`（version を増分）
+- `POST /v1/zk/vk/deprecate` — `DeprecateVerifyingKey`
+- `GET  /v1/zk/vk/{backend}/{name}` — レコード取得
 
 - `vk_bytes` (base64) — 検証鍵本体。`commitment_hex` 指定時は一致を検証。`vk_len` を追加すると長さを事前検証できます。
 - `commitment_hex` (64 hex) — コミットメントのみを運ぶ場合。鍵本体を省略するため `vk_len` を必須で指定します。
@@ -175,8 +175,8 @@ iroha ledger trigger register \
 ## ガバナンスエンドポイント（ZK 投票）
 
 ZK 投票関連のエンドポイントは Governance App API を参照（`private_key` がある場合は Torii が署名・送信し、ない場合はスケルトンを返す）:
-- `POST /v2/gov/ballots/zk` — `CastZkBallot` スケルトンを返す
-- `POST /v2/gov/ballots/zk-v1` — v1 形式 DTO
-- `POST /v2/gov/ballots/zk-v1/ballot-proof` — `BallotProof` JSON を直接受け付け（`zk-ballot` フィーチャー）
+- `POST /v1/gov/ballots/zk` — `CastZkBallot` スケルトンを返す
+- `POST /v1/gov/ballots/zk-v1` — v1 形式 DTO
+- `POST /v1/gov/ballots/zk-v1/ballot-proof` — `BallotProof` JSON を直接受け付け（`zk-ballot` フィーチャー）
 
 詳細は `docs/source/governance_api.md` を参照。

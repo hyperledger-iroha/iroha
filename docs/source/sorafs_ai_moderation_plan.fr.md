@@ -204,7 +204,7 @@ the expected layout and feeds directly into the sample gateway denylist.
   - Entry point `run_moderation.py` (or Rust equivalent) exposing HTTP/gRPC API.
 - Publish artefacts to `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
 - Runner binary ships as part of `sorafs_ai_runner` crate. The build pipeline
-  embeds manifest hash in the binary (exposed via `/v2/info`).
+  embeds manifest hash in the binary (exposed via `/v1/info`).
 
 ## 8. Telemetry & Observability
 - Prometheus metrics:

@@ -74,7 +74,7 @@ paso a paso detallado.
    de puesta en escena referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifique que los anuncios del proveedor se propaguen a través de una API de descubrimiento:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Ejercite los puntos finales de manifiesto/plan con encabezados de gobierno:
    ```bash

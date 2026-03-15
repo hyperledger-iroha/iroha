@@ -47,7 +47,7 @@ Torii. Каждый раздел напрямую соответствует ent
 
 - Verifique se o processo Torii é fornecido para a tela/exibição para `data_dir`.
 - Подтвердите, что узел объявляет ожидаемую ёмкость через
-  `GET /v2/sorafs/capacity/state` contém declarações de declaração.
+  `GET /v1/sorafs/capacity/state` contém declarações de declaração.
 - При включённом сглаживании дашборды показывают как сырые, так и сглаженные
   счётчики GiB·hour/PoR, чтобы подчёркивать тренды без джиттера рядом с
   мгновенными значениями.
@@ -97,8 +97,8 @@ Você pode clicar em → transferir → ver o arquivo off-line para executar a A
 A configuração Torii pode exigir que os artefatos sejam HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Para obter um ponto de venda específico, você pode usar o trabalhador de armazenamento, usar testes de fumaça CLI e
@@ -111,7 +111,7 @@ Para obter um ponto de venda específico, você pode usar o trabalhador de armaz
 2. Abra o manifesto no código base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -121,7 +121,7 @@ Para obter um ponto de venda específico, você pode usar o trabalhador de armaz
 3. Verifique os danos:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -136,7 +136,7 @@ Para obter um ponto de venda específico, você pode usar o trabalhador de armaz
 2. Selecione o processo Torii (ou seu uso).
 3. Повторно отправьте запрос fetch. Payload é adicionado a um resumo, um resumo em
    ответе должен совпасть с предшествующим перезапуску.
-4. Verifique `GET /v2/sorafs/storage/state`, que é usado, que `bytes_used` funciona
+4. Verifique `GET /v1/sorafs/storage/state`, que é usado, que `bytes_used` funciona
    manifestos сохранённые после перезагрузки.
 
 ## 4. Teste o valor da chave
@@ -154,7 +154,7 @@ Para obter um ponto de venda específico, você pode usar o trabalhador de armaz
 2. Abra o PoR-выборку:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -179,7 +179,7 @@ Para obter um ponto de venda específico, você pode usar o trabalhador de armaz
 - Дашборды должны отслеживать:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   -`torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
-  - счётчики успехов/неудач PoR, публикуемые через `/v2/sorafs/capacity/state`
+  - счётчики успехов/неудач PoR, публикуемые через `/v1/sorafs/capacity/state`
   - liquidação pública попытки публикации через `sorafs_node_deal_publish_total{result=success|failure}`
 
 O período de garantia é garantido, o que significa que o trabalhador de armazenamento é contratado

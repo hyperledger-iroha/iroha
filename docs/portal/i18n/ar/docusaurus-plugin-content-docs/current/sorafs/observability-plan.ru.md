@@ -78,7 +78,7 @@ Sidebar_label: Наблюдаемость وSLO
 | `sorafs_node_por_failure_total` | عداد | `provider_id` | monotonnый счетчик неуспезный PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`، `torii_sorafs_storage_por_*` | مقياس | `provider` | مقياس Prometheus للإستخدامات المستخدمة في الطعوم والنظارات وPoR أثناء الطيران. |
 | `torii_sorafs_capacity_*`، `torii_sorafs_uptime_bps`، `torii_sorafs_por_bps` | مقياس | `provider` | شكرًا لك على توفير السعة/وقت التشغيل، وسيتم عرضها في لوحة الوصول. |
-| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | تراكم الأعمال المتراكمة بالإضافة إلى مجموعة كاملة من أدوات الحماية، التي يتم تصديرها عند إجراء عملية `/v2/sorafs/por/ingestion/{manifest}`، قم بتشغيل اللوحة/التنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | تراكم الأعمال المتراكمة بالإضافة إلى مجموعة كاملة من أدوات الحماية، التي يتم تصديرها عند إجراء عملية `/v1/sorafs/por/ingestion/{manifest}`، قم بتشغيل اللوحة/التنبيه "PoR Stalls". |
 
 ### إثبات الاسترجاع في الوقت المناسب (PoTR) وSLA على أجزاء| متريكا | النوع | ميتكي | منتج | مساعدة |
 |---------|-----|--------------|------------|------|--------|

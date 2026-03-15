@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-21
 - מצבי הצבעה: ZK (ברירת מחדל, דורש VK `Active` עם bytes inline) ו‑Plain (משקל
   ריבועי). אי‑התאמות מצב נדחות; יצירה/הארכה של lock הן מונוטוניות בשני המצבים
   עם בדיקות רגרסיה עבור הצבעות ZK ו‑Plain מחדש.
-- התנהגות לא תקינה של מאמתים מטופלת דרך צינור הראיות (`/v2/sumeragi/evidence*`,
+- התנהגות לא תקינה של מאמתים מטופלת דרך צינור הראיות (`/v1/sumeragi/evidence*`,
   עזרי CLI) עם העברות joint‑consensus שנאכפות ע"י `NextMode` + `ModeActivationHeight`.
 - שמות־מרחב מוגנים, hooks לשדרוג runtime, והודאת governance manifest מתועדים
   ב‑`governance_api.md` ומכוסים בטלמטריה (`governance_manifest_*`,

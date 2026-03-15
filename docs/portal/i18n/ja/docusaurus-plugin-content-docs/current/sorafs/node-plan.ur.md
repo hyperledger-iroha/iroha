@@ -62,7 +62,7 @@ SF-3 実行可能 `sorafs-node` クレート Iroha/Torii プロセス SoraFS ス
 - Torii Axum スタック `norito::json` ペイロード数
 - 応答 Norito スキーマ (`PinResultV1`、`FetchErrorV1`、テレメトリ構造体)
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` バックログの深さ 最も古いエポック/期限 プロバイダー 最近の成功/失敗のタイムスタンプ `sorafs_node::NodeHandle::por_ingestion_status` パワード ہے، Torii ダッシュボード `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ゲージ レコードہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` バックログの深さ 最も古いエポック/期限 プロバイダー 最近の成功/失敗のタイムスタンプ `sorafs_node::NodeHandle::por_ingestion_status` パワード ہے، Torii ダッシュボード `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ゲージ レコードہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. スケジューラとクォータの適用|タスク |詳細 |
 |-----|----------|

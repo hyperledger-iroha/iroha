@@ -38,7 +38,7 @@ codes Norito ; le repli sur serde/JSON n'est pas disponible.
 ## Surface API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -210,7 +210,7 @@ chunking и проверкой опциональных manifestes.
   который уже питает `iroha app sorafs fetch`. Les opérateurs peuvent acheter des artefacts
   manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou** avant
   Ticket de stockage Torii par `--storage-ticket`. Lors de l'utilisation du ticket CLI
-  télécharger le manifeste depuis `/v2/da/manifests/<ticket>`, avec le bundle dans`artifacts/da/fetch_<timestamp>/` (remplacer par `--manifest-cache-dir`), выводит
+  télécharger le manifeste depuis `/v1/da/manifests/<ticket>`, avec le bundle dans`artifacts/da/fetch_<timestamp>/` (remplacer par `--manifest-cache-dir`), выводит
   Hachage de blob pour `--manifest-id` et installation d'orchestrator à votre place
   `--gateway-provider` списком. Vous trouverez des boutons pour le récupérateur SoraFS
   сохраняются (enveloppes de manifestes, étiquettes de clients, caches de garde, anonymes
@@ -219,7 +219,7 @@ chunking и проверкой опциональных manifestes.
   Ainsi, la disponibilité de bout en bout est vérifiée dans l'espace de noms `da` sans
   дублирования orchestrator logiques.
 - `iroha app da get-blob` забирает канонические manifestes напрямую из Torii ici
-  `GET /v2/da/manifests/{storage_ticket}`. Commanda Pischet
+  `GET /v1/da/manifests/{storage_ticket}`. Commanda Pischet
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` et `chunk_plan_{ticket}.json`
   dans `artifacts/da/fetch_<timestamp>/` (ou `--output-dir`), par
   Ceci est la commande `iroha app da get` (`--manifest-id`), maintenant

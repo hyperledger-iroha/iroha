@@ -25,12 +25,12 @@ Körpü sübut təqdimatları standart təlimat yolundan (`SubmitBridgeProof`) k
 
 ## Torii API səthi
 
-- `GET /v2/zk/proofs` və `GET /v2/zk/proofs/count` körpüdən xəbərdar filtrləri qəbul edir:
+- `GET /v1/zk/proofs` və `GET /v1/zk/proofs/count` körpüdən xəbərdar filtrləri qəbul edir:
   - `bridge_only=true` yalnız körpü sübutlarını qaytarır.
   - `bridge_pinned_only=true` bərkidilmiş körpü sübutlarına qədər daralır.
   - `bridge_start_from_height` / `bridge_end_until_height` körpü diapazonu pəncərəsini sıxın.
-- `GET /v2/zk/proof/{backend}/{hash}` sübut id/status/VK bağlamaları ilə yanaşı körpü metadatasını (aralıq, manifest hash, faydalı yükün xülasəsi) qaytarır.
-- Tam Norito sübut qeydi (faydalı yük baytları daxil olmaqla) node yoxlayıcılar üçün `GET /v2/proofs/{proof_id}` vasitəsilə mövcuddur.
+- `GET /v1/zk/proof/{backend}/{hash}` sübut id/status/VK bağlamaları ilə yanaşı körpü metadatasını (aralıq, manifest hash, faydalı yükün xülasəsi) qaytarır.
+- Tam Norito sübut qeydi (faydalı yük baytları daxil olmaqla) node yoxlayıcılar üçün `GET /v1/proofs/{proof_id}` vasitəsilə mövcuddur.
 
 ## Körpü qəbz hadisələri
 

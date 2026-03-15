@@ -46,7 +46,7 @@ Maxfiy eslatma konvertlari endi `fixtures/confidential/encrypted_payload_v1.json
 Swift SDK-lar endi maxsus JSON elimsiz qalqon ko'rsatmalarini chiqarishi mumkin:
 `ShieldRequest` 32 baytli nota majburiyati, shifrlangan foydali yuk va debet metamaʼlumotlari bilan,
 keyin imzo qo'yish va uzatish uchun `IrohaSDK.submit(shield:keypair:)` (yoki `submitAndWait`) ga qo'ng'iroq qiling.
-`/v2/pipeline/transactions` dan ortiq tranzaksiya. Yordamchi majburiyat muddatini tasdiqlaydi,
+`/v1/pipeline/transactions` dan ortiq tranzaksiya. Yordamchi majburiyat muddatini tasdiqlaydi,
 `ConfidentialEncryptedPayload` ni Norito kodlovchisiga ulaydi va `zk::Shield` ni aks ettiradi
 tartibi quyida tasvirlangan, shuning uchun hamyonlar Rust bilan qulflangan qadamda qoladi.
 
@@ -78,7 +78,7 @@ tartibi quyida tasvirlangan, shuning uchun hamyonlar Rust bilan qulflangan qadam
 
 #### Torii orqali o'tishlarni kuzatish
 
-Hamyonlar va auditorlar tekshirish uchun `GET /v2/confidential/assets/{definition_id}/transitions` so'rovi
+Hamyonlar va auditorlar tekshirish uchun `GET /v1/confidential/assets/{definition_id}/transitions` so'rovi
 faol `AssetConfidentialPolicy`. JSON foydali yuki har doim kanonikni o'z ichiga oladi
 aktiv identifikatori, oxirgi kuzatilgan blok balandligi, siyosatning `current_mode`, rejim
 bu balandlikda amal qiladi (konversiya oynalari vaqtincha `Convertible` haqida xabar beradi) va
@@ -130,7 +130,7 @@ Yuqorida sanab o'tilmagan o'tishlar boshqaruvni taqdim etish paytida rad etiladi
 ### Migratsiya ketma-ketligi
 
 2. **O‘tish bosqichi:** `ScheduleConfidentialPolicyTransition` ni `effective_height` bilan `policy_transition_delay_blocks` ga mos ravishda yuboring. `ShieldedOnly` tomon harakatlanayotganda konvertatsiya oynasini belgilang (`window ≥ policy_transition_window_blocks`).
-3. **Operator yo‘riqnomasini nashr qilish:** Qaytarilgan `transition_id` ni yozib oling va rampni yoqish/o‘chirish kitobini tarqating. Hamyonlar va auditorlar oynaning ochiq balandligini o'rganish uchun `/v2/confidential/assets/{id}/transitions` ga obuna bo'lishadi.
+3. **Operator yo‘riqnomasini nashr qilish:** Qaytarilgan `transition_id` ni yozib oling va rampni yoqish/o‘chirish kitobini tarqating. Hamyonlar va auditorlar oynaning ochiq balandligini o'rganish uchun `/v1/confidential/assets/{id}/transitions` ga obuna bo'lishadi.
 4. **Oynani qo'llash:** Oyna ochilganda, ish vaqti siyosatni `Convertible` ga o'zgartiradi, `PolicyTransitionWindowOpened { transition_id }` chiqaradi va ziddiyatli boshqaruv so'rovlarini rad etishni boshlaydi.
 5. **Yakunlash yoki to‘xtatish:** `effective_height` da ish vaqti o‘tish shartlarini tekshiradi (nol shaffof ta’minot, favqulodda vaziyatlarda olib qo‘yish yo‘q va h.k.). Muvaffaqiyat siyosatni talab qilingan rejimga o'zgartiradi; muvaffaqiyatsizlik `PolicyTransitionPrerequisiteFailed` chiqaradi, kutilayotgan o'tishni o'chiradi va siyosatni o'zgarishsiz qoldiradi.
 6. **Sxema yangilanishi:** Muvaffaqiyatli oʻtishdan soʻng boshqaruv aktivlar sxemasi versiyasini (masalan, `asset_definition.v2`) oʻzgartiradi va manifestlarni ketma-ketlashtirishda CLI vositalari `confidential_policy` ni talab qiladi. Genesis yangilash hujjatlari operatorlarga validatorlarni qayta ishga tushirishdan oldin siyosat sozlamalari va registr barmoq izlarini qo‘shishni buyuradi.
@@ -254,7 +254,7 @@ qulflangan qadam.
 - Hisob uchun kalitlarni hosil qilish ierarxiyasi:
   - `sk_spend` → `nk` (nullifier kaliti), `ivk` (kirish ko'rish kaliti), `ovk` (chiqish ko'rish kaliti), `fvk`.
 - Shifrlangan eslatma yuklamalari ECDH-dan olingan umumiy kalitlarga ega AEAD-dan foydalanadi; ixtiyoriy auditor ko'rinishi kalitlari har bir aktiv siyosati natijalariga biriktirilishi mumkin.
-- CLI qo'shimchalari: `confidential create-keys`, `confidential send`, `confidential export-view-key`, eslatmalar shifrini ochish uchun auditor asboblari va Kotodama oflayn konvertlarini ishlab chiqarish/tekshirish uchun `iroha app zk envelope` yordamchisi. Torii `POST /v2/confidential/derive-keyset` orqali bir xil hosila oqimini ochib beradi, ham hex va base64 shakllarini qaytaradi, shuning uchun hamyonlar asosiy ierarxiyalarni dasturiy tarzda olishlari mumkin.
+- CLI qo'shimchalari: `confidential create-keys`, `confidential send`, `confidential export-view-key`, eslatmalar shifrini ochish uchun auditor asboblari va Kotodama oflayn konvertlarini ishlab chiqarish/tekshirish uchun `iroha app zk envelope` yordamchisi. Torii `POST /v1/confidential/derive-keyset` orqali bir xil hosila oqimini ochib beradi, ham hex va base64 shakllarini qaytaradi, shuning uchun hamyonlar asosiy ierarxiyalarni dasturiy tarzda olishlari mumkin.
 
 ## Gaz, limitlar va DoS boshqaruvlari
 - deterministik gaz jadvali:

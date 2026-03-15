@@ -68,7 +68,7 @@ linguagens e plataformas.
 Um nó Iroha executa vários serviços cooperantes:
 
 - **Torii (`iroha_torii`)** expõe APIs HTTP/WebSocket para transações, consultas, eventos de streaming e
-  telemetria (pontos finais `/v2/...`).
+  telemetria (pontos finais `/v1/...`).
 - **Core (`iroha_core`)** coordena validação, consenso, execução, governança e gestão de estado.
 - **Sumeragi (`iroha_core::sumeragi`)** implementa o pipeline de consenso pronto para NPoS com alterações de visualização,
   disponibilidade confiável de dados de transmissão e certificados de confirmação. Veja o

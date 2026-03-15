@@ -225,7 +225,7 @@ malicious providers کو whitelist کرتا ہے، یا alerts suppress کرتا
 
 - DA-2 میں replay cache اور cursor persistence آچکی ہے۔ Implementation دیکھیں
   שילוב `crates/iroha_core/src/da/replay_cache.rs` (לוגיקת מטמון) אור Torii
-  `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v2/da/ingest` کے ذریعے fingerprint
+  `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے fingerprint
   checks thread کرتا ہے۔
 - רתמת הוכחת זרם של PDP/PoTR זרימת סימולציות.
   `crates/sorafs_car/tests/sorafs_cli.rs`. یہ PoR/PDP/PoTR request flows اور

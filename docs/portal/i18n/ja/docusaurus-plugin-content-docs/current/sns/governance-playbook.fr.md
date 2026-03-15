@@ -50,7 +50,7 @@ Il couvre les Phases de beta fermee (N0)、lancement public (N1) および拡張
 |行政管理 |憲章の承認と接尾辞の政治、訴訟の評決とスチュワードの交替。 | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`、`sns governance charter submit` 経由の株式管理速報。 |大統領コンセイユ + 行政文書の作成。 |
 |コンセイユ・デ・ガーディアン |ゲルのソフト/ハード、緊急の規範、およびレビュー 72 時間。 |チケット ガーディアン emis パー `sns governance freeze`、マニフェスト ドーオーバーライド 委託品 `artifacts/sns/guardian/*`。 |ローテーション ガーディアンがオンコール中 (ACK が 15 分未満)。 |
 |スチュワード・ド・サフィックス |レジストラのファイル、アンシェール、プリニヴォーなどの通信クライアント。偵察兵。 | Politics de Steward dans `SuffixPolicyV1`、Fiches de Reference de prix、Acknowledgments de Steward は、cote des memo reglementaires をストックします。 |主任プログラム スチュワード + PagerDuty のサフィックス。 |
-|運用レジストラとファクチュレーション |エンドポイント `/v2/sns/*` の操作、支払いの調整、テレメトリーおよびスナップショット CLI の保守の管理。 | API レジストラー ([`registrar-api.md`](./registrar-api.md))、メトリクス `sns_registrar_status_total`、preuves de paiement archivees sous `artifacts/sns/payments/*`。 |登録および連絡管理の責任者。 |
+|運用レジストラとファクチュレーション |エンドポイント `/v1/sns/*` の操作、支払いの調整、テレメトリーおよびスナップショット CLI の保守の管理。 | API レジストラー ([`registrar-api.md`](./registrar-api.md))、メトリクス `sns_registrar_status_total`、preuves de paiement archivees sous `artifacts/sns/payments/*`。 |登録および連絡管理の責任者。 |
 |オペレーター リゾルバーとゲートウェイ | SoraDNS、GAR などのゲートウェイをレジストラのイベントに合わせて保守します。拡散性の透明性。 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 | SRE リゾルバー オンコール + ブリッジ運用ゲートウェイ。 |
 |トレゾリーと金融 |再分割 70/30、照会のカーブアウト、保管庫/保管庫および証明書 SLA の申請。 |収益の蓄積マニフェスト、ストライプ/トレゾリの輸出、付録 KPI トリメストリエル スー `docs/source/sns/regulatory/`。 |財務管理者 + 責任ある適合者。 |
 |連絡調整と規制 |グローバルな義務に準拠し (EU DSA など)、1 時間の契約 KPI と漏洩の証拠を満たしました。 | `docs/source/sns/regulatory/` のレグルメンテール、デッキのリファレンス、テーブル上のリハーサルのメインディッシュ `ops/drill-log.md` のメモ。 |プログラム不適合者をリードします。 |
@@ -173,7 +173,7 @@ Les canons d'urgence (ガーディアンのゲルのデクレンシュ <= 72 時
 |信号 |出典 |説明/アクション |
 |--------|--------|-----------|
 | `sns_registrar_status_total{result,suffix}` |ゲストレジストラ Torii |登録、再構築、ジェル、転送の成功/失敗を計算します。接尾辞 `result="error"` を拡張します。 |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` |メトリクス Torii | SLO 遅延遅延ハンドラー API。 `torii_norito_rpc_observability.json` のダッシュボードの問題。 |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` |メトリクス Torii | SLO 遅延遅延ハンドラー API。 `torii_norito_rpc_observability.json` のダッシュボードの問題。 |
 | `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` |透明リゾルバーのテーラー | GAR を導出するペリメートの検出。 `dashboards/alerts/soradns_transparency_rules.yml` によるガードファウスの定義。 |
 | `sns_governance_activation_total` | CLI ガバナンス | Compteur は、チャート/付録のアクティベーションを追加します。調整者による決定とコンセイユと追加の公開を利用します。 |
 | `guardian_freeze_active` ゲージ | CLI ガーディアン |スーツ レ フェネトル ドゥ ジェル ソフト/ハード パー選択者。ページ SRE si la valeurreste `1` au-dela du SLA を宣言します。 |

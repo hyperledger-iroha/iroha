@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 የድህረ ማጽደቅ ውቅረት ቅጽበተ-ፎቶዎች
 
 የሪፈረንደም ወይም የአስተዳደር ድምጽ ከተጠናቀቀ እና `[settlement.repo]`
-ለውጥ ተዘርግቷል፣የ `/v2/configuration` ቅጽበተ-ፎቶዎችን ከእያንዳንዱ እኩያ ያንሱ
+ለውጥ ተዘርግቷል፣የ `/v1/configuration` ቅጽበተ-ፎቶዎችን ከእያንዳንዱ እኩያ ያንሱ
 ኦዲተሮች የጸደቀው ፖሊሲ በክላስተር ውስጥ የቀጥታ መሆኑን ማረጋገጥ ይችላሉ (ተመልከት
 `docs/source/finance/repo_ops.md` §2.9 ለማስረጃው የስራ ሂደት)።
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration \
+curl -fsSL https://peer01.example/v1/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

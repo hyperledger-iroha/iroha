@@ -203,7 +203,7 @@ coloca provedores maliciosos na lista de permissões ou suprime alertas.
 - O cache de repetição do DA e a persistência do cursor chegaram ao DA-2. Veja o
   implementação em `crates/iroha_core/src/da/replay_cache.rs` (lógica de cache) e
   a integração Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia o
-  verificações de impressões digitais por meio de `/v2/da/ingest`.
+  verificações de impressões digitais por meio de `/v1/da/ingest`.
 - Simulações de streaming PDP/PoTR são exercidas por meio do equipamento de fluxo de prova em
   `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de solicitação PoR/PDP/PoTR
   e cenários de falha animados no modelo de ameaça.

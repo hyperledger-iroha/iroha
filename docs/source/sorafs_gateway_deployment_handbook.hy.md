@@ -83,7 +83,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
 | Step | Description | Acceptance criteria |
 |------|-------------|---------------------|
-| 1 | Deploy new gateway instances (green) alongside existing blue pool. | healthz + `/v2/sorafs/storage/status` pass. |
+| 1 | Deploy new gateway instances (green) alongside existing blue pool. | healthz + `/v1/sorafs/storage/status` pass. |
 | 2 | Register green hosts via admission registry update; publish governance envelope. | `torii.sorafs_gateway.direct_mode.plan` dry-run shows expected vanity mapping. |
 | 3 | Shift a small traffic slice (5%) using orchestration tokens targeted at `stage-gw`. | Dashboard `grafana_sorafs_gateway_load_tests.json` shows ≤1% refusal. |
 | 4 | Expand to 50% once telemetry remains within SLOs for 30 minutes. | `torii_sorafs_stream_token_denials_total` slope near zero; `scripts/sorafs_direct_mode_smoke.sh` passes against staging gateway endpoints. |

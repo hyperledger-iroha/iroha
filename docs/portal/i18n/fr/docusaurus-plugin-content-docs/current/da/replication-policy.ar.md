@@ -32,7 +32,7 @@ _الحالة : قيد التنفيذ -- المالكون : Core Protocol WG /
 | _Par défaut (كل الفئات الاخرى)_ | 6 étapes | 30 janvier | 3 | `warm` | `da.default` |
 
 تدمج هذه القيم في `torii.da_ingest.replication_policy` وتطبق على جميع
-طلبات `/v2/da/ingest`. يعيد Torii كتابة manifestes مع ملف الاحتفاظ المفروض ويصدر
+طلبات `/v1/da/ingest`. يعيد Torii كتابة manifestes مع ملف الاحتفاظ المفروض ويصدر
 Vous pouvez utiliser des SDK pour créer des liens vers des SDK
 المتقادمة.
 
@@ -141,5 +141,5 @@ La situation actuelle est proche de celle de SoraFS pour le client
    Et PDP.
 
 توجد تغطية الانحدار في `integration_tests/tests/da/replication_policy.rs`؛ تقوم
-حزمة بارسال سياسة احتفاظ غير متطابقة الى `/v2/da/ingest` وتتحقق من ان
+حزمة بارسال سياسة احتفاظ غير متطابقة الى `/v1/da/ingest` وتتحقق من ان
 manifeste المسترجع يعرض الملف المفروض بدلا من نية المتصل.

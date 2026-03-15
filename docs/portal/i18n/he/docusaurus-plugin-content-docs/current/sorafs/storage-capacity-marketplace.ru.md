@@ -63,13 +63,13 @@ sidebar_label: Маркетплейс емкости
 - `ReplicationOrderV1` связывает מניפסטים с назначениями, выпущенными ממשל, с целями избыточности, порогами SLA assignment и гарантиMENT; валидаторы обеспечивают канонические מטפל ב-chunker, ספקי уникальные и ограничения по דדליין до того, как Prometheus סדר.【ארגזים/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` אופטימיזציה של תצלומי מצב (זמנית לעומת GiB, תקליטורים, קצבאות פעולה/תקשורת), עמלות распределение. Проверки границ удерживают использование внутри деклараций, а проценты - в пределах 0-100%.【ארגזים/sorafs_manifest/src/capacity.rs:476】
 - עוזרי שירות (`CapacityMetadataEntry`, `PricingScheduleV1`, נתיב/מקצה/SLA) יגיעו לשירותי שרת, которые могут переиспользовать CI и כלי עבודה במורד הזרם.【ארגזים/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` צור תצלום מצב על-שרשרת через `/v2/sorafs/capacity/state`, ספקי תקשורים ופנקס עמלות חשבונות Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` צור תצלום מצב על-שרשרת через `/v1/sorafs/capacity/state`, ספקי תקשורים ופנקס עמלות חשבונות Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Покрытие валидации проверяет соблюдение канонических ידיות, обнаружение дубликатов, границы полюдение канонических, שומרים проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【ארגזים/sorafs_manifest/src/capacity.rs:792】
-- כלי עבודה למפעיל: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` מפרט טכני של Norito, מפרט תקליטורים, מטענים של Norito, נקודות בסיס 64 וסיכומי JSON. подготовить גופי `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry` וגופי הזמנת שכפול с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_fxture/ifests_fxture/ifests_man:1 живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.### 2. מטוס בקרה Интеграция
+- כלי עבודה למפעיל: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` מפרט טכני של Norito, מפרט תקליטורים, מטענים של Norito, נקודות בסיס 64 וסיכומי JSON. подготовить גופי `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` וגופי הזמנת שכפול с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_fxture/ifests_fxture/ifests_man:1 живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.### 2. מטוס בקרה Интеграция
 
 | Задача | בעלים | Примечания |
 |------|----------------|-------|
-| Добавить обработчики Torii `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` עם Norito מטענים של JSON. | צוות Torii | Зеркалировать логику валидации; переиспользовать Norito עוזרי JSON. |
+| Добавить обработчики Torii `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` עם Norito מטענים של JSON. | צוות Torii | Зеркалировать логику валидации; переиспользовать Norito עוזרי JSON. |
 | צפה בתמונות בזק `CapacityDeclarationV1` ב-metadata scoreboard orchestrator и планы fetch gateway. | צוות Tooling WG / תזמורת | Расширить `provider_metadata` ссылками на קיבולת, чтобы мульти-источниковый ניקוד соблюдал лимиты по ליין. |
 | צור הזמנות שכפול ב-clients orchestrator/gateway לניהול מטלות ורמזים ל-failover. | Networking TL / Gateway צוות | בונה לוחות תוצאות потребляет подписанные פקודות שכפול ממשל. |
 | כלי CLI: расширить `sorafs_cli` командами `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Предоставить детерминированный JSON + לוח תוצאות יציאות. |
@@ -90,7 +90,7 @@ sidebar_label: Маркетплейс емкости
 | Расширить צריכת מדידה в Torii для приема `CapacityTelemetryV1`. | צוות Torii | Валидировать GiB-hour, успех PoR, זמן פעולה. |
 | Обновить מדידת צינורות `sorafs_node` для отчета по использованию на הזמנה + статистике SLA. | צוות אחסון | Согласовать с הזמנות שכפול и מטפל ב-chunker. |
 | הסדר צינור: конвертировать телеметрию + репликацию в payouts, номинированные в XOR, выдавать סיכומים מוכנים לממשל ו-ledger. | צוות אוצר / אחסנה | Подключить к Deal Engine / יצוא האוצר. |
-| Экспортировать לוחות מחוונים/התראות למטרת здоровья (בליעה של פיגור, устаревшая телеметрия). | צפייה | Расширить пакет Grafana, на который ссылаются SF-6/SF-7. |- Torii теперь публикует `/v2/sorafs/capacity/telemetry` ו- `/v2/sorafs/capacity/state` (JSON + Norito), чтобы операторы операторы мотраправя мотьправя эпохам, а инспекторы - получать канонический ספר חשבונות для аудита или упаковки доказательств.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+| Экспортировать לוחות מחוונים/התראות למטרת здоровья (בליעה של פיגור, устаревшая телеметрия). | צפייה | Расширить пакет Grafana, на который ссылаются SF-6/SF-7. |- Torii теперь публикует `/v1/sorafs/capacity/telemetry` ו- `/v1/sorafs/capacity/state` (JSON + Norito), чтобы операторы операторы мотраправя мотьправя эпохам, а инспекторы - получать канонический ספר חשבונות для аудита или упаковки доказательств.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - Интеграция `PinProviderRegistry` гарантирует, что הזמנות שכפול доступны через тот же נקודת קצה; helpers CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) צור קשר עם אוטומציה עם ריצות של אוטומציה בשיטת גיבוב ודברים אחרים.
 - תמונת מצב של מדידה פורמטית של `CapacityTelemetrySnapshot`, תמונה של תמונת מצב `metering`, ו-Prometheus ייצוא תמונה תמונה לוח Grafana ב-`docs/source/grafana_sorafs_metering.json`, чтобы команды биллинга отслеживали накопление GiB-hour, прогнозируе00180 nano соблюдение SLA в реальном времени.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - החלקת מדידה Когда включено, תמונת מצב включает `smoothed_gib_hours` ו-`smoothed_por_success_bps`, чтобы операторы могли сравнивать EMA-трезнач сырыми счетчиками, которые governance использует для תשלומים.【crates/sorafs_node/src/metering.rs:401】
@@ -164,8 +164,8 @@ sidebar_label: Маркетплейс емкости
 ### ספקי Смоук-тесты онбординга и выхода
 - Регенерируйте artefacts деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
   בדיקות CLI прогоняйте перед подачей (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Отправляйте через Torii (`/v2/sorafs/capacity/declare`), затем фиксируйте
-  `/v2/sorafs/capacity/state` плюс скриншоты Grafana. Следуйте flow выхода в
+- Отправляйте через Torii (`/v1/sorafs/capacity/declare`), затем фиксируйте
+  `/v1/sorafs/capacity/state` плюс скриншоты Grafana. Следуйте flow выхода в
   `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Архивируйте подписанные חפצי אמנות и יציאות פיוס внутри
   `docs/examples/sorafs_capacity_marketplace_validation/`.

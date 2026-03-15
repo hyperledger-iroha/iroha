@@ -61,7 +61,7 @@ La plomería en runtime enlaza las interacciones PoR a través de `sorafs_node::
 - Usa el stack Axum de Torii עם מטענים `norito::json`.
 - Arega esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría).
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del backlog más la época/límite más antiguos y los timestamps de éxito/fallo más recientes por proveedor, impulsado por `sorafs_node::NodeHandle::por_ingestion_status`, y `sorafs_node::NodeHandle::por_ingestion_status`, y I00000180x registred gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para לוחות מחוונים.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del backlog más la época/límite más antiguos y los timestamps de éxito/fallo más recientes por proveedor, impulsado por `sorafs_node::NodeHandle::por_ingestion_status`, y `sorafs_node::NodeHandle::por_ingestion_status`, y I00000180x registred gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para לוחות מחוונים.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. מתזמן y cumplimiento de cuotas
 

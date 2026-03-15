@@ -68,7 +68,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - استخدم مكدس Axum الخاص بـ Torii مع حمولات `norito::json`.
 - أضف مخططات Norito للاستجابات (`PinResultV1` و`FetchErrorV1` وبنى التليمترية).
 
-- ✅ أصبح المسار `/v2/sorafs/por/ingestion/{manifest_digest_hex}` يعرض عمق الـ backlog وأقدم epoch/deadline وأحدث طوابع النجاح/الفشل لكل مزود، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وتسجل Torii عدادات `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للّوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ أصبح المسار `/v1/sorafs/por/ingestion/{manifest_digest_hex}` يعرض عمق الـ backlog وأقدم epoch/deadline وأحدث طوابع النجاح/الفشل لكل مزود، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وتسجل Torii عدادات `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للّوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. المجدول وفرض الحصص
 

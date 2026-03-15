@@ -166,9 +166,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > O шлюз Torii агора expoe helpers только для чтения apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - возврат или манифест
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - возврат или манифест
 > Norito Armazenado (base64) junto com дайджест/метаданные. [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - возврат или плоскость фрагмента
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - возврат или плоскость фрагмента
 > Детерминированный JSON (`chunk_fetch_specs`) для последующих инструментов. [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > Конечные точки Esses используются в CLI для того, чтобы трубопроводы могли троакарами
@@ -211,19 +211,19 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      degovanca estiver definido; пора или дизайн принять квоты estritas e
      Операции по откреплению начальных операций оператора.
 
-### Объявление мощности и интеграция планирования- Torii после обновления обновлений `CapacityDeclarationRecord` от `/v2/sorafs/capacity/declare`
+### Объявление мощности и интеграция планирования- Torii после обновления обновлений `CapacityDeclarationRecord` от `/v1/sorafs/capacity/declare`
   Для `CapacityManager` встроен режим, который каждый раз создает визу в памяти
   де-суас-алокако, компрометидас-де-чанкер и переулок. O Manager предоставляет снимки только для чтения
-  для телеметрии (`GET /v2/sorafs/capacity/state`) и вводить резервы для каждого профиля или полосы
+  для телеметрии (`GET /v1/sorafs/capacity/state`) и вводить резервы для каждого профиля или полосы
   antes de novas ordens serem aceitas. [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- Конечная точка O `/v2/sorafs/capacity/schedule` aceita полезные нагрузки `ReplicationOrderV1`
+- Конечная точка O `/v1/sorafs/capacity/schedule` aceita полезные нагрузки `ReplicationOrderV1`
   emitidos pelagovanca. Когда заказ будет проверен местным или проверенным менеджером
   планирование дублирования, проверка мощности фрагмента/дорожки, резерв или срез и возврат
   um `ReplicationPlan` требуется оставшаяся емкость для ферментации
   orquestracao possam seguir com ingestao. Заказы на выездные мероприятия в Сан-Франциско
   reconhecidas com resposta `ignored` для облегчения рабочих процессов с несколькими операторами. [crates/iroha_torii/src/routing.rs:4845]
 - Крючки для заключения (например, разногласия при приеме внутрь, чтобы добиться успеха) Chamam
-  `POST /v2/sorafs/capacity/complete` для освобождения резервов через
+  `POST /v1/sorafs/capacity/complete` для освобождения резервов через
   `CapacityManager::complete_order`. Ответ, включающий снимок
   `ReplicationRelease` (все оставшиеся, остатки фрагмента/полосы) для инструмента
   de orquestracao possa enfileirar a proxima ordem sem polling. Трабальо будущего

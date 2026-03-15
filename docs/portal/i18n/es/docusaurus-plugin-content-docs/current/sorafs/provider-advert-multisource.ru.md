@@ -63,7 +63,7 @@ Aquí hay instrucciones de operación, archivos SDK y dispositivos de telemetrí
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Instrumentos y accesorios- Cargas útiles объявлений провайдеров должны включать `range_capability`, `stream_budget`
-  y `transport_hints`. Pruebe через ответы `/v2/sorafs/providers` y accesorios de admisión;
+  y `transport_hints`. Pruebe через ответы `/v1/sorafs/providers` y accesorios de admisión;
   JSON-резюме должны включать разобранную capacidad, presupuesto de transmisión y sugerencias masivas
   для телеметрического ingerir.
 - `cargo xtask sorafs-admission-fixtures` выводит presupuestos de flujo y sugerencias de transporte
@@ -75,7 +75,7 @@ Aquí hay instrucciones de operación, archivos SDK y dispositivos de telemetrí
 
 ## Integración con el orquestador y Torii
 
-- Torii `/v2/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
+- Torii `/v1/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
   вместе с `stream_budget` y `transport_hints`. Предупреждения degradación срабатывают, когда
   Los proveedores utilizan nuevas metadanas, un rango de puntos finales que se basa en la organización.
   для прямых клиентов.

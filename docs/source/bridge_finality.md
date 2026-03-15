@@ -48,7 +48,7 @@ still verify the same hash via the commitment payload today.
 MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
 from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Verification is analogous to the basic proof: recompute `block_hash` from the
 header, verify the commit-certificate signatures, and check the commitment
@@ -93,10 +93,10 @@ range/insufficient signatures with deterministic errors.
 
 ## API surface
 
-- `GET /v2/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
+- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
   requested block height. Content negotiation via `Accept` supports Norito or
   JSON.
-- `GET /v2/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
+- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
   (commitment + justification + header/certificate) for the requested height.
 
 ## Notes and follow‑ups

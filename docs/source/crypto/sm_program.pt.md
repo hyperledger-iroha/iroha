@@ -319,7 +319,7 @@ O resumo abaixo rastreia os itens principais apresentados para a engenharia de l
 |-----------|----------------|-------------|-------|
 | SM2 | GB/T32918 (todas as peças) | GM/T0003 | Assinatura digital ECC + troca de chaves; Iroha expõe verificação em nós principais e assinatura determinística para SDKs. |
 | SM3 | GB/T32905 | GM/T0004 | Hash de 256 bits; hashing determinístico em caminhos escalares e acelerados ARMv8. |
-| SM4 | GB/T32907 | GM/T0002 | Cifra de bloco de 128 bits; Iroha fornece auxiliares GCM/CCM e garante paridade big-endian entre implementações. |- **Manifesto de capacidade:** O endpoint Torii `/v2/node/capabilities` anuncia o seguinte formato JSON para que operadores e ferramentas possam consumir o manifesto SM programaticamente:
+| SM4 | GB/T32907 | GM/T0002 | Cifra de bloco de 128 bits; Iroha fornece auxiliares GCM/CCM e garante paridade big-endian entre implementações. |- **Manifesto de capacidade:** O endpoint Torii `/v1/node/capabilities` anuncia o seguinte formato JSON para que operadores e ferramentas possam consumir o manifesto SM programaticamente:
 
 ```json
 {

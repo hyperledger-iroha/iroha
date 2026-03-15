@@ -25,7 +25,7 @@ seu cofre CI; Os locais de execução podem carregar o carregador por meio das e
 
 - Nó 18.18+ com `npm` ou `pnpm`.
 -`sorafs_cli` via `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii que expõe `/v2/sorafs/*` mais uma conta/cle privee d'autorite que pode ser solicitada
+- URL Torii que expõe `/v1/sorafs/*` mais uma conta/cle privee d'autorite que pode ser solicitada
   des manifestes et des alias.
 - Emmeteur OIDC (GitHub Actions, GitLab, identidade de carga de trabalho, etc.) para emitir um `SIGSTORE_ID_TOKEN`.
 Opcional: `examples/sorafs_cli_quickstart.sh` para funcionamento a seco e
@@ -858,7 +858,7 @@ Configure os seguintes segredos/variáveis antes de desativar o trabalho:
 
 | Nome | Mas |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii que expõe `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii que expõe `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de época registrado com os envios. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autorite de assinatura para o manifesto de submissão. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | O alias da tupla está no manifesto quando `perform_submit` é `true`. |

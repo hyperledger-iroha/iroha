@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii スナップショットとプロバイダーの料金台帳、サービス
 ダッシュボード、ゲート、ペナルティストライク:
 
-- 残り: `GET /v2/sorafs/capacity/state` と `credit_ledger[*]`、
+- 残り: `GET /v1/sorafs/capacity/state` と `credit_ledger[*]`、
   台帳を保存したり、浸したりできます。 См.
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` 最低価格

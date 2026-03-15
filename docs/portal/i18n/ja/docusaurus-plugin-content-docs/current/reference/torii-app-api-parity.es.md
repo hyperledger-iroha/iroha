@@ -18,11 +18,11 @@ title: Torii アプリの API を使用した監査
 責任者: Torii プラットフォーム、SDK プログラム リード  
 ロードマップの参照: TORII-APP-1 - Auditoria de paridad de `app_api`
 
-`TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) のページは、モノレポのページで、最高の情報を提供します `/v2/*` ケーブル、プロバダス、および文書を表示します。 `Torii::add_app_api_routes`、`add_contracts_and_vk_routes` および `add_connect_routes` のオーディオを再エクスポートします。
+`TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) のページは、モノレポのページで、最高の情報を提供します `/v1/*` ケーブル、プロバダス、および文書を表示します。 `Torii::add_app_api_routes`、`add_contracts_and_vk_routes` および `add_connect_routes` のオーディオを再エクスポートします。
 
 ## アルカンスと方法
 
-`crates/iroha_torii/src/lib.rs:256-522` では、機能ゲーティングのコンストラクターが公開されており、監査検査が行われています。ロードマップの検証情報 `/v2/*` の詳細:
+`crates/iroha_torii/src/lib.rs:256-522` では、機能ゲーティングのコンストラクターが公開されており、監査検査が行われています。ロードマップの検証情報 `/v1/*` の詳細:
 
 - `crates/iroha_torii/src/routing.rs` の DTO 定義のハンドラーを実装します。
 - ルーター機能の登録 `app_api` または `connect`。
@@ -40,25 +40,25 @@ title: Torii アプリの API を使用した監査
 - 例:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## エンドポイントの在庫
 
-### Permisos de cuenta (`/v2/accounts/{id}/permissions`) - クビエルト
+### Permisos de cuenta (`/v1/accounts/{id}/permissions`) - クビエルト
 - ハンドラー: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)。
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)。
 - ルーター バインディング: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム。
 - 注意: 本文 JSON Norito と `items`/`total` は、SDK のページヘルパーと一致します。
 
-### 別名 OPRF の評価 (`POST /v2/aliases/voprf/evaluate`) - Cubierto
+### 別名 OPRF の評価 (`POST /v1/aliases/voprf/evaluate`) - Cubierto
 - ハンドラー: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)。
 - DTO: `AliasVoprfEvaluateRequestDto`、`AliasVoprfEvaluateResponseDto`、`AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`)。
@@ -76,7 +76,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム。
 - 注意事項: バックエンドの 16 進決定性識別子を保護するための管理権限。 SDK コンシューマー DTO を失います。
 
-### イベント証明 SSE (`GET /v2/events/sse`) - Cubierto
+### イベント証明 SSE (`GET /v1/events/sse`) - Cubierto
 - ハンドラー: `handle_v1_events_sse` フィルター デ コン ポート (`crates/iroha_torii/src/routing.rs:14008-14133`)。
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) 配線フィルターの保護。
 - ルーター バインディング: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -86,7 +86,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム (ランタイム)、統合テスト WG (フィクスチャ)。
 - 注: エンドツーエンドで有効な証明のフィルタの実行。 `docs/source/zk_app_api.md` で生きているドキュメント。
 
-### シクロ デ ヴィーダ デ コントラトス (`/v2/contracts/*`) - クビエルト
+### シクロ デ ヴィーダ デ コントラトス (`/v1/contracts/*`) - クビエルト
 - ハンドラー: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)、
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)、
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)、
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
   `contracts_instance_activate_integration.rs`、`contracts_call_integration.rs`、
   `contracts_instances_list_router.rs`。
 - 所有者: Torii プラットフォームのスマート コントラクト WG。
-- 注意: エンドポイントのエンコラン トランザクション ファームダと再利用メトリクス コンパルティダ デ テレメトリ (`handle_transaction_with_metrics`)。### シクロ デ ヴィーダ デ クラーベス デ ベリフィカシオン (`/v2/zk/vk/*`) - Cubierto
+- 注意: エンドポイントのエンコラン トランザクション ファームダと再利用メトリクス コンパルティダ デ テレメトリ (`handle_transaction_with_metrics`)。### シクロ デ ヴィーダ デ クラーベス デ ベリフィカシオン (`/v1/zk/vk/*`) - Cubierto
 - ハンドラー: `handle_post_vk_register`、`handle_post_vk_update`、`handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) y `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)。
 - DTO: `ZkVkRegisterDto`、`ZkVkUpdateDto`、`ZkVkDeprecateDto`、`VkListQuery`、`ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォームをサポートする ZK ワーキング グループ。
 - 注意: Los DTOs se alinean con los esquemas Norito Referenciados por los SDK; `limits.rs` を介してレート制限を実行します。
 
-### Nexus 接続 (`/v2/connect/*`) - Cubierto (機能 `connect`)
+### Nexus 接続 (`/v1/connect/*`) - Cubierto (機能 `connect`)
 - ハンドラー: `handle_connect_session`、`handler_connect_session_delete`、`handle_connect_ws`、
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)。
 - DTO: `ConnectSessionRequest`、`ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)、

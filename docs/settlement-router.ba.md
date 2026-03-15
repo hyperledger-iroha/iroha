@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## Дәлилдәр & Һылтанмалар
 - NX-3 ҡасаба маршрутизаторы ҡабул итеү иҫкәрмәләре: `status.md`X (NX-3 бүлеге).
 - Оператор өҫтө: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Квитанция схемаһы һәм API өҫтө: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
+- Квитанция схемаһы һәм API өҫтө: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

@@ -69,13 +69,13 @@ translation_last_reviewed: 2026-02-07
 تقبل البوابات طلبات HTTP التي تحدد البيانات الوصفية
 الإعلانات.
 
-###`GET /v2/sorafs/storage/car/{manifest_id}`| المتطلبات | تفاصيل |
+###`GET /v1/sorafs/storage/car/{manifest_id}`| المتطلبات | تفاصيل |
 |-----------|----------|
 | **العناوين** | `Range` (نافذة واحدة مخصصة لإزاحة القطع) و`dag-scope: block` و`X-SoraFS-Chunker` و`X-SoraFS-Nonce` اختيارية و`X-SoraFS-Stream-Token` base64 إلزامية. |
 | **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` الذي يصف خادم النافذة والبيانات الوصفية `X-Sora-Chunk-Range` ورؤوس القطع/الرمز المميز البيئي. |
 | **طرق السقوط** | `416` للنطاقات التي تم تحليتها، `401` للرموز المميزة الخاطئة أو غير الصالحة، `429` عند تجاوز متطلبات الدفق/البايت. |
 
-###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 قم بإحضار قطعة واحدة بنفس الرؤوس بشكل أكبر من التحديد
 قطعة. يستخدم لإعادة التحميل أو التنزيلات عندما لا تحتاج إلى شرائح
@@ -126,12 +126,12 @@ translation_last_reviewed: 2026-02-07
 - `iroha app sorafs pin list|show`، `alias list` و`replication list` مغلفان
   نقاط النهاية REST del pin-registry والطباعة Norito JSON الخام مع الكتل
   شهادة لإثبات السمع.
-- `iroha app sorafs storage pin` و `torii /v2/sorafs/pin/register` بيانات الأسيبتان
+- `iroha app sorafs storage pin` و `torii /v1/sorafs/pin/register` بيانات الأسيبتان
   Norito o المزيد من إثباتات JSON للأسماء المستعارة الاختيارية واللاحقة؛ البراهين المشوهة
   elevan `400`، البراهين القديمة الموضحة `503` مع `Warning: 110`، والبراهين
   انتهت الصلاحية `412`.
-- نقاط النهاية REST (`/v2/sorafs/pin`، `/v2/sorafs/aliases`،
-  `/v2/sorafs/replication`) تتضمن هياكل التصديق الخاصة بهم
+- نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`،
+  `/v1/sorafs/replication`) تتضمن هياكل التصديق الخاصة بهم
   يتحقق العملاء من البيانات مقابل رؤوس الكتلة الأخيرة قبل التشغيل.
 
 ## المراجع- المواصفات القانونية:

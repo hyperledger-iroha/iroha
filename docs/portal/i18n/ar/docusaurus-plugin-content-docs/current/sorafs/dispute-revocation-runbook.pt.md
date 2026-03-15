@@ -26,7 +26,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
 ## 1. معرفة الحادث
 
 - **شروط الاسترداد:** اكتشاف تداخل SLA (وقت التشغيل/خطأ PoR)، أو عجز النسخ، أو تباين النحاس.
-- **تأكيد القياس عن بعد:** التقط لقطات `/v2/sorafs/capacity/state` و`/v2/sorafs/capacity/telemetry`.
+- **تأكيد القياس عن بعد:** التقط لقطات `/v1/sorafs/capacity/state` و`/v1/sorafs/capacity/telemetry`.
 - **Notificar parts interessadas:** فريق التخزين (عمليات إثبات)، مجلس الإدارة (orgao decisor)، إمكانية المراقبة (تحقيق لوحات المعلومات).
 
 ## 2. إعداد حزمة الأدلة1. Colete artefatos brutos (القياس عن بعد JSON، سجلات CLI، ملاحظات الاستماع).
@@ -72,7 +72,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
    ```
 
 3. قم بمراجعة `dispute_summary.json` (تأكيد النوع، ملخص الأدلة والطوابع الزمنية).
-4. قم بإرسال طلب JSON لـ Torii `/v2/sorafs/capacity/dispute` عبر ملف التحويلات الحاكمة. التقاط قيمة الرد `dispute_id_hex`; إنها أخرى مثل نصائح التجديد اللاحقة وعلاقات الاستماع.
+4. قم بإرسال طلب JSON لـ Torii `/v1/sorafs/capacity/dispute` عبر ملف التحويلات الحاكمة. التقاط قيمة الرد `dispute_id_hex`; إنها أخرى مثل نصائح التجديد اللاحقة وعلاقات الاستماع.
 
 ## 4. الإخلاء والإعادة1. **Janela de graca:** إشعار أو إثبات حول إعادة وشيكة؛ يسمح بالإخلاء بعد إصلاحه عندما تسمح به السياسة.
 2. ** جير `ProviderAdmissionRevocationV1`: **

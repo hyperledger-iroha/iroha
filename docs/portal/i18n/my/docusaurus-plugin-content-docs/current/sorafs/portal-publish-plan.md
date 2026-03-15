@@ -69,7 +69,7 @@ runbook မျိုးစုံ။
 
 မန်နီးဖက်စ်များကို Torii သို့ တွန်းပြီး နာမည်တူများကို စည်းရန် `sorafs_cli manifest submit` ကိုသုံးပါ။
 `${SUBMITTED_EPOCH}` ကို နောက်ဆုံး သဘောတူညီချက် (မှ) သို့ သတ်မှတ်ပါ။
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` သို့မဟုတ် သင်၏ ဒက်ရှ်ဘုတ်)။
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` သို့မဟုတ် သင်၏ ဒက်ရှ်ဘုတ်)။
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -77,7 +77,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

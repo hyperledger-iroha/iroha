@@ -71,7 +71,7 @@ Soporte de Tooling:- Los pipelines de provider advert deben validar capacidad de
 Los gateways aceptan provocate HTTP deterministas que reflejan la metadata de
 los anuncios.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | Requisito | פרטים |
 |----------------|--------|
@@ -79,7 +79,7 @@ los anuncios.
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range` que describe la ventana servida, metadata `X-Sora-Chunk-Range` y headers de chunker/token ecoados. |
 | **מודוס דה fallo** | `416` עבור Rangos desalineados, `401` עבור אסימונים faltantes o inválidos, `429` cuando se exeden preupuestos de stream/bytes. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 אחזר את ה-un solo chunk con los mismos headers más el digest determinista del
 נתח. Útil para reintentos o descargas forenses cuando no se necesitan slices
@@ -132,12 +132,12 @@ Cuando se habilita el fetch multifuente SF-6 (CLI Rust vía `sorafs_fetch`,
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` envuelven los
   נקודות קצה REST של pin-registry e imprimen Norito JSON crudo con bloques de
   אישור לראיה דה אודיטוריה.
-- `iroha app sorafs storage pin` y `torii /v2/sorafs/pin/register` מניפסטים אקפטניים
+- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` מניפסטים אקפטניים
   Norito o JSON עוד הוכחות לכינוי אופציונליים וממשיכים; הוכחה למלפורמדוס
   elevan `400`, הוכחות מיושנות exponen `503` con `Warning: 110`, y הוכחות
   expirados devuelven `412`.
-- Los נקודות קצה REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
-  `/v2/sorafs/replication`) כולל אישורים
+- Los נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) כולל אישורים
   לקוחות אימות נתונים נגד כותרות דל último bloque antes de actuar.
 
 ## אסמכתאות

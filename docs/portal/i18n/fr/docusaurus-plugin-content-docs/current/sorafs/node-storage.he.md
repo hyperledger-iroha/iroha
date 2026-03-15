@@ -174,9 +174,9 @@ que manifests et payloads se round-trip correctement avant l'arrivée des APIs T
 > Le gateway Torii expose désormais des helpers en lecture seule basés sur le même
 > `NodeHandle` :
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — renvoie le manifest
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — renvoie le manifest
 >   Norito stocké (base64) avec digest/métadonnées.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — renvoie le plan de chunk
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — renvoie le plan de chunk
 >   déterministe JSON (`chunk_fetch_specs`) pour les outils downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Ces endpoints reflètent la sortie CLI afin que les pipelines puissent passer
@@ -221,18 +221,18 @@ que manifests et payloads se round-trip correctement avant l'arrivée des APIs T
 
 ### Déclaration de capacité et intégration du scheduling
 
-- Torii relaie désormais les mises à jour `CapacityDeclarationRecord` depuis `/v2/sorafs/capacity/declare`
+- Torii relaie désormais les mises à jour `CapacityDeclarationRecord` depuis `/v1/sorafs/capacity/declare`
   vers le `CapacityManager` embarqué, de sorte que chaque nœud construit une vue en mémoire de ses
   allocations chunker/lane engagées. Le manager expose des snapshots read-only pour la télémétrie
-  (`GET /v2/sorafs/capacity/state`) et applique des réservations par profil ou par lane avant que de
+  (`GET /v1/sorafs/capacity/state`) et applique des réservations par profil ou par lane avant que de
   nouvelles commandes ne soient acceptées.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- L'endpoint `/v2/sorafs/capacity/schedule` accepte des payloads `ReplicationOrderV1` émis par la gouvernance.
+- L'endpoint `/v1/sorafs/capacity/schedule` accepte des payloads `ReplicationOrderV1` émis par la gouvernance.
   Lorsque l'ordre cible le provider local, le manager vérifie la planification en doublon, valide la
   capacité chunker/lane, réserve la tranche, et renvoie un `ReplicationPlan` décrivant la capacité restante
   afin que les outils d'orchestration puissent poursuivre l'ingestion. Les ordres pour d'autres providers
   sont acquittés avec une réponse `ignored` pour faciliter les workflows multi-opérateurs.【crates/iroha_torii/src/routing.rs:4845】
 - Des hooks de complétion (par ex. déclenchés après succès d'ingestion) appellent
-  `POST /v2/sorafs/capacity/complete` pour libérer les réservations via `CapacityManager::complete_order`.
+  `POST /v1/sorafs/capacity/complete` pour libérer les réservations via `CapacityManager::complete_order`.
   La réponse inclut un snapshot `ReplicationRelease` (totaux restants, résiduels chunker/lane) afin que
   les outils d'orchestration puissent queue la commande suivante sans polling. Un travail futur reliera
   cela au pipeline de chunk store lorsque la logique d'ingestion sera prête.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】

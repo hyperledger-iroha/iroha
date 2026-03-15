@@ -78,7 +78,7 @@ lorsque l'application PoR/PoTR s'intensifie.
 | `sorafs_node_por_failure_total` | Compteur | `provider_id` | Compteur monotone des échantillons PoR échecs. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Jauge | `provider` | Jauges Prometheus existantes pour octets utilisés, profondeur de file, comptes PoR en vol. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Jauge | `provider` | Les données de capacité/uptime réussies du fournisseur sont exposées dans le tableau de bord de capacité. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à chaque interrogation de `/v2/sorafs/por/ingestion/{manifest}`, alimentant le panneau/alerte "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à chaque interrogation de `/v1/sorafs/por/ingestion/{manifest}`, alimentant le panneau/alerte "PoR Stalls". |
 
 ### Preuve de récupération en temps utile (PoTR) et SLA des chunks| Métrique | Tapez | Étiquettes | Producteur | Remarques |
 |-------------|------|------------|------------|-------|

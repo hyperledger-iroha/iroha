@@ -62,9 +62,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |---------|----------|------|------|
 | Draft | Dataspace オーナー | fixture を複製して許可/ガバナンスを編集し、`cargo test -p iroha_data_model nexus::manifest` を実行。 | Git 差分、テストログ。 |
 | Review | Governance WG | manifest JSON + Norito bytes を検証し、決定ログに署名。 | 署名済み議事録、manifest hash（BLAKE3 + Norito `.to`）。 |
-| Publish | Lane ops | CLI（`iroha app space-directory manifest publish`）で Norito `.to` もしくは生 JSON を送信 **または** `/v2/space-directory/manifests` に manifest JSON + 任意理由を POST。Torii 応答を確認し `SpaceDirectoryEvent` を取得。 | CLI/Torii レシート、イベントログ。 |
+| Publish | Lane ops | CLI（`iroha app space-directory manifest publish`）で Norito `.to` もしくは生 JSON を送信 **または** `/v1/space-directory/manifests` に manifest JSON + 任意理由を POST。Torii 応答を確認し `SpaceDirectoryEvent` を取得。 | CLI/Torii レシート、イベントログ。 |
 | Expire | Lane ops / Governance | `iroha app space-directory manifest expire`（UAID, dataspace, epoch）を実行し、`SpaceDirectoryEvent::ManifestExpired` を確認、binding 清掃の証跡をアーカイブ。 | CLI 出力、イベントログ。 |
-| Revoke | Governance + Lane ops | `iroha app space-directory manifest revoke`（UAID, dataspace, epoch, reason）**または** `/v2/space-directory/manifests/revoke` へ同一 payload を POST。`SpaceDirectoryEvent::ManifestRevoked` を確認し証跡バンドルを更新。 | CLI/Torii レシート、イベントログ、チケットメモ。 |
+| Revoke | Governance + Lane ops | `iroha app space-directory manifest revoke`（UAID, dataspace, epoch, reason）**または** `/v1/space-directory/manifests/revoke` へ同一 payload を POST。`SpaceDirectoryEvent::ManifestRevoked` を確認し証跡バンドルを更新。 | CLI/Torii レシート、イベントログ、チケットメモ。 |
 | Monitor | SRE/Compliance | テレメトリと監査ログを監視し、revocation/expiry のアラートを設定。 | Grafana スクリーンショット、保存ログ。 |
 | Rotate/Revoke | Lane ops + Governance | 置換 manifest（新 epoch）を準備し、tabletop を実施。revoke の場合はインシデントを記録。 | ローテーションチケット、ポストモーテム。 |
 

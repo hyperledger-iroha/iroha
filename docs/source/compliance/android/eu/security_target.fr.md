@@ -55,7 +55,7 @@ Hypothèses :
 | Manifestes de configuration falsifiés | `ClientConfig` valide les manifestes (hachage + schéma) avant de les appliquer et enregistre les rechargements refusés via `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java` ; `docs/source/android_runbook.md` §1–2. |
 | Compromission des clés de signature | Les politiques requises par StrongBox, les harnais d'attestation et les audits de matrice de périphériques identifient les dérives ; remplacements documentés par incident. | `docs/source/sdk/android/key_management.md` ; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` ; `scripts/android_strongbox_attestation_ci.sh`. |
 | Fuite de PII dans la télémétrie | Autorités hachées Blake2b, profils d'appareils regroupés, omission de l'opérateur, journalisation de remplacement. | `docs/source/sdk/android/telemetry_redaction.md` ; Supporte le Playbook §8. |
-| Rejouer ou rétrograder sur Torii RPC | Le générateur de requêtes `/v2/pipeline` applique l'épinglage TLS, la politique de canal de bruit et les budgets de nouvelles tentatives avec un contexte d'autorité hachée. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` ; `docs/source/sdk/android/networking.md` (prévu). |
+| Rejouer ou rétrograder sur Torii RPC | Le générateur de requêtes `/v1/pipeline` applique l'épinglage TLS, la politique de canal de bruit et les budgets de nouvelles tentatives avec un contexte d'autorité hachée. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` ; `docs/source/sdk/android/networking.md` (prévu). |
 | Versions non signées ou non reproductibles | Attestations CycloneDX SBOM + Sigstore sécurisées par la liste de contrôle AND6 ; Les RFC de publication nécessitent des preuves dans `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md` ; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Gestion incomplète des incidents | Runbook + playbook définissent les remplacements, les exercices de chaos et l'arborescence d'escalade ; les remplacements de télémétrie nécessitent des requêtes Norito signées. | `docs/source/android_runbook.md` ; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ Hypothèses :
 | 7.4 Contrôle d'accès | Politiques StrongBox + workflow de remplacement nécessitant des artefacts Norito signés. |
 | 7.5 Contrôles cryptographiques | Exigences de génération, de stockage et d’attestation de clés de AND2 (guide de gestion des clés). |
 | 7.6 Sécurité des opérations | Hachage de télémétrie, répétitions de chaos, réponse aux incidents et libération des preuves. |
-| 7.7 Sécurité des communications | `/v2/pipeline` Politique TLS + autorités hachées (doc de rédaction de télémétrie). |
+| 7.7 Sécurité des communications | `/v1/pipeline` Politique TLS + autorités hachées (doc de rédaction de télémétrie). |
 | 7.8 Acquisition/développement du système | Constructions Gradle reproductibles, SBOM et portes de provenance dans les plans AND5/AND6. |
 | 7.9 Relations avec les fournisseurs | Attestations Buildkite + Sigstore enregistrées aux côtés des SBOM de dépendance tiers. |
 | 7.10 Gestion des incidents | Escalade Runbook/Playbook, journalisation des remplacements, compteurs d'échecs de télémétrie. |

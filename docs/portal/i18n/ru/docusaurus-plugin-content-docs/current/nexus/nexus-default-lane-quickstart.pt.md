@@ -164,7 +164,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` и ящик клиента Rust опустите или запустите `lane_id`, когда прозвучит `--lane-id` / `LaneSelector`. На маршрутизаторе для файлов, портанто, введите `default_lane`. Используйте явные флаги `--lane-id`/`--dataspace-id` для доступа к mirar um Lane nao Padrao.
 - **JS/Swift/Android.** В последних выпусках SDK используются `laneId`/`lane_id` как опции и резервный вариант, чтобы объявить о доблести для `/status`. Mantenha a politica de roteamento sincronizada entre staging e producao para que apps moveis nao precisem de reconfiguracoes de emergencia.
-- **Тестирование конвейера/SSE.** Фильтры событий трансакционного обмена предсказываются `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v2/pipeline/events/transactions` com является фильтром для проверки того, что пишется в поле, указанном в явном виде, как или идентификатор резервной полосы.
+- **Тестирование конвейера/SSE.** Фильтры событий трансакционного обмена предсказываются `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v1/pipeline/events/transactions` com является фильтром для проверки того, что пишется в поле, указанном в явном виде, как или идентификатор резервной полосы.
 
 ## 7. Наблюдение и контроль над правительством
 

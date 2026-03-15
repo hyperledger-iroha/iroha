@@ -58,7 +58,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | مجلس الحوكمة | يصيغ ويصادق على المواثيق، وسياسات اللاحقات، واحكام النزاعات، وتناوب stewards. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, بطاقات تصويت المجلس المخزنة عبر `sns governance charter submit`. | رئيس المجلس + متعقب جدول اعمال الحوكمة. |
 | مجلس guardian | يصدر تجميدات soft/hard، وقوانين طارئة، ومراجعات 72 h. | تذاكر guardian الصادرة عبر `sns governance freeze`، ومانيفستات التجاوز المسجلة تحت `artifacts/sns/guardian/*`. | دورية guardian on-call (<=15 min ACK). |
 | stewards اللاحقة | يديرون طوابير المسجل، والمزادات، وشرائح التسعير، واتصالات العملاء؛ ويقرون بالامتثال. | سياسات steward في `SuffixPolicyV1`, جداول مرجعية للتسعير, اقرارات steward المخزنة بجانب المذكرات التنظيمية. | قائد برنامج steward + PagerDuty خاص بكل لاحقة. |
-| عمليات المسجل والفوترة | تشغل نقاط `/v2/sns/*`, وتسوي المدفوعات, وتصدر التليمترية, وتحافظ على لقطات CLI. | API المسجل ([`registrar-api.md`](./registrar-api.md)), مقاييس `sns_registrar_status_total`, اثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`. | مدير مناوبة المسجل ورابط الخزينة. |
+| عمليات المسجل والفوترة | تشغل نقاط `/v1/sns/*`, وتسوي المدفوعات, وتصدر التليمترية, وتحافظ على لقطات CLI. | API المسجل ([`registrar-api.md`](./registrar-api.md)), مقاييس `sns_registrar_status_total`, اثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`. | مدير مناوبة المسجل ورابط الخزينة. |
 | مشغلو resolver والبوابة | يحافظون على SoraDNS وGAR وحالة البوابة متوافقة مع احداث المسجل؛ ويبثون مقاييس الشفافية. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | SRE resolver on-call + جسر عمليات البوابة. |
 | الخزينة والمالية | تطبق تقسيم ايرادات 70/30، واقتطاعات referral، وملفات الضرائب/الخزينة، وشهادات SLA. | مانيفستات تراكم الايرادات، صادرات Stripe/الخزينة، ملاحق KPI ربع سنوية تحت `docs/source/sns/regulatory/`. | مراقب المالية + مسؤول الامتثال. |
 | جهة اتصال الامتثال والتنظيم | تتبع الالتزامات العالمية (EU DSA، الخ)، وتحدث مواثيق KPI، وتقدم الافصاحات. | مذكرات تنظيمية في `docs/source/sns/regulatory/`, عروض مرجعية, ومدخلات `ops/drill-log.md` لتجارب الطاولة. | قائد برنامج الامتثال. |
@@ -169,7 +169,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | الاشارة | المصدر | الوصف / الاجراء |
 |---------|--------|-----------------|
 | `sns_registrar_status_total{result,suffix}` | معالجات مسجل Torii | عداد نجاح/خطا للتسجيلات، التجديدات، التجميدات، التحويلات؛ ينبه عندما يرتفع `result="error"` لكل لاحقة. |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | مقاييس Torii | SLO للكمون لمعالجات API؛ تغذي لوحات مبنية على `torii_norito_rpc_observability.json`. |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | مقاييس Torii | SLO للكمون لمعالجات API؛ تغذي لوحات مبنية على `torii_norito_rpc_observability.json`. |
 | `soradns_bundle_proof_age_seconds` و `soradns_bundle_cid_drift_total` | tailer شفافية resolver | تكشف ادلة قديمة او انحراف GAR؛ الحواجز معرفة في `dashboards/alerts/soradns_transparency_rules.yml`. |
 | `sns_governance_activation_total` | CLI الحوكمة | عداد يزداد عند تفعيل ميثاق/ملحق؛ يستخدم لتسوية قرارات المجلس مقابل الملاحق المنشورة. |
 | `guardian_freeze_active` gauge | CLI guardian | يتتبع نوافذ تجميد soft/hard لكل محدد؛ ناد SRE اذا بقيت القيمة `1` بعد SLA المعلن. |

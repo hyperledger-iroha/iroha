@@ -56,12 +56,12 @@ SF-8 路線圖軌道引入了 SoraFS 交易引擎，提供
 Torii 公開專用端點，以便提供商可以報告使用情況並驅動
 無需定制接線的交易生命週期：
 
-- `POST /v2/sorafs/deal/usage` 接受 `DealUsageReport` 遙測並返回
+- `POST /v1/sorafs/deal/usage` 接受 `DealUsageReport` 遙測並返回
   確定性會計結果 (`UsageOutcome`)。
-- `POST /v2/sorafs/deal/settle` 完成當前窗口，流式傳輸
+- `POST /v1/sorafs/deal/settle` 完成當前窗口，流式傳輸
   生成的 `DealSettlementRecord` 以及 Base64 編碼的 `DealSettlementV1`
   準備好治理 DAG 發布。
-- Torii 的 `/v2/events/sse` 源現在廣播 `SorafsGatewayEvent::DealUsage`
+- Torii 的 `/v1/events/sse` 源現在廣播 `SorafsGatewayEvent::DealUsage`
   總結每次使用提交的記錄（紀元、計量 GiB 小時、票證
   計數器，確定性費用），`SorafsGatewayEvent::DealSettlement`
   記錄包括規範結算賬本快照以及

@@ -29,7 +29,7 @@ Sidebar_label: ملاحظات النشر
 - **سياسة القبول** - قم بمراجعة إعلانات مقدمي الخدمة التي تم الاعتداء عليها والأسماء المستعارة اللازمة لـ `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
 - **Runbook do pin Registration** - احتفظ بـ `docs/source/sorafs/runbooks/pin_registry_ops.md` من أجل سيناريوهات الاسترداد (تدوير الاسم المستعار، falhas de النسخ المتماثل).
 
-## تكوين البيئة- يجب على البوابات تمكين نقطة نهاية تدفق إثبات (`POST /v2/sorafs/proof/stream`) حتى يقوم CLI بإصدار استئناف القياس عن بعد.
+## تكوين البيئة- يجب على البوابات تمكين نقطة نهاية تدفق إثبات (`POST /v1/sorafs/proof/stream`) حتى يقوم CLI بإصدار استئناف القياس عن بعد.
 - قم بتكوين السياسة `sorafs_alias_cache` باستخدام الإعدادات في `iroha_config` أو مساعد CLI (`sorafs_cli manifest submit --alias-*`).
 - رموز دفق Forneca (ou credenciais Torii) عبر um Secret manager seguro.
 - مصدرو القياس عن بعد المؤهلون (`torii_sorafs_proof_stream_*`، `torii_sorafs_chunk_range_*`) ويرسلون إلى مكدسهم Prometheus/OTel.

@@ -76,13 +76,13 @@ slug: /sorafs/staging-manifest-playbook-kk
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Табудың соңғы нүктесін сұраңыз және жарнаманың канондық бүркеншік аттармен көрсетілетінін растаңыз:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    `profile_aliases` бірінші жазба ретінде `"sorafs.sf1@1.0.0"` қосылғанына көз жеткізіңіз.

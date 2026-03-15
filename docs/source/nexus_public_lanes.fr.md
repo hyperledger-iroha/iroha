@@ -87,7 +87,7 @@ Les delegators (et les validateurs qui augmentent leur propre bond) sont modeles
 
 `PublicLaneUnbonding` contient le calendrier deterministe de retrait (`amount`, `release_at_ms`).
 Torii expose maintenant les shares actives et les retraits en attente via
-`GET /v2/nexus/public_lanes/{lane}/stake` afin que les wallets affichent les timers sans RPCs bespoke.
+`GET /v1/nexus/public_lanes/{lane}/stake` afin que les wallets affichent les timers sans RPCs bespoke.
 
 Hooks de cycle de vie (forces par runtime) :
 
@@ -240,16 +240,16 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
     `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
     reflete le endpoint `/stake` avec des hints pending-unbond par paire `(validator, staker)`.
   - Snapshots Torii pour dashboards et SDKs :
-    - `GET /v2/nexus/public_lanes/{lane}/validators` - metadata, statut
+    - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, statut
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoch/height d'activation,
       timers de release, stake bonded, dernier epoch de reward.
       `canonical I105 literal rendering` controle le rendu des litteraux.
-    - `GET /v2/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
+    - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
       `staker`, montant bonded) plus timers pending unbond. `?validator=i105...`
       filtre la reponse pour les dashboards focalises sur un validateur ; `canonical I105 rendering`
       s'applique a tous les litteraux.
   - Les ISIs de cycle de vie utilisent le chemin transaction standard (Torii
-    `/v2/transactions` ou le pipeline d'instructions CLI). Exemples de payloads Norito JSON :
+    `/v1/transactions` ou le pipeline d'instructions CLI). Exemples de payloads Norito JSON :
 
     ```jsonc
     [
@@ -273,7 +273,7 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
 
 - OK Runtime et storages WSV implementent le cycle de vie des validateurs NX-9 ; les regressions couvrent
   le timing d'activation, les prerequis de peers, les sorties differees, et la re-registration apres slashes.
-- OK Torii expose `/v2/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` en Norito JSON pour
+- OK Torii expose `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` en Norito JSON pour
   que SDKs et dashboards surveillent l'etat de la lane sans RPCs custom.
 - OK Les config knobs et la telemetrie sont documentees ; les deployments mixtes maintiennent les lanes
   stake-elected et admin-managed isolees pour que les rosters de validateurs restent deterministes.

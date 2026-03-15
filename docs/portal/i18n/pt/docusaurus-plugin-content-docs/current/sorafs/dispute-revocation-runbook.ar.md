@@ -26,7 +26,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
 ## 1. تقييم الحادث
 
 - **شروط الإطلاق:** رصد خرق SLA (التوفر/فشل PoR), نقص التكرار, أو خلاف في الفوترة.
-- **تأكيد التليمترية:** Use o `/v2/sorafs/capacity/state` e o `/v2/sorafs/capacity/telemetry` para `/v2/sorafs/capacity/telemetry`.
+- **تأكيد التليمترية:** Use o `/v1/sorafs/capacity/state` e o `/v1/sorafs/capacity/telemetry` para `/v1/sorafs/capacity/telemetry`.
 - **إخطار أصحاب المصلحة:** Equipe de armazenamento (عمليات المزوّد), Conselho de governança (جهة القرار), Observabilidade (تحديثات لوحات المتابعة).
 
 ## 2. إعداد حزمة الأدلة
@@ -74,7 +74,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
    ```
 
 3. راجع `dispute_summary.json` (تأكد من النوع, resumo do site e والطوابع الزمنية).
-4. Use JSON como Torii `/v2/sorafs/capacity/dispute` para obter o valor desejado. Descrição do produto `dispute_id_hex`; Isso é feito por meio de uma chave de fenda.
+4. Use JSON como Torii `/v1/sorafs/capacity/dispute` para obter o valor desejado. Descrição do produto `dispute_id_hex`; Isso é feito por meio de uma chave de fenda.
 
 ## 4. الإخلاء والإلغاء
 

@@ -16,7 +16,7 @@ Este es un archivo predeterminado que está binario `sorafs_cli` (combinado con 
 
 ## Предварительные условия- Nodo 18.18+ con `npm` o `pnpm`.
 - `sorafs_cli` y `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii, introduzca el código `/v2/sorafs/*`, haga clic más o haga clic en el botón izquierdo del ratón y muestre los manifiestos. алиасы.
+- URL Torii, introduzca el código `/v1/sorafs/*`, haga clic más o haga clic en el botón izquierdo del ratón y muestre los manifiestos. алиасы.
 - Emisor OIDC (GitHub Actions, GitLab, identidad de carga de trabajo y т. п.) para el usuario `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para ejecución en seco y `docs/source/sorafs_ci_templates.md` para flujos de trabajo de GitHub/GitLab.
 - Instale OAuth permanentemente Pruébelo (`DOCS_OAUTH_*`) y presione
@@ -547,7 +547,7 @@ Configure los secretos/variables del repositorio antes del trabajo:
 
 | Nombre | Назначение |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii con `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii con `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de época, записанный при envío. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Подписывающая autoridad для presentación манифеста. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tupla de alias, creada por `perform_submit` = `true`. |

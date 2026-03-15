@@ -21,7 +21,7 @@ Modelo `docs/source/sorafs/runbooks/pin_registry_ops.md`. حافظ على الن
 
 ## نظرة عامة
 
-Você pode usar o Pin Registry no SoraFS e usar o Pin Registry no SoraFS para fazer o download. Use o `iroha_torii` e o Prometheus para obter o `torii_sorafs_*`. O Torii é usado para registrar o registro em 30 dias no site, para que você possa usar o registro. Você pode usar o produto `/v2/sorafs/pin/*` para obter mais informações. Use o código de barras (`docs/source/grafana_sorafs_pin_registry.json`) para obter mais informações sobre Grafana. الأقسام أدناه مباشرة.
+Você pode usar o Pin Registry no SoraFS e usar o Pin Registry no SoraFS para fazer o download. Use o `iroha_torii` e o Prometheus para obter o `torii_sorafs_*`. O Torii é usado para registrar o registro em 30 dias no site, para que você possa usar o registro. Você pode usar o produto `/v1/sorafs/pin/*` para obter mais informações. Use o código de barras (`docs/source/grafana_sorafs_pin_registry.json`) para obter mais informações sobre Grafana. الأقسام أدناه مباشرة.
 
 ## مرجع المقاييس
 
@@ -114,7 +114,7 @@ groups:
 
 1. **تحديد السبب**
    - اذا زادت اخفاقات SLA بينما بقي التراكم منخفضا, ركز على اداء provedores (فشل PoR, الاكتمال المتاخر).
-   - اذا زاد التراكم مع اخفاقات مستقرة, افحص القبول (`/v2/sorafs/pin/*`) لتاكيد manifests التي تنتظر موافقة sim.
+   - اذا زاد التراكم مع اخفاقات مستقرة, افحص القبول (`/v1/sorafs/pin/*`) لتاكيد manifests التي تنتظر موافقة sim.
 2. **Fornecedores de serviços de terceiros**
    - O `iroha app sorafs providers list` deve ser removido do computador.
    - Medidores de medição `torii_sorafs_capacity_*` para GiB e PoR.
@@ -133,7 +133,7 @@ groups:
 2. **Teste de teste**
    - انشر تغيير الاعدادات على عنقود staging يعكس طوبولوجيا الانتاج.
    - شغّل `cargo xtask sorafs-pin-fixtures` لتاكيد ان fixtures الكنسية للـ alias ما زالت تفك التشفير وتقوم بعملية ida e volta؛ Não há deriva que você possa encontrar.
-   - Os endpoints `/v2/sorafs/pin/{digest}` e `/v2/sorafs/aliases` devem ser armazenados em fresco e janela de atualização e expirado e expirado. Você pode usar HTTP e cabeçalhos (`Sora-Proof-Status`, `Retry-After`, `Warning`) e usar JSON como exemplo.
+   - Os endpoints `/v1/sorafs/pin/{digest}` e `/v1/sorafs/aliases` devem ser armazenados em fresco e janela de atualização e expirado e expirado. Você pode usar HTTP e cabeçalhos (`Sora-Proof-Status`, `Retry-After`, `Warning`) e usar JSON como exemplo.
 3. **التفعيل في الانتاج**
    - اطرح الاعدادات الجديدة no final do processo. Use Torii para configurar gateways/SDK sem usar gateways Aqui está.
    - Coloque `docs/source/grafana_sorafs_pin_registry.json` no Grafana (empurre o cache para o alias) مساحة عمل NOC.

@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 - Node 18.18 او احدث مع `npm` او `pnpm`.
 - `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- عنوان Torii يكشف `/v2/sorafs/*` مع حساب/مفتاح خاص بسلطة سلطة سلطة المانيفست والاسماء المستعارة.
+- عنوان Torii يكشف `/v1/sorafs/*` مع حساب/مفتاح خاص بسلطة سلطة سلطة المانيفست والاسماء المستعارة.
 - مُصدِر OIDC (GitHub Actions، GitLab، Workload Identity، الخ) لاإصدار `SIGSTORE_ID_TOKEN`.
 - اختياري: `examples/sorafs_cli_quickstart.sh` للتجارب الجافة و `docs/source/sorafs_ci_templates.md` لقوالب سير العمل في GitHub/GitLab.
 - اضبط تنوعات OAuth الخاصة بـ Try it (`DOCS_OAUTH_*`) وشغّل
@@ -588,7 +588,7 @@ npm run monitor:publishing -- \
 
 | الاسم | اللحوم |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | ضيف Torii الذي يكشف `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | ضيف Torii الذي يكشف `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف Epoch المسجل مع الارسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | طريقة التوقيع لارسال المانيفست. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | الاسم المستعار Tuple المربوط عند `perform_submit` = `true`. |

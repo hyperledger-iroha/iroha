@@ -206,7 +206,7 @@ await torii.getStatusSnapshot(); // emits telemetry; errors when allowInsecure i
 
 const rpc = new NoritoRpcClient("https://torii.example", { apiToken: "abc" });
 const payload = new Uint8Array([0x01]);
-await rpc.call("/v2/pipeline/submit", payload); // throws on host/protocol mismatch
+await rpc.call("/v1/pipeline/submit", payload); // throws on host/protocol mismatch
 ```
 
 See `javascript/iroha_js/test/transportSecurity.test.js` for the guarded cases.
@@ -227,12 +227,12 @@ Environment variables are available for local development:
 
 The resolver also surfaces retry profiles that mirror the Torii roadmap:
 
-- `pipeline` — used for `/v2/pipeline/transactions` + `/v2/pipeline/transactions/status`. POST
+- `pipeline` — used for `/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`. POST
   submissions are safe to retry because the payload hash deduplicates requests, so the profile adds
   `POST` to the allowed methods, lowers the initial backoff to 250 ms, and raises the attempt cap to 5.
   A `404` from the status endpoint is treated as pending, so pollers keep waiting after Torii restarts.
-- `streaming` — used for SSE endpoints (`/v2/events/sse`, `/v2/sumeragi/status/sse`,
-  `/v2/kaigi/relays/events`). It prefers longer retry windows so event feeds reconnect automatically.
+- `streaming` — used for SSE endpoints (`/v1/events/sse`, `/v1/sumeragi/status/sse`,
+  `/v1/kaigi/relays/events`). It prefers longer retry windows so event feeds reconnect automatically.
 
 Override a profile by passing `retryProfiles` to `resolveToriiClientConfig` or the `ToriiClient`
 constructor:
@@ -307,8 +307,8 @@ render the two headers from a method/path/query/body tuple.
 
 ## Iterable Lists & Pagination
 
-Use the new helpers to mirror the Python SDK’s ergonomics for `/v2/accounts`,
-`/v2/domains`, `/v2/assets/definitions`, NFTs, account balances, asset holders,
+Use the new helpers to mirror the Python SDK’s ergonomics for `/v1/accounts`,
+`/v1/domains`, `/v1/assets/definitions`, NFTs, account balances, asset holders,
 and account transaction history. Each method accepts the same filter/sort
 envelope as the Torii JSON API and returns `{ items, total }`. When you want to
 exhaust a dataset, the corresponding `iterate*` method advances the offset
@@ -464,7 +464,7 @@ slug and, for Provisioned allowances, surfaces the inspector key, schema,
 version, TTL, and optional digest under `integrity_metadata.provisioned`.
 
 `listOfflineAllowances` accepts the same convenience filters exposed via
-`/v2/offline/allowances`: pass `assetId`, `certificateExpiresBeforeMs/AfterMs`,
+`/v1/offline/allowances`: pass `assetId`, `certificateExpiresBeforeMs/AfterMs`,
 `policyExpiresBeforeMs/AfterMs`, `verdictIdHex`, `requireVerdict`, or
 `onlyMissingVerdict` to avoid building JSON predicates for common reports.
 
@@ -575,7 +575,7 @@ for await (const event of torii.streamEvents({
 
 Explorer telemetry surfaces two helper endpoints so SDKs can capture the same replay
 snapshots and QR payloads exposed in the portal. `getExplorerMetrics()` fetches
-`/v2/explorer/metrics`, normalises the payload, and returns `null` when the route is
+`/v1/explorer/metrics`, normalises the payload, and returns `null` when the route is
 disabled or gated. Pair it with `getExplorerAccountQr()` when you need a share-ready
 preferred I105 literal (or the I105 literal) plus inline SVG for QR buttons.
 
@@ -684,7 +684,7 @@ change starts from the fleet’s latest limits.
 
 ### Connect WebSocket dialling
 
-`ToriiClient.openConnectWebSocket()` builds the canonical `/v2/connect/ws` URL (converting
+`ToriiClient.openConnectWebSocket()` builds the canonical `/v1/connect/ws` URL (converting
 `http→ws` / `https→wss`, adding `sid`, `role`, and `token`) and hands it to whichever
 WebSocket implementation you provide. Browsers automatically reuse the global `WebSocket`;
 Node.js callers should pass a constructor such as `ws`:
@@ -770,7 +770,7 @@ snapshot/evidence helpers, see {doc}`offline`.
 
 ## Streaming watchers & event cursors
 
-`ToriiClient.streamEvents()` exposes `/v2/events/sse` as an async iterator with automatic
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
 retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
 Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
 resume a stream without skipping events when a process restarts.
@@ -809,7 +809,7 @@ for await (const event of torii.streamEvents({
   signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
   for a smoke test.
 - `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v2/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
+  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
   iterator honours `Last-Event-ID` the same way.
 - See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
   env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
@@ -838,8 +838,8 @@ scripts can be dropped into staging rehearals or release workflows without bespo
 JS-06 also requires a deterministic way to publish bytecode/manifest payloads without
 rewriting curl invocations. The new `javascript/iroha_js/recipes/contracts.mjs` helper
 reads bytecode from `CONTRACT_CODE_PATH`, optional manifest JSON from either
-`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and runs `/v2/contracts/deploy`
-followed by `/v2/contracts/instance` when `CONTRACT_STAGE` includes `instance` (default:
+`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and runs `/v1/contracts/deploy`
+followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (default:
 `both`). Supply the credentials and namespace context via:
 
 ```
@@ -866,12 +866,12 @@ Roadmap item **JS-08** also requires Roadrunner Block Commitment (RBC) sampling 
 operators can show that Sumeragi delivered the block whose chunks they fetched. The JS SDK
 exposes the same helpers as the Rust CLI:
 
-1. `getSumeragiRbcSessions()` mirrors `/v2/sumeragi/rbc/sessions`, while
+1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, while
    `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
    (used by the integration suite when `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` guards the `{blockHash,height,view}`
    triple and optional `{count,seed,apiToken}` overrides before Torii receives the payload.
-3. `sampleRbcChunks()` POSTs the request to `/v2/sumeragi/rbc/sample` and returns chunk proofs
+3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample` and returns chunk proofs
    (`samples[].chunkHex`, Merkle paths, `chunkRoot`, `payloadHash`) that you should persist
    alongside the height/view identifiers.
 4. `getSumeragiRbcDelivered(height, view)` captures the delivery metadata so the sampling log

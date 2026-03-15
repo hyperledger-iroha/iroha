@@ -62,9 +62,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |------|---------------|------|-----------|
 | Draft | Владелец dataspace | Клонировать fixture, отредактировать права/gov, выполнить `cargo test -p iroha_data_model nexus::manifest`. | Diff в Git, лог тестов. |
 | Review | Governance WG | Валидировать JSON manifest’а + Norito‑bytes, подписать журнал решения. | Подписанный протокол, хеш manifest’а (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Отправить через CLI (`iroha app space-directory manifest publish`) с Norito‑payload’ом `.to` или «сырым» JSON **или** сделать POST на `/v2/space-directory/manifests` с JSON‑manifest’ом + опциональной reason; проверить ответ Torii, зафиксировать `SpaceDirectoryEvent`. | Квитанция CLI/Torii, лог событий. |
+| Publish | Lane ops | Отправить через CLI (`iroha app space-directory manifest publish`) с Norito‑payload’ом `.to` или «сырым» JSON **или** сделать POST на `/v1/space-directory/manifests` с JSON‑manifest’ом + опциональной reason; проверить ответ Torii, зафиксировать `SpaceDirectoryEvent`. | Квитанция CLI/Torii, лог событий. |
 | Expire | Lane ops / Governance | Выполнить `iroha app space-directory manifest expire` (UAID, dataspace, epoch) при достижении конца срока; проверить `SpaceDirectoryEvent::ManifestExpired`, заархивировать доказательства очищения bindings. | Вывод CLI, лог событий. |
-| Revoke | Governance + Lane ops | Выполнить `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **или** POST `/v2/space-directory/manifests/revoke` с тем же payload в Torii, проверить `SpaceDirectoryEvent::ManifestRevoked`, обновить комплект доказательств. | Квитанция CLI/Torii, лог событий, заметка в тикете. |
+| Revoke | Governance + Lane ops | Выполнить `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **или** POST `/v1/space-directory/manifests/revoke` с тем же payload в Torii, проверить `SpaceDirectoryEvent::ManifestRevoked`, обновить комплект доказательств. | Квитанция CLI/Torii, лог событий, заметка в тикете. |
 | Monitor | SRE/Compliance | Отслеживать телеметрию + audit‑логи, настраивать алерты по revocation/expiry. | Скриншот Grafana, архив логов. |
 | Rotate/Revoke | Lane ops + Governance | Подготовить manifest‑замену (новый epoch), провести tabletop, открыть инцидент (при revoke). | Тикет на ротацию, пост‑мортем. |
 
@@ -147,7 +147,7 @@ allow, и deny:
 Операторы могут публиковать manifests напрямую через Torii, не используя CLI.
 
 ```
-POST /v2/space-directory/manifests
+POST /v1/space-directory/manifests
 ```
 
 | Поле | Тип | Описание |
@@ -201,7 +201,7 @@ write‑API Space Directory (gates по CIDR/token’у/API‑fee‑policy).
 `CanPublishSpaceDirectoryManifest { dataspace }`, аналогично CLI‑workflow.
 
 ```
-POST /v2/space-directory/manifests/revoke
+POST /v1/space-directory/manifests/revoke
 ```
 
 | Поле | Тип | Описание |

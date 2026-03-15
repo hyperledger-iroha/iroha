@@ -95,7 +95,7 @@ npm run start
   hapken булғанда, несущий схемаһы, `X-TryIt-Client` менән тегтар үтенестәре,
   инъекция I18NI000000081X, һәм яңынан яҙа шылтыратыуҙар аша прокси ҡасан
   `TRYIT_PROXY_PUBLIC_URL` билдәләнгән.
-- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v2/mcp` agent workflows.
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
 - **РапиДок** — I18NI000000083X-та күрһәтелгән; жетон баҫыуын көҙгөләй,
   ҡабаттан ҡулланыла, шул уҡ башлыҡтарҙы Swagger панелендә, һәм маҡсатлы прокси
   автоматик рәүештә URL-адрес конфигурацияланғанда.
@@ -195,7 +195,7 @@ I18NF000000029X.
 I18NI000000119X-та күрһәтелгән теләһә ниндәй яҙма өсөн ҡоролма менән алмашыу
 йәки `cargo xtask norito-rpc-fixtures` менән үҙегеҙҙең файҙалы йөктө кодлай. Ҡасан I18NT000000022Х
 канар режимында һеҙ I18NI000000121X күрһәтә аласыз try-был прокси .
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) шул уҡ күнекмәләр өсөн
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) шул уҡ күнекмәләр өсөн
 инфраструктураһы, тип порталь виджеттар ҡуллана.
 
 ## Күҙәтеүсәнлек һәм операцияларҺәр үтенес бер тапҡыр ысул, юл, сығышы, өҫкө ағымдағы статус һәм

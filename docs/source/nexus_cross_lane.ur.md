@@ -88,13 +88,13 @@ Lane relay QCs کو per-dataspace committee کے خلاف validate کیا جات
    `BlockBuilder::finalize` کے دوران ہر `(lane_id, dataspace_id)` pair اپنا accumulator drain کرتا ہے۔ builder ایک `LaneBlockCommitment` بناتا ہے، receipt list copy کرتا ہے، totals accumulate کرتا ہے، اور optional swap metadata (via `SwapEvidence`) store کرتا ہے۔ نتیجے والا vector Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) میں push ہوتا ہے تاکہ Torii اور telemetry فوری طور پر expose کر سکیں۔
 
 3. **Relay packaging اور DA attestations۔**  
-   `LaneRelayBroadcaster` اب block sealing کے دوران emit ہونے والے `LaneRelayEnvelope`s consume کرتا ہے اور انہیں high-priority `NetworkMessage::LaneRelay` frames کے طور پر gossip کرتا ہے۔ envelopes verify ہوتے ہیں، `(lane_id,dataspace_id,height,settlement_hash)` کے لحاظ سے de-duplicate ہوتے ہیں، اور Sumeragi status snapshot (`/v2/sumeragi/status`) میں operators اور auditors کے لئے persist ہوتے ہیں۔ broadcaster آگے چل کر DA artefacts (RBC chunk proofs، Norito headers، SoraFS/Object manifests) attach کرے گا اور head-of-line blocking کے بغیر merge ring feed کرے گا۔
+   `LaneRelayBroadcaster` اب block sealing کے دوران emit ہونے والے `LaneRelayEnvelope`s consume کرتا ہے اور انہیں high-priority `NetworkMessage::LaneRelay` frames کے طور پر gossip کرتا ہے۔ envelopes verify ہوتے ہیں، `(lane_id,dataspace_id,height,settlement_hash)` کے لحاظ سے de-duplicate ہوتے ہیں، اور Sumeragi status snapshot (`/v1/sumeragi/status`) میں operators اور auditors کے لئے persist ہوتے ہیں۔ broadcaster آگے چل کر DA artefacts (RBC chunk proofs، Norito headers، SoraFS/Object manifests) attach کرے گا اور head-of-line blocking کے بغیر merge ring feed کرے گا۔
 
 4. **Global ordering اور merge ledger۔**  
    NPoS ring ہر relay envelope validate کرتا ہے: per-dataspace committee کے خلاف `lane_qc` check کرنا، settlement totals recompute کرنا، DA proofs verify کرنا، پھر lane tip کو `docs/source/merge_ledger.md` میں بیان کردہ merge ledger reduction میں feed کرنا۔ جب merge entry seal ہوتی ہے تو world-state hash (`global_state_root`) ہر `LaneBlockCommitment` کو commit کرتا ہے۔
 
 5. **Persistence اور exposure۔**  
-   Kura lane block، merge entry اور `LaneBlockCommitment` کو atomically لکھتا ہے تاکہ replay اسی reduction کو reconstruct کر سکے۔ `/v2/sumeragi/status` expose کرتا ہے:
+   Kura lane block، merge entry اور `LaneBlockCommitment` کو atomically لکھتا ہے تاکہ replay اسی reduction کو reconstruct کر سکے۔ `/v1/sumeragi/status` expose کرتا ہے:
    - `lane_commitments` (execution metadata).
    - `lane_settlement_commitments` (یہاں بیان کردہ payload).
    - `lane_relay_envelopes` (relay headers، QCs، DA digests، settlement hash، اور RBC byte counts).
@@ -118,7 +118,7 @@ merge ring کو lane commitment قبول کرنے سے پہلے یہ شرائط 
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, اور
 - **Torii surfaces:**  
-  `/v2/sumeragi/status` میں `lane_commitments`, `lane_settlement_commitments` اور dataspace snapshots شامل ہیں۔ `/v2/nexus/lane-config` (planned) `LaneConfig` geometry publish کرے گا تاکہ clients `lane_id` کو dataspace labels کے ساتھ map کر سکیں۔
+  `/v1/sumeragi/status` میں `lane_commitments`, `lane_settlement_commitments` اور dataspace snapshots شامل ہیں۔ `/v1/nexus/lane-config` (planned) `LaneConfig` geometry publish کرے گا تاکہ clients `lane_id` کو dataspace labels کے ساتھ map کر سکیں۔
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` lane backlog، DA availability signals، اور اوپر بیان کردہ settlement totals دکھاتا ہے۔ Alert definitions کو page کرنا چاہئے جب:
   - `nexus_scheduler_dataspace_age_slots` policy کو breach کرے۔

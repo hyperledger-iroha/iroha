@@ -200,7 +200,7 @@ struct AdversarialPerceptualVariantV1 {
   - 入口点 `run_moderation.py`（或 Rust 等效项）公开 HTTP/gRPC API。
 - 将工件发布到 `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`。
 - Runner 二进制文件作为 `sorafs_ai_runner` 板条箱的一部分发货。构建管道
-  在二进制文件中嵌入清单哈希（通过 `/v2/info` 公开）。
+  在二进制文件中嵌入清单哈希（通过 `/v1/info` 公开）。
 
 ## 8. 遥测和可观测性
 - Prometheus 指标：

@@ -36,7 +36,7 @@ PagerDuty integration:
   --pagerduty-dedup-key <KEY>     Optional deduplication key.
   --pagerduty-detail key=value    Extra custom_details pair (repeatable).
   --pagerduty-output <PATH>       Where to store the JSON payload (default: artefacts dir).
-  --pagerduty-url <URL>           Override the Events API endpoint (default: https://events.pagerduty.com/v2/enqueue).
+  --pagerduty-url <URL>           Override the Events API endpoint (default: https://events.pagerduty.com/v1/enqueue).
   --pagerduty-dry-run             Skip the HTTP POST; still writes the payload for evidence.
 
 Any arguments appearing after `--` are passed verbatim to
@@ -70,7 +70,7 @@ PAGE_SOURCE="sorafs-gateway-probe"
 PAGE_COMPONENT="sorafs-gateway"
 PAGE_GROUP="tls-drill"
 PAGE_DEDUP_KEY=""
-PAGE_URL="${PAGERDUTY_EVENT_URL:-https://events.pagerduty.com/v2/enqueue}"
+PAGE_URL="${PAGERDUTY_EVENT_URL:-https://events.pagerduty.com/v1/enqueue}"
 PAGE_DRY_RUN=0
 PAGE_OUTPUT_PATH=""
 PD_EXTRA_DETAILS=()

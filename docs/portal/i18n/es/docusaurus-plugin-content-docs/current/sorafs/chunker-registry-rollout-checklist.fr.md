@@ -74,7 +74,7 @@ procedimiento detallado.
    de registre staging référencé par `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifique que los anuncios del proveedor se propaguen a través del descubrimiento de API:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Ejercer el manifiesto/plan de puntos finales con los encabezados de gobierno:
    ```bash

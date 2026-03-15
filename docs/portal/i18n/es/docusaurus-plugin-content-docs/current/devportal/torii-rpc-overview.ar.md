@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # نظرة عامة على Norito-RPC
 
-Norito-RPC y el sistema operativo Torii. Utilización de protocolos HTTP con `/v2/pipeline` y configuración de hashes con Norito. للمخطط y sumas de verificación. Establece archivos de código fuente y archivos de datos JSON en la tubería.
+Norito-RPC y el sistema operativo Torii. Utilización de protocolos HTTP con `/v1/pipeline` y configuración de hashes con Norito. للمخطط y sumas de verificación. Establece archivos de código fuente y archivos de datos JSON en la tubería.
 
 ## لماذا ننتقل؟
 - Utilice CRC64 y hashes para crear archivos.
@@ -20,7 +20,7 @@ Norito-RPC y el sistema operativo Torii. Utilización de protocolos HTTP con `/v
 ## تنفيذ طلب
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Utilice el códec Norito (`iroha_client`, SDK de software y `norito::to_bytes`).
@@ -37,7 +37,7 @@ Requisitos del SDK:
 ## مثال وحدة Pruébalo
 
 يوفر بوابة المطورين وكيل Pruébalo كي يتمكن المراجعون من اعادة تشغيل حمولات Norito دون كتابة نصوص مخصصة.1. [ابدأ الوكيل](./try-it.md#start-the-proxy-locally) واضبط `TRYIT_PROXY_PUBLIC_URL` حتى تعرف الادوات المصغرة اين ترسل الحركة.
-2. افتح بطاقة **Pruébalo** في هذه الصفحة او لوحة `/reference/torii-swagger` واختر مسارا مثل `POST /v2/pipeline/submit`.
+2. افتح بطاقة **Pruébalo** في هذه الصفحة او لوحة `/reference/torii-swagger` واختر مسارا مثل `POST /v1/pipeline/submit`.
 3. Seleccione **Tipo de contenido** en `application/x-norito`, haga clic en **Binario** y en `fixtures/norito_rpc/transfer_asset.norito` (es decir, haga clic en `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Utilice el token de portador y el código de dispositivo OAuth y el código de dispositivo OAuth (الوكيل يقبل تجاوزات `X-TryIt-Auth` y `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Conecte el conector Torii al conector `schema_hash` y el `fixtures/norito_rpc/schema_hashes.json`. Utilice el cable Norito para conectar el cable de alimentación/controlador.

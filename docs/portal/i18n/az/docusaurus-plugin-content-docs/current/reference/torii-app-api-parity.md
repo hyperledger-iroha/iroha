@@ -16,14 +16,14 @@ Sahiblər: Torii Platforması, SDK Proqram Rəhbəri
 Yol xəritəsi arayışı: TORII-APP-1 — `app_api` paritet auditi
 
 Bu səhifə daxili `TORII-APP-1` auditini əks etdirir (`docs/source/torii/app_api_parity_audit.md`)
-Beləliklə, mono-repodan kənar oxucular hansı `/v2/*` səthlərinin simli, sınaqdan keçirildiyini,
+Beləliklə, mono-repodan kənar oxucular hansı `/v1/*` səthlərinin simli, sınaqdan keçirildiyini,
 və sənədləşdirilmişdir. Audit `Torii::add_app_api_routes` vasitəsilə yenidən ixrac edilən marşrutları izləyir,
 `add_contracts_and_vk_routes` və `add_connect_routes`.
 
 ## Əhatə dairəsi və metodu
 
 Audit `crates/iroha_torii/src/lib.rs:256-522`-də ictimai təkrar ixracı yoxlayır və
-xüsusiyyətli marşrut qurucuları. Yol xəritəsindəki hər `/v2/*` səthi üçün biz təsdiq etdik:
+xüsusiyyətli marşrut qurucuları. Yol xəritəsindəki hər `/v1/*` səthi üçün biz təsdiq etdik:
 
 - `crates/iroha_torii/src/routing.rs`-də işləyicinin tətbiqi və DTO tərifləri.
 - `app_api` və ya `connect` xüsusiyyət qrupları altında marşrutlaşdırıcının qeydiyyatı.
@@ -42,25 +42,25 @@ mövcud səhifələmə/geri təzyiq məhdudiyyətlərinə əlavə olaraq, əvvə
 - Nümunə parçaları:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Son nöqtə inventar
 
-### Hesab icazələri (`/v2/accounts/{id}/permissions`) — Əhatə olunur
+### Hesab icazələri (`/v1/accounts/{id}/permissions`) — Əhatə olunur
 - İşləyici: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO-lar: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Routerin bağlanması: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Sahib: Torii Platforması.
 - Qeydlər: Cavab SDK səhifələşdirmə köməkçilərinə uyğun gələn `items`/`total` ilə Norito JSON gövdəsidir.
 
-### Ləqəb OPRF qiymətləndirməsi (`POST /v2/aliases/voprf/evaluate`) — Örtülüdür
+### Ləqəb OPRF qiymətləndirməsi (`POST /v1/aliases/voprf/evaluate`) — Örtülüdür
 - İşləyici: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO-lar: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Sahib: Torii Platforması.
 - Qeydlər: Cavab səthi deterministik hex və arxa uç identifikatorlarını tətbiq edir; SDK-lar DTO-nu istehlak edir.
 
-### Proof hadisələri SSE (`GET /v2/events/sse`) — Örtülüdür
+### Proof hadisələri SSE (`GET /v1/events/sse`) — Örtülüdür
 - İşləyici: filtr dəstəyi ilə `handle_v1_events_sse` (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO-lar: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) üstəgəl sübut filtr naqilləri.
 - Routerin bağlanması: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -88,7 +88,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Sahib: Torii Platforması (işləmə vaxtı), İnteqrasiya Testləri WG (qurğular).
 - Qeydlər: Sübut filtr yolları başdan sona doğrulanmış; sənədlər `docs/source/zk_app_api.md` altında yaşayır.
 
-### Müqavilənin həyat dövrü (`/v2/contracts/*`) — Əhatə olunur
+### Müqavilənin həyat dövrü (`/v1/contracts/*`) — Əhatə olunur
 - İşləyicilər: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -103,7 +103,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Sahib: Torii Platforması ilə Ağıllı Müqavilə WG.
 - Qeydlər: Son nöqtələr imzalanmış əməliyyatları növbəyə çəkir və paylaşılan telemetriya ölçülərini təkrar istifadə edir (`handle_transaction_with_metrics`).
 
-### Açarın həyat dövrünün yoxlanılması (`/v2/zk/vk/*`) — Örtülüdür
+### Açarın həyat dövrünün yoxlanılması (`/v1/zk/vk/*`) — Örtülüdür
 - İşləyicilər: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) və `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO-lar: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -115,7 +115,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Sahib: Torii Platforma dəstəyi ilə ZK İşçi Qrupu.
 - Qeydlər: DTO-lar SDK-lar tərəfindən istinad edilən Norito sxemləri ilə uyğunlaşdırılır; dərəcə məhdudiyyəti `limits.rs` vasitəsilə tətbiq edilir.
 
-### Nexus Qoşulun (`/v2/connect/*`) — Örtülü (`connect` xüsusiyyəti)
+### Nexus Qoşulun (`/v1/connect/*`) — Örtülü (`connect` xüsusiyyəti)
 - İşləyicilər: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO-lar: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

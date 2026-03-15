@@ -1694,7 +1694,7 @@ async fn sorafs_routes_disabled_when_cache_off() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sorafs/providers")
+                .uri("/v1/sorafs/providers")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1720,7 +1720,7 @@ async fn sorafs_routes_enabled_with_admission_dir() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/sorafs/providers")
+                .uri("/v1/sorafs/providers")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1761,7 +1761,7 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sorafs/capacity/state")
+                .uri("/v1/sorafs/capacity/state")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1782,7 +1782,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sorafs/capacity/state")
+                .uri("/v1/sorafs/capacity/state")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1883,7 +1883,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     };
     let pin_request = Request::builder()
         .method("POST")
-        .uri("/v2/sorafs/storage/pin")
+        .uri("/v1/sorafs/storage/pin")
         .header("content-type", "application/json")
         .body(Body::from(
             json::to_vec(&pin_body).expect("serialize pin request"),
@@ -1937,7 +1937,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     };
     let fetch_request = Request::builder()
         .method("POST")
-        .uri("/v2/sorafs/storage/fetch")
+        .uri("/v1/sorafs/storage/fetch")
         .header("content-type", "application/json")
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::from(
@@ -1990,7 +1990,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     };
     let por_request = Request::builder()
         .method("POST")
-        .uri("/v2/sorafs/storage/por-sample")
+        .uri("/v1/sorafs/storage/por-sample")
         .header("content-type", "application/json")
         .body(Body::from(
             json::to_vec(&por_body).expect("serialize por request"),
@@ -2056,7 +2056,7 @@ async fn sorafs_storage_endpoints_round_trip() {
 
     let proof_request = Request::builder()
         .method("POST")
-        .uri("/v2/sorafs/proof/stream")
+        .uri("/v1/sorafs/proof/stream")
         .header("content-type", "application/json")
         .body(Body::from(
             json::to_vec(&proof_body).expect("serialize proof stream request"),
@@ -2106,7 +2106,7 @@ async fn sorafs_storage_endpoints_round_trip() {
 
     let state_request = Request::builder()
         .method("GET")
-        .uri("/v2/sorafs/storage/state")
+        .uri("/v1/sorafs/storage/state")
         .body(Body::empty())
         .expect("state request");
     let state_response = app.oneshot(state_request).await.expect("state response");
@@ -2150,7 +2150,7 @@ async fn sorafs_pin_register_route_accepts_manifest() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sorafs/pin/register")
+                .uri("/v1/sorafs/pin/register")
                 .header("content-type", "application/json")
                 .body(Body::from(payload))
                 .expect("build request"),
@@ -2197,7 +2197,7 @@ async fn sorafs_pin_register_rejects_invalid_alias_proof() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sorafs/pin/register")
+                .uri("/v1/sorafs/pin/register")
                 .header("content-type", "application/json")
                 .body(Body::from(payload))
                 .expect("build request"),
@@ -2237,7 +2237,7 @@ async fn sorafs_pin_register_accepts_norito_payload() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sorafs/pin/register")
+                .uri("/v1/sorafs/pin/register")
                 .header("content-type", "application/x-norito")
                 .body(Body::from(norito_payload))
                 .expect("build request"),
@@ -2272,7 +2272,7 @@ async fn sorafs_pin_register_rejects_malformed_successor_hex() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sorafs/pin/register")
+                .uri("/v1/sorafs/pin/register")
                 .header("content-type", "application/json")
                 .body(Body::from(payload))
                 .expect("build request"),
@@ -2340,7 +2340,7 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
 
     let request = Request::builder()
         .method("GET")
-        .uri(format!("/v2/sorafs/pin/{}", setup.manifest_digest_hex))
+        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::empty())
         .expect("build request");
@@ -2521,7 +2521,7 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
 
     let request = Request::builder()
         .method("GET")
-        .uri(format!("/v2/sorafs/pin/{}", setup.manifest_digest_hex))
+        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::empty())
         .expect("build request");
@@ -2643,7 +2643,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
 
     let list_request = Request::builder()
         .method("GET")
-        .uri("/v2/sorafs/pin")
+        .uri("/v1/sorafs/pin")
         .body(Body::empty())
         .expect("build list request");
     let list_response = harness
@@ -2661,7 +2661,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
 
     let request = Request::builder()
         .method("GET")
-        .uri(format!("/v2/sorafs/pin/{}", setup.manifest_digest_hex))
+        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::empty())
         .expect("build request");
@@ -2776,7 +2776,7 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
 
     let request = Request::builder()
         .method("GET")
-        .uri(format!("/v2/sorafs/pin/{}", setup.manifest_digest_hex))
+        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::empty())
         .expect("build request");
@@ -2894,7 +2894,7 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
 
     let request = Request::builder()
         .method("GET")
-        .uri(format!("/v2/sorafs/pin/{}", setup.manifest_digest_hex))
+        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
         .header("x-sorafs-manifest-envelope", "dummy-envelope")
         .body(Body::empty())
         .expect("build request");
@@ -2990,7 +2990,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
 
     let list_request = Request::builder()
         .method("GET")
-        .uri("/v2/sorafs/pin")
+        .uri("/v1/sorafs/pin")
         .body(Body::empty())
         .expect("build alias list request");
     let list_response = harness
@@ -3083,7 +3083,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
 async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::Value {
     let list_request = Request::builder()
         .method("GET")
-        .uri("/v2/sorafs/pin")
+        .uri("/v1/sorafs/pin")
         .body(Body::empty())
         .expect("build alias list request");
     let list_response = harness

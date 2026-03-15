@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 ስዊፍት ኤስዲኬዎች አሁን የጋሻ መመሪያዎችን ያለ የጄሶን ሙጫ ማውጣት ይችላሉ፡ ግንባታ ሀ
 `ShieldRequest` ባለ 32-ባይት ማስታወሻ ቁርጠኝነት፣ የተመሰጠረ ክፍያ እና የዴቢት ዲበ ዳታ፣
 ከዚያ ለመፈረም እና ለማስተላለፍ `IrohaSDK.submit(shield:keypair:)` (ወይም `submitAndWait`) ይደውሉ
-ግብይት በ `/v2/pipeline/transactions`. ረዳቱ የቁርጠኝነት ርዝመቶችን ያረጋግጣል ፣
+ግብይት በ `/v1/pipeline/transactions`. ረዳቱ የቁርጠኝነት ርዝመቶችን ያረጋግጣል ፣
 ክሮች `ConfidentialEncryptedPayload` ወደ Norito ኢንኮደር፣ እና `zk::Shield` ያንጸባርቃል
 አቀማመጥ ከዚህ በታች ተብራርቷል ስለዚህ የኪስ ቦርሳዎች ከዝገት ጋር በደረጃ መቆለፊያ ውስጥ እንዲቆዩ።## የስምምነት ቃል ኪዳኖች እና የችሎታ ጌቲንግ
 - አግድ ራስጌዎች `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ያጋልጣሉ; ዳይጀስት በስምምነት ሃሽ ውስጥ ይሳተፋል እና ተቀባይነትን ለማገድ ከአካባቢው የመመዝገቢያ እይታ ጋር እኩል መሆን አለበት።
@@ -71,7 +71,7 @@ SPDX-License-Identifier: Apache-2.0
 - ዘፍጥረት ይገለጣል እና CLI የወለል የአሁን እና በመጠባበቅ ላይ ያሉ ፖሊሲዎችን ያፈሳል። የመግቢያ አመክንዮ እያንዳንዱ ሚስጥራዊ መመሪያ የተፈቀደ መሆኑን ለማረጋገጥ በአፈፃፀም ጊዜ ፖሊሲውን ያነባል።
 - የፍልሰት ማረጋገጫ ዝርዝር - Milestone M0 የሚከታተለውን የማሻሻያ ዕቅድ ከዚህ በታች ያለውን "የስደት ቅደም ተከተል" ይመልከቱ።
 
-#### በTorii በኩል ሽግግሮችን መከታተልየኪስ ቦርሳዎች እና ኦዲተሮች ምርጫ `GET /v2/confidential/assets/{definition_id}/transitions` ለመመርመር
+#### በTorii በኩል ሽግግሮችን መከታተልየኪስ ቦርሳዎች እና ኦዲተሮች ምርጫ `GET /v1/confidential/assets/{definition_id}/transitions` ለመመርመር
 ንቁው `AssetConfidentialPolicy`. የJSON ክፍያ ሁልጊዜ ቀኖናዊውን ያካትታል
 የንብረት መታወቂያ፣ የቅርብ ጊዜ የታየው የማገጃ ቁመት፣ የፖሊሲው `current_mode`፣ ይህ ሁነታ
 በዚያ ከፍታ ላይ ውጤታማ (የልወጣ መስኮቶች `Convertible` ለጊዜው ሪፖርት ያደርጋሉ) እና
@@ -122,7 +122,7 @@ SPDX-License-Identifier: Apache-2.0
 ### የስደት ቅደም ተከተል
 
 2. ** ሽግግሩን ደረጃ፡** `ScheduleConfidentialPolicyTransition` ከ `effective_height` ጋር `policy_transition_delay_blocks` ያቅርቡ። ወደ `ShieldedOnly` ሲሄዱ የመቀየሪያ መስኮት ይግለጹ (`window ≥ policy_transition_window_blocks`)።
-3. **የኦፕሬተር መመሪያን ያትሙ፡** የተመለሰውን `transition_id` ይቅረጹ እና የራምፕ ላይ/የራምፕ runbook ያሰራጩ። የመስኮቱን ክፍት ቁመት ለማወቅ Wallets እና ኦዲተሮች ለ`/v2/confidential/assets/{id}/transitions` ይመዝገቡ።
+3. **የኦፕሬተር መመሪያን ያትሙ፡** የተመለሰውን `transition_id` ይቅረጹ እና የራምፕ ላይ/የራምፕ runbook ያሰራጩ። የመስኮቱን ክፍት ቁመት ለማወቅ Wallets እና ኦዲተሮች ለ`/v1/confidential/assets/{id}/transitions` ይመዝገቡ።
 4. **የመስኮት ማስፈጸሚያ፡** መስኮቱ ሲከፈት የሩጫ ሰዓቱ ፖሊሲውን ወደ `Convertible` ይቀይራል፣ `PolicyTransitionWindowOpened { transition_id }` ያወጣል እና የሚጋጩ የአስተዳደር ጥያቄዎችን አለመቀበል ይጀምራል።
 5. ** ማጠናቀቅ ወይም ማስወረድ፡** በ `effective_height`፣ የሩጫ ጊዜው የሽግግር ቅድመ ሁኔታዎችን ያረጋግጣል (ዜሮ ግልጽ አቅርቦት፣ የአደጋ ጊዜ ማቋረጥ፣ ወዘተ)። ስኬት ፖሊሲውን ወደተጠየቀው ሁነታ ይገለብጣል; አለመሳካቱ `PolicyTransitionPrerequisiteFailed` ያወጣል፣ በመጠባበቅ ላይ ያለውን ሽግግር ያጸዳል እና ፖሊሲው ሳይለወጥ ይተወዋል።
 6. ** የመርሃግብር ማሻሻያዎች፡** ከተሳካ ሽግግር በኋላ፣ አስተዳደር የንብረት እቅድ ስሪቱን ያደናቅፋል (ለምሳሌ፣ `asset_definition.v2`) እና CLI tooling `confidential_policy` ያስፈልገዋል። የጄነሲስ ማሻሻያ ሰነዶች ኦፕሬተሮች አረጋጋጮችን እንደገና ከመጀመርዎ በፊት የፖሊሲ ቅንብሮችን እና የመመዝገቢያ የጣት አሻራዎችን እንዲያክሉ ያዛል።
@@ -238,7 +238,7 @@ SPDX-License-Identifier: Apache-2.0
 - በየመለያ ቁልፍ የማውጫ ተዋረድ፡
   - `sk_spend` → `nk` (የማስሻሻ ቁልፍ)፣ `ivk` (መጪ መመልከቻ ቁልፍ)፣ `ovk` (የወጪ መመልከቻ ቁልፍ)፣ `fvk`።
 - የተመሰጠረ የማስታወሻ ጭነት AEAD ከ ECDH-የተገኙ የጋራ ቁልፎች ጋር ይጠቀማሉ; አማራጭ የኦዲተር እይታ ቁልፎች በንብረት ፖሊሲ ከውጤቶች ጋር ሊጣበቁ ይችላሉ።
-- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት። Torii በ `POST /v2/confidential/derive-keyset` በኩል ተመሳሳይ የመነሻ ፍሰት ያጋልጣል፣ ሁለቱንም ሄክስ እና ቤዝ64 ቅጾችን በመመለስ የኪስ ቦርሳ ቁልፍ ተዋረዶችን በፕሮግራማዊ መንገድ ማምጣት ይችላል።
+- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት። Torii በ `POST /v1/confidential/derive-keyset` በኩል ተመሳሳይ የመነሻ ፍሰት ያጋልጣል፣ ሁለቱንም ሄክስ እና ቤዝ64 ቅጾችን በመመለስ የኪስ ቦርሳ ቁልፍ ተዋረዶችን በፕሮግራማዊ መንገድ ማምጣት ይችላል።
 
 ## ጋዝ፣ ገደቦች እና የዶኤስ መቆጣጠሪያዎች
 - የሚወስን የጋዝ መርሃ ግብር;

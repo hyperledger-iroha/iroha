@@ -53,7 +53,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii כעת חושף snapshots של credit providers לצד fee ledgers כדי ש-dashboards יוכלו להתריע על יתרות נמוכות
 ועל penalty strikes:
 
-- REST: `GET /v2/sorafs/capacity/state` מחזיר רשומות `credit_ledger[*]` שמחזירות
+- REST: `GET /v1/sorafs/capacity/state` מחזיר רשומות `credit_ledger[*]` שמחזירות
   את שדות ledger שאומתו במבחן ה-soak. ראו
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` מציג את

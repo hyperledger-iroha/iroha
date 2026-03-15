@@ -20,9 +20,9 @@ translation_last_reviewed: 2025-11-14
 مفعَّلًا (القيمة الافتراضية). يتم التحكّم في سلوك runtime عبر الإعدادات:
 
 - اضبط `connect.enabled=false` لتعطيل جميع مسارات Connect
-  (`/v2/connect/*`).
+  (`/v1/connect/*`).
 - اتركها `true` (القيمة الافتراضية) لتمكين نقاط نهاية جلسات WebSocket
-  ومسار `/v2/connect/status`.
+  ومسار `/v1/connect/status`.
 
 تجاوزات متغيرات البيئة (إعداد المستخدم → الإعداد الفعلي):
 
@@ -53,8 +53,8 @@ translation_last_reviewed: 2025-11-14
   WebSocket وزيادة المقياس `connect.ping_miss_total`.
 - عند تعطيل Connect في runtime (`connect.enabled=false`)، لا يتم تسجيل
   مسارات الـ WebSocket ومسار الحالة، وتعيد الطلبات إلى
-  `/v2/connect/ws` و`/v2/connect/status` استجابة 404.
-- يتطلّب الخادم `sid` يقدّمه العميل في `​/v2/connect/session` (بصيغة
+  `/v1/connect/ws` و`/v1/connect/status` استجابة 404.
+- يتطلّب الخادم `sid` يقدّمه العميل في `​/v1/connect/session` (بصيغة
   base64url أو hex بطول 32 بايت). لم يَعُد الخادم يولّد `sid` احتياطيًا.
 
 انظر أيضًا:

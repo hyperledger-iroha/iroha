@@ -56,12 +56,12 @@ report de crédit avec résultats de liquidation.
 ## Intégration avec Torii
 
 Torii expose les points de terminaison dédiés aux preuves de rapport d'utilisation et de vérification
-cycle de vie en accord avec le câblage en toute sécurité :- `POST /v2/sorafs/deal/usage` chaîne de télémétrie `DealUsageReport` et retour
+cycle de vie en accord avec le câblage en toute sécurité :- `POST /v1/sorafs/deal/usage` chaîne de télémétrie `DealUsageReport` et retour
   resultados deterministas de contabilidade (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` finalise le message actuel, transmet le message
+- `POST /v1/sorafs/deal/settle` finalise le message actuel, transmet le message
   `DealSettlementRecord` résultant d'un `DealSettlementV1` en base64
   Pronto para publicacao no DAG de gouvernance.
-- Le flux `/v2/events/sse` vers Torii transmet les enregistrements `SorafsGatewayEvent::DealUsage`.
+- Le flux `/v1/events/sse` vers Torii transmet les enregistrements `SorafsGatewayEvent::DealUsage`.
   reprendre chaque envoi d'utilisation (époque, GiB-heures, contadores de tickets,
   cobrancas deterministas), registres `SorafsGatewayEvent::DealSettlement`
   qui inclut l'instantané canonique du grand livre de liquidation mais aussi le digest/tamanho/base64

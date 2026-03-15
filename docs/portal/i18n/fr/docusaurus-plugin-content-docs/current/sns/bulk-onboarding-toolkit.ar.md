@@ -107,7 +107,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -127,9 +127,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- يصدر المساعد `POST /v2/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
+- يصدر المساعد `POST /v1/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
   Il s'agit de NDJSON.
-- `--poll-status` est compatible avec `/v2/sns/registrations/{selector}`.
+- `--poll-status` est compatible avec `/v1/sns/registrations/{selector}`.
   ارسال (حتى `--poll-attempts`, الافتراضي 5) لتاكيد ظهور السجل. et
   `--suffix-map` (JSON correspond à `suffix_id` comme "suffixe") dans la version actuelle
   اشتقاق لواحق `{label}.{suffix}` عند sondage.

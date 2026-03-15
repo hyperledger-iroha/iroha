@@ -6575,7 +6575,7 @@ impl Telemetry {
         }
     }
 
-    /// Record a Taikai alias rotation accepted via `/v2/da/ingest`.
+    /// Record a Taikai alias rotation accepted via `/v1/da/ingest`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_taikai_alias_rotation(
         &self,
@@ -14139,7 +14139,7 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
 
         telemetry.record_torii_explorer_request(
-            "/v2/explorer/transactions",
+            "/v1/explorer/transactions",
             "ok",
             Duration::from_millis(25),
         );
@@ -14147,7 +14147,7 @@ mod tests {
         assert_eq!(
             metrics
                 .torii_explorer_requests_total
-                .with_label_values(&["/v2/explorer/transactions", "ok"])
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
                 .get(),
             1,
             "explorer request counter should increment for each wrapper call"
@@ -14155,7 +14155,7 @@ mod tests {
         assert_eq!(
             metrics
                 .torii_explorer_request_duration_seconds
-                .with_label_values(&["/v2/explorer/transactions", "ok"])
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
                 .get_sample_count(),
             1,
             "explorer request latency histogram should record wrapper observations"

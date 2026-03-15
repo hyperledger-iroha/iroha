@@ -100,7 +100,7 @@ stage-gate review.
    GAR) and captures the ZRH digest; the digest is recorded in the VR header
    template stored alongside the PoP descriptor.
 2. **Proof ingest:** Operators upload the Merkle proof via
-   `POST /v2/zones/{zone}/authoritative-proof`; the resolver notariser stores
+   `POST /v1/zones/{zone}/authoritative-proof`; the resolver notariser stores
    it under `artifacts/soradns/proofs/<zone>/` with the VR template.
 3. **Response binding:** For any managed zone answer, the resolver emits the
    ZRH digest, VR signature, and (for ODoH) the blinded relay-id so SDKs can
@@ -130,7 +130,7 @@ endpoints so operators can automate rollouts without shelling into the PoP.
 ### Example REST payloads
 
 ```json
-POST /v2/zones
+POST /v1/zones
 {
   "zone": "docs-preview.sora.link.",
   "ttl_seconds": 300,
@@ -144,18 +144,18 @@ POST /v2/zones
 }
 ```
 
-- `POST /v2/zones/{zone}/authoritative-proof`: uploads the Merkle proof bundle
+- `POST /v1/zones/{zone}/authoritative-proof`: uploads the Merkle proof bundle
   for the ZRH notariser.
-- `GET /v2/resolver/policy`: returns the current privacy posture
+- `GET /v1/resolver/policy`: returns the current privacy posture
   (salt epoch, ECS config, QNAME policy).
-- `POST /v2/resolver/waivers`: records ECS/QNAME overrides with signed RPT
+- `POST /v1/resolver/waivers`: records ECS/QNAME overrides with signed RPT
   attestations.
-- `PATCH /v2/resolver/policy`: toggles enforcement knobs (QNAME minimisation,
+- `PATCH /v1/resolver/policy`: toggles enforcement knobs (QNAME minimisation,
   ECS opt-in defaults, serve-stale ceiling, ODoH preview enablement) and
   records the Sigstore client identity for audit exports.
-- `GET /v2/telemetry/metrics`: JSON view of the Prometheus snapshot used by
+- `GET /v1/telemetry/metrics`: JSON view of the Prometheus snapshot used by
   the dashboards so GAR reviewers can pull metrics without scraping Prometheus.
-- `GET /v2/telemetry/qps`: streaming endpoint that emits per-protocol counters,
+- `GET /v1/telemetry/qps`: streaming endpoint that emits per-protocol counters,
   cache hit rates, DNSSEC failure counts, BFD state per upstream resolver, and
   latency buckets.
 

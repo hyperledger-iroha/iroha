@@ -15,8 +15,8 @@ translator: machine-google-reviewed
 Iroha Torii 公開可選的 WalletConnect 風格的 WebSocket 端點和最小的節點內中繼
 當 `connect` Cargo 功能啟用時（默認）。運行時行為在配置中被控制：
 
-- 設置 `connect.enabled=false` 以禁用所有連接路由 (`/v2/connect/*`)。
-- 保留 `true`（默認）以啟用 WS 會話端點和 `/v2/connect/status`。
+- 設置 `connect.enabled=false` 以禁用所有連接路由 (`/v1/connect/*`)。
+- 保留 `true`（默認）以啟用 WS 會話端點和 `/v1/connect/status`。
 
 環境覆蓋（用戶配置→實際配置）：
 
@@ -44,8 +44,8 @@ Iroha Torii 公開可選的 WalletConnect 風格的 WebSocket 端點和最小的
   服務器在關閉 WebSocket 之前可以容忍 `ping_miss_tolerance` 次連續錯過的 pong，並且
   增加 `connect.ping_miss_total` 指標。
 - 在運行時禁用時 (`connect.enabled=false`)，Connect WS 和狀態路由不會
-  已註冊；對 `/v2/connect/ws` 和 `/v2/connect/status` 的請求返回 404。
-- 服務器需要客戶端為 `/v2/connect/session` 提供 `sid`（base64url 或十六進制，32 字節）。
+  已註冊；對 `/v1/connect/ws` 和 `/v1/connect/status` 的請求返回 404。
+- 服務器需要客戶端為 `/v1/connect/session` 提供 `sid`（base64url 或十六進制，32 字節）。
   它不再生成後備 `sid`。
 
 另請參閱：`crates/iroha_config/src/parameters/{user,actual}.rs` 和默認值

@@ -156,9 +156,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > توفر بوابة Torii مساعدين للقراءة فقط في الأساس أيضًا
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — voзвращаеt сограненный
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — voзвращаеt сограненный
 > بيان Norito (base64) موجود في الملخص/البيانات الوصفية.[crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — تحديد القرار
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — تحديد القرار
 > خطة JSON (`chunk_fetch_specs`) للأدوات النهائية.[crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > هذه النقاط تعكس مسار CLI، ويمكن الوصول إلى الخطوط العريضة من المواقع المحلية
@@ -198,18 +198,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      نماذج الحوكمة; حول التصميم يقترح الكثير من الكلمات و
      إزالة التثبيت، بدء تشغيل المشغل.
 
-### تكامل الإعلان والجدولة- Torii تحويل درجة الحرارة إلى `CapacityDeclarationRecord` من `/v2/sorafs/capacity/declare`
+### تكامل الإعلان والجدولة- Torii تحويل درجة الحرارة إلى `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare`
   في `CapacityManager` الأساسي، حيث يتم عرض كل وحدة في الذاكرة الخاصة بك
   تخصيص قطع/حارة التأمين. ينشر المدير لقطات للقراءة فقط لأجهزة القياس عن بعد
-  (`GET /v2/sorafs/capacity/state`) وقم بتخصيص الحجوزات لكل ملف شخصي/لكل مسار حتى الإنشاء الجديد
+  (`GET /v1/sorafs/capacity/state`) وقم بتخصيص الحجوزات لكل ملف شخصي/لكل مسار حتى الإنشاء الجديد
   заказов.[crates/sorafs_node/src/capacity.rs:1]】[crates/sorafs_node/src/lib.rs:60]
-- النقطة `/v2/sorafs/capacity/schedule` تبدأ `ReplicationOrderV1` الصادرة عن الحوكمة
+- النقطة `/v1/sorafs/capacity/schedule` تبدأ `ReplicationOrderV1` الصادرة عن الحوكمة
   الحمولات. عندما يطلب منك مزود خدمة محلي، يتحقق الوسيط من الازدواجية
   تم التسجيل والتحقق من صحة المقطع/الممر وحجز الفتحة والاتصال بـ `ReplicationPlan`
   مع الوصفة، يمكن للتنظيم أن يطيل عملية الابتلاع. شكرا لك
   يتواصل مقدمو الطلبات الآخرون مع `ignored`، ويدعمون سير العمل متعدد المشغلين.
 - خطافات الإكمال (على سبيل المثال، بعد الاستيعاب الناجح)
-  `POST /v2/sorafs/capacity/complete` للحجز عبر الإنترنت
+  `POST /v1/sorafs/capacity/complete` للحجز عبر الإنترنت
   `CapacityManager::complete_order`. قم بإدراج اللقطة `ReplicationRelease`
   (الإجماليات القياسية، القطع المقطوعة/الممر)، مما قد يؤدي إلى أدوات التنسيق
   قم بالإجابة على السؤال التالي دون الاقتراع. العمل الأخير يربط هذا بخط الأنابيب

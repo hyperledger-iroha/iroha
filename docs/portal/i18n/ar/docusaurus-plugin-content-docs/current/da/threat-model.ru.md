@@ -226,7 +226,7 @@ commitments, вызывая fetch failures и light-client inconsistencies.
 
 - إعادة تشغيل ذاكرة التخزين المؤقت وهبوط المؤشرات في DA-2. تحقيق في
   `crates/iroha_core/src/da/replay_cache.rs` (منطق ذاكرة التخزين المؤقت) والتكامل Torii в
-  `crates/iroha_torii/src/da/ingest.rs`، حيث يتم فحص بصمات الأصابع من خلال `/v2/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`، حيث يتم فحص بصمات الأصابع من خلال `/v1/da/ingest`.
 - يتم تنفيذ عمليات محاكاة تدفق PDP/PoTR من خلال أداة إثبات التدفق في
   `crates/sorafs_car/tests/sorafs_cli.rs`، فتح تدفقات طلب PoR/PDP/PoTR،
   سيناريوهات الفشل من نماذج الألعاب.

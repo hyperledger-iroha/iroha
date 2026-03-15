@@ -47,7 +47,7 @@ Torii۔ ہر سیکشن براہ راست SF-3 کی فراہمی سے مطابق
 
 - اس بات کو یقینی بنائیں کہ اس عمل Torii نے `data_dir` تک پڑھنے/تحریری رسائی حاصل کی ہے۔
 - اس بات کی تصدیق کریں کہ نوڈ متوقع صلاحیت کے ذریعے تشہیر کرتا ہے
-  `GET /v2/sorafs/capacity/state` اعلامیہ ریکارڈ کرنے کے بعد۔
+  `GET /v1/sorafs/capacity/state` اعلامیہ ریکارڈ کرنے کے بعد۔
 - جب اینٹی ایلیسنگ فعال ہوجاتی ہے تو ، ڈیش بورڈ دونوں کچے اور ہموار دونوں کو دکھاتے ہیں
   جِب آور/پور کاؤنٹرز جٹر فری رجحانات کو اجاگر کرنے کے لئے آگے
   فوری اقدار۔
@@ -97,8 +97,8 @@ HTTP API پر کال کرنے سے پہلے سائیکل کال → پروف →
 Torii چلانے کے بعد آپ HTTP کے ذریعے وہی نمونے حاصل کرسکتے ہیں:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 دونوں اختتامی مقامات بلٹ ان اسٹوریج ورکر کے ذریعہ پیش کیے جاتے ہیں ، لہذا سی ایل آئی سگریٹ نوشی کے ٹیسٹ اور
@@ -111,7 +111,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بیس 64 انکوڈنگ میں مینی فیسٹ بھیجیں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -121,7 +121,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. پن والا ڈیٹا حاصل کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -136,7 +136,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Torii عمل (یا پورا نوڈ) دوبارہ شروع کریں۔
 3. بازیافت کی درخواست کو دوبارہ جمع کریں۔ پے لوڈ کو اب بھی بازیافت کرنا چاہئے اور ہضم ہونا چاہئے
    ردعمل کو دوبارہ شروع ہونے والے ایک سے میچ کرنا چاہئے۔
-4. `GET /v2/sorafs/storage/state` چیک کریں تاکہ یہ یقینی بنایا جاسکے کہ `bytes_used` کی عکاسی ہو رہی ہے
+4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ یہ یقینی بنایا جاسکے کہ `bytes_used` کی عکاسی ہو رہی ہے
    ریبوٹ کے بعد بچائے گئے ظاہر۔
 
 ## 4. کوٹہ انکار ٹیسٹ
@@ -154,7 +154,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. پور نمونہ کی درخواست کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -179,7 +179,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ڈیش بورڈز کو ٹریک کرنا چاہئے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` کے ذریعے شائع کردہ POR کامیابی/ناکامی کاؤنٹرز
+  - `/v1/sorafs/capacity/state` کے ذریعے شائع کردہ POR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے تصفیہ شائع کرنے کی کوششیں
 
 ان مشقوں پر عمل کرنے سے یہ یقینی بنائے گا کہ بلٹ ان اسٹوریج ورکر اس قابل ہے

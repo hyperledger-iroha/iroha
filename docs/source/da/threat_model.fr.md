@@ -203,7 +203,7 @@ met sur liste blanche les fournisseurs malveillants ou supprime les alertes.
 - Le cache de relecture DA et la persistance du curseur ont atterri dans DA-2. Voir le
   implémentation dans `crates/iroha_core/src/da/replay_cache.rs` (logique de cache) et
   l'intégration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui enfile le
-  vérification des empreintes digitales via `/v2/da/ingest`.
+  vérification des empreintes digitales via `/v1/da/ingest`.
 - Les simulations de streaming PDP/PoTR sont exercées via le harnais proof-stream dans
   `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de requêtes PoR/PDP/PoTR
   et des scénarios de défaillance animés dans le modèle de menace.

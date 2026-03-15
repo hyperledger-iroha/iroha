@@ -195,7 +195,7 @@ curl -s http://127.0.0.1:8080/status \
   重新配置。
 - **管道/SSE 测试。** 交易事件过滤器接受
   `tx_lane_id == <u32>` 谓词（请参阅 `docs/source/pipeline.md`）。订阅
-  `/v2/pipeline/events/transactions` 使用该过滤器来证明写入已发送
+  `/v1/pipeline/events/transactions` 使用该过滤器来证明写入已发送
   没有明确的车道到达后备车道 ID 下。
 
 ## 7. 可观察性和治理挂钩

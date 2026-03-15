@@ -30,7 +30,7 @@ _مسودة: 25-03-2026 -- المالكون: Core Protocol WG / Smart Contract T
   الى تخزين الدفتر.
 - توفير براهين عضوية حتمية لكي يصنع العملاء الجدد من تجزئة البيان
   تثبيته في كتلة محددة.
-- كشف استعلامات Torii (`/v2/da/commitments/*`) وبراهين تسمح للـ Relays وSDKs
+- كشف استعلامات Torii (`/v1/da/commitments/*`) وبراهين تسمح للـ Relays وSDKs
   وادوات تشغيل ال تور بتدقيق التوفر دون إعادة كل الكتلة.
 - تحقق على ظرف `SignedBlockWire` القياسي عبر TB6 البنى الجديدة من خلال
   ترويسة بيانات Norito الوصفية واشتقاق hash الجاذبية.
@@ -44,7 +44,7 @@ _مسودة: 25-03-2026 -- المالكون: Core Protocol WG / Smart Contract T
    `crates/iroha_core/src/block.rs`).
 3. **الفهارس المستمرة** حتى بدأت WSV من اجابة استعلامات التعهدات بسرعة
    (`iroha_core/src/wsv/mod.rs`).
-4. **اضافات RPC في Torii** لقائمة النقاط/الاستعلام/الإثبات تحت `/v2/da/commitments`.
+4. **اضافات RPC في Torii** لقائمة النقاط/الاستعلام/الإثبات تحت `/v1/da/commitments`.
 5. **اختبارات تكامل + تركيبات** متعددة من تخطيط الأسلاك وإثبات التدفق
    `integration_tests/tests/da/commitments.rs`.
 
@@ -133,9 +133,9 @@ setters/getters لـ `da_commitments` (راجع `BlockBuilder::set_da_commitment
 
 | المسار | الطريقة | الحمولة | تعليقات |
 |--------|---------|--------|---------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق النطاق/العصر/التسلسل، مع ترقيم الصفحات) | أعاد `DaCommitmentPage` المجدي الاجمالي والتعهدات و التجزئة. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + تجزئة البيان أو tuple `(epoch, sequence)`). | إعادة `DaCommitmentProof` (سجل + مسار ميركل + هاش كيدج). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية يعيد حساب التجزئة الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكن الربط مباشرة مع `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق النطاق/العصر/التسلسل، مع ترقيم الصفحات) | أعاد `DaCommitmentPage` المجدي الاجمالي والتعهدات و التجزئة. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (الممر + تجزئة البيان أو tuple `(epoch, sequence)`). | إعادة `DaCommitmentProof` (سجل + مسار ميركل + هاش كيدج). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد عديم الجنسية يعيد حساب التجزئة الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكن الربط مباشرة مع `iroha_crypto`. |
 
 كل الحمولات تعيش تحت `iroha_data_model::da::commitment`. يقوم بتركيب Torii
 تقوم المعالجات بجانب نقاط النهاية باستقبال LDA الحالي لاعادة استخدام سياسات token/mTLS.

@@ -142,12 +142,12 @@ Deploiement operateur (sans downtime)
 
 Torii et CLI
 - Torii
-  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implante)
-  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implante)
-  - `GET /v2/runtime/upgrades` -> liste des records (implante).
-  - `POST /v2/runtime/upgrades/propose` -> encapsule `ProposeRuntimeUpgrade` (retourne un squelette d instruction; implante).
-  - `POST /v2/runtime/upgrades/activate/:id` -> encapsule `ActivateRuntimeUpgrade` (retourne un squelette d instruction; implante).
-  - `POST /v2/runtime/upgrades/cancel/:id` -> encapsule `CancelRuntimeUpgrade` (retourne un squelette d instruction; implante).
+  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implante)
+  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implante)
+  - `GET /v1/runtime/upgrades` -> liste des records (implante).
+  - `POST /v1/runtime/upgrades/propose` -> encapsule `ProposeRuntimeUpgrade` (retourne un squelette d instruction; implante).
+  - `POST /v1/runtime/upgrades/activate/:id` -> encapsule `ActivateRuntimeUpgrade` (retourne un squelette d instruction; implante).
+  - `POST /v1/runtime/upgrades/cancel/:id` -> encapsule `CancelRuntimeUpgrade` (retourne un squelette d instruction; implante).
 - CLI
   - `iroha runtime abi active` (implante)
   - `iroha runtime abi hash` (implante)

@@ -12,7 +12,7 @@ use http::HeaderMap;
 
 use crate::limits;
 
-/// Policy applied to `/v2/sorafs/storage/pin` submissions.
+/// Policy applied to `/v1/sorafs/storage/pin` submissions.
 #[derive(Clone, Debug)]
 pub struct PinSubmissionPolicy {
     require_token: bool,

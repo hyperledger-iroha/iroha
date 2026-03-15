@@ -32,7 +32,7 @@ OIDC Sigstore үшін тіркелгі деректері. Ұзақ өмір с
 
 - `npm` немесе `pnpm` бар 18.18+ түйіні.
 - `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` бастап.
-- Torii URL мекенжайы `/v2/sorafs/*` плюс өкілетті тіркелгіні/жеке кілтті көрсетеді
+- Torii URL мекенжайы `/v1/sorafs/*` плюс өкілетті тіркелгіні/жеке кілтті көрсетеді
   манифесттер мен бүркеншік аттарды жібере алады.
 - OIDC эмитенті (GitHub әрекеттері, GitLab, жұмыс жүктемесінің идентификациясы және т.б.)
   `SIGSTORE_ID_TOKEN`.
@@ -894,7 +894,7 @@ SoraFS сайтында жариялау енді көп дереккөзді а
 
 | Аты | Мақсаты |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | `/v2/sorafs/pin/register` ашатын Torii хосты. |
+| `DOCS_SORAFS_TORII_URL` | `/v1/sorafs/pin/register` ашатын Torii хосты. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Жіберулермен жазылған дәуір идентификаторы. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Манифестті жіберуге қол қоюшы орган. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` `true` болғанда манифестке байланыстырылған бүркеншік ат кортежі. |

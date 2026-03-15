@@ -53,7 +53,7 @@ translation_last_reviewed: 2026-02-07
 | `taikai_ingest_segment_latency_ms` | CMAF შეყოვნების ჰისტოგრამა თითო კლასტერზე/ნაკადზე (სამიზნე: p95<750ms, p99<900ms). |
 | `taikai_ingest_live_edge_drift_ms` | პირდაპირი დრეიფი ენკოდერსა და წამყვანის მუშაკებს შორის (გვერდები p99>1,5 წმ 10 წთ). |
 | `taikai_ingest_segment_errors_total{reason}` | შეცდომები ითვლება მიზეზის მიხედვით (`decode`, `manifest_mismatch`, `lineage_replay`,…). ნებისმიერი ზრდა იწვევს `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | იზრდება, როდესაც `/v2/da/ingest` მიიღებს ახალ TRM-ს მეტსახელისთვის; გამოიყენეთ `rate()` ბრუნვის კადენციის დასადასტურებლად. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | იზრდება, როდესაც `/v1/da/ingest` მიიღებს ახალ TRM-ს მეტსახელისთვის; გამოიყენეთ `rate()` ბრუნვის კადენციის დასადასტურებლად. |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON სნეპშოტი `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` და დროის შტამპებით მტკიცებულებათა პაკეტებისთვის. |
 | `taikai_viewer_*` (რებუფერი, CEK ბრუნვის ასაკი, PQ ჯანმრთელობა, გაფრთხილებები) | მაყურებლის მხრიდან KPI-ები, რათა უზრუნველყონ CEK ბრუნვა + PQ სქემები ჯანსაღად დარჩეს წამყვანების დროს. |
 

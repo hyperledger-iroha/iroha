@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - 政策元數據和待定轉換可通過
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`)，由 Swift SDK 鏡像
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) 並記錄在
   機密資產設計和 SDK 指南

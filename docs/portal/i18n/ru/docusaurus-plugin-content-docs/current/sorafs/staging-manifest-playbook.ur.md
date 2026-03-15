@@ -74,13 +74,13 @@ Sidebar_label: SoraFS книга промежуточного манифеста
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Запрос конечной точки обнаружения для подтверждения или объявления канонических псевдонимов или для подтверждения:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Введите `profile_aliases` и `"sorafs.sf1@1.0.0"` для входа в систему.

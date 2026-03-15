@@ -68,7 +68,7 @@ Reqressiya əhatə dairəsi yaşayır
 ## Alətlər və qurğular
 
 - Provayderin reklam yüklərinə `range_capability`, `stream_budget` və
-  `transport_hints` metadata. `/v2/sorafs/providers` cavabları vasitəsilə təsdiqləyin və
+  `transport_hints` metadata. `/v1/sorafs/providers` cavabları vasitəsilə təsdiqləyin və
   qəbul qurğuları; JSON xülasələri təhlil edilmiş qabiliyyəti ehtiva etməlidir,
   axın büdcəsi və telemetriya qəbulu üçün göstəriş massivləri.
 - `cargo xtask sorafs-admission-fixtures` axın büdcələrini və nəqliyyatı göstərir
@@ -80,7 +80,7 @@ Reqressiya əhatə dairəsi yaşayır
 
 ## Orchestrator & Torii inteqrasiyası
 
-- Torii `/v2/sorafs/providers` təhlil edilmiş diapazon qabiliyyəti metadatasını qaytarır
+- Torii `/v1/sorafs/providers` təhlil edilmiş diapazon qabiliyyəti metadatasını qaytarır
   `stream_budget` və `transport_hints` ilə. Endirmə xəbərdarlığı zamanı atəş
   provayderlər yeni metadatanı buraxır və şlüz aralığının son nöqtələri eyni şeyi tətbiq edir
   birbaşa müştərilər üçün məhdudiyyətlər.

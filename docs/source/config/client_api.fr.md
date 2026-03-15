@@ -46,6 +46,6 @@ Sémantique de l'étape :
 - **ga** — Norito-RPC est disponible pour chaque appelant authentifié (sous réserve des
   taux habituel et limites de préautorisation).
 
-Les opérateurs peuvent mettre à jour ces valeurs de manière dynamique via `/v2/config`. Chaque changement
+Les opérateurs peuvent mettre à jour ces valeurs de manière dynamique via `/v1/config`. Chaque changement
 se reflète immédiatement dans `/rpc/capabilities`, permettant les SDK et l'observabilité
 des tableaux de bord pour montrer la posture du transport en direct.

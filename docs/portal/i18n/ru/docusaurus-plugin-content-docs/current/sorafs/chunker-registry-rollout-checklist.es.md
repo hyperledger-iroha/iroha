@@ -76,7 +76,7 @@ o пакет допусков поставщиков после пересмот
    ссылка на промежуточную версию `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Проверка того, что реклама поставщика распространяется через API обнаружения:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Выведите конечные точки манифеста/плана с заголовками правительства:
    ```bash

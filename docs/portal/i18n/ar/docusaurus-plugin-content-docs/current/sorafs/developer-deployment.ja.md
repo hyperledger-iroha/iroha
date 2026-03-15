@@ -36,7 +36,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## إعدادات البيئة
 
-- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v2/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
+- يجب على البوابات تفعيل نقطة نهاية بث الأدلة (`POST /v1/sorafs/proof/stream`) حتى يتمكن CLI من إصدار ملخصات التليمترية.
 - اضبط سياسة `sorafs_alias_cache` باستخدام القيم الافتراضية في `iroha_config` أو عبر أداة CLI المساعدة (`sorafs_cli manifest submit --alias-*`).
 - وفّر رموز البث (أو بيانات اعتماد Torii) عبر مدير أسرار آمن.
 - فعّل مصدّرات التليمترية (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) وأرسلها إلى حزمة Prometheus/OTel الخاصة بك.

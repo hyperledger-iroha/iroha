@@ -51,7 +51,7 @@ translation_last_reviewed: 2026-02-07
 |ガバナンス評議会 | Разрабатывает и утверждает чартеры, политики суффиксов, вердикты по спорам и ротации steward. | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`、бюллетени совета、сохраненные через `sns governance charter submit`。 | Председатель совета + трекер повестки управления。 |
 |ガーディアンボード |ソフト/ハードの組み合わせ、72 時間の保証。 |ガーディアン、`sns governance freeze`、`artifacts/sns/guardian/*` をオーバーライドします。 |保護者がオンコール中です (15 分以内の ACK)。 |
 |サフィックススチュワード | Ведут очереди registrar, аукционы, ценовые уровни и коммуникации с клиентами; ждтверждают комплаенс。 | Политики Steward в `SuffixPolicyV1`, ценовые листы, 謝辞 Steward рядом с регуляторными мемо. |スチュワード + PagerDuty を使用します。 |
-|レジストラと請求業務 | Обслуживают `/v2/sns/*` эндпоинты、сверяют платежи、публикуют телеметрию и сохраняют снимки CLI。 |レジストラー API ([`registrar-api.md`](./registrar-api.md))、`sns_registrar_status_total`、`artifacts/sns/payments/*` を参照してください。 |勤務管理者登録官と連絡係 казначейства。 |
+|レジストラと請求業務 | Обслуживают `/v1/sns/*` эндпоинты、сверяют платежи、публикуют телеметрию и сохраняют снимки CLI。 |レジストラー API ([`registrar-api.md`](./registrar-api.md))、`sns_registrar_status_total`、`artifacts/sns/payments/*` を参照してください。 |勤務管理者登録官と連絡係 казначейства。 |
 |リゾルバーおよびゲートウェイ オペレーター | SoraDNS、GAR およびゲートウェイとレジストラを接続します。必要があります。 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 |リゾルバー SRE オンコール + オペレーション ゲートウェイ。 |
 |財務および財務 | 70/30、紹介カーブアウト、SLA および SLA を参照してください。 | Манифесты начислений дохода, выгрузки Stripe/казначейства, квартальные KPI приложения в `docs/source/sns/regulatory/`. | Финансовый контролер + комплаенс-офицер。 |
 |コンプライアンスおよび規制担当窓口 | Отслеживает глобальные обязательства (EU DSA および др.)、KPI 規約および раскрытия。 | `docs/source/sns/regulatory/` のリファレンス デッキ、`ops/drill-log.md` のテーブルトップ。 | Лид программы комплаенса。 |
@@ -166,7 +166,7 @@ translation_last_reviewed: 2026-02-07
 ## 5. Телеметрия и отчетность| Сигнал | Источник | Описание / Действие |
 |----------|----------|-----------|
 | `sns_registrar_status_total{result,suffix}` | Обработчики レジストラ Torii | Счетчик успех/обка для регистраций, продлений, заморозок, трансферов; `result="error"` が表示されます。 |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | Метрики Torii | SLO は API を提供します。 `torii_norito_rpc_observability.json` を参照してください。 |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Метрики Torii | SLO は API を提供します。 `torii_norito_rpc_observability.json` を参照してください。 |
 | `soradns_bundle_proof_age_seconds` と `soradns_bundle_cid_drift_total` |リゾルバー透明度テーラー | Выявляют устаревльства или дрейф GAR;ガードレール определены в `dashboards/alerts/soradns_transparency_rules.yml`。 |
 | `sns_governance_activation_total` |ガバナンス CLI | Счетчик、увеличивающийся при активации чартеров/приложений;追加情報を追加してください。 |
 | `guardian_freeze_active` ゲージ |ガーディアンCLI |ソフト/ハード フリーズをサポートします。 SRE、`1` と SLA を接続します。 |

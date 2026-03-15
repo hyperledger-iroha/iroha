@@ -117,7 +117,7 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
    يقوم `LaneRelayBroadcaster` الان باستهلاك `LaneRelayEnvelope`s الصادرة اثناء اغلاق الكتلة
    ويبثها كاطارات `NetworkMessage::LaneRelay` ذات اولوية عالية. يتم التحقق من الـ envelopes،
    وازالة التكرار حسب `(lane_id,dataspace_id,height,settlement_hash)`، وتخزينها في لقطة حالة
-   Sumeragi (`/v2/sumeragi/status`) للمشغلين والمدققين. سيستمر الـ broadcaster بالتطور لاضافة
+   Sumeragi (`/v1/sumeragi/status`) للمشغلين والمدققين. سيستمر الـ broadcaster بالتطور لاضافة
    artefacts DA (اثباتات chunk لـ RBC، وheaders Norito، وmanifests SoraFS/Object) وتغذية merge ring
    بدون حجب head-of-line.
 
@@ -129,7 +129,7 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
 
 5. **الحفظ والافصاح.**  
    يكتب Kura lane block وmerge entry و`LaneBlockCommitment` بشكل ذري كي يتمكن replay من اعادة بناء
-   نفس التخفيض. يعرض `/v2/sumeragi/status`:
+   نفس التخفيض. يعرض `/v1/sumeragi/status`:
    - `lane_commitments` (metadata التنفيذ).
    - `lane_settlement_commitments` (الحمولة الموصوفة هنا).
    - `lane_relay_envelopes` (relay headers وQCs وDA digests وsettlement hash وعدادات بايت RBC).
@@ -166,8 +166,8 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
   التنبيه عند ارتفاع missing-availability (عدادات reschedule قديمة ويجب ان تبقى صفرا)، ويجب ان
   يبقى `lane_relay_invalid_total` صفرا خارج تدريبات الخصم.
 - **اسطح Torii:**  
-  يتضمن `/v2/sumeragi/status` قيم `lane_commitments` و`lane_settlement_commitments` ولقطات dataspace.
-  `/v2/nexus/lane-config` (مخطط) سينشر هندسة `LaneConfig` حتى يتمكن العملاء من مطابقة `lane_id`
+  يتضمن `/v1/sumeragi/status` قيم `lane_commitments` و`lane_settlement_commitments` ولقطات dataspace.
+  `/v1/nexus/lane-config` (مخطط) سينشر هندسة `LaneConfig` حتى يتمكن العملاء من مطابقة `lane_id`
   مع تسميات dataspace.
 - **لوحات المتابعة:**  
   يعرض `dashboards/grafana/nexus_lanes.json` تراكم lane واشارات توفر DA ومجاميع settlement المذكورة

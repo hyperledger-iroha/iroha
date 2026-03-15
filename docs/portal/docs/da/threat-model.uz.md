@@ -219,7 +219,7 @@ zararli provayderlarni oq ro'yxatga kiritadi yoki ogohlantirishlarni bostiradi.
 - DA replay keshi va kursorning barqarorligi DA-2 ga tushdi. ga qarang
   `crates/iroha_core/src/da/replay_cache.rs` da amalga oshirish (kesh mantig'i) va
   `crates/iroha_torii/src/da/ingest.rs` da Torii integratsiyasi,
-  barmoq izlari `/v2/da/ingest` orqali tekshiriladi.
+  barmoq izlari `/v1/da/ingest` orqali tekshiriladi.
 - PDP/PoTR oqim simulyatsiyalari proof-stream jabduqlari orqali amalga oshiriladi
   `crates/sorafs_car/tests/sorafs_cli.rs`, PoR/PDP/PoTR soʻrov oqimlarini qamrab oladi
   va tahdid modelida jonlantirilgan muvaffaqiyatsizlik stsenariylari.

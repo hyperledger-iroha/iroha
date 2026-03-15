@@ -133,7 +133,7 @@ fn observer_node_catches_up() -> Result<()> {
     wait_for_observer(1)?;
 
     // Produce non-genesis blocks and verify height parity across all peers
-    // Baseline timestamp (ms) to filter POST /v2/accounts/:id/transactions/query later.
+    // Baseline timestamp (ms) to filter POST /v1/accounts/:id/transactions/query later.
     let now_ms = || -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         let ms = SystemTime::now()
@@ -277,7 +277,7 @@ fn observer_node_catches_up() -> Result<()> {
     let alice_id_str = format!("{}", *ALICE_ID);
     let fetch_tx_http = |peer: &NetworkPeer, limit: usize| -> Result<(u64, Vec<JsonValue>)> {
         let url = format!(
-            "{}/v2/accounts/{}/transactions?limit={}",
+            "{}/v1/accounts/{}/transactions?limit={}",
             peer.torii_url(),
             &*ALICE_ID,
             limit
@@ -326,11 +326,11 @@ fn observer_node_catches_up() -> Result<()> {
         assert!(!items.is_empty(), "expected items via HTTP for observer");
     }
 
-    // POST /v2/accounts/{alice}/transactions/query with timestamp filter since t0
+    // POST /v1/accounts/{alice}/transactions/query with timestamp filter since t0
     let post_tx_query =
         |peer: &NetworkPeer, min_ts: u64, max_ts: Option<u64>| -> Result<(u64, Vec<JsonValue>)> {
             let url = format!(
-                "{}/v2/accounts/{}/transactions/query",
+                "{}/v1/accounts/{}/transactions/query",
                 peer.torii_url(),
                 &*ALICE_ID,
             );

@@ -118,12 +118,12 @@ Rollout do operador (sem downtime)
 
 Torii e CLI
 - Torii
-  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implementado)
-  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implementado)
-  - `GET /v2/runtime/upgrades` -> lista de registros (implementado).
-  - `POST /v2/runtime/upgrades/propose` -> encapsula `ProposeRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
-  - `POST /v2/runtime/upgrades/activate/:id` -> encapsula `ActivateRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
-  - `POST /v2/runtime/upgrades/cancel/:id` -> encapsula `CancelRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
+  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implementado)
+  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implementado)
+  - `GET /v1/runtime/upgrades` -> lista de registros (implementado).
+  - `POST /v1/runtime/upgrades/propose` -> encapsula `ProposeRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
+  - `POST /v1/runtime/upgrades/activate/:id` -> encapsula `ActivateRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
+  - `POST /v1/runtime/upgrades/cancel/:id` -> encapsula `CancelRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
 - CLI
   - `iroha runtime abi active` (implementado)
   - `iroha runtime abi hash` (implementado)

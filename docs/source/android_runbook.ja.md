@@ -635,7 +635,7 @@ Sev1/2 のフォローアップと証拠のアーカイブは `incident/<date>-a
 **信号**
 
 - `android_sdk_submission_latency`、`android_sdk_pending_queue_depth`、に関するアラート
-  `android_sdk_offline_replay_errors`、および Torii `/v2/pipeline` エラー率。
+  `android_sdk_offline_replay_errors`、および Torii `/v1/pipeline` エラー率。
 - `operator-console` ウィジェット (例/Android) でキュー ドレインの停止または停止が表示される
   再試行が指数関数的バックオフで停止しました。
 
@@ -685,7 +685,7 @@ Sev1/2 のフォローアップと証拠のアーカイブは `incident/<date>-a
 **回復**
 
 1. Torii のパフォーマンスが低下した場合は、Torii をオンコールにし、再生を続けます。
-   `/v2/pipeline` がトラフィックを受け入れるとキューになります。
+   `/v1/pipeline` がトラフィックを受け入れるとキューになります。
 2. 影響を受けるクライアントは、署名された `iroha_config` マニフェストを介してのみ再構成します。の
    `ClientConfig` ホットリロード ウォッチャーはインシデントの前に成功ログを出力する必要があります
    閉じることができます。

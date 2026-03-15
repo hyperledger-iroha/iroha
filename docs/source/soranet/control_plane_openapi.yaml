@@ -379,7 +379,7 @@ components:
         cursor:
           type: string
 paths:
-  /v2/auth/token:
+  /v1/auth/token:
     post:
       summary: Exchange credentials for an org-scoped token
       operationId: issueToken
@@ -417,7 +417,7 @@ paths:
                     type: integer
                   refresh_token:
                     type: string
-  /v2/orgs:
+  /v1/orgs:
     get:
       summary: List organisations available to the caller
       operationId: listOrgs
@@ -450,7 +450,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Org"
-  /v2/projects:
+  /v1/projects:
     get:
       summary: List projects under the active org
       operationId: listProjects
@@ -486,7 +486,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
-  /v2/domains:
+  /v1/domains:
     get:
       summary: List domains
       operationId: listDomains
@@ -524,7 +524,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Domain"
-  /v2/domains/{domainId}/purge:
+  /v1/domains/{domainId}/purge:
     post:
       summary: Purge cache content for a domain
       operationId: purgeDomain
@@ -548,7 +548,7 @@ paths:
       responses:
         "202":
           description: Purge accepted
-  /v2/dns/zones:
+  /v1/dns/zones:
     get:
       summary: List DNS zones for the org
       operationId: listZones
@@ -580,7 +580,7 @@ paths:
       responses:
         "201":
           description: Created
-  /v2/dns/zones/{zoneId}/records:upsert:
+  /v1/dns/zones/{zoneId}/records:upsert:
     post:
       summary: Upsert record sets
       operationId: upsertRecords
@@ -609,7 +609,7 @@ paths:
       responses:
         "202":
           description: Change accepted
-  /v2/waf/policies:
+  /v1/waf/policies:
     get:
       summary: List WAF rule sets
       operationId: listWafPolicies
@@ -643,7 +643,7 @@ paths:
           description: Created
         "200":
           description: Updated
-  /v2/cache/rate-limits:
+  /v1/cache/rate-limits:
     post:
       summary: Configure rate limits
       operationId: setRateLimit
@@ -661,7 +661,7 @@ paths:
       responses:
         "200":
           description: Applied
-  /v2/analytics/query:
+  /v1/analytics/query:
     post:
       summary: Execute an analytics query
       operationId: queryAnalytics
@@ -682,7 +682,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AnalyticsResult"
-  /v2/billing/meters:
+  /v1/billing/meters:
     get:
       summary: Retrieve metering samples
       operationId: readMeters
@@ -698,7 +698,7 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/MeterSample"
-  /v2/billing/statements/{period}:
+  /v1/billing/statements/{period}:
     get:
       summary: Retrieve billing statement
       operationId: readStatement
@@ -718,7 +718,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BillingStatement"
-  /v2/moderation/proofs:
+  /v1/moderation/proofs:
     post:
       summary: Attach moderation proofs for GAR/denylist enforcement
       operationId: attachModerationProof
@@ -744,7 +744,7 @@ paths:
       responses:
         "202":
           description: Proof accepted
-  /v2/audit/events:
+  /v1/audit/events:
     get:
       summary: Stream audit events
       operationId: getAuditEvents

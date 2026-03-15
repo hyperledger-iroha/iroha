@@ -63,7 +63,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 استخدم `sorafs_cli manifest submit` لدفع manifests الى Torii وربط aliases.
 اضبط `${SUBMITTED_EPOCH}` على اخر ايبوك اجماع (من
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` او لوحة التحكم).
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` او لوحة التحكم).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -71,7 +71,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

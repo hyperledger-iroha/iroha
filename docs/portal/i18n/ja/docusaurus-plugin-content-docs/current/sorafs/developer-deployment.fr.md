@@ -30,7 +30,7 @@ Sidebar_label: 導入メモ
 
 ## 環境構成
 
-- ゲートウェイは、アクティブなエンドポイントの証明ストリーミング (`POST /v2/sorafs/proof/stream`) を使用して、CLI の履歴を確認します。
+- ゲートウェイは、アクティブなエンドポイントの証明ストリーミング (`POST /v1/sorafs/proof/stream`) を使用して、CLI の履歴を確認します。
 - `iroha_config` およびヘルパー CLI (`sorafs_cli manifest submit --alias-*`) のデフォルト値のポリシー `sorafs_alias_cache` を構成します。
 - Fournissez のストリーム トークン (識別子 Torii) は、秘密セキュリティの管理を通じて取得されます。
 - Activez lesexporters de télémétrie (`torii_sorafs_proof_stream_*`、`torii_sorafs_chunk_range_*`) および envoyez-les vers votre stack Prometheus/OTel。

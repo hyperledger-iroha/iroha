@@ -248,12 +248,12 @@ mod tests {
 
     #[test]
     fn canonical_message_includes_body_hash() {
-        let uri: Uri = format!("/v2/accounts/{TEST_ACCOUNT_I105}/assets?limit=5")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=5")
             .parse()
             .expect("uri");
         let msg = canonical_request_message(&Method::GET, &uri, b"{\"foo\":1}");
         let rendered = String::from_utf8(msg).expect("utf8");
-        assert!(rendered.contains(&format!("/v2/accounts/{TEST_ACCOUNT_I105}/assets")));
+        assert!(rendered.contains(&format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets")));
         assert!(rendered.contains("limit=5"));
         assert!(
             rendered.ends_with("37a76343c8e3c695feeaadfe52329673ff129c65f99f55ae6056c9254f4c481d")
@@ -266,7 +266,7 @@ mod tests {
         let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v2/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);
@@ -290,7 +290,7 @@ mod tests {
         let account: AccountId = AccountId::new(kp.public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v2/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
         let bad_sig = Signature::new(KeyPair::random().private_key(), b"forged");
@@ -318,7 +318,7 @@ mod tests {
         let other: AccountId = AccountId::new(KeyPair::random().public_key().clone());
         let state = minimal_state_with_account(&account);
         let method = Method::GET;
-        let uri: Uri = format!("/v2/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
             .parse()
             .expect("uri");
         let message = canonical_request_message(&method, &uri, &[]);

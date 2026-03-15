@@ -1629,8 +1629,8 @@ impl RejectionStatsArgs {
         let endpoint = context
             .config()
             .torii_api_url
-            .join("v2/offline/rejections")
-            .map_err(|err| eyre!("failed to derive /v2/offline/rejections URL: {err}"))?;
+            .join("v1/offline/rejections")
+            .map_err(|err| eyre!("failed to derive /v1/offline/rejections URL: {err}"))?;
         let client = BlockingHttpClient::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -1664,7 +1664,7 @@ impl RejectionStatsArgs {
             return Err(eyre!("Torii returned an empty payload for {endpoint}"));
         }
         let stats: OfflineRejectionStatsResponse = norito::json::from_slice(&bytes)
-            .map_err(|err| eyre!("failed to parse /v2/offline/rejections response: {err}"))?;
+            .map_err(|err| eyre!("failed to parse /v1/offline/rejections response: {err}"))?;
         Ok(Some(stats))
     }
 }

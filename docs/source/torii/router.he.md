@@ -48,7 +48,7 @@ let router = builder.finish();
 - קבעו `IROHA_TORII_OPENAPI_EXPECTED=/path/to/openapi.json` כדי לאמת שהפלט תואם לסנאפשוט.
 - ניתן להגדיר `IROHA_TORII_OPENAPI_ACTUAL=/tmp/iroha-openapi.json` כדי לכתוב את הפלט הנוכחי לצורך בדיקה ידנית או כלי diff.
 
-אם נקודת הקצה של OpenAPI אינה זמינה, ההשוואה תדלג באופן אוטומטי. הבדיקה מריצה גם קריאות Smoke מותנות-פיצ'ר (למשל `/v2/domains` עם `app_api`, ‏`/v2/connect/status` עם `connect`) כדי להבטיח שה-builder המדורג מכסה את כל קבוצות המסלולים.
+אם נקודת הקצה של OpenAPI אינה זמינה, ההשוואה תדלג באופן אוטומטי. הבדיקה מריצה גם קריאות Smoke מותנות-פיצ'ר (למשל `/v1/domains` עם `app_api`, ‏`/v1/connect/status` עם `connect`) כדי להבטיח שה-builder המדורג מכסה את כל קבוצות המסלולים.
 
 ## הערות הגירה
 
@@ -56,6 +56,6 @@ let router = builder.finish();
 
 ## קריאה נוספת
 
-- `crates/iroha_torii/docs/mcp_api.md` — חוזה ה־MCP JSON-RPC הקנוני של Torii עבור אינטגרציות agent/tool (`/v2/mcp`).
+- `crates/iroha_torii/docs/mcp_api.md` — חוזה ה־MCP JSON-RPC הקנוני של Torii עבור אינטגרציות agent/tool (`/v1/mcp`).
 
 </div>

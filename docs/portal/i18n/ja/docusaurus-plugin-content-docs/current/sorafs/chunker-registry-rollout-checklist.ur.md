@@ -73,7 +73,7 @@ Sidebar_label: チャンカーのロールアウト
    جسے `torii.sorafs.discovery.admission.envelopes_dir` 参照 کرتا ہے۔
 3. ディスカバリー API プロバイダーの広告、伝播、検証:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. ガバナンス ヘッダーとマニフェスト/プラン エンドポイントの演習:
    ```bash

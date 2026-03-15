@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 Yol xəritəsi bəndi **SF-2c** xəzinədarlığın tutum haqqı kitabçasını sübut etməsini tələb edir
 hər gecə həyata keçirilən XOR köçürmələrinə uyğun gəlir. istifadə edin
 `scripts/telemetry/capacity_reconcile.py` ilə müqayisə etmək üçün köməkçi
-`/v2/sorafs/capacity/state` icra edilmiş köçürmə dəstəsinə qarşı snapshot və
+`/v1/sorafs/capacity/state` icra edilmiş köçürmə dəstəsinə qarşı snapshot və
 Alertmanager üçün Prometheus mətn faylı ölçülərini yayır.
 
 ## İlkin şərtlər

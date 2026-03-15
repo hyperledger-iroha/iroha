@@ -58,12 +58,12 @@ Sidebar_label: Двигатель аккордов
 ## Интеграция с Torii
 
 Torii выставляет конечные точки, предназначенные для проверки отчетов об использовании и передаче данных
-ciclo de vida do acordo sem проводка рыдает медида:- `POST /v2/sorafs/deal/usage` телеметрия `DealUsageReport` и реторна
+ciclo de vida do acordo sem проводка рыдает медида:- `POST /v1/sorafs/deal/usage` телеметрия `DealUsageReport` и реторна
   определённые результаты контроля (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` окончательно завершает работу, передает
+- `POST /v1/sorafs/deal/settle` окончательно завершает работу, передает
   `DealSettlementRecord` результат объединения с `DealSettlementV1` в base64
   быстро опубликовать информацию о DAG правительства.
-- O подайте `/v2/events/sse` до Torii, а затем передайте регистры `SorafsGatewayEvent::DealUsage`
+- O подайте `/v1/events/sse` до Torii, а затем передайте регистры `SorafsGatewayEvent::DealUsage`
   resumindo cada envio de uso (эпоха, ГиБ-часы медидос, контадоры де билеты,
   cobrancas deterministas), регистры `SorafsGatewayEvent::DealSettlement`
   который включает в себя моментальный снимок canonico do Ledger de Liquidacao больше или дайджест/tamanho/base64

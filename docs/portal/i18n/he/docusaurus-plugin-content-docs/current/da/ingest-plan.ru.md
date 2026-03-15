@@ -38,7 +38,7 @@ Norito-מטאדאננייע וספיקות רזרביות SoraFS. Докумен
 ## משטח API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -216,7 +216,7 @@ chunking и проверкой опциональных מניפסטים.
   который уже питает `iroha app sorafs fetch`. Операторы могут указать חפצי אמנות
   מניפסט + תוכנית נתח (`--manifest`, `--plan`, `--manifest-id`) **אולי** передать
   Torii כרטיס אחסון через `--storage-ticket`. При использовании כרטיס CLI
-  загружает מניפסט из `/v2/da/manifests/<ticket>`, сохраняет חבילה в
+  загружает מניפסט из `/v1/da/manifests/<ticket>`, сохраняет חבילה в
   `artifacts/da/fetch_<timestamp>/` (עקוף באמצעות `--manifest-cache-dir`), выводит
   כתם חשיש ל-`--manifest-id` и запускает orchestrator с заданным
   `--gateway-provider` списком. Все продвинутые כפתורים из SoraFS מאחזר
@@ -226,7 +226,7 @@ chunking и проверкой опциональных מניפסטים.
   כדי להגיע לזמינות מקצה לקצה.
   дублирования מתזמר логики.
 - `iroha app da get-blob` забирает канонические מניפסטים напрямую из Torii через
-  `GET /v2/da/manifests/{storage_ticket}`. Команда пишет
+  `GET /v1/da/manifests/{storage_ticket}`. Команда пишет
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` ו-`chunk_plan_{ticket}.json`
   в `artifacts/da/fetch_<timestamp>/` (или пользовательский `--output-dir`), при
   этом выводит точную команду `iroha app da get` (включая `--manifest-id`), нужную

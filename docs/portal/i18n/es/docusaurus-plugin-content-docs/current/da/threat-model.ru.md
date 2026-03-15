@@ -206,7 +206,7 @@ Lista blanca: proveedores maliciosos o alertas.
 
 **Para mejorar esto:**- Caché de reproducción y cursores de persistencia aterrizaron en DA-2. Realización en
   `crates/iroha_core/src/da/replay_cache.rs` (lógica de caché) e integración Torii en
-  `crates/iroha_torii/src/da/ingest.rs`, el proceso de verificación de huellas dactilares es `/v2/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`, el proceso de verificación de huellas dactilares es `/v1/da/ingest`.
 - Simulaciones de transmisión PDP/PoTR mejoradas con arnés de flujo de prueba
   `crates/sorafs_car/tests/sorafs_cli.rs`, muestra flujos de solicitud PoR/PDP/PoTR y
   escenarios de falla из модели угроз.

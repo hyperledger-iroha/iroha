@@ -26,7 +26,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
 ## 1. Avaliar o incidente
 
 - **Condições de encerramento:** detecção de violação de SLA (disponibilidade/échec PoR), déficit de replicação ou cancelamento de faturação.
-- **Confirme a telemetria:** capture os instantâneos `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` para o fornecedor.
+- **Confirme a telemetria:** capture os instantâneos `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` para o fornecedor.
 - **Notificador das partes interessadas:** Equipe de armazenamento (operações do fornecedor), Conselho de governança (órgão de decisão), Observabilidade (mises à jour des dashboards).
 
 ## 2. Preparando o pacote de testes
@@ -74,7 +74,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
    ```
 
 3. Verifique `dispute_summary.json` (confirme o tipo, o resumo das recomendações, os carimbos de data e hora).
-4. Insira o JSON de solicitação em Torii `/v2/sorafs/capacity/dispute` por meio do arquivo de transações de governo. Capture o valor de resposta `dispute_id_hex` ; elle ancre les ações de revogação seguintes e os relatórios de auditoria.
+4. Insira o JSON de solicitação em Torii `/v1/sorafs/capacity/dispute` por meio do arquivo de transações de governo. Capture o valor de resposta `dispute_id_hex` ; elle ancre les ações de revogação seguintes e os relatórios de auditoria.
 
 ## 4. Evacuação e revogação
 

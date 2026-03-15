@@ -68,7 +68,7 @@ translation_last_reviewed: 2026-02-07
 ## نطاق نقاط النهاية بوابة دوتقبل البوابات طلبات HTTP التي تحددها
 métadonnées des adverts.
 
-###`GET /v2/sorafs/storage/car/{manifest_id}`
+###`GET /v1/sorafs/storage/car/{manifest_id}`
 
 | الضرورة | التفاصيل |
 |----------|--------|
@@ -76,7 +76,7 @@ métadonnées des adverts.
 | **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` يتم إنشاء نافذة الخدمة، والتحويلات `X-Sora-Chunk-Range`، ومقسم الرؤوس/الرمز المميز. |
 | **أوضاع الفحص** | `416` للبطاقات غير المحاذاة، `401` للرموز المميزة المفقودة/غير الصالحة، `429` عندما يتم إلغاء تدفق الميزانيات/الثمانية. |
 
-###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب قطعة واحدة باستخدام الرؤوس المماثلة، بالإضافة إلى تحديد الملخص
 قطعة. مفيد لإعادة المحاولات أو التنزيلات الجنائية أثناء قيامك بذلك
@@ -127,12 +127,12 @@ métadonnées des adverts.
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` حاصروا الملفات
   نقاط النهاية REST du pin-registry et impriment du Norito JSON brut avec blocks
   شهادة للتدقيق.
-- `iroha app sorafs storage pin` و`torii /v2/sorafs/pin/register` مقبول
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` مقبول
   بيانات Norito ou JSON، بالإضافة إلى إثباتات الأسماء المستعارة للخيارات والخلفاء؛
   البراهين النموذجية غير الصحيحة `400`، البراهين القديمة المكشوفة `503` مع
   `Warning: 110`، والإثباتات منتهية الصلاحية مرة أخرى `412`.
-- نقاط النهاية REST (`/v2/sorafs/pin`، `/v2/sorafs/aliases`،
-  `/v2/sorafs/replication`) تتضمن هياكل المصادقة التي ستساعدك
+- نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`،
+  `/v1/sorafs/replication`) تتضمن هياكل المصادقة التي ستساعدك
   يتحقق العملاء من البيانات باستخدام آخر رؤوس الكتلة قبل البدء.
 
 ## مراجع- المواصفات الكنسي :

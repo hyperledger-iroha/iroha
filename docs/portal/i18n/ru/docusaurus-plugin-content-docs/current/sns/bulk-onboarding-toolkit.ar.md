@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- Установите `POST /v2/sns/registrations` для подключения к HTTP.
+```- Установите `POST /v1/sns/registrations` для подключения к HTTP.
   Позвоните в компанию NDJSON.
-- `--poll-status` для `/v2/sns/registrations/{selector}` для `/v2/sns/registrations/{selector}`.
+- `--poll-status` для `/v1/sns/registrations/{selector}` для `/v1/sns/registrations/{selector}`.
   Приложение (حتى `--poll-attempts`, версия 5) было отключено. وفر
   `--suffix-map` (JSON يحول `suffix_id` الى قيم "суффикс") в исходном коде
   Запустите опрос `{label}.{suffix}`.

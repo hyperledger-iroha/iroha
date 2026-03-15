@@ -169,9 +169,9 @@ API-интерфейсы Torii.【crates/sorafs_node/tests/cli.rs:1】> Пари
 > Шлюз Torii сейчас покажет помощники по одиночной лекции, ответив на вопрос «Миссо»
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — раскрыть манифест
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — раскрыть манифест
 > Norito almacenado (base64) вместе с дайджестом/метаданными.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — раскрыть план фрагмента
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — раскрыть план фрагмента
 > определить JSON (`chunk_fetch_specs`) для последующих инструментов.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Конечные точки Estos отражают изменение CLI, чтобы использовать конвейеры.
@@ -218,12 +218,12 @@ API-интерфейсы Torii.【crates/sorafs_node/tests/cli.rs:1】> Пари
      эль операдор.### Декларация возможностей и интеграция планирования
 
 - Torii сейчас повторит актуальную реализацию `CapacityDeclarationRecord` после этого
-  `/v2/sorafs/capacity/declare` был вставлен в `CapacityManager`, в том режиме, который
+  `/v1/sorafs/capacity/declare` был вставлен в `CapacityManager`, в том режиме, который
   каждый раз создается перспектива в памяти о наших компрометидах
   чанкёр и переулок. Менеджер показывает снимки индивидуальных лекций для телеметрии
-  (`GET /v2/sorafs/capacity/state`) и резервы приложений для каждого профиля или дорожки до этого
+  (`GET /v1/sorafs/capacity/state`) и резервы приложений для каждого профиля или дорожки до этого
   aceptar nuevos pedidos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Конечная точка El `/v2/sorafs/capacity/schedule` принимает полезные нагрузки `ReplicationOrderV1`
+- Конечная точка El `/v1/sorafs/capacity/schedule` принимает полезные нагрузки `ReplicationOrderV1`
   emitidos por gobernanza. Когда заказ будет произведен, местный менеджер
   повторная проверка расписания, проверка мощности блока/полосы, резерв
   Франция и развитие `ReplicationPlan`, описание возможности остатка
@@ -231,7 +231,7 @@ API-интерфейсы Torii.【crates/sorafs_node/tests/cli.rs:1】> Пари
   другие проверки могут быть проверены с ответом `ignored` для облегчения плавания
   мультиоператор.【crates/iroha_torii/src/routing.rs:4845】
 - Крючки для завершения (например, разбросанные по выходу из проглатывания)
-  позвоните `POST /v2/sorafs/capacity/complete` для освобождения резервов через
+  позвоните `POST /v1/sorafs/capacity/complete` для освобождения резервов через
   `CapacityManager::complete_order`. Ответ включает снимок
   `ReplicationRelease` (общее количество оставшихся, остатки фрагмента/дорожки) для того, что
   las Herramientas de Orquestación может быть включен в следующий порядок опроса.

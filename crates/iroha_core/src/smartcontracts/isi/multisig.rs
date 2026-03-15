@@ -222,7 +222,8 @@ impl Execute for SetAccountQuorum {
         let mut spec = multisig_spec_strict(state_transaction, &account)?;
         spec.quorum = quorum;
         validate_registration(state_transaction, &account, &spec).map_err(map_validation_fail)?;
-        let updated_account = rekey_multisig_account(state_transaction, &account, &home_domain, &spec)?;
+        let updated_account =
+            rekey_multisig_account(state_transaction, &account, &home_domain, &spec)?;
         persist_multisig_account_state(
             state_transaction,
             &MultisigAccountState::new(updated_account, home_domain, spec),
@@ -266,7 +267,7 @@ fn multisig_proposal_state_key(
         multisig_proposal_state_prefix(multisig_account),
         instructions_hash
     ))
-        .expect("constant string must be a valid name")
+    .expect("constant string must be a valid name")
 }
 
 fn multisig_role_for(
@@ -1196,12 +1197,10 @@ fn execute_register(
         )));
     }
 
-    Register::account(
-        iroha_data_model::account::NewAccount::new_in_domain(
-            multisig_account_id.clone(),
-            home_domain.clone(),
-        )
-    )
+    Register::account(iroha_data_model::account::NewAccount::new_in_domain(
+        multisig_account_id.clone(),
+        home_domain.clone(),
+    ))
     .execute(authority, state_transaction)
     .map_err(ValidationFail::InstructionFailed)?;
 
@@ -1475,7 +1474,10 @@ fn prune_down(
     state_transaction
         .world
         .smart_contract_state
-        .remove(multisig_proposal_state_key(multisig_account, instructions_hash));
+        .remove(multisig_proposal_state_key(
+            multisig_account,
+            instructions_hash,
+        ));
 
     for signatory in resolved_signatory_accounts(state_transaction, &spec)? {
         let relay_hash = {
@@ -1887,10 +1889,10 @@ fn persist_multisig_account_state(
     account_state: &MultisigAccountState,
 ) -> Result<(), ValidationFail> {
     let bytes = norito::to_bytes(account_state).map_err(multisig_state_encode_error)?;
-    state_transaction.world.smart_contract_state.insert(
-        multisig_account_state_key(&account_state.account_id),
-        bytes,
-    );
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(multisig_account_state_key(&account_state.account_id), bytes);
     Ok(())
 }
 
@@ -1954,12 +1956,16 @@ fn move_multisig_proposals(
     let prefix = multisig_proposal_state_prefix(old_account);
     let prefix_literal = prefix.as_ref().to_owned();
     let mut entries = Vec::new();
-    for (key, value) in state_transaction.world.smart_contract_state.range(prefix.clone()..) {
+    for (key, value) in state_transaction
+        .world
+        .smart_contract_state
+        .range(prefix.clone()..)
+    {
         if !key.as_ref().starts_with(prefix_literal.as_str()) {
             break;
         }
-        let state =
-            norito::decode_from_bytes::<MultisigProposalState>(value).map_err(multisig_state_decode_error)?;
+        let state = norito::decode_from_bytes::<MultisigProposalState>(value)
+            .map_err(multisig_state_decode_error)?;
         entries.push((key.clone(), state));
     }
 

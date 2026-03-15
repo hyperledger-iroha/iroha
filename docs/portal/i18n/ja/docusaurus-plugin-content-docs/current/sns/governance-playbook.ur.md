@@ -46,7 +46,7 @@ translation_last_reviewed: 2026-02-07
 |ガバナンス評議会 | چارٹرز، 接尾辞 پالیسیوں، تنازعہ فیصلوں اور スチュワードローテーション کی تدوین و توثیق۔ | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`、議会投票用紙 جو `sns governance charter submit` سے محفوظ ہوتے ہیں۔ |評議会議長 + ガバナンス ドケット トラッカー|
 |ガーディアンボード |ソフト/ハード フリーズ数 キャノン数 72 時間のレビュー数|ガーディアン チケット جو `sns governance freeze` سے نکلتے ہیں، オーバーライド マニフェスト جو `artifacts/sns/guardian/*` میں لاگ ہوتے ہیں۔ |ガーディアンのオンコール ローテーション (<=15 分の ACK)۔ |
 |サフィックススチュワード |レジストラのキュー、オークション、価格設定、顧客とのコミュニケーション、コンプライアンスの承認 دیتے ہیں۔ |スチュワードポリシー `SuffixPolicyV1` 価格設定リファレンスシート スチュワードの謝辞 規制メモ ساتھ محفوظ ہوتے ہیں۔ |スチュワード プログラムのリード + サフィックス مخصوص PagerDuty۔ |
-|レジストラと請求業務 | `/v2/sns/*` エンドポイントの支払いの調整、テレメトリの発行、CLI スナップショットの作成、および CLI スナップショットの作成|レジストラー API ([`registrar-api.md`](./registrar-api.md))、`sns_registrar_status_total` メトリクス、支払い証明、`artifacts/sns/payments/*` میں محفوظ ہیں۔ |レジストラ義務マネージャー、財務連絡担当者|
+|レジストラと請求業務 | `/v1/sns/*` エンドポイントの支払いの調整、テレメトリの発行、CLI スナップショットの作成、および CLI スナップショットの作成|レジストラー API ([`registrar-api.md`](./registrar-api.md))、`sns_registrar_status_total` メトリクス、支払い証明、`artifacts/sns/payments/*` میں محفوظ ہیں۔ |レジストラ義務マネージャー、財務連絡担当者|
 |リゾルバーおよびゲートウェイ オペレーター | SoraDNS GAR ゲートウェイ ステート レジストラ イベント 調整済みの状態透明性メトリクス ストリーム| [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 |リゾルバー SRE オンコール + ゲートウェイ運用ブリッジ|
 |財務および財務 | 70/30 の収益分割、紹介のカーブアウト、税金/財務省申告、SLA 証明書の作成|収益見越マニフェスト、ストライプ/国庫輸​​出、KPI 付録 `docs/source/sns/regulatory/` میں۔ |財務管理者 + コンプライアンス責任者۔ |
 |コンプライアンスおよび規制担当窓口 |認証 (EU DSA وغیرہ) 認証 KPI 規約 認証 開示情報|規制メモ `docs/source/sns/regulatory/` リファレンス デッキ、テーブルトップ リハーサル、`ops/drill-log.md` エントリ|コンプライアンス プログラム リード|
@@ -156,7 +156,7 @@ translation_last_reviewed: 2026-02-07
 ## 5. テレメトリーレポート|信号 |出典 |説明/アクション |
 |--------|--------|-----------|
 | `sns_registrar_status_total{result,suffix}` | Torii レジストラー ハンドラー |更新、凍結、転送、成功/エラーカウンターجب `result="error"` サフィックス کے حساب سے بڑھ جائے تو アラート۔ |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | Torii メトリクス | API ハンドラーとレイテンシ SLO `torii_norito_rpc_observability.json` ダッシュボードとフィードの管理|
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii メトリクス | API ハンドラーとレイテンシ SLO `torii_norito_rpc_observability.json` ダッシュボードとフィードの管理|
 | `soradns_bundle_proof_age_seconds` または `soradns_bundle_cid_drift_total` |リゾルバー透明度テーラー |証明、GAR ドリフト、検出、検出ガードレール `dashboards/alerts/soradns_transparency_rules.yml` میں 定義 ہیں۔ |
 | `sns_governance_activation_total` |ガバナンス CLI |チャーター/付録の有効化 پر بڑھنے والا カウンター評議会の決定、追加の公開、和解、和解、追加|
 | `guardian_freeze_active` ゲージ |ガーディアンCLI |セレクタ ソフト/ハード フリーズ Windows トラック トラックاگر `1` SLA سے زیادہ رہے تو SRE کو ページ کریں۔ |

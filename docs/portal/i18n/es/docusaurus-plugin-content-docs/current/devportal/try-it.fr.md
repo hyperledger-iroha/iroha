@@ -152,7 +152,7 @@ El portal, los propietarios del SDK y los revisores pueden mejorar los bytes exa
 1. Elija un dispositivo como `fixtures/norito_rpc/transfer_asset.norito`. ces
    los archivos son sobres Norito brutos; **ne** la codificación base64 no.
 2. En Swagger o RapiDoc, localice el punto final NRPC (por ejemplo
-   `POST /v2/pipeline/submit`) y seleccione el selector **Content-Type** en
+   `POST /v1/pipeline/submit`) y seleccione el selector **Content-Type** en
    `application/x-norito`.
 3. Seleccione el editor de cuerpo en **binario** (modo "Archivo" de Swagger o
    seleccione "Binary/File" de RapiDoc) y cargue el archivo `.norito`. El widget
@@ -174,13 +174,13 @@ Cuando tenga validez el proxy o la puerta de enlace de respuestas:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
 Reemplace el dispositivo par n'importe quelle entree listee dans `transaction_fixtures.manifest.json`
 o codifica tu propia carga útil con `cargo xtask norito-rpc-fixtures`. Cuando Torii está en
 modo canario, puedes usar el puntero `curl` frente al proxy try-it
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) para ejercitar la infraestructura del meme
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) para ejercitar la infraestructura del meme
 Que utilizan los widgets del portal.
 
 ## Observabilidad y operaciones
@@ -194,7 +194,7 @@ Relayer stdout vers un colector central sin craindre des fuites.
 
 Lancez la sonda incluye durante las implementaciones o en un cronograma:```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 Perillas de medio ambiente:

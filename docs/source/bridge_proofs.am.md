@@ -25,12 +25,12 @@ translator: machine-google-reviewed
 
 ## Torii ኤፒአይ ወለል
 
-- `GET /v2/zk/proofs` እና `GET /v2/zk/proofs/count` ድልድይ የሚያውቁ ማጣሪያዎችን ይቀበላሉ፡
+- `GET /v1/zk/proofs` እና `GET /v1/zk/proofs/count` ድልድይ የሚያውቁ ማጣሪያዎችን ይቀበላሉ፡
   - `bridge_only=true` የድልድይ ማረጋገጫዎችን ብቻ ይመልሳል።
   - `bridge_pinned_only=true` በተሰካው ድልድይ ማረጋገጫዎች ላይ ጠባብ።
   - `bridge_start_from_height` / `bridge_end_until_height` የድልድይ ክልል መስኮቱን አጣብቅ።
-- `GET /v2/zk/proof/{backend}/{hash}` ከማስረጃ መታወቂያ/ሁኔታ/VK ማሰሪያዎች ጎን ለጎን ድልድይ ሜታዳታ (ክልል፣ አንጸባራቂ ሃሽ፣ የክፍያ ማጠቃለያ) ይመልሳል።
-- ሙሉው የNorito የማስረጃ መዝገብ (የክፍያ ባይት ጨምሮ) በ`GET /v2/proofs/{proof_id}` ከአንጓ ውጪ አረጋጋጮች ይገኛል።
+- `GET /v1/zk/proof/{backend}/{hash}` ከማስረጃ መታወቂያ/ሁኔታ/VK ማሰሪያዎች ጎን ለጎን ድልድይ ሜታዳታ (ክልል፣ አንጸባራቂ ሃሽ፣ የክፍያ ማጠቃለያ) ይመልሳል።
+- ሙሉው የNorito የማስረጃ መዝገብ (የክፍያ ባይት ጨምሮ) በ`GET /v1/proofs/{proof_id}` ከአንጓ ውጪ አረጋጋጮች ይገኛል።
 
 ## የድልድይ ደረሰኝ ዝግጅቶች
 

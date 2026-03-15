@@ -31,7 +31,7 @@ répliques sans dépendance à l'intention de l'émetteur.
 | `nexus_lane_sidecar` | 6 heures | 7 jours | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 heures | 180 jours | 3 | `cold` | `da.governance` |
 | _Default (toutes les autres classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |Ces valeurs sont intégrées dans `torii.da_ingest.replication_policy` et appliquées
-à toutes les soumissions `/v2/da/ingest`. Torii recrit les manifestes avec le
+à toutes les soumissions `/v1/da/ingest`. Torii recrit les manifestes avec le
 profil de rétention impose et emet un avertissement lorsque les appelants sont fournis
 des valeurs incohérentes afin que les opérateurs détectent des SDK obsolètes.
 
@@ -149,5 +149,5 @@ hors conformité automatiquement.
    les SRE peuvent référencer le meme digest et la preuve PDP.
 
 La couverture de régression vit dans `integration_tests/tests/da/replication_policy.rs`;
-la suite soumet une politique de rétention non conforme à `/v2/da/ingest` et vérifie
+la suite soumet une politique de rétention non conforme à `/v1/da/ingest` et vérifie
 que le manifeste récupéré expose le profil impose plutôt que l'intention du caller.

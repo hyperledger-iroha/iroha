@@ -195,7 +195,7 @@ payloads PagerDuty, asi que puedes ejecutarlo directo desde CI o bastion hosts:
 - `--pagerduty-routing-key <key>` habilita integracion PagerDuty. Combinalo con
   `--pagerduty-payload <path>` (por defecto
   `artifacts/sorafs_gateway_probe/pagerduty_event.json`) y, cuando estes listo,
-  `--pagerduty-url https://events.pagerduty.com/v2/enqueue` para publicar el
+  `--pagerduty-url https://events.pagerduty.com/v1/enqueue` para publicar el
   evento. Flags adicionales (`--pagerduty-component`, `--pagerduty-group`,
   `--pagerduty-link text=url`, `--pagerduty-dedup-key`, etc.) mapean directo a
   la payload de la Events API.
@@ -214,7 +214,7 @@ cargo xtask sorafs-gateway-probe \
   --summary-json artifacts/sorafs_gateway_probe/tls_probe.json \
   --pagerduty-routing-key "$PAGERDUTY_ROUTING_KEY" \
   --pagerduty-link "Rollback plan=https://git.example.com/sorafs/tls-rotation" \
-  --pagerduty-url https://events.pagerduty.com/v2/enqueue
+  --pagerduty-url https://events.pagerduty.com/v1/enqueue
 ```
 
 Probes fallidos disparan PagerDuty inmediatamente (omite la URL durante

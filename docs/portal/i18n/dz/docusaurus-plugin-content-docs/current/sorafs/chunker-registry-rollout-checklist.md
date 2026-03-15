@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-02-07
    `torii.sorafs.discovery.admission.envelopes_dir` གིས་ གཞི་བསྟུན་འབད་ཡོདཔ།
 ༣ འཚོལ་ཞིབ་ཨེ་པི་ཨའི་བརྒྱུད་དེ་ བྱིན་མི་ ཁྱབ་བསྒྲགས་ཚུ་ བདེན་དཔྱད་འབད།
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 ༤ ལུས་རྩལ་གྱི་མགོ་ཡིག་ཚུ་དང་གཅིག་ཁར་ གསལ་སྟོན་/འཆར་གཞི་གི་མཇུག་བསྡུ།
    ```bash

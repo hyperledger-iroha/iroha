@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - Саясат метадеректері және күтудегі ауысулар арқылы қол жетімді
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), Swift SDK арқылы бейнеленген
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) және құжатталған
   құпия активтер дизайны және SDK нұсқаулықтары

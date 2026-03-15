@@ -162,9 +162,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Torii گیٹ وے اب اسی کی بنیاد پر صرف پڑھنے والے مددگار فراہم کرتا ہے
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - محفوظ شدہ واپس کرتا ہے
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - محفوظ شدہ واپس کرتا ہے
 > Norito مینی فیسٹ (BASE64) کے ساتھ ساتھ ڈائجسٹ/میٹا ڈیٹا۔
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - واپسی کے عین مطابق
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - واپسی کے عین مطابق
 > JSON CHUNK پلان (`chunk_fetch_specs`) بہاو ٹولنگ کے لئے۔
 >
 > یہ اختتامی نکات CLI آؤٹ پٹ کی نقل تیار کرتے ہیں تاکہ پائپ لائنز مقامی لوگوں سے منتقل ہوسکیں
@@ -207,18 +207,18 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      گورننس ماڈل پر اتفاق کرنا ؛ جبکہ ڈیزائن سخت کوٹے اور فرض کرتا ہے
      آپریٹر کے ذریعہ شروع کردہ انپن آپریشنز۔
 
-### صلاحیت کے اعلانات اور نظام الاوقات کا انضمام- Torii اب `/v2/sorafs/capacity/declare` سے `CapacityDeclarationRecord` پر تازہ کاری کرتا ہے
+### صلاحیت کے اعلانات اور نظام الاوقات کا انضمام- Torii اب `/v1/sorafs/capacity/declare` سے `CapacityDeclarationRecord` پر تازہ کاری کرتا ہے
   بلٹ میں `CapacityManager` میں ، تاکہ ہر نوڈ اس کی ایک میموری کی نمائندگی کرے
   ریکارڈ شدہ چنکر/لین مختص۔ مینیجر ٹیلی میٹری کے لئے صرف پڑھنے والے سنیپ شاٹس شائع کرتا ہے
   .
   احکامات۔ 【کریٹس/sorafs_node/src/capact.rs: 1 】【 کریٹس/sorafs_node/src/lib.rs: 60】
-- اختتامی نقطہ `/v2/sorafs/capacity/schedule` گورننس سے جاری کردہ `ReplicationOrderV1` کو قبول کرتا ہے
+- اختتامی نقطہ `/v1/sorafs/capacity/schedule` گورننس سے جاری کردہ `ReplicationOrderV1` کو قبول کرتا ہے
   پے لوڈ جب کسی مقامی فراہم کنندہ کو آرڈر کو نشانہ بنایا جاتا ہے تو ، مینیجر نقل کی جانچ پڑتال کرتا ہے
   نظام الاوقات ، چنکر/لین کی گنجائش کی توثیق کرتا ہے ، ایک سلاٹ محفوظ رکھتا ہے اور `ReplicationPlan` واپس کرتا ہے
   بقیہ صلاحیت کی تفصیل کے ساتھ تاکہ آرکیسٹریشن ادخال جاری رکھے۔ کے احکامات
   دوسرے فراہم کنندگان کی تصدیق `ignored` کے ذریعہ کی جاتی ہے ، ملٹی آپریٹر کے ورک فلوز کو آسان بناتے ہوئے۔
 - تکمیل ہکس (مثال کے طور پر ، ایک کامیاب ingest کے بعد) کہا جاتا ہے
-  `POST /v2/sorafs/capacity/complete` ریزرو کے ذریعے جاری کرنے کے لئے
+  `POST /v1/sorafs/capacity/complete` ریزرو کے ذریعے جاری کرنے کے لئے
   `CapacityManager::complete_order`۔ جواب میں اسنیپ شاٹ `ReplicationRelease` شامل ہے
   (بقایا کل ، بقایا چنکر/لین) تاکہ آرکیسٹریشن ٹولنگ کر سکے
   پولنگ کے بغیر اپنا اگلا آرڈر رکھیں۔ مزید کام اس کو پائپ لائن سے مربوط کرے گا

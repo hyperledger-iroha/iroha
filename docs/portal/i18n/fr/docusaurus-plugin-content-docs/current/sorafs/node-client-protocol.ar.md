@@ -62,13 +62,13 @@ Il s'agit d'une solution de gestion de la qualité de service. تقارن أظر
 
 Vous pouvez utiliser HTTP pour obtenir des informations sur les connexions HTTP.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | المتطلب | التفاصيل |
 |---------|----------|
 | **En-têtes** | `Range` (prise en charge par les utilisateurs), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` Il s'agit d'un `X-SoraFS-Stream-Token` base64. |
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car` et `Content-Range` pour les appareils `X-Sora-Chunk-Range` et `X-Sora-Chunk-Range` Il s'agit d'un chunker/jeton. |
-| **Modes de défaillance** | `416` Dispositifs de sécurité `401` Dispositifs de protection/de sécurité `429` Dispositifs de protection ميزانيات flux/octet. |### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+| **Modes de défaillance** | `416` Dispositifs de sécurité `401` Dispositifs de protection/de sécurité `429` Dispositifs de protection ميزانيات flux/octet. |### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب شريحة واحدة بنفس الرؤوس بالإضافة إلى digest الحتمي للشريحة. مفيد لإعادة
 المحاولة أو تنزيلات الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
@@ -114,11 +114,11 @@ Voici la liste des SDK :
 
 - `iroha app sorafs pin list|show` et `alias list` et `replication list` pour REST
   Les broches sont également Norito JSON pour l'attestation.
-- `iroha app sorafs storage pin` و`torii /v2/sorafs/pin/register` manifestes
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` manifestes
   Utilisez Norito et JSON pour les preuves pour l'alias et le successeur. تؤدي preuves
   المشوهة إلى `400`, وتُظهر proofs القديمة `503` مع `Warning: 110`, بينما تعيد
   preuves المنتهية تمامًا `412`.
-- Fonction REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- Fonction REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.
 

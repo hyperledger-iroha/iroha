@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - بيانات تعريف السياسة والانتقالات المعلقة متاحة من خلال
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`)، معكوسة بواسطة Swift SDK
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) وموثقة في
   كل من تصميم الأصول السرية وأدلة SDK

@@ -22,7 +22,7 @@ translator: machine-google-reviewed
 - **Torii I18NT0000000X** - I18NI0000010X የቅርብ ጊዜውን የ Torii REST መግለጫን በመጠቀም ያቀርባል
   እንደገና። ዝርዝሩን በI18NI0000011X ያድሱ (አክል
   ቅጽበተ-ፎቶውን ወደ ተጨማሪ ታሪካዊ ስሪቶች ለመቅዳት `--mirror=<label>`)።
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
 - ** የማዋቀሪያ ሠንጠረዦች *** - የሙሉ መለኪያ ካታሎግ ተቀምጧል
   `docs/source/references/configuration.md`. ፖርታሉ ራስ-ማስመጣት እስከሚልክ ድረስ፣ ያንን ያጣቅሱ
   ለትክክለኛ ነባሪዎች እና የአካባቢ መሻሮች ምልክት ማድረጊያ ፋይል።

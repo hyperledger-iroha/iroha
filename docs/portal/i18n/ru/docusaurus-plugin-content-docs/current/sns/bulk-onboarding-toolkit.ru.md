@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```## 3. Автоматизированные отправки
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник делает один `POST /v2/sns/registrations` на запрос и останавливается при
+- Помощник делает один `POST /v1/sns/registrations` на запрос и останавливается при
   HTTP первые деньги. Ответы включаются в регистрацию, как записано NDJSON.
-- `--poll-status` повторно запрашивает `/v2/sns/registrations/{selector}` после
+- `--poll-status` повторно запрашивает `/v1/sns/registrations/{selector}` после
   каждое отправление (до `--poll-attempts`, по умолчанию 5), чтобы проверить
   видимость записи. Укажите `--suffix-map` (JSON-сопоставление `suffix_id` в значениях
   "суффикс"), чтобы инструмент мог вывести `{label}.{suffix}` для опроса.

@@ -201,7 +201,7 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 - エイリアス + アカウント コンポーネントによるミント:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - エイリアスを正規エイドに解決します。
-  - JSON を使用した `POST /v2/assets/aliases/resolve` `{ "alias": "pkr#ubl@sbp" }`
+  - JSON を使用した `POST /v1/assets/aliases/resolve` `{ "alias": "pkr#ubl@sbp" }`
 
 移行メモ:
 - `name#domain` テキストのアセット定義 ID は、最初のリリースでは意図的にサポートされていません。

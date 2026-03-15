@@ -33,7 +33,7 @@ chaque noeud validateur/stockage reient le nombre requis d'epoques et de
 | _ברירת מחדל (מחלקות toutes les autres)_ | 6 heures | 30 ימים | 3 | `warm` | `da.default` |
 
 Ces valeurs sont integrees dans `torii.da_ingest.replication_policy` et appliquees
-מסר להגשות `/v2/da/ingest`. Torii שחזר את המניפסטים עם הרשימה
+מסר להגשות `/v1/da/ingest`. Torii שחזר את המניפסטים עם הרשימה
 פרופיל דה שימור להטיל et emet un adertissement quand les callers fournissent
 des valeurs incoherentes afin que les operators detectent des SDKs מיושן.
 
@@ -153,5 +153,5 @@ hors conformite automatiquement.
    et relancez l'audit jusqu'a convergence du set de replicas. יוצקים les overrides
    d'urgence, associez la sortie CLI avec `iroha app da prove-availability` afin que
    les SREs puissent referencer le meme digest et la preuve PDP.La couverture de regression vit dans `integration_tests/tests/da/replication_policy.rs`;
-la suite soumet une politique de retention non conforme a `/v2/da/ingest` ואימות
+la suite soumet une politique de retention non conforme a `/v1/da/ingest` ואימות
 que le manifest recupere לחשוף le profil להטיל plutot que l'intention du מתקשר.

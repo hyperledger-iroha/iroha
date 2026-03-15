@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Norito-RPC جائزہ
 
-Norito-RPC Torii انٹرفیس کی بائنری ٹرانسپورٹ ہے۔ یہ وہی HTTP راستوں کو دوبارہ استعمال کرتا ہے جیسے `/v2/pipeline` لیکن Norito کے ذریعہ فریمڈ پے لوڈ کا تبادلہ کرتا ہے جس میں اسکیما ہیش اور چیکمس شامل ہیں۔ جب آپ کو لازمی ، توثیق شدہ ردعمل کی ضرورت ہو یا جب آپ کی پائپ لائن کے JSON ردعمل رکاوٹ بن جائیں تو اس کا استعمال کریں۔
+Norito-RPC Torii انٹرفیس کی بائنری ٹرانسپورٹ ہے۔ یہ وہی HTTP راستوں کو دوبارہ استعمال کرتا ہے جیسے `/v1/pipeline` لیکن Norito کے ذریعہ فریمڈ پے لوڈ کا تبادلہ کرتا ہے جس میں اسکیما ہیش اور چیکمس شامل ہیں۔ جب آپ کو لازمی ، توثیق شدہ ردعمل کی ضرورت ہو یا جب آپ کی پائپ لائن کے JSON ردعمل رکاوٹ بن جائیں تو اس کا استعمال کریں۔
 
 ## ہم کیوں منتقل ہوتے ہیں؟
 - CRC64 اور ہیشس اسکیم کے ساتھ فریم ڈٹرمینسٹک ضابطہ کشائی کی غلطیوں کو کم کرتا ہے۔
@@ -20,7 +20,7 @@ Norito-RPC Torii انٹرفیس کی بائنری ٹرانسپورٹ ہے۔ یہ
 ## درخواست پر عمل درآمد
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. کوڈیک Norito (`iroha_client` ، SDK پلگ انز یا `norito::to_bytes`) کا استعمال کرتے ہوئے پے لوڈ کو سیریلائز کریں۔
@@ -39,7 +39,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 ڈویلپر پورٹل ایک آزمائشی آئی ٹی ایجنٹ فراہم کرتا ہے تاکہ جائزہ لینے والے کسٹم اسکرپٹ لکھے بغیر Norito پے لوڈ کو دوبارہ چلاسکتے ہیں۔
 
 1. [اسٹارٹ ایجنٹ] (./try-it.md#start-the-proxy-locally) اور `TRYIT_PROXY_PUBLIC_URL` سیٹ کریں تاکہ ویجٹ کو معلوم ہو کہ ٹریفک کہاں بھیجنا ہے۔
-2. اس صفحے یا `/reference/torii-swagger` پینل پر ** کارڈ کو آزمائیں ** کارڈ کھولیں اور `POST /v2/pipeline/submit` جیسے راستہ کا انتخاب کریں۔
+2. اس صفحے یا `/reference/torii-swagger` پینل پر ** کارڈ کو آزمائیں ** کارڈ کھولیں اور `POST /v1/pipeline/submit` جیسے راستہ کا انتخاب کریں۔
 3. تبدیل کریں ** مواد کی قسم ** `application/x-norito` میں ، ** بائنری ** ایڈیٹر کا انتخاب کریں ، اور `fixtures/norito_rpc/transfer_asset.norito` (یا کوئی بھی پے لوڈ `fixtures/norito_rpc/transaction_fixtures.manifest.json` کے طور پر درج) اپ لوڈ کریں۔
 4. OAUTH ڈیوائس کوڈ ویجیٹ یا دستی ٹوکن فیلڈ کے ذریعے بیئرر ٹوکن فراہم کریں (جب `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` سیٹ ہوتا ہے تو ایجنٹ `X-TryIt-Auth` اوور رائڈس کو قبول کرتا ہے)۔
 5. درخواست جمع کروائیں اور تصدیق کریں کہ Torii `schema_hash` کی قیمت کو `fixtures/norito_rpc/schema_hashes.json` میں شامل کرتا ہے۔ مماثل اقدار اس بات کی تصدیق کرتی ہیں کہ Norito ہیڈر براؤزر/پراکسی جمپ سے بچ گیا۔

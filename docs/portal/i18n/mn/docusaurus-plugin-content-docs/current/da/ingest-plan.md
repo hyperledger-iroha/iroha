@@ -40,7 +40,7 @@ Norito кодлогч ашиглах; ямар ч serde/JSON нөөцийг зө
 ## API гадаргуу (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -208,14 +208,14 @@ pub struct DaIngestReceipt {
 - `iroha app da get` нь аль хэдийн ажиллаж байгаа олон эх сурвалжийн найруулагчийн хувьд DA-д чиглэсэн өөр нэрийг нэмдэг.
   `iroha app sorafs fetch`. Операторууд үүнийг манифест + хэсэгчилсэн төлөвлөгөөний олдворууд дээр зааж болно (`--manifest`,
   `--plan`, `--manifest-id`) **эсвэл** `--storage-ticket`-ээр дамжуулан Torii хадгалах тасалбарыг дамжуулна уу. Тасалбар хэзээ
-  замыг ашиглаж байгаа бол CLI нь `/v2/da/manifests/<ticket>`-аас манифестийг татаж, доорх багцыг хадгалдаг.
+  замыг ашиглаж байгаа бол CLI нь `/v1/da/manifests/<ticket>`-аас манифестийг татаж, доорх багцыг хадгалдаг.
   `artifacts/da/fetch_<timestamp>/` (`--manifest-cache-dir`-р дарж бичих) нь blob хэшийг гаргаж авдаг
   `--manifest-id`, дараа нь нийлүүлсэн `--gateway-provider` жагсаалтаар найруулагчийг ажиллуулна. Бүгд
   SoraFS зөөгч гадаргуугийн дэвшилтэт товчлуурууд (манифест дугтуй, үйлчлүүлэгчийн шошго, хамгаалалтын кэш,
   нэрээ нууцлах тээвэрлэлтийг хүчингүй болгох, онооны самбарын экспорт, `--output` замууд) ба манифестийн төгсгөлийн цэг нь боломжтой.
   Захиалгат Torii хостуудад `--manifest-endpoint`-ээр дамжуулан дарж бичих тул бэлэн байдлыг шууд шалгаж болно.
   Оркестрийн логикийг хуулбарлахгүйгээр бүхэлд нь `da` нэрийн талбарт.
-- `iroha app da get-blob` нь `GET /v2/da/manifests/{storage_ticket}`-ээр дамжуулан Torii-ээс каноник манифестуудыг шууд татдаг.
+- `iroha app da get-blob` нь `GET /v1/da/manifests/{storage_ticket}`-ээр дамжуулан Torii-ээс каноник манифестуудыг шууд татдаг.
   Энэ тушаал нь `manifest_{ticket}.norito`, `manifest_{ticket}.json`, `chunk_plan_{ticket}.json` гэж бичдэг.
   `artifacts/da/fetch_<timestamp>/` (эсвэл хэрэглэгчийн нийлүүлсэн `--output-dir`) дор яг цуурайтаж байхад
   `iroha app da get` дуудлагыг (`--manifest-id`-г оруулаад) дараагийн найрал хөгжимчийг татахад шаардлагатай.
@@ -265,12 +265,12 @@ pub struct DaIngestReceipt {
   үл мэдэгдэх хувилбарууд нь шинэ манифестын бүдүүвчийг илгээх үед тодорхойлогч шинэчлэлтүүдийг баталгаажуулдаг.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR дэгээ** — PDP амлалтууд нь бөөгнөрсөн дэлгүүрээс шууд гардаг бөгөөд хадгалагдах болно.
   манифестуудаас гадна DA-5 хуваарь гаргагчид каноник өгөгдлөөс түүвэрлэлтийн сорилтуудыг эхлүүлж, мөн
-  `/v2/da/ingest` дээр `/v2/da/manifests/{ticket}` одоо `Sora-PDP-Commitment` гарчигтай
+  `/v1/da/ingest` дээр `/v1/da/manifests/{ticket}` одоо `Sora-PDP-Commitment` гарчигтай
   үндсэн64 Norito ачааг зөөвөрлөх тул SDK нь DA-5 датчикуудыг яг таг хадгалдаг. зорилтот.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
 
 ## Хэрэгжүүлэх тэмдэглэл
 
-- Torii-ийн `/v2/da/ingest` төгсгөлийн цэг нь ачааллын шахалтыг хэвийн болгож, дахин тоглуулах кэшийг ажиллуулж,
+- Torii-ийн `/v1/da/ingest` төгсгөлийн цэг нь ачааллын шахалтыг хэвийн болгож, дахин тоглуулах кэшийг ажиллуулж,
   Каноник байтуудыг тодорхой хэмжээгээр хувааж, `DaManifestV1`-г дахин бүтээж, кодлогдсон ачааллыг бууруулдаг
   `config.da_ingest.manifest_store_dir` руу SoraFS найруулгад зориулж `Sora-PDP-Commitment` нэмдэг
   толгой нь операторууд PDP хуваарьлагчдын лавлагаа өгөх амлалтыг авах болно.【crates/iroha_torii/src/da/ingest.rs:220】
@@ -282,7 +282,7 @@ pub struct DaIngestReceipt {
   Rust хайрцаг нь `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, Python-г экспортолдог
   `ToriiClient`-д одоо `decode_pdp_commitment_header`, `IrohaSwift` хөлөг багтана
   `decodePdpCommitmentHeader` түүхий толгойн газрын зураг эсвэл `HTTPURLResponse` хэт ачаалал тохиолдлууд.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii нь мөн `GET /v2/da/manifests/{storage_ticket}`-г ил гаргадаг тул SDK болон операторууд манифест татаж авах боломжтой.
+- Torii нь мөн `GET /v1/da/manifests/{storage_ticket}`-г ил гаргадаг тул SDK болон операторууд манифест татаж авах боломжтой.
   зангилааны дамар лавлахад хүрэлгүйгээр төлөвлөгөөг хуваах. Хариулт нь Norito байтыг буцаана
   (base64), manifest JSON, `chunk_plan` JSON blob `sorafs fetch`-д бэлэн, холбогдох
   hex задлах (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) ба
@@ -294,7 +294,7 @@ pub struct DaIngestReceipt {
 ### Ачаа ихтэй урсгалын урсгал
 
 Нэг хүсэлтийн тохируулсан хязгаараас их хэмжээний хөрөнгийг залгих шаардлагатай үйлчлүүлэгчид
-`POST /v2/da/ingest/chunk/start` руу залгаж цацах сесс. Torii a гэж хариулна
+`POST /v1/da/ingest/chunk/start` руу залгаж цацах сесс. Torii a гэж хариулна
 `ChunkSessionId` (BLAKE3-хүссэн blob мета өгөгдлөөс үүсэлтэй) болон тохиролцсон бөөмийн хэмжээ.
 Дараагийн `DaIngestChunk` хүсэлт бүрд:- `client_blob_id` — эцсийн `DaIngestRequest`-тэй ижил.
 - `chunk_session_id` — зүсмэлүүдийг ажиллаж байгаа сесстэй холбоно.
@@ -307,7 +307,7 @@ Torii нь `config.da_ingest.manifest_store_dir/chunks/<session>/` доор ба
 чадваргүй байдлыг хүндэтгэхийн тулд дахин тоглуулах кэш доторх явцыг бүртгэдэг. Эцсийн зүсмэл газардах үед Torii
 дискэн дээрх ачааллыг дахин угсардаг (санах ойн өсөлтөөс зайлсхийхийн тулд бөөгнөрсөн лавлахаар дамжуулдаг),
 Каноник манифест/баримтыг нэг удаагийн байршуулалттай яг адилхан тооцоолж, эцэст нь хариу өгнө
-`POST /v2/da/ingest` үе шаттай олдворыг хэрэглэснээр. Амжилтгүй болсон сессийг тодорхой цуцалж болно
+`POST /v1/da/ingest` үе шаттай олдворыг хэрэглэснээр. Амжилтгүй болсон сессийг тодорхой цуцалж болно
 `config.da_ingest.replay_cache_ttl` дараа хог цуглуулдаг. Энэ загвар нь сүлжээний форматыг хадгалдаг
 Norito-д ээлтэй, үйлчлүүлэгчид зориулсан дахин сэргээх протоколоос зайлсхийж, одоо байгаа манифест дамжуулах хоолойг дахин ашигладаг
 өөрчлөгдөөгүй.

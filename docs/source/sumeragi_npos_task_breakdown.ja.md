@@ -19,8 +19,8 @@ translation_last_reviewed: 2026-01-01
 - ✅ Norito の `Proposal`/`Vote`/`Qc` 型を `BlockMessage` に公開し、エンコード／デコードの往復テストを実施（`crates/iroha_data_model/tests/consensus_roundtrip.rs`）。
 - ✅ 旧 `BlockSigned/BlockCommitted` フレームを制御するトグルを退役前に `false` で固定。
 - ✅ 旧ブロックメッセージを切り替えるマイグレーションノブを廃止し、Vote/commit certificate モードを唯一のワイヤ経路に。
-- ✅ Torii ルータ、CLI、テレメトリ利用者を更新し、旧ブロックフレームより `/v2/sumeragi/*` JSON スナップショットを優先。
-- ✅ 統合テストで Vote/commit certificate パイプラインのみを通した `/v2/sumeragi/*` エンドポイントを検証（`integration_tests/tests/sumeragi_vote_qc_commit.rs`）。
+- ✅ Torii ルータ、CLI、テレメトリ利用者を更新し、旧ブロックフレームより `/v1/sumeragi/*` JSON スナップショットを優先。
+- ✅ 統合テストで Vote/commit certificate パイプラインのみを通した `/v1/sumeragi/*` エンドポイントを検証（`integration_tests/tests/sumeragi_vote_qc_commit.rs`）。
 - ✅ 機能同等性と相互接続テストが揃い次第、旧フレームを削除。
 
 ### フレーム削除計画
@@ -61,6 +61,6 @@ translation_last_reviewed: 2026-01-01
 ### 即時タスク
 1. ✅ バウンデッドジッタハーネスでペースメーカージッタを測定（`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`）。
 2. ✅ `npos_queue_backpressure_triggers_metrics` で RBC 遅延アサーションを強化し、決定的なストア圧力を与える（`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`）。
-3. ✅ `/v2/sumeragi/telemetry` の長時間ソークを実施し、複数の高さにわたってスナップショットと Prometheus カウンタを比較。アドバサリアルなコレクタを含むテストでカバー（`integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`）。
+3. ✅ `/v1/sumeragi/telemetry` の長時間ソークを実施し、複数の高さにわたってスナップショットと Prometheus カウンタを比較。アドバサリアルなコレクタを含むテストでカバー（`integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`）。
 
 このリストをここで管理することで `roadmap.md` はマイルストン中心に保たれ、チームは進捗を追えるチェックリストを得られます。パッチを反映したら随時更新し、完了を記録してください。

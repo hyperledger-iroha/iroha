@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-mn
   ```
 
 - Torii процесс нь `data_dir` руу унших/бичих эрхтэй эсэхийг шалгаарай.
-- Мэдэгдэл бүртгэгдсэний дараа зангилаа хүлээгдэж буй хүчин чадлаа `GET /v2/sorafs/capacity/state`-ээр дамжуулан сурталчилж байгааг баталгаажуулна уу.
+- Мэдэгдэл бүртгэгдсэний дараа зангилаа хүлээгдэж буй хүчин чадлаа `GET /v1/sorafs/capacity/state`-ээр дамжуулан сурталчилж байгааг баталгаажуулна уу.
 - Гөлгөржүүлэх идэвхжсэн үед хяналтын самбар нь спот утгын хажуугаар чичиргээгүй чиг хандлагыг тодотгохын тулд түүхий болон жигдрүүлсэн GiB·цаг/PoR тоолуурыг хоёуланг нь ил гаргадаг.
 
 ### CLI хуурай гүйлт (заавал биш)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 Torii ажиллаж эхэлмэгц та HTTP-ээр дамжуулан ижил олдворуудыг татаж авах боломжтой:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Хоёр төгсгөлийн цэгийг суулгагдсан хадгалалтын ажилтан үйлчилдэг тул CLI утааны тест болон гарцын мэдрэгч нь синхрончлолд байдаг.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#1】L
@@ -81,7 +81,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестийг base64 кодчилолоор илгээнэ үү:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Буулгасан өгөгдлийг дуудах:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. Дор хаяж нэг манифестийг дээрх шиг тогтооно.
 2. Torii процессыг (эсвэл бүхэл бүтэн зангилааг) дахин эхлүүлнэ үү.
 3. Татаж авах хүсэлтийг дахин илгээнэ үү. Ачааллыг сэргээх боломжтой хэвээр байх ёстой бөгөөд буцаасан мэдээ нь дахин эхлүүлэхийн өмнөх утгатай тохирч байх ёстой.
-4. `GET /v2/sorafs/storage/state`-г шалгана уу, `bytes_used` дахин ачаалсны дараа үргэлжилсэн манифестуудыг тусгаж байна.
+4. `GET /v1/sorafs/storage/state`-г шалгана уу, `bytes_used` дахин ачаалсны дараа үргэлжилсэн манифестуудыг тусгаж байна.
 
 ## 4. Квотоос татгалзах шалгалт
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. PoR дээжийг хүсэх:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Хяналтын самбар нь дараахь зүйлийг хянах ёстой.
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` ба `torii_sorafs_storage_fetch_inflight`
-  - PoR амжилт/бүтэлгүйтлийн тоолуур `/v2/sorafs/capacity/state`-ээр гарч ирэв
+  - PoR амжилт/бүтэлгүйтлийн тоолуур `/v1/sorafs/capacity/state`-ээр гарч ирэв
   - `sorafs_node_deal_publish_total{result=success|failure}`-ээр төлбөр тооцоо нийтлэх оролдлого
 
 Эдгээр дасгалуудыг дагаснаар суулгагдсан хадгалалтын ажилтан нь датаг залгих, дахин эхлүүлэх үед амьд үлдэх, тохируулсан квотыг хүндэтгэх, зангилаа өргөн сүлжээнд хүчин чадлаа сурталчлахаас өмнө тодорхой PoR нотолгоо үүсгэх боломжтой болно.

@@ -27,7 +27,7 @@ verificações de governança. Todas as cargas úteis são codificadas em Norito
   estado sem consultar o armazenamento off-ledger.
 - Fornecer provas de associação determinísticas para que os clientes leves possam verificar se um
   o hash do manifesto foi finalizado em um determinado bloco.
-- Expor consultas Torii (`/v2/da/commitments/*`) e provas que permitem relés,
+- Expor consultas Torii (`/v1/da/commitments/*`) e provas que permitem relés,
   SDKs e disponibilidade de auditoria de automação de governança sem repetir todos
   bloco.
 - Mantenha o envelope `SignedBlockWire` existente canônico, rosqueando o novo
@@ -42,7 +42,7 @@ verificações de governança. Todas as cargas úteis são codificadas em Norito
 3. **Persistência/índices** para que o WSV possa responder rapidamente a consultas de compromisso
    (`iroha_core/src/wsv/mod.rs`).
 4. **Adições de RPC Torii** para listar/consultar/comprovar endpoints em
-   `/v2/da/commitments`.
+   `/v1/da/commitments`.
 5. **Testes de integração + acessórios** validando o layout da fiação e o fluxo de prova em
    `integration_tests/tests/da/commitments.rs`.
 
@@ -129,7 +129,7 @@ até que Torii encadeie pacotes reais.
 A montagem do bloco e a ingestão `BlockCreated` revalidam cada compromisso em relação
 o catálogo de pistas: as pistas Merkle rejeitam compromissos perdidos da KZG, as pistas KZG exigem um
 compromisso KZG diferente de zero e `chunk_root` diferente de zero, e faixas desconhecidas são
-caiu. O endpoint `/v2/da/commitments/verify` do Torii espelha a mesma proteção,
+caiu. O endpoint `/v1/da/commitments/verify` do Torii espelha a mesma proteção,
 e ingerir agora envolve o compromisso determinístico da KZG em cada
 Registro `kzg_bls12_381` para que pacotes configuráveis em conformidade com a política alcancem a montagem do bloco.
 
@@ -148,9 +148,9 @@ pista para evitar ataques de repetição.
 
 Torii expõe três pontos de extremidade:| Rota | Método | Carga útil | Notas |
 |-------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de intervalo por faixa/época/sequência, paginação) | Retorna `DaCommitmentPage` com contagem total, compromissos e hash de bloco. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto ou tupla `(epoch, sequence)`). | Responde com `DaCommitmentProof` (registro + caminho Merkle + hash de bloco). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Auxiliar sem estado que reproduz o cálculo do hash do bloco e valida a inclusão; usado por SDKs que não podem ser vinculados diretamente ao `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de intervalo por faixa/época/sequência, paginação) | Retorna `DaCommitmentPage` com contagem total, compromissos e hash de bloco. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (pista + hash de manifesto ou tupla `(epoch, sequence)`). | Responde com `DaCommitmentProof` (registro + caminho Merkle + hash de bloco). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Auxiliar sem estado que reproduz o cálculo do hash do bloco e valida a inclusão; usado por SDKs que não podem ser vinculados diretamente ao `iroha_crypto`. |
 
 Todas as cargas úteis residem em `iroha_data_model::da::commitment`. Montagem de roteadores Torii
 os manipuladores próximos aos endpoints de ingestão de DA existentes para reutilizar token/mTLS

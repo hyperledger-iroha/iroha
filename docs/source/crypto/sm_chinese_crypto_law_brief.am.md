@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. **ሰነድ**
    - የግዛት የንግድ ምስጠራ ሁኔታን፣ የሚጠበቁ ነገሮችን እና የመገናኛ ነጥቦችን በመጥቀስ ለ`docs/source/crypto/sm_program.md` የማክበር አባሪ ያክሉ።
    - ኦፕሬተሮች ማቅረቢያዎችን በሚያዘጋጁበት ጊዜ ሊጠቀሙበት የሚችሉትን የ Norito አንጸባራቂ መስክ (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) ያትሙ።
-   - የTorii `/v2/node/capabilities` ማስታወቂያ (እና የ`iroha runtime capabilities` CLI ተለዋጭ ስም) መርከቦችን በእያንዳንዱ ልቀት ያረጋግጡ ስለዚህ ኦፕሬተሮች ለMLPS/密评 ማስረጃ `crypto.sm` አንጸባራቂ ቅጽበታዊ ገጽ እይታን ማንሳት ይችላሉ።
+   - የTorii `/v1/node/capabilities` ማስታወቂያ (እና የ`iroha runtime capabilities` CLI ተለዋጭ ስም) መርከቦችን በእያንዳንዱ ልቀት ያረጋግጡ ስለዚህ ኦፕሬተሮች ለMLPS/密评 ማስረጃ `crypto.sm` አንጸባራቂ ቅጽበታዊ ገጽ እይታን ማንሳት ይችላሉ።
    - የሁለት ቋንቋ (EN/ZH) ተገዢነት ፈጣን ጅምር ግዴታዎችን ያቅርቡ።
 2. ** ቅርሶችን ይልቀቁ ***
    - ለኤስኤም የነቁ ግንባታዎች የ SBOM/CycloneDX ፋይሎችን ይላኩ።

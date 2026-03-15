@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   XOR-ը պետք է անմիջապես, XOR-ը, որը սպասվում էր սանրվածքից հետո, իրականացավ
   շեղում (`xor_variance_micro`), իսկ բլոկի ժամանակի դրոշմը միլիվայրկյաններով:
 - Արգելափակման կատարումը միավորում է ստացականները յուրաքանչյուր գծի/տվյալների տարածության համար և հրապարակում դրանք
-  `lane_settlement_commitments`-ի միջոցով `/v2/sumeragi/status`-ում:  Ընդհանուր գումարները
+  `lane_settlement_commitments`-ի միջոցով `/v1/sumeragi/status`-ում:  Ընդհանուր գումարները
   բացահայտել `total_local_micro`, `total_xor_due_micro` և
   `total_xor_after_haircut_micro` ամփոփված բլոկի վրա գիշերվա համար
   հաշտեցման արտահանում.

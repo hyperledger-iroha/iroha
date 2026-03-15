@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] 捕获的最新确定性测试输出：
       `scripts/sm_openssl_smoke.sh`、`cargo test -p iroha_crypto sm` 和
       Norito 往返夹具。
-- [ ] Torii `/v2/node/capabilities` 广告（通过 `iroha runtime capabilities`）记录，验证 `crypto.sm` 清单字段和加速策略快照。
+- [ ] Torii `/v1/node/capabilities` 广告（通过 `iroha runtime capabilities`）记录，验证 `crypto.sm` 清单字段和加速策略快照。
 
 # 参与执行
 

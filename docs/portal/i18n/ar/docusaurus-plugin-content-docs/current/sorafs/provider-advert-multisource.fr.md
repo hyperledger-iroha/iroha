@@ -62,7 +62,7 @@ rejettent les metadonnees mal formees:
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## الأدوات والتركيبات- يجب أن تتضمن حمولات إعلانات الموردين البيانات التعريفية `range_capability`،
-  `stream_budget` و`transport_hints`. Validez via les reponses `/v2/sorafs/providers` et les
+  `stream_budget` و`transport_hints`. Validez via les reponses `/v1/sorafs/providers` et les
   تجهيزات القبول؛ تتضمن السيرة الذاتية لـ JSON سعة التحليل وميزانية التدفق
   ولوحات التلميحات الخاصة بالقياس عن بعد.
 - `cargo xtask sorafs-admission-fixtures` يعرض ميزانيات البث وينقل التلميحات فيها
@@ -72,7 +72,7 @@ rejettent les metadonnees mal formees:
   - `multi_fetch_plan.json` حتى تتمكن مجموعات SDK من تجديد خطة الجلب
     الحتمية المتعددة الأقران
 
-## التكامل مع الأوركسترا وTorii- Torii `/v2/sorafs/providers` يعيد البيانات الوصفية لسعة الشاطئ مع
+## التكامل مع الأوركسترا وTorii- Torii `/v1/sorafs/providers` يعيد البيانات الوصفية لسعة الشاطئ مع
   `stream_budget` و`transport_hints`. يتم تقليل تحذيرات الرجوع إلى المستوى الأدنى عند
   يقوم الموردون بحذف البيانات الجديدة ونقاط نهاية شاطئ البوابة
   أضف الميمات المحظورة للعملاء المباشرين.

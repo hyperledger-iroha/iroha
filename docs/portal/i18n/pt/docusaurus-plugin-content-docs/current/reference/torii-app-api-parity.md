@@ -13,11 +13,11 @@ Status: Concluido 2026-03-21
 Responsaveis: Torii Platform, SDK Program Lead  
 Referencia do roadmap: TORII-APP-1 - auditoria de paridade `app_api`
 
-Esta pagina espelha a auditoria interna `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) para que leitores fora do mono-repo vejam quais superficies `/v2/*` estao conectadas, testadas e documentadas. A auditoria acompanha as rotas reexportadas via `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` e `add_connect_routes`.
+Esta pagina espelha a auditoria interna `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) para que leitores fora do mono-repo vejam quais superficies `/v1/*` estao conectadas, testadas e documentadas. A auditoria acompanha as rotas reexportadas via `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` e `add_connect_routes`.
 
 ## Escopo e metodo
 
-A auditoria inspeciona as reexportacoes publicas em `crates/iroha_torii/src/lib.rs:256-522` e os construtores de rotas com feature gating. Para cada superficie `/v2/*` do roadmap verificamos:
+A auditoria inspeciona as reexportacoes publicas em `crates/iroha_torii/src/lib.rs:256-522` e os construtores de rotas com feature gating. Para cada superficie `/v1/*` do roadmap verificamos:
 
 - Implementacao do handler e definicoes DTO em `crates/iroha_torii/src/routing.rs`.
 - Registro do router nos grupos de features `app_api` ou `connect`.
@@ -35,25 +35,25 @@ As listagens de ativos/transações da conta e de titulares de ativos aceitam pa
 - Exemplos:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Inventario de endpoints
 
-### Permissoes de conta (`/v2/accounts/{id}/permissions`) - Coberto
+### Permissoes de conta (`/v1/accounts/{id}/permissions`) - Coberto
 - Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -61,7 +61,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform.
 - Notas: A resposta e um body JSON Norito com `items`/`total`, alinhado aos helpers de paginacao dos SDKs.
 
-### Avaliacao OPRF de alias (`POST /v2/aliases/voprf/evaluate`) - Coberto
+### Avaliacao OPRF de alias (`POST /v1/aliases/voprf/evaluate`) - Coberto
 - Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -71,7 +71,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform.
 - Notas: A superficie de resposta reforca hex deterministico e identificadores de backend; os SDKs consomem o DTO.
 
-### Eventos de proof SSE (`GET /v2/events/sse`) - Coberto
+### Eventos de proof SSE (`GET /v1/events/sse`) - Coberto
 - Handler: `handle_v1_events_sse` com suporte a filtros (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) mais o wiring de filtro de proof.
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -81,7 +81,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform (runtime), Integration Tests WG (fixtures).
 - Notas: Os caminhos de filtro de proof foram validados end-to-end; a documentacao fica em `docs/source/zk_app_api.md`.
 
-### Ciclo de vida de contratos (`/v2/contracts/*`) - Coberto
+### Ciclo de vida de contratos (`/v1/contracts/*`) - Coberto
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -96,7 +96,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Smart Contract WG com Torii Platform.
 - Notas: Os endpoints enfileiram transacoes assinadas e reutilizam metricas de telemetria compartilhadas (`handle_transaction_with_metrics`).
 
-### Ciclo de vida de chaves de verificacao (`/v2/zk/vk/*`) - Coberto
+### Ciclo de vida de chaves de verificacao (`/v1/zk/vk/*`) - Coberto
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) e `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -108,7 +108,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: ZK Working Group com suporte da Torii Platform.
 - Notas: Os DTOs se alinham aos schemas Norito referenciados pelos SDKs; rate limiting e aplicado via `limits.rs`.
 
-### Nexus Connect (`/v2/connect/*`) - Coberto (feature `connect`)
+### Nexus Connect (`/v1/connect/*`) - Coberto (feature `connect`)
 - Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

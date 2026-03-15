@@ -34,7 +34,7 @@ _נוסח: 2026-02-20 - בעלים: Core Protocol WG / Storage Team / DA WG_
 ## משטח API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 שגיאה פנימית | כשל בלתי צפוי (נרשם + התראה). |
 
 ```
-GET /v2/da/proof_policies
+GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 לא צריך נסיעה נוספת הלוך ושוב כדי לאגד הוכחה למערכת המדיניות הפעילה.
 
 ```
-GET /v2/da/proof_policy_snapshot
+GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
 - `iroha app da get` מוסיף כינוי ממוקד DA עבור מתזמר ריבוי מקורות שכבר מפעיל
   `iroha app sorafs fetch`. מפעילים יכולים להפנות אותו אל חפצי אמנות של מניפסט + תוכנית נתח (`--manifest`,
   `--plan`, `--manifest-id`) **או** פשוט להעביר כרטיס אחסון Torii דרך `--storage-ticket`. כאשר ה
-  נעשה שימוש בנתיב הכרטיס, ה-CLI מושך את המניפסט מ-`/v2/da/manifests/<ticket>`, ממשיך את החבילה
+  נעשה שימוש בנתיב הכרטיס, ה-CLI מושך את המניפסט מ-`/v1/da/manifests/<ticket>`, ממשיך את החבילה
   תחת `artifacts/da/fetch_<timestamp>/` (עקוף עם `--manifest-cache-dir`), נגזרת **המניפסט
   hash** עבור `--manifest-id`, ולאחר מכן מפעיל את התזמר עם ה-`--gateway-provider` שסופק
   רשימה. אימות מטען עדיין מסתמך על תקציר CAR/`blob_hash` המוטבע בזמן שמזהה השער הוא
@@ -248,7 +248,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   עקיפות, ייצוא לוח תוצאות ונתיבי `--output`), וניתן לעקוף את נקודת הקצה המניפסט באמצעות
   `--manifest-endpoint` עבור מארחי Torii מותאמים אישית, כך שבדיקות זמינות מקצה לקצה פועלות לחלוטין תחת
   `da` מרחב שמות ללא שכפול לוגיקה של מתזמר.
-- `iroha app da get-blob` מושך מניפסטים קנוניים הישר מ-Torii דרך `GET /v2/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` מושך מניפסטים קנוניים הישר מ-Torii דרך `GET /v1/da/manifests/{storage_ticket}`.
   הפקודה מסמנת כעת חפצים עם ה-hash המניפסט (מזהה blob), כתיבה
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` ו-`chunk_plan_{manifest_hash}.json`
   תחת `artifacts/da/fetch_<timestamp>/` (או `--output-dir` שסופק על ידי המשתמש) תוך הדהוד מדויק
@@ -259,7 +259,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   `ToriiClient.getDaManifestBundle(...)`. שניהם מחזירים את ה-Norito בתים המפוענחים, JSON מניפסט, Hash של מניפסט,ותוכנית נתחים כך שמתקשרי SDK יוכלו להרטיב הפעלות מתזמר מבלי להפגיז ל-CLI ול-Swift
   לקוחות יכולים בנוסף להתקשר ל-`fetchDaPayloadViaGateway(...)` כדי להעביר את החבילות האלה דרך המקור
   SoraFS מעטפת מתזמר.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- תגובות `/v2/da/manifests` מופיעות כעת `manifest_hash`, ושני עוזרי CLI + SDK (`iroha app da get`,
+- תגובות `/v1/da/manifests` מופיעות כעת `manifest_hash`, ושני עוזרי CLI + SDK (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway`, ועטיפות השער של Swift/JS) מתייחסים לעיכול הזה כאל
   מזהה מניפסט קנוני תוך כדי המשך אימות מטענים מול CAR/blob hash המוטבע.
 - `iroha app da rent-quote` מחשבת שכר דירה דטרמיניסטי ופירוק תמריצים עבור גודל אחסון שסופק
@@ -277,7 +277,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
 - שוויון רישום פינים מתרחב כעת ל-SDKs: `ToriiClient.registerSorafsPinManifest(...)` ב-
   JavaScript SDK בונה את המטען המדויק שבו נעשה שימוש על ידי `iroha app sorafs pin register`, אוכפת קנונית
   מטא נתונים של chunker, מדיניות סיכות, הוכחות כינוי ותקצירים ממשיכים לפני פרסום ב-
-  `/v2/sorafs/pin/register`. זה מונע מבוטי CI ואוטומציה להפגיז ל-CLI כאשר
+  `/v1/sorafs/pin/register`. זה מונע מבוטי CI ואוטומציה להפגיז ל-CLI כאשר
   מקליט רישומי מניפסט, והעוזר מגיע עם כיסוי TypeScript/README כך של DA-8
   שוויון הכלים "שלח/קבל/הוכח" מתקיים במלואו ב-JS לצד Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` משרשרת את כל האמור לעיל: זה לוקח כרטיס אחסון, מוריד את
@@ -334,7 +334,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   גרסאות לא ידועות, המבטיחות שדרוגים דטרמיניסטיים כאשר פריסות מניפסט חדשות נשלחות.【crates/iroha_data_model/src/da/types.rs:308】
 - ** PDP/PoTR hooks** - התחייבויות PDP נובעות ישירות מחנות הנתחים ונמשכות
   לצד מניפסטים כדי שמתזמני DA-5 יוכלו להשיק אתגרי דגימה מנתונים קנוניים; את
-  כותרת `Sora-PDP-Commitment` נשלחת כעת עם `/v2/da/ingest` ו-`/v2/da/manifests/{ticket}`
+  כותרת `Sora-PDP-Commitment` נשלחת כעת עם `/v1/da/ingest` ו-`/v1/da/manifests/{ticket}`
   תגובות כך ש-SDKs ילמדו מיד את ההתחייבות החתומה שבדיקות עתידיות יפנו אליה.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest】s:476.
 - **יומן סמן רסיס** - מטא נתונים של נתיבים עשויים לציין `da_shard_id` (ברירת המחדל ל-`lane_id`), וכן
   Sumeragi מחזיק כעת את ה-`(epoch, sequence)` הגבוה ביותר לכל `(shard_id, lane_id)`
@@ -357,7 +357,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   חשיפת בתים של מטען. הקבלות מתנקות מ-Kura במהלך השידור החוזר, כך שמאמתים משחזרים אותו דבר
   מטא נתונים של סודיות לאחר מופעלת מחדש.【ארגזים/iroha_config/src/parameters/actual.rs】【ארגזים/iroha_core/src/da/confidential.rs】【ארגזים/iroha_core/src/da/confidential_store.rs】】【ecrates/irha_stat
 
-## הערות יישום- נקודת הקצה `/v2/da/ingest` של Torii מנרמלת כעת את דחיסת המטען, אוכפת את מטמון השידור החוזר,
+## הערות יישום- נקודת הקצה `/v1/da/ingest` של Torii מנרמלת כעת את דחיסת המטען, אוכפת את מטמון השידור החוזר,
   חותך באופן דטרמיניסטי את הבתים הקנוניים, בונה מחדש את `DaManifestV1` ומפיל את המטען המקודד
   לתוך `config.da_ingest.manifest_store_dir` עבור SoraFS תזמור לפני הנפקת הקבלה; את
   המטפל מצרף גם כותרת `Sora-PDP-Commitment` כדי שלקוחות יוכלו ללכוד את המחויבות המקודדת
@@ -370,7 +370,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   כיסוי `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` Rust, ה-Python `ToriiClient`
   מייצאת כעת `decode_pdp_commitment_header`, ו-`IrohaSwift` שולחת עוזרים תואמים כל כך ניידים
   לקוחות יכולים לאחסן את לוח הזמנים של הדגימה המקודד באופן מיידי.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii חושף גם את `GET /v2/da/manifests/{storage_ticket}` כך ש-SDK ואופרטורים יכולים להביא מניפסטים
+- Torii חושף גם את `GET /v1/da/manifests/{storage_ticket}` כך ש-SDK ואופרטורים יכולים להביא מניפסטים
   ותוכניות נתחים מבלי לגעת בספריית הסליל של הצומת. התגובה מחזירה את ה-Norito בתים
   (base64), מניפסט JSON שעבר עיבוד, כתם `chunk_plan` JSON מוכן ל-`sorafs fetch`, בתוספת הרלוונטי
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) כך שהכלים במורד הזרם יכולים
@@ -388,7 +388,7 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   `--block-hash` לעקוף.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### זרימת מטען גדוללקוחות שצריכים להטמיע נכסים גדולים מהמגבלה שהוגדרה לבקשה יחידה יוזמים א
-הפעלת סטרימינג על ידי התקשרות ל-`POST /v2/da/ingest/chunk/start`. Torii מגיב עם א
+הפעלת סטרימינג על ידי התקשרות ל-`POST /v1/da/ingest/chunk/start`. Torii מגיב עם א
 `ChunkSessionId` (BLAKE3-נגזר מהמטא-נתונים של הכתם המבוקשים) וגודל הנתח שנקבע.
 כל בקשה הבאה `DaIngestChunk` נושאת:
 
@@ -403,7 +403,7 @@ Torii נמשך פרוסות מאומתות תחת `config.da_ingest.manifest_sto
 מתעד התקדמות בתוך מטמון השידור החוזר כדי לכבד את האי-דמוקרטיה. כאשר הפרוסה האחרונה נוחתת, Torii
 מרכיב מחדש את המטען בדיסק (הזרמה דרך ספריית ה-chunk כדי למנוע עליות זיכרון),
 מחשב את המניפסט/הקבלה הקנונית בדיוק כמו בהעלאות של צילום יחיד, ולבסוף מגיב ל
-`POST /v2/da/ingest` על ידי צריכת החפץ המבוים. הפעלות שנכשלו ניתן לבטל באופן מפורש או
+`POST /v1/da/ingest` על ידי צריכת החפץ המבוים. הפעלות שנכשלו ניתן לבטל באופן מפורש או
 נאספים אשפה לאחר `config.da_ingest.replay_cache_ttl`. עיצוב זה שומר על פורמט הרשת
 Norito ידידותית, נמנעת מפרוטוקולים הניתנים לחידוש פעולה ספציפיים ללקוח, ומשתמשת מחדש בצינור המניפסט הקיים
 ללא שינוי.

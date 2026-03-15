@@ -66,7 +66,7 @@ SoraFS の Runbook です。
 ## ツーリングと治具
 
 - 証明者または通知のペイロード損失にはメタデータ `range_capability` が含まれます。
-  `stream_budget` と `transport_hints`。 `/v2/sorafs/providers` y のレスキューを介して検証
+  `stream_budget` と `transport_hints`。 `/v1/sorafs/providers` y のレスキューを介して検証
   入場設備。 los resúmenes JSON deben incluir la capacidad parseada、
   ストリームの予算と、テレメトリの取り込みに関するヒントの配列。
 - `cargo xtask sorafs-admission-fixtures` ストリーム バジェットとトランスポート ヒントを説明します
@@ -79,7 +79,7 @@ SoraFS の Runbook です。
 
 ## 統合コントラクターと Torii
 
-- Torii `/v2/sorafs/providers` ランゴ解析の容量のメタデータを取得します
+- Torii `/v1/sorafs/providers` ランゴ解析の容量のメタデータを取得します
   `stream_budget` y `transport_hints`。クアンドロスのダウングレードに関する広告の表示
   新しいメタデータを省略し、ランゴ デル ゲートウェイ アプリケーションのエンドポイントを失うことを証明しました
   顧客の直接のミスマス制限。

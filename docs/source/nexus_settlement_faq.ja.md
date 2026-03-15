@@ -64,7 +64,7 @@ translator: LLM (Codex)
 ### SDK 側で特別な対応は必要ですか？
 
 - SDK は以下を提供する必要があります。
-  - ` /v2/settlement/records` から決済イベントを取得するヘルパーと `SettlementApplied` ログの解釈。
+  - ` /v1/settlement/records` から決済イベントを取得するヘルパーと `SettlementApplied` ログの解釈。
   - クライアント設定でレーン ID と settlement handle を公開し、オペレーターが正しくルーティングできるようにする。
   - `docs/source/settlement_router.md` で定義された Norito ペイロード（`SettlementInstructionV1` など）を実装し、エンドツーエンドテストを用意。
 - Nexus SDK クイックスタートには各言語向けのオンボーディングスニペットがあります。

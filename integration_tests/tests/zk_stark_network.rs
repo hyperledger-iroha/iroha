@@ -210,7 +210,7 @@ async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<Proo
         let value = get_torii_json_v2(
             client,
             &["v2", "zk", "ivm", "prove", job_id],
-            "fetch /v2/zk/ivm/prove/{job_id}",
+            "fetch /v1/zk/ivm/prove/{job_id}",
         )
         .await?;
         let dto: ZkIvmProveJob =
@@ -525,7 +525,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         &client,
         &["v2", "zk", "ivm", "derive"],
         &derive_req_json,
-        "post /v2/zk/ivm/derive",
+        "post /v1/zk/ivm/derive",
     )
     .await?;
     let derive_resp: ZkIvmDeriveResponse =
@@ -543,7 +543,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         &client,
         &["v2", "zk", "ivm", "prove"],
         &prove_req_json,
-        "post /v2/zk/ivm/prove",
+        "post /v1/zk/ivm/prove",
     )
     .await?;
     let prove_created: ZkIvmProveJobCreated =

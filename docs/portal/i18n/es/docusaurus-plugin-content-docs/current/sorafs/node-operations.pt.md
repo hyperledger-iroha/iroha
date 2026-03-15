@@ -44,7 +44,7 @@ Este runbook guía operadores na validacao de uma implantacao `sorafs-node` embu
   ```
 
 - Garantía de que el proceso Torii tiene acceso a lectura/escrita en `data_dir`.
-- Confirme que o no anuncia a capacidade esperada via `GET /v2/sorafs/capacity/state` quando uma declaracao for registrada.
+- Confirme que o no anuncia a capacidade esperada via `GET /v1/sorafs/capacity/state` quando uma declaracao for registrada.
 - Cuando el suavizado está habilitado, los paneles de control exponen contadores GiB·hour/PoR brutos y suavizados para destacar tendencias sin jitter al lado de valores instantáneos.
 
 ### Ejecución en seco de CLI (opcional)
@@ -81,8 +81,8 @@ El comando emite un resumen JSON (resumen del manifiesto, identificación del pr
 Después de que o Torii estiver ativo voce pode recuperar os mesmos artefactos a través de HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, portanto smoke tests de CLI y sondas de gateway permanecen sincronizados.
@@ -91,7 +91,7 @@ Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, po
 2. Envie el manifiesto con codificación base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, po
 3. Busque los dados fijos:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, po
 1. Fixe pelo menos um manifest como acima.
 2. Reinicia el proceso Torii (o no entero).
 3. Vuelva a enviar la solicitud de recuperación. La carga útil debe continuar disponible y el resumen retornado debe coincidir con el valor anterior al reinicio.
-4. Inspeccione `GET /v2/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistentes después del reinicio.
+4. Inspeccione `GET /v1/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistentes después del reinicio.
 
 ## 4. Teste de rejeicao por cuota
 
@@ -131,7 +131,7 @@ Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, po
 2. Solicite uma amostra PoR:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ Ambos os endpoints son servidos por el trabajador de almacenamiento embutido, po
 - Los paneles de control deben acompañarse:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
-  - contadores de éxito/falha PoR expostos vía `/v2/sorafs/capacity/state`
+  - contadores de éxito/falha PoR expostos vía `/v1/sorafs/capacity/state`
   - tentativas de publicación de acuerdo vía `sorafs_node_deal_publish_total{result=success|failure}`
 
 Seguir esses ejercicios garantizados que o trabajador de almacenamiento embutido consiga ingerir datos, sobreviver a reinicios, respetar cuotas configuradas y gerar provas PoR determinísticas antes de o no anunciar capacidade para a rede mais ampla.

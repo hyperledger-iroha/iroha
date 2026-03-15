@@ -54,8 +54,8 @@ max_adjust_ms_per_min = 50
 
 ### נקודות קצה של Torii
 
-- `GET /v2/time/now` → ‏`{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64> }`
-- `GET /v2/time/status` → דיאגנוסטיקה ואספקת התפלגות RTT:
+- `GET /v1/time/now` → ‏`{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64> }`
+- `GET /v1/time/status` → דיאגנוסטיקה ואספקת התפלגות RTT:
   - ‏`{ "peers": <u64>, "samples": [{"peer","last_offset_ms","last_rtt_ms","count"}, ...], "rtt": {"buckets": [{"le","count"},...], "sum_ms", "count"}, "note": "NTS running" }`
 
 ### מדדי טלמטריה

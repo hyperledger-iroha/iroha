@@ -18,11 +18,11 @@ translation_last_reviewed: 2026-02-07
 סמלים: Torii Platform, מוביל תוכנית SDK  
 כרטיס חדש: TORII-APP-1 — אאודיט חלק `app_api`
 
-Эта страница отражает внутренний аудит `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`), чтобы читатели вне монорепозивить какие поверхности `/v2/*` מוצרים, מוצרים ושירותים. Аудит отслеживает маршруты, переэкспортируемые через `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` ו-`add_connect_routes`.
+Эта страница отражает внутренний аудит `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`), чтобы читатели вне монорепозивить какие поверхности `/v1/*` מוצרים, מוצרים ושירותים. Аудит отслеживает маршруты, переэкспортируемые через `Torii::add_app_api_routes`, `add_contracts_and_vk_routes` ו-`add_connect_routes`.
 
 ## Область и метод
 
-אבטחת שירותים ב-`crates/iroha_torii/src/lib.rs:256-522` ושירותים עם תכונות שערים. Для каждой поверхности `/v2/*` в дорожной карте мы проверили:
+אבטחת שירותים ב-`crates/iroha_torii/src/lib.rs:256-522` ושירותים עם תכונות שערים. Для каждой поверхности `/v1/*` в дорожной карте мы проверили:
 
 - מטפל Реализацию и определения DTO в `crates/iroha_torii/src/routing.rs`.
 - מערכת הפעלה למשחק תכונה `app_api` או `connect`.
@@ -40,25 +40,25 @@ translation_last_reviewed: 2026-02-07
 - דגמים:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Инвентарь эндпойнтов
 
-### Права аккаунта (`/v2/accounts/{id}/permissions`) — Покрыто
+### Права аккаунта (`/v1/accounts/{id}/permissions`) — Покрыто
 - מטפל: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - כריכת נתב: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - בעלים: Torii Platform.
 - הערות: Ответ — Norito JSON с `items`/`total`, совпадает с SDK хелперами пагинации.
 
-### כינוי OPRF оценка (`POST /v2/aliases/voprf/evaluate`) — Покрыто
+### כינוי OPRF оценка (`POST /v1/aliases/voprf/evaluate`) — Покрыто
 - מטפל: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -74,7 +74,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - בדיקות: מטפל מוטבע ב-тесты (`crates/iroha_torii/src/lib.rs:9945-9986`) плюс SDK покрытие
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - בעלים: Torii Platform.
-- הערות: Поверхность ответа принуждает детерминированный hex и идентификаторы backend; SDK потребляют DTO.### События proof SSE (`GET /v2/events/sse`) — Покрыто
+- הערות: Поверхность ответа принуждает детерминированный hex и идентификаторы backend; SDK потребляют DTO.### События proof SSE (`GET /v1/events/sse`) — Покрыто
 - מטפל: `handle_v1_events_sse` с поддержкой фильтров (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) плюс חיווט фильтра הוכחה.
 - כריכת נתב: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - בעלים: פלטפורמת Torii (זמן ריצה), בדיקות אינטגרציה WG (מתקנים).
 - הערות: Маршруты proof фильтра проверены מקצה לקצה; документация в `docs/source/zk_app_api.md`.
 
-### Жизненный цикл контрактов (`/v2/contracts/*`) — Покрыто
+### Жизненный цикл контрактов (`/v1/contracts/*`) — Покрыто
 - מטפלים: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - בעלים: Smart Contract WG совместно с Torii Platform.
 - הערות: Эндпойнты ставят подписанные транзакции в очередь и переиспользуют общие метрики телеметри0и (0101090).
 
-### Жизненный цикл ключей проверки (`/v2/zk/vk/*`) — Покрыто
+### Жизненный цикл ключей проверки (`/v1/zk/vk/*`) — Покрыто
 - מטפלים: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) ו-`handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - בעלים: ZK Working Group при поддержке Torii Platform.
 - הערות: DTO согласованы со схемами Norito, на которые ссылаются SDK; הגבלת שיעור נאכף через `limits.rs`.
 
-### Nexus Connect (`/v2/connect/*`) — Покрыто (תכונה `connect`)
+### Nexus Connect (`/v1/connect/*`) — Покрыто (תכונה `connect`)
 - מטפלים: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

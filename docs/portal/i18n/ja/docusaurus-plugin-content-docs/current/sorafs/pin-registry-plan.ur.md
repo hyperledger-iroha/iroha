@@ -76,7 +76,7 @@ Torii ファサード、CLI、不変条件、不変条件
 
 ## ファサード (Torii/SDK انضمام)|ああ |ああ | और देखें
 |------|-----|---------------|
-| Torii サービス | `/v2/sorafs/pin` (送信) `/v2/sorafs/pin/{cid}` (検索) `/v2/sorafs/aliases` (リスト/バインド) `/v2/sorafs/replication` (注文/受領)ページネーション + フィルタリング|ネットワーキング TL / コア インフラ |
+| Torii サービス | `/v1/sorafs/pin` (送信) `/v1/sorafs/pin/{cid}` (検索) `/v1/sorafs/aliases` (リスト/バインド) `/v1/sorafs/replication` (注文/受領)ページネーション + フィルタリング|ネットワーキング TL / コア インフラ |
 |証明書 |応答 レジストリの高さ/ハッシュ شامل کریں؛ Norito 構成証明構造体 SDK は、次のものを消費します。 |コアインフラ |
 | CLI | `sorafs_manifest_stub` インターフェイス `sorafs_pin` CLI インターフェイス `pin submit`、`alias bind`、`order issue`、 `registry export` ہو۔ |ツーリングWG |
 | SDK | Norito スキーマとクライアント バインディング (Rust/Go/TS) が生成する統合テストのテスト| SDK チーム |
@@ -133,9 +133,9 @@ Torii ファサード、CLI、不変条件、不変条件
 SF-4 チェックリスト آئٹم میں پیش رفت پر اس منصوبے کا حوالہ ہونا چاہیے۔
 REST ファサードの認証済みエンドポイントのリスト:
 
-- `GET /v2/sorafs/pin` は `GET /v2/sorafs/pin/{digest}` をマニフェストします。
+- `GET /v1/sorafs/pin` は `GET /v1/sorafs/pin/{digest}` をマニフェストします。
   エイリアス バインディング、レプリケーション順序、ブロック ハッシュ、認証オブジェクト、認証オブジェクト
-- `GET /v2/sorafs/aliases` `GET /v2/sorafs/replication` エイリアス カタログ
+- `GET /v1/sorafs/aliases` `GET /v1/sorafs/replication` エイリアス カタログ
   レプリケーション順序バックログ 一貫性のあるページネーション ステータス フィルター
 
 CLI は、ラップを呼び出します (`iroha app sorafs pin list`、`pin show`、`alias list`、

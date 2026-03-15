@@ -25,13 +25,13 @@ translator: manual
 מאחסנים הוכחות, JSON ועוד. לכל קובץ מזהה דטרמיניסטי.
 
 נקודות קצה:
-- `POST /v2/zk/attachments` — מעלה קובץ ומחזיר `{ id, size, content_type, created_ms }`.
-- `GET  /v2/zk/attachments` — רשימת מטא-נתונים (תומך מסננים: `id`, ‏`content_type`, ‏`since_ms`, ‏`before_ms`, ‏`has_tag=<TAG>`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
-- `GET  /v2/zk/attachments/:id` — מוריד את הבייטים המאוחסנים לפי מזהה.
-- `DELETE /v2/zk/attachments/:id` — מוחק קובץ ומטא-נתונים.
-- `GET  /v2/zk/attachments/count` — `{ count }` עם מסננים זהים.
-- `GET  /v2/zk/proof/{backend}/{hash}` — שליפת רשומת הוכחה (מחזיר JSON עם סטטוס, גובה אימות, VK וכו').
-- `GET  /v2/zk/proofs` + `GET /count` — רשימה/ספירה עם מסננים (`backend`, ‏`status`, ‏`has_tag`, ‏`verified_from_height`, ‏`verified_until_height`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
+- `POST /v1/zk/attachments` — מעלה קובץ ומחזיר `{ id, size, content_type, created_ms }`.
+- `GET  /v1/zk/attachments` — רשימת מטא-נתונים (תומך מסננים: `id`, ‏`content_type`, ‏`since_ms`, ‏`before_ms`, ‏`has_tag=<TAG>`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
+- `GET  /v1/zk/attachments/:id` — מוריד את הבייטים המאוחסנים לפי מזהה.
+- `DELETE /v1/zk/attachments/:id` — מוחק קובץ ומטא-נתונים.
+- `GET  /v1/zk/attachments/count` — `{ count }` עם מסננים זהים.
+- `GET  /v1/zk/proof/{backend}/{hash}` — שליפת רשומת הוכחה (מחזיר JSON עם סטטוס, גובה אימות, VK וכו').
+- `GET  /v1/zk/proofs` + `GET /count` — רשימה/ספירה עם מסננים (`backend`, ‏`status`, ‏`has_tag`, ‏`verified_from_height`, ‏`verified_until_height`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
 
 פרטים:
 - מזהה = Blake2b-32 של גוף הבקשה לאחר סניטציה (hex).
@@ -50,10 +50,10 @@ translator: manual
 - אחרים: ניסיון JSON ואז Norito; כישלון → `ok: false`.
 
 נקודות קצה:
-- `GET /v2/zk/prover/reports` — רשימה (מסננים: `ok_only`, ‏`failed_only`, ‏`errors_only`, ‏`id`, ‏`content_type`, ‏`has_tag`, ‏`limit`, ‏`since_ms`, ‏`before_ms`, ‏`order`, ‏`offset`, ‏`latest`, ‏`ids_only`, ‏`messages_only`).
-- `GET /v2/zk/prover/reports/:id` — דוח יחיד.
-- `DELETE /v2/zk/prover/reports` — מחיקה המונית (מחזיר `{ deleted, ids }`).
-- `DELETE /v2/zk/prover/reports/:id` — מחיקת דוח ספציפי.
+- `GET /v1/zk/prover/reports` — רשימה (מסננים: `ok_only`, ‏`failed_only`, ‏`errors_only`, ‏`id`, ‏`content_type`, ‏`has_tag`, ‏`limit`, ‏`since_ms`, ‏`before_ms`, ‏`order`, ‏`offset`, ‏`latest`, ‏`ids_only`, ‏`messages_only`).
+- `GET /v1/zk/prover/reports/:id` — דוח יחיד.
+- `DELETE /v1/zk/prover/reports` — מחיקה המונית (מחזיר `{ deleted, ids }`).
+- `DELETE /v1/zk/prover/reports/:id` — מחיקת דוח ספציפי.
 
 הגדרות (Torii):
 - `torii.zk_prover_enabled`, ‏`torii.zk_prover_scan_period_secs`, ‏`torii.zk_prover_reports_ttl_secs`.
@@ -73,9 +73,9 @@ translator: manual
 ## רישום מפתחות אימות
 
 נקודות קצה נוחות לשליחת ISI:
-- `POST /v2/zk/vk/{register,update,deprecate}`
-- `GET /v2/zk/vk/{backend}/{name}`
-- `GET /v2/zk/vk` (מסננים `backend`, ‏`status`, ‏`name_contains`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`)
+- `POST /v1/zk/vk/{register,update,deprecate}`
+- `GET /v1/zk/vk/{backend}/{name}`
+- `GET /v1/zk/vk` (מסננים `backend`, ‏`status`, ‏`name_contains`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`)
 
 - `vk_bytes` (base64) — מצרף מפתח מלא; Torii יחושב את ה-commitment ויוודא מול `commitment_hex` אם נכלל. `vk_len` אופציונלי אך חייב להתאים לאורך הבייטים אם מוגדר.
 - `commitment_hex` (hex באורך 64) — רישום לפי commitment בלבד; במקרה זה חובה לציין `vk_len` כדי לשמר מידע על אורך המפתח.
@@ -129,6 +129,6 @@ CLI: `iroha app zk vk register/update/deprecate/get`.
 
 ## ממשקי ממשל (ZK Ballots)
 
-עבור הצבעות ZK ראה Governance App API (`/v2/gov/ballots/zk*`). אם מספקים `private_key`, Torii חותמת ומגישה; אחרת מוחזר שלד ל-ISI לחתימה ושליחה.
+עבור הצבעות ZK ראה Governance App API (`/v1/gov/ballots/zk*`). אם מספקים `private_key`, Torii חותמת ומגישה; אחרת מוחזר שלד ל-ISI לחתימה ושליחה.
 
 </div>

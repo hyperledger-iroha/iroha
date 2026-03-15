@@ -29,7 +29,7 @@ Bu SF-6 ostida yetkazib berilgan orkestratsiya stegi allaqachon o'rnatilgan deb 
 ## 1. Parvoz oldidan tekshirish
 
 1. **Boshqaruv maʼlumotlarini tasdiqlang.**
-   - Barcha nomzod provayderlar `ProviderAdvertV1` konvertlarini diapazonning foydali yuklari va oqim byudjetlari bilan nashr etishlari kerak. `/v2/sorafs/providers` orqali tasdiqlang va kutilgan imkoniyatlar maydonlari bilan solishtiring.
+   - Barcha nomzod provayderlar `ProviderAdvertV1` konvertlarini diapazonning foydali yuklari va oqim byudjetlari bilan nashr etishlari kerak. `/v1/sorafs/providers` orqali tasdiqlang va kutilgan imkoniyatlar maydonlari bilan solishtiring.
    - Kechikish/muvaffaqiyatsizlik tezligini ta'minlovchi telemetriya suratlari har bir kanareyka yugurishidan oldin < 15 daqiqa eski bo'lishi kerak.
 2. **Bosqich konfiguratsiyasi.**
    - Qatlamli `iroha_config` daraxtida orkestr JSON konfiguratsiyasini davom ettiring:

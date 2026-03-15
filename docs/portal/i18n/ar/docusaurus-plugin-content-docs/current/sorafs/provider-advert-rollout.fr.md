@@ -46,7 +46,7 @@ vigueur.
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` مع `max_span` محدد
      - `allow_unknown_capabilities=<true|false>` عندما يتم تقديم TLVs GREASE
-   - التحقق عبر `/v2/sorafs/providers` و`sorafs_fetch` ; تحذيرات سور دي
+   - التحقق عبر `/v1/sorafs/providers` و`sorafs_fetch` ; تحذيرات سور دي
      القدرات inconnues doivent être triés.
 3. **التحقق من الاستعداد متعدد المصادر.**
    - المنفذ `sorafs_fetch` مع `--provider-advert=<path>` ; صدى صوت CLI
@@ -188,9 +188,9 @@ groups:
 ## التواصل وإدارة الأحداث- **بريد إلكتروني من statut.** DevRel ينشر ملخصًا للسيرة الذاتية للمتر
   القبول والتحذيرات أثناء الدورة والمواعيد النهائية حتى النهاية.
 - **الرد على الحادث.** إذا تم إلغاء التنبيهات `reject`، عند الطلب :
-  1. استرد الإعلان الرائع عبر الاكتشاف Torii (`/v2/sorafs/providers`).
+  1. استرد الإعلان الرائع عبر الاكتشاف Torii (`/v1/sorafs/providers`).
   2. اربط التحقق من صحة الإعلان في مزود خط الأنابيب وقارن معه
-     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
   3. قم بالتنسيق مع المزود لعرض الإعلان قبل الشراء
      الموعد النهائي للتحديث.
 - **جيل التغييرات.** هناك إمكانية تعديل مخطط القدرات

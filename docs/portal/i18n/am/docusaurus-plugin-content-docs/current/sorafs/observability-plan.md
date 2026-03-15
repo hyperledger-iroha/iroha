@@ -79,7 +79,7 @@ translation_last_reviewed: 2026-02-07
 | `sorafs_node_por_failure_total` | ቆጣሪ | `provider_id` | ላልተሳካ የPoR ናሙናዎች ሞኖቶኒክ ቆጣሪ። |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | መለኪያ | `provider` | ያገለገሉ ባይት የነባር የPrometheus መለኪያዎች፣ የወረፋ ጥልቀት፣ የPoR inflight ብዛት። |
 | `torii_sorafs_capacity_*`፣ `torii_sorafs_uptime_bps`፣ `torii_sorafs_por_bps` | መለኪያ | `provider` | በአቅም ዳሽቦርድ ውስጥ የአቅራቢ አቅም/የጊዜ ስኬት ውሂብ ብቅ አለ። |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | መለኪያ | `provider`, `manifest` | የኋላ መዝገብ ጥልቀት እና `/v2/sorafs/por/ingestion/{manifest}` ድምጽ በተሰጠ ቁጥር ወደ ውጭ የሚላኩት ድምር ውድቀት ቆጣሪዎች የ"PoR Stalls" ፓኔል/ማንቂያን ይመገባሉ። |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | መለኪያ | `provider`, `manifest` | የኋላ መዝገብ ጥልቀት እና `/v1/sorafs/por/ingestion/{manifest}` ድምጽ በተሰጠ ቁጥር ወደ ውጭ የሚላኩት ድምር ውድቀት ቆጣሪዎች የ"PoR Stalls" ፓኔል/ማንቂያን ይመገባሉ። |
 
 ### ጥገና & SLA
 

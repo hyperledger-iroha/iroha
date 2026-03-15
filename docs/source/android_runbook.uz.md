@@ -635,7 +635,7 @@ Sev1/2 kuzatish va dalillarni `incident/<date>-android-*.md` da arxivlash.
 **Signallar**
 
 - `android_sdk_submission_latency`, `android_sdk_pending_queue_depth` da ogohlantirishlar,
-  `android_sdk_offline_replay_errors` va Torii `/v2/pipeline` xato darajasi.
+  `android_sdk_offline_replay_errors` va Torii `/v1/pipeline` xato darajasi.
 - `operator-console` vidjetlari (misollar/android) toʻxtab qolgan navbatni koʻrsatuvchi yoki
   qayta urinishlar eksponentsial orqaga yopishib qolgan.
 
@@ -685,7 +685,7 @@ Sev1/2 kuzatish va dalillarni `incident/<date>-android-*.md` da arxivlash.
 **Qayta tiklash**
 
 1. Agar Torii buzilgan bo'lsa, Torii qo'ng'irog'ini ishga tushiring va qayta o'ynashni davom eting.
-   navbat bir marta `/v2/pipeline` trafikni qabul qiladi.
+   navbat bir marta `/v1/pipeline` trafikni qabul qiladi.
 2. Ta'sir qilingan mijozlarni faqat imzolangan `iroha_config` manifestlari orqali qayta sozlang. The
    `ClientConfig` issiq qayta yuklash kuzatuvchisi voqeadan oldin muvaffaqiyat jurnalini chiqarishi kerak
    yopishi mumkin.

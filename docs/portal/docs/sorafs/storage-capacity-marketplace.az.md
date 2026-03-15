@@ -63,15 +63,15 @@ ilk buraxılış üçün tələb olunur və onları hərəkətə keçirə bilən
 - `ReplicationOrderV1` manifestləri artıqlıq hədəfləri, SLA hədləri və hər bir tapşırıq zəmanəti ilə idarəetmə tərəfindən verilmiş tapşırıqlara bağlayır; validatorlar Torii və ya reyestr sifarişi qəbul etməzdən əvvəl kanonik chunker tutacaqlarını, unikal provayderləri və son tarix məhdudiyyətlərini tətbiq edir.【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` ödəniş paylanmasını təmin edən dövr anlıq görüntülərini (istifadə olunan GiB, təkrarlama sayğacları, iş vaxtı/PoR faizləri ilə müqayisədə elan edilmiş) ifadə edir. Sərhəd yoxlamaları bəyannamələr daxilində istifadəni və 0 – 100% daxilində faizləri saxlayır.【crates/sorafs_manifest/src/capacity.rs:476】
 - Paylaşılan köməkçilər (`PricingScheduleV1`, `PricingScheduleV1`, zolaq/təyinat/SLA təsdiqləyiciləri) CI və aşağı axın alətlərinin təkrar istifadə edə biləcəyi ilə bağlı deterministik açar doğrulama və xəta hesabatını təmin edir.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` indi deterministik Norito arxasında provayder bəyannamələrini və ödəniş kitabçası qeydlərini birləşdirərək `/v2/sorafs/capacity/state` vasitəsilə zəncir üzərindəki görüntünü təqdim edir. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` indi deterministik Norito arxasında provayder bəyannamələrini və ödəniş kitabçası qeydlərini birləşdirərək `/v1/sorafs/capacity/state` vasitəsilə zəncir üzərindəki görüntünü təqdim edir. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Təsdiqləmə əhatə dairəsi kanonik idarəetmə tətbiqi, dublikatın aşkarlanması, hər zolaqlı sərhədlər, replikasiya təyini qoruyucuları və telemetriya diapazonunun yoxlanılması ilə məşğul olur ki, reqressiyalar dərhal CI-də üzə çıxsın.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator alətləri: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` insan tərəfindən oxuna bilən spesifikasiyaları kanonik Norito faydalı yüklərə, base64 bloblara və JSON xülasələrinə çevirir ki, operatorlar `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry` və replikasiya sifarişi ilə yerli düzəlişləri hazırlaya bilsinlər. validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 İstinad qurğuları `fixtures/sorafs_manifest/replication_order/`-də (`order_v1.json`, `order_v1.to`) yaşayır və 00.0.05 vasitəsilə yaradılır.
+- Operator alətləri: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` insan tərəfindən oxuna bilən spesifikasiyaları kanonik Norito faydalı yüklərə, base64 bloblara və JSON xülasələrinə çevirir ki, operatorlar `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` və replikasiya sifarişi ilə yerli düzəlişləri hazırlaya bilsinlər. validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 İstinad qurğuları `fixtures/sorafs_manifest/replication_order/`-də (`order_v1.json`, `order_v1.to`) yaşayır və 00.0.05 vasitəsilə yaradılır.
 
 ### 2. İdarəetmə Təyyarəsinin İnteqrasiyası
 
 | Tapşırıq | Sahib(lər) | Qeydlər |
 |------|----------|-------|
-| `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` Norito JSON faydalı yükləri olan işləyiciləri əlavə edin. | Torii Komandası | Mirror validator məntiqi; Norito JSON köməkçilərini təkrar istifadə edin. |
+| `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Norito JSON faydalı yükləri olan işləyiciləri əlavə edin. | Torii Komandası | Mirror validator məntiqi; Norito JSON köməkçilərini təkrar istifadə edin. |
 | `CapacityDeclarationV1` snapşotlarını orkestrator tablosunun metadatasına və şlüz gətirmə planlarına təbliğ edin. | Tooling WG / Orkestr qrupu | `provider_metadata`-i tutum istinadları ilə genişləndirin ki, çox mənbəli hesablama zolaq məhdudiyyətlərinə riayət etsin. |
 | Tapşırıqları və əvəzetmə göstərişlərini idarə etmək üçün replikasiya sifarişlərini orkestrator/şluz müştərilərinə çatdırın. | Şəbəkə TL / Gateway komandası | Scoreboard builder idarəetmə tərəfindən imzalanmış replikasiya sifarişlərini istehlak edir. |
 | CLI alətləri: `sorafs_cli`-i `capacity declare`, `capacity telemetry`, `capacity orders import` ilə genişləndirin. | Tooling WG | Deterministik JSON + skorbord nəticələrini təmin edin. |
@@ -94,7 +94,7 @@ ilk buraxılış üçün tələb olunur və onları hərəkətə keçirə bilən
 | Hesablaşma boru kəməri: telemetriya + replikasiya məlumatlarını XOR-də nominal ödənişlərə çevirin, idarəetməyə hazır xülasələr hazırlayın və uçotun vəziyyətini qeyd edin. | Xəzinədarlıq / Saxlama Komandası | Deal Engine / Treasury ixracına daxil olun. |
 | Ölçmə sağlamlığı üçün idarə panellərini/xəbərdarlıqlarını ixrac edin (alınma gecikməsi, köhnə telemetriya). | Müşahidə qabiliyyəti | SF-6/SF-7 tərəfindən istinad edilən Grafana paketini genişləndirin. |
 
-- Torii indi `/v2/sorafs/capacity/telemetry` və `/v2/sorafs/capacity/state` (JSON + Norito) ifşa edir, beləliklə operatorlar epox telemetriya snapshotlarını təqdim edə, müfəttişlər isə audit və ya kanonik göstəriciləri əldə edə bilsinlər. qablaşdırma.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii indi `/v1/sorafs/capacity/telemetry` və `/v1/sorafs/capacity/state` (JSON + Norito) ifşa edir, beləliklə operatorlar epox telemetriya snapshotlarını təqdim edə, müfəttişlər isə audit və ya kanonik göstəriciləri əldə edə bilsinlər. qablaşdırma.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - `PinProviderRegistry` inteqrasiyası replikasiya sifarişlərinin eyni son nöqtə vasitəsilə əldə edilməsini təmin edir; CLI köməkçiləri (`sorafs_cli capacity telemetry --from-file telemetry.json`) indi deterministik hashing və ləqəb həlli ilə avtomatlaşdırma işlərindən telemetriyanı təsdiqləyir/nəşr edir.
 - Ölçmə snapshotları `metering` snapşotuna bərkidilmiş `CapacityTelemetrySnapshot` daxiletmələrini yaradır və Prometheus ixracları idxala hazır Grafana lövhəsini I18NI0000003X monitorunda qidalandırır. hesablama, proqnozlaşdırılan nano-SORA haqları və real vaxtda SLA uyğunluğu.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - Ölçmələrin hamarlanması aktiv olduqda, snapşot `smoothed_gib_hours` və `smoothed_por_success_bps`-dən ibarətdir ki, operatorlar EMA trendli dəyərləri idarəetmənin ödənişlər üçün istifadə etdiyi xam sayğaclarla müqayisə edə bilsin.【crates/sorafs_node/src/metering.rs:401】:
@@ -168,7 +168,7 @@ həyata keçirilməsi ilə sinxronlaşdırılır.
 ### Provayderin işə düşməsi və tüstüdən çıxma testləri
 - `sorafs_manifest_stub capacity ...` ilə bəyannamə/temetriya artefaktlarını bərpa edin və təkrar oxuyun
   təqdim etməzdən əvvəl CLI testləri (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Torii (`/v2/sorafs/capacity/declare`) vasitəsilə təqdim edin, sonra `/v2/sorafs/capacity/state` plus yazın
+- Torii (`/v1/sorafs/capacity/declare`) vasitəsilə təqdim edin, sonra `/v1/sorafs/capacity/state` plus yazın
   Grafana ekran görüntüləri. `docs/source/sorafs/capacity_onboarding_runbook.md`-də çıxış axını izləyin.
 - Arxivdə imzalanmış artefaktlar və uzlaşma çıxışları
   `docs/examples/sorafs_capacity_marketplace_validation/`.

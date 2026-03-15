@@ -6,7 +6,7 @@ summary: Landing page for installing IrohaSwift, running the quickstart, and und
 # Iroha Swift SDK
 
 The Swift SDK (IrohaSwift) targets iOS and macOS clients that require deterministic
-Norito encoding, `/v2/pipeline` submission, and the Connect/WebSocket surfaces used in
+Norito encoding, `/v1/pipeline` submission, and the Connect/WebSocket surfaces used in
 Sora Nexus. It ships as a Swift Package (`IrohaSwift/Package.swift`) and can also be
 embedded via CocoaPods or XCFramework ZIPs.
 
@@ -118,9 +118,9 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 
 ## Pipeline Submission & Polling
 
-- `submitAndWait` performs `POST /v2/pipeline/transactions` and polls
-  `/v2/pipeline/transactions/status` until the transaction reaches a terminal state.
-- A `404` from `/v2/pipeline/transactions/status` means Torii has no cached status yet
+- `submitAndWait` performs `POST /v1/pipeline/transactions` and polls
+  `/v1/pipeline/transactions/status` until the transaction reaches a terminal state.
+- A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
   (for example after a restart); the Swift SDK treats this as "pending" and keeps polling.
 - `pollPipelineStatus` monitors a hash that may have been submitted by another SDK or CLI.
 - `PipelineStatusPollOptions` configures polling interval, timeout, max attempts, and the
@@ -129,7 +129,7 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 - `PipelineSubmitOptions` controls retry behaviour for transaction submission
   (defaults: 3 retries, 0.5s backoff, multiplier 2.0, retrying 429/5xx and transport
   errors).
-- `pipelineEndpointMode` toggles between the modern `/v2/pipeline/*` endpoints and the
+- `pipelineEndpointMode` toggles between the modern `/v1/pipeline/*` endpoints and the
   Torii nodes that have not adopted the pipeline routes yet.
 - Completion-based APIs return a `Task<Void, Never>` so callers can cancel outstanding
   polls from UI layers.
@@ -167,7 +167,7 @@ let requestBody = try noritoEncode(typeName: "PipelineSubmitRequestV1",
 if #available(iOS 15.0, macOS 12.0, *) {
     Task {
         let response = try await rpc.call(
-            path: "/v2/pipeline/submit",
+            path: "/v1/pipeline/submit",
             payload: requestBody,
             params: ["dry_run": "false"]
         )
@@ -352,7 +352,7 @@ let metadata: [String: ToriiJSONValue] = [
 ```
 
 Torii builds FASTPQ witness payloads from the transfer payload
-(`POST /v2/offline/transfers/proof`). Feed the JSON into
+(`POST /v1/offline/transfers/proof`). Feed the JSON into
 `OfflineReceiptBuilder.generateAggregateProofs` to get proof bytes (requires the native bridge):
 
 ```swift
@@ -411,7 +411,7 @@ when no custom UI is supplied. Additional risk guidance lives in `docs/source/of
 ### Offline allowance top-up
 
 Use `ToriiClient.topUpOfflineAllowance` to issue a certificate and register it on-ledger in one call.
-The helper performs `/v2/offline/certificates/issue` followed by `/v2/offline/allowances` and
+The helper performs `/v1/offline/certificates/issue` followed by `/v1/offline/allowances` and
 verifies that both responses reference the same certificate id:
 
 ```swift
@@ -460,8 +460,8 @@ try wallet.recordVerdictMetadata(from: issued)
 ```
 
 For renewals, call `topUpOfflineAllowanceRenewal`, which targets
-`/v2/offline/certificates/{certificate_id_hex}/renew/issue` and
-`/v2/offline/allowances/{certificate_id_hex}/renew`:
+`/v1/offline/certificates/{certificate_id_hex}/renew/issue` and
+`/v1/offline/allowances/{certificate_id_hex}/renew`:
 
 ```swift
 let renewal = try await torii.topUpOfflineAllowanceRenewal(
@@ -560,7 +560,7 @@ raw certificate JSON before toggling offline functionality or presenting regulat
 
 ### Counter journal
 
-`/v2/offline/summaries` exposes the monotonic counter checkpoints for App Attest and Android marker-key series. Use
+`/v1/offline/summaries` exposes the monotonic counter checkpoints for App Attest and Android marker-key series. Use
 `fetchSummariesRecordingCounters` to persist those checkpoints into `OfflineCounterJournal` (stored alongside the audit
 log under `Documents/offline_counter_journal.json`) and `counterCheckpoint(for:)` or `counterSnapshot()` to read the
 latest values.
@@ -600,7 +600,7 @@ See `IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift` and the parit
 
 ### DA manifest + proof-of-availability helpers
 
-`ToriiClient.getDaManifestBundle(storageTicketHex:)` calls `/v2/da/manifests/{ticket}` and returns the
+`ToriiClient.getDaManifestBundle(storageTicketHex:)` calls `/v1/da/manifests/{ticket}` and returns the
 canonical manifest bytes, decoded Norito JSON, and chunk plan (`ToriiDaManifestBundle`). Pair it with
 `ToriiClient.fetchDaPayloadViaGateway(...)` to mirror the `iroha app da prove-availability` flow inside Swift:
 
@@ -697,7 +697,7 @@ the CLI.
 ### DA ingest submission
 
 `ToriiClient.submitDaBlob(_:)` mirrors `iroha app da submit`, building the Norito request body, signing it,
-posting to `/v2/da/ingest`, and decoding the receipt. Use `ToriiDaBlobSubmission` to describe the payload,
+posting to `/v1/da/ingest`, and decoding the receipt. Use `ToriiDaBlobSubmission` to describe the payload,
 erasure profile, retention policy, optional metadata, and signing material:
 
 ```swift
@@ -841,7 +841,7 @@ you need the full decrypted payload (sign results, encrypted controls), or
 
 - Use `ConnectSid.generate(chainId:appPublicKey:nonce16:)` to reproduce the strawman SID
   derivation (`BLAKE2b-256("iroha-connect|sid|" || chain || pk || nonce)`) before posting
-  to `/v2/connect/session`. The helper stores the raw bytes plus the base64url form needed
+  to `/v1/connect/session`. The helper stores the raw bytes plus the base64url form needed
   for the REST payload.
 - `ConnectCrypto.deriveDirectionKeys(sharedSecret:sid:)` expands the shared secret via
   the bridge-backed HKDF (`iroha-connect|k_app` / `iroha-connect|k_wallet` labels) so
@@ -889,7 +889,7 @@ you need the full decrypted payload (sign results, encrypted controls), or
 - Use `ConnectSession.eventStream(filter:)` (iOS 15/macOS 12+) to iterate `ConnectEvent`
   values directly, or `eventsPublisher(filter:)` when you need a Combine pipeline for SwiftUI.
   The payloads cover sign requests/results, display prompts, control-close/reject envelopes,
-  and the new `ConnectBalanceSnapshot` payload emitted by `/v2/connect/ws`.
+  and the new `ConnectBalanceSnapshot` payload emitted by `/v1/connect/ws`.
 - `ConnectSession.balanceStream(accountID:)` / `balancePublisher(accountID:)` surface
   the Norito-provided balance snapshots. Each snapshot carries queue diagnostics sourced
   from `ConnectSessionDiagnostics`, so the SDK exports `connect.queue_*` metrics without
@@ -913,12 +913,12 @@ For higher-level walkthroughs, see:
 - **Accounts:** `getAssets`, `getTransactions` (both accept optional `assetId` filters),
   attachment upload/list/delete, trigger management, and general query envelopes. The
   `getExplorerAccountQr(accountId:)`
-  helper wraps `/v2/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
+  helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
   preferred I105 QR payloads without reimplementing the renderer
   (omit the format to use I105 or use canonical I105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
-  `/v2/explorer/instructions` and `/v2/explorer/transactions` with
+  `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
   optional `assetId` and `account` scoping). Fetch a single
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
@@ -955,7 +955,7 @@ For higher-level walkthroughs, see:
   `streamAccountTransferHistory` to emit historical transfer summaries and then keep streaming live
   updates without stitching the two flows manually; Combine callers can use
   `accountTransferHistoryPublisher`.
-- **Domains & registries:** `listDomains(options:)` wraps `/v2/domains` with typed
+- **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an
   `AsyncThrowingStream<ToriiDomainRecord>` that walks the full dataset behind the same
@@ -964,31 +964,31 @@ For higher-level walkthroughs, see:
   offset bookkeeping.
 - **Contracts:** register/deploy/fetch manifest/code bytes.
 - **Pipeline:** `submitTransaction` (Norito envelopes, returns the submission receipt payload, and
-  enforces `data_model_version` from `/v2/node/capabilities` with
+  enforces `data_model_version` from `/v1/node/capabilities` with
   `ToriiClientError.incompatibleDataModel` on mismatch), `getTransactionStatus`, and recovery
   snapshots via `getPipelineRecovery(height:)`.
-- **Network time:** `getTimeNow` for `/v2/time/now` snapshots.
+- **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
 - **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry helpers (`getVerifyingKey`, `listVerifyingKeys`, register/update/deprecate`).
 - **Confidential assets:** derive the wallet key hierarchy through `deriveConfidentialKeyset`
-  (`POST /v2/confidential/derive-keyset`), build memo envelopes with
+  (`POST /v1/confidential/derive-keyset`), build memo envelopes with
   `ConfidentialEncryptedPayload`, submit shielded debits via `ShieldRequest` +
   `submit(shield:keypair:)`, **unshield confidential balances via `ProofAttachment` +**
   `UnshieldRequest` **and** `submit(unshield:keypair:)`, and inspect rollout windows with
   `getConfidentialAssetPolicy(assetDefinitionId:)`, which wraps
-  `GET /v2/confidential/assets/{definition_id}/transitions` and exposes pending transition
+  `GET /v1/confidential/assets/{definition_id}/transitions` and exposes pending transition
   metadata (transition id, conversion window, derived window-open height). Use
   `getConfidentialGasSchedule()` when you need the active verification multipliers that
-  Torii reads from `confidential_gas` in `/v2/configuration`.
+  Torii reads from `confidential_gas` in `/v1/configuration`.
 - **Runtime & capabilities:** `getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`,
   `getRuntimeAbiHash`, `listRuntimeUpgrades`, and the helper trio
   (`proposeRuntimeUpgrade`, `activateRuntimeUpgrade`, `cancelRuntimeUpgrade`) mirroring the
-  `/v2/node/capabilities` and `/v2/runtime/*` surfaces with typed instruction bundles.
+  `/v1/node/capabilities` and `/v1/runtime/*` surfaces with typed instruction bundles.
 - **Governance:** draft deployment proposals (`submitGovernanceDeployContractProposal`),
   submit plain/ZK ballots, finalize or enact referenda, and fetch proposal/lock/tally/lock-stat
   snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
   directly into `TxBuilder` to produce signed transactions.
 
-> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical I105 account literals and percent-encode `/v2/accounts/{account_id}/…` paths automatically.
+> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical I105 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
 
 Upcoming work (tracked under IOS3) includes governance endpoints, additional query
 builders, and WebSocket/SSE subscribers shared with Android/JS.
@@ -1028,7 +1028,7 @@ print("SVG payload", qr.svg)
 
 ## Verifying Key Registry
 
-`ToriiClient` wraps `/v2/zk/vk/*` so wallets can inspect registry state or submit verifier
+`ToriiClient` wraps `/v1/zk/vk/*` so wallets can inspect registry state or submit verifier
 updates without hand-rolling JSON:
 
 ```swift

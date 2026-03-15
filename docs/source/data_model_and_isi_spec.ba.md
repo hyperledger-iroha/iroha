@@ -200,7 +200,7 @@ translator: machine-google-reviewed
 - Минт по псевдониму + компоненты счета:
   - 18НИ00000422Х
 - Каноник ярҙамға псевдонимды хәл итеү:
-  - `POST /v2/assets/aliases/resolve` менән JSON SoraFS
+  - `POST /v1/assets/aliases/resolve` менән JSON SoraFS
 
 Миграция иҫкәрмәһе:
 - `name#domain` тексты актив-аныҡлау идентификаторҙары беренсе релизда аңлы рәүештә ярҙам итмәй.

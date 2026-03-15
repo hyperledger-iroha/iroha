@@ -142,7 +142,7 @@ cargo xtask nexus-lane-audit \
 ### کیا SDKs کو settlement کے لئے خاص handling کی ضرورت ہے؟
 
 - SDKs کو:
-  - settlement events (`/v2/settlement/records`) query کرنے اور `SettlementApplied` logs interpret کرنے
+  - settlement events (`/v1/settlement/records`) query کرنے اور `SettlementApplied` logs interpret کرنے
     کے لئے helpers دینا ہوں گے۔
   - client configuration میں lane IDs + settlement handles دکھانا ہوں گے تاکہ operators
     transactions درست طرح route کر سکیں۔

@@ -83,7 +83,7 @@ qarşıdan gələn tətbiqlər kitab kitabçasına təhlükəsiz şəkildə daxi
 Şlüz indi konkret JSON zərflərini nümayiş etdirir ki, bu da bir-birini ilə əlaqələndirir
 `crates/iroha_data_model::fraud`-də tətbiq olunan Norito növləri:
 
-- **Risk qəbulu** – `POST /v2/fraud/query` `RiskQuery` sxemini qəbul edir:
+- **Risk qəbulu** – `POST /v1/fraud/query` `RiskQuery` sxemini qəbul edir:
   - `query_id` (`[u8; 32]`, hex kodlu)
   - `subject` (`AccountId`, kanonik I105 hərfi; isteğe bağlı `@<domain>` işarə və ya ləqəb)
   - `operation` (`RiskOperation`-ə uyğun etiketlənmiş nömrə; JSON `type`
@@ -94,14 +94,14 @@ qarşıdan gələn tətbiqlər kitab kitabçasına təhlükəsiz şəkildə daxi
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; daşıyan `tenant_id`, isteğe bağlı `session_id`,
     isteğe bağlı `reason`)
-- **Risk qərarı** – `POST /v2/fraud/assessment` istehlak edir
+- **Risk qərarı** – `POST /v1/fraud/assessment` istehlak edir
   `FraudAssessment` faydalı yük (həmçinin idarəetmə ixracında əks olunur):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` nömrə), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }` massivi)
   - `generated_at_ms`
   - `signature` (optional base64 Norito kodlu qiymətləndirməni əhatə edir)
-- **İdarəetmə ixracı** – `GET /v2/fraud/governance/export` qaytarır
+- **İdarəetmə ixracı** – `GET /v1/fraud/governance/export` qaytarır
   `GovernanceExport` strukturu `governance` funksiyası aktiv olduqda, paketləşmə
   aktiv parametrlər, ən son qanunvericilik aktı, model versiyası, siyasət həzmi və
   `DecisionAggregate` histoqramı.

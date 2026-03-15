@@ -71,7 +71,7 @@ SBOMs) հոսելու SoraFS մանիֆեստի խողովակաշարով և ծ
 
 Օգտագործեք `sorafs_cli manifest submit`՝ մանիֆեստները Torii-ի մեջ մղելու և փոխանունները կապելու համար:
 Սահմանեք `${SUBMITTED_EPOCH}`-ը վերջին կոնսենսուսի դարաշրջանին (սկսած
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` կամ ձեր վահանակը):
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` կամ ձեր վահանակը):
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -79,7 +79,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

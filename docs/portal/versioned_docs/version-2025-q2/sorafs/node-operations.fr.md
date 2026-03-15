@@ -41,7 +41,7 @@ Ce runbook guide les opérateurs dans la validation d'un déploiement `sorafs-no
   ```
 
 - Assurez-vous que le processus Torii dispose d'un accès en lecture/écriture à `data_dir`.
-- Confirmez que le nœud annonce la capacité attendue via `GET /v2/sorafs/capacity/state` une fois qu'une déclaration est enregistrée.
+- Confirmez que le nœud annonce la capacité attendue via `GET /v1/sorafs/capacity/state` une fois qu'une déclaration est enregistrée.
 - Lorsque le lissage est activé, les tableaux de bord exposent les compteurs GiB·heure/PoR bruts et lissés pour mettre en évidence les tendances sans instabilité aux côtés des valeurs ponctuelles.
 
 ### Exécution à sec CLI (facultatif)
@@ -66,8 +66,8 @@ Les commandes impriment les résumés JSON Norito et refusent les incompatibilit
 Une fois Torii actif, vous pouvez récupérer les mêmes artefacts via HTTP :
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Les deux points de terminaison sont servis par le gestionnaire de stockage intégré, de sorte que les tests de fumée CLI et les sondes de passerelle restent synchronisés.
@@ -78,7 +78,7 @@ Les deux points de terminaison sont servis par le gestionnaire de stockage inté
 2. Soumettez le manifeste avec l'encodage base64 :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -87,7 +87,7 @@ Les deux points de terminaison sont servis par le gestionnaire de stockage inté
 3. Récupérez les données épinglées :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -103,7 +103,7 @@ Les deux points de terminaison sont servis par le gestionnaire de stockage inté
 1. Épinglez au moins un manifeste comme ci-dessus.
 2. Redémarrez le processus Torii (ou le nœud entier).
 3. Soumettez à nouveau la demande de récupération. La charge utile doit toujours être récupérable et le résumé renvoyé doit correspondre à la valeur de pré-redémarrage.
-4. Inspectez `GET /v2/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants après le redémarrage.
+4. Inspectez `GET /v1/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants après le redémarrage.
 
 ## 4. Test de rejet de quota
 
@@ -118,7 +118,7 @@ Les deux points de terminaison sont servis par le gestionnaire de stockage inté
 2. Demandez un échantillon PoR :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -139,7 +139,7 @@ Les deux points de terminaison sont servis par le gestionnaire de stockage inté
 - Les tableaux de bord doivent suivre :
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   -`torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - Compteurs de réussite/échec PoR apparus via `/v2/sorafs/capacity/state`
+  - Compteurs de réussite/échec PoR apparus via `/v1/sorafs/capacity/state`
   - Tentatives de publication de règlement via `sorafs_node_deal_publish_total{result=success|failure}`
 
 Suivre ces exercices garantit que l'opérateur de stockage intégré peut ingérer des données, survivre aux redémarrages, respecter les quotas configurés et générer des preuves PoR déterministes avant que le nœud n'annonce sa capacité au réseau plus large.

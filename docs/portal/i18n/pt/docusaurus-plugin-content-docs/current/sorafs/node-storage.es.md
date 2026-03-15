@@ -169,9 +169,9 @@ APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】> Paridade HTTP
 > El gateway Torii agora exponha ajudantes de solo palestra respaldados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — retorna o manifesto
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — retorna o manifesto
 > Norito armazenado (base64) junto com digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — devolve o plano de pedaço
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — devolve o plano de pedaço
 > determinista JSON (`chunk_fetch_specs`) para ferramentas downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Esses endpoints refletem a saída da CLI para que os pipelines possam
@@ -218,12 +218,12 @@ APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】> Paridade HTTP
      o operador.### Declaração de capacidade e integração de agendamento
 
 - Torii agora retransmite atualizações de `CapacityDeclarationRecord` desde
-  `/v2/sorafs/capacity/declare` para o `CapacityManager` incorporado, de modo que
+  `/v1/sorafs/capacity/declare` para o `CapacityManager` incorporado, de modo que
   cada nó constrói uma vista em memória de suas atribuições comprometidas de
   pedaço e pista. El manager expõe snapshots de solo palestra para telemetria
-  (`GET /v2/sorafs/capacity/state`) e aplique reservas por perfil o lane antes de
+  (`GET /v1/sorafs/capacity/state`) e aplique reservas por perfil o lane antes de
   aceitar novos pedidos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- O endpoint `/v2/sorafs/capacity/schedule` aceita cargas úteis `ReplicationOrderV1`
+- O endpoint `/v1/sorafs/capacity/schedule` aceita cargas úteis `ReplicationOrderV1`
   emitidos por governo. Cuando la orden apunta al proveedor local el manager
   revisão de agendamento duplicado, verificação de capacidade de chunker/lane, reserva la
   franja e desvia um `ReplicationPlan` descrevendo a capacidade restante para
@@ -231,7 +231,7 @@ APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】> Paridade HTTP
   outros fornecedores são reconhecidos com uma resposta `ignored` para facilitar fluxos
   multi-operador.【crates/iroha_torii/src/routing.rs:4845】
 - Ganchos de completitud (por exemplo, disparados após o sucesso da ingestão)
-  ligue para `POST /v2/sorafs/capacity/complete` para liberar reservas via
+  ligue para `POST /v1/sorafs/capacity/complete` para liberar reservas via
   `CapacityManager::complete_order`. A resposta inclui um instantâneo
   `ReplicationRelease` (totais restantes, resíduos de chunker/lane) para que
   as ferramentas de orquestração podem incluir a próxima ordem sem votação.

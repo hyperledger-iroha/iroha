@@ -28,7 +28,7 @@ O checklist abaixo deve ser revisado antes de habilitar o mercado para operadore
 
 | Checagem | Validação | Evidência |
 |-------|------------|----------|
-| O registro aceita declarações canônicas de capacidade | O teste de integração exercita `/v2/sorafs/capacity/declare` via app API, verificando tratamento de assinaturas, captura de metadados e handoff para o registro do node. | `crates/iroha_torii/src/routing.rs:7654` |
+| O registro aceita declarações canônicas de capacidade | O teste de integração exercita `/v1/sorafs/capacity/declare` via app API, verificando tratamento de assinaturas, captura de metadados e handoff para o registro do node. | `crates/iroha_torii/src/routing.rs:7654` |
 | O contrato inteligente rejeita cargas divergentes | O teste unitário garante que IDs de provedor e campos GiB comprometem-se com a declaração assinada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | O CLI emite artistas canônicos de onboarding | O chicote de CLI escreve ditas Norito/JSON/Base64 determinísticas e valida round-trips para que os operadores possam preparar declarações offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | O guia do operador cobre o fluxo de trabalho de admissão e guarda-corpos de governança | A documentação enumera o esquema de declaração, padrões de política e passos de revisão para o conselho. | `../storage-capacity-marketplace.md` |

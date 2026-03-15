@@ -32,7 +32,7 @@ _番号: 番号 -- 番号: コア プロトコル WG / ストレージ チーム
 | _デフォルト (كل الفئات الاخرى)_ | 6 件 | 30日3 | `warm` | `da.default` |
 
 تدمج هذه القيم في `torii.da_ingest.replication_policy` وتطبق على جميع
-`/v2/da/ingest`。 يعيد Torii كتابة マニフェスト مع ملف الاحتفاظ المفروض ويصدر
+`/v1/da/ingest`。 يعيد Torii كتابة マニフェスト مع ملف الاحتفاظ المفروض ويصدر
 SDK をダウンロードする
 そうです。
 
@@ -145,5 +145,5 @@ governance_tag = "da.taikai.archive"
    PDP。
 
 評価 `integration_tests/tests/da/replication_policy.rs` 評価さいきょう
-حزمة بارسال سياسة احتفاظ غير متطابقة الى `/v2/da/ingest` وتتحقق من ان
+حزمة بارسال سياسة احتفاظ غير متطابقة الى `/v1/da/ingest` وتتحقق من ان
 マニフェストは、マニフェストを表示します。

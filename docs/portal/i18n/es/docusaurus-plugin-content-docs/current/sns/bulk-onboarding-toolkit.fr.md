@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- L'helper emet un `POST /v2/sns/registrations` par requete et s'arrete au premier
+```- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
   Error HTTP. Las respuestas se amplían en el registro como registros NDJSON.
-- `--poll-status` reinterroge `/v2/sns/registrations/{selector}` después de cada
+- `--poll-status` reinterroge `/v1/sns/registrations/{selector}` después de cada
   Soumission (jusqu'a `--poll-attempts`, predeterminado 5) para confirmar que
   El registro está visible. Fournissez `--suffix-map` (JSON de `suffix_id`
   vers des valeurs "suffix") para que la herramienta derive las letras

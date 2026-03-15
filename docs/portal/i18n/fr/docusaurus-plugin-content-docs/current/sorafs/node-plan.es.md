@@ -55,7 +55,7 @@ La surveillance au moment de l'exécution active les interactions pour les passa
 Notes de mise en œuvre :
 
 - Utilisez la pile Axum de Torii avec les charges utiles `norito::json`.
-- Ajoutez les codes Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` expose désormais la profondeur du retard plus l'époque/limite la plus ancienne et les horodatages d'éxito/fallo plus récents par le fournisseur, poussé par `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrent les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour tableaux de bord.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- Ajoutez les codes Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` expose désormais la profondeur du retard plus l'époque/limite la plus ancienne et les horodatages d'éxito/fallo plus récents par le fournisseur, poussé par `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrent les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour tableaux de bord.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Planificateur et cumul de commandes
 

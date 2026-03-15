@@ -635,7 +635,7 @@ Android عند الطلب: مهلة Torii/الشبكة، وفشل التصديق
 **الإشارات**
 
 - تنبيهات على `android_sdk_submission_latency`، `android_sdk_pending_queue_depth`،
-  `android_sdk_offline_replay_errors`، ومعدل الخطأ Torii `/v2/pipeline`.
+  `android_sdk_offline_replay_errors`، ومعدل الخطأ Torii `/v1/pipeline`.
 - عناصر واجهة مستخدم `operator-console` (أمثلة/Android) تعرض استنزاف قائمة الانتظار المتوقفة أو
   إعادة المحاولة عالقة في التراجع الأسي.
 
@@ -685,7 +685,7 @@ Android عند الطلب: مهلة Torii/الشبكة، وفشل التصديق
 ** التعافي **
 
 1. إذا تدهور مستوى Torii، قم بتشغيل Torii عند الطلب واستمر في إعادة تشغيل
-   قائمة الانتظار بمجرد أن يقبل `/v2/pipeline` حركة المرور.
+   قائمة الانتظار بمجرد أن يقبل `/v1/pipeline` حركة المرور.
 2. قم بإعادة تكوين العملاء المتأثرين فقط عبر بيانات `iroha_config` الموقعة. ال
    يجب أن يقوم مراقب التحميل السريع `ClientConfig` بإصدار سجل نجاح قبل وقوع الحادث
    يمكن أن تغلق.

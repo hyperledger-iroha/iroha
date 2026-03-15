@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-02-07
 
 | ደረጃ | መስኮት | ወሰን | መውጫ መስፈርት |
 |-------|--------|-------|
-| ** P0 - የላብራቶሪ እኩልነት *** | Q22025 | Rust CLI + Python smoke suites `/v2/norito-rpc` በCI ውስጥ ያካሂዳሉ፣ JS አጋዥ የዩኒት ፈተናዎችን ያልፋል፣ አንድሮይድ ሞክ ታጥቆ ባለሁለት መጓጓዣዎችን ይሠራል። | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` እና `javascript/iroha_js/test/noritoRpcClient.test.js` አረንጓዴ በ CI; አንድሮይድ መታጠቂያ ወደ I18NI0000023X ተሽሯል። |
+| ** P0 - የላብራቶሪ እኩልነት *** | Q22025 | Rust CLI + Python smoke suites `/v1/norito-rpc` በCI ውስጥ ያካሂዳሉ፣ JS አጋዥ የዩኒት ፈተናዎችን ያልፋል፣ አንድሮይድ ሞክ ታጥቆ ባለሁለት መጓጓዣዎችን ይሠራል። | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` እና `javascript/iroha_js/test/noritoRpcClient.test.js` አረንጓዴ በ CI; አንድሮይድ መታጠቂያ ወደ I18NI0000023X ተሽሯል። |
 | ** P1 - የኤስዲኬ ቅድመ እይታ *** | Q32025 | የጋራ መገልገያ ቅርቅብ ተመዝግቦ ገብቷል፣ `scripts/run_norito_rpc_fixtures.sh --sdk <label>` መዝገቦች ምዝግብ ማስታወሻዎች + JSON በI18NI0000025X፣ አማራጭ Norito የትራንስፖርት ባንዲራዎች በኤስዲኬ ናሙናዎች ውስጥ ተጋልጠዋል። | የማሳያ አንጸባራቂ ተፈርሟል፣ README ዝማኔዎች የመርጦ መግቢያ አጠቃቀምን ያሳያሉ፣ የስዊፍት ቅድመ እይታ API ከ IOS2 ባንዲራ ጀርባ ይገኛል። |
 | ** P2 - ደረጃ / AND4 ቅድመ እይታ *** | Q12026 | የደረጃ Torii ገንዳዎች I18NT0000002Xን፣ የአንድሮይድ AND4 ቅድመ እይታ ደንበኞችን እና የስዊፍት IOS2 ፓሪቲ ስብስቦችን ከሁለትዮሽ ትራንስፖርት ነባሪ ይመርጣሉ፣ ቴሌሜትሪ ዳሽቦርድ `dashboards/grafana/torii_norito_rpc_observability.json` ተሞልቷል። | `docs/source/torii/norito_rpc_stage_reports.md` ካናሪውን፣ `scripts/telemetry/test_torii_norito_rpc_alerts.sh` ማለፊያዎችን ይይዛል፣ የአንድሮይድ ሞክ ማሰሪያ መልሶ ማጫወት የስኬት/የስህተት ጉዳዮችን ይይዛል። |
 | ** P3 - ምርት GA *** | Q42026 | Norito ለሁሉም ኤስዲኬዎች ነባሪ መጓጓዣ ይሆናል። JSON እንደ ቡኒ ውድቀት ሆኖ ይቆያል። የተለቀቁ ስራዎች የእኩልነት ቅርሶችን በእያንዳንዱ መለያ ያከማቹ። | የፍተሻ ዝርዝር ቅርቅቦችን ይልቀቁ Norito የጭስ ውፅዓት ለ Rust/JS/Python/Swift/Android; ለNorito vs JSON የስህተት መጠን SLOs የማንቂያ ገደቦች ተፈጻሚ ሆነዋል። `status.md` እና የተለቀቁ ማስታወሻዎች የ GA ማስረጃን ይጠቅሳሉ። |

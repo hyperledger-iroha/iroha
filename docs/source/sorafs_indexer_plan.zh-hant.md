@@ -20,7 +20,7 @@ summary: Outline for SFM-1 indexer API.
 
 ## Components
 - Ingest pipeline for adverts/proofs (from governance DAG).
-- API endpoints (`/routing/v2/find`, etc.).
+- API endpoints (`/routing/v1/find`, etc.).
 - Caching layer and TTL policies.
 - Metrics for query volume and freshness.
 
@@ -55,7 +55,7 @@ Ingest pipeline sequence:
    latest record into RocksDB (hot path) and append to PostgreSQL (historical path) inside a
    single transactional boundary.
 3. Update materialised views (`provider_capability_index`, `provider_latency_view`) that feed
-   the `/routing/v2/find` query planner.
+   the `/routing/v1/find` query planner.
 
 Caching rules:
 - Hot cache entries expire when `expires_at` crosses current time or when a superseding advert
@@ -75,7 +75,7 @@ low for clients colocated with gateways.
     RocksDB caches. They subscribe to a Kafka/Redpanda topic fed by the ingest cluster so hot
     updates propagate within <2 seconds.
 - **Placement.** Each Torii gateway hosts a co-located indexer pod that fronts the regional
-  cache and exposes the `/routing/v2/*` API. Requests fall back to the primary region when the
+  cache and exposes the `/routing/v1/*` API. Requests fall back to the primary region when the
   local replica lags beyond 30 seconds (measured via replication LSN monitoring).
 - **Scaling.**
   - Autoscale reader pods based on QPS and cache hit rate (target >95% hits).

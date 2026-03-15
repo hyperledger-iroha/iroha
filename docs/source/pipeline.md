@@ -167,7 +167,7 @@ Determinism:
   - Continues with the recomputed schedule — this does not affect consensus or block outcomes.
 
 Operator access (Torii)
-- Read a recovery sidecar via: `GET /v2/pipeline/recovery/:height`
+- Read a recovery sidecar via: `GET /v1/pipeline/recovery/:height`
   - 200 application/json with the persisted sidecar, or 404 if not found
   - Helpful for tooling and dashboards to inspect access sets and DAG fingerprints
 
@@ -267,14 +267,14 @@ Iroha can group signatures by scheme during block validation and verify them in 
 ### Torii Endpoints (Operator Aids)
 
 - Consensus visibility (Sumeragi):
-  - `GET /v2/sumeragi/new_view` — JSON snapshot of NEW_VIEW receipt counts per `(height, view)`. Shape:
+  - `GET /v1/sumeragi/new_view` — JSON snapshot of NEW_VIEW receipt counts per `(height, view)`. Shape:
     - `{ "ts_ms": <now>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
     - Note: counts are retained in a bounded in-memory window; oldest entries are evicted.
-  - `GET /v2/sumeragi/new_view/sse` — Server‑Sent Events stream of the same JSON (polled ~1s). Useful for dashboards.
+  - `GET /v1/sumeragi/new_view/sse` — Server‑Sent Events stream of the same JSON (polled ~1s). Useful for dashboards.
   - Purpose: operator insight into pacemaker gating during view changes; complements Prometheus metric `sumeragi_new_view_receipts_by_hv{height,view}`.
 
 - Evidence audit (non‑consensus):
-  - `GET /v2/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
-- `GET /v2/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal, Censorship).
+  - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
+- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal, Censorship).
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
   - Purpose: quick inspection during development and ops. Data is node‑local and not persisted.

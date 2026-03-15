@@ -62,7 +62,7 @@ El SDK y el software están disponibles en los archivos SoraFS.
 ## الأدوات وaccesorios
 
 - Hay cargas útiles que incluyen `range_capability`, `stream_budget` y `transport_hints`.
-  تحقّق عبر استجابات `/v2/sorafs/providers` y accesorios القبول؛ يجب أن تتضمن
+  تحقّق عبر استجابات `/v1/sorafs/providers` y accesorios القبول؛ يجب أن تتضمن
   ملخصات JSON القدرة المحللة وميزانية البث ومصفوفات sugerencias لابتلاع التليمترية.
 - `cargo xtask sorafs-admission-fixtures` يعرض presupuestos de flujo y sugerencias de transporte داخل
   artefactos JSON كي تابع لوحات المراقبة تبني الميزة.
@@ -70,7 +70,7 @@ El SDK y el software están disponibles en los archivos SoraFS.
   - anuncios متعددة المصادر قياسية،
   - `multi_fetch_plan.json` Para obtener el SDK, busque y busque archivos.
 
-## تكامل المُنسق وTorii- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
+## تكامل المُنسق وTorii- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` y `transport_hints`. تُطلق تحذيرات degradar عندما يحذف
   المزودون البيانات الجديدة، وتطبق نقاط نطاق البوابة القيود نفسها للعملاء المباشرين.
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

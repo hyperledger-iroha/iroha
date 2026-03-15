@@ -223,9 +223,9 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 ## 8. Offline Allowance Inspection & Auditing
 
 - `OfflineToriiClient` reuses the primary transport stack (base URI, observers,
-  default headers) so SDKs can query `/v2/offline/allowances`,
-  `/v2/offline/transfers` (and `/v2/offline/settlements` alias), `/v2/offline/receipts`,
-  and `/v2/offline/state` without duplicating HTTP plumbing. Pass
+  default headers) so SDKs can query `/v1/offline/allowances`,
+  `/v1/offline/transfers` (and `/v1/offline/settlements` alias), `/v1/offline/receipts`,
+  and `/v1/offline/state` without duplicating HTTP plumbing. Pass
   `OfflineListParams` to control pagination, filters, and address formatting,
   mirroring the Torii REST surface described in the OA7 roadmap item.
 - `OfflineListParams.Builder` exposes the same roadmap filters shipped on the
@@ -246,7 +246,7 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   asset_id, amount}` using the ledger payload instead of mirroring the
   top-level receiver twice. This keeps regulator exports aligned with the actual
   spend receipts.
-- `/v2/offline/summaries` (and the POST-based `.query` variant) returns the
+- `/v1/offline/summaries` (and the POST-based `.query` variant) returns the
   controller-facing hardware counter checkpoints for each registered allowance.
   Use this feed when merchants or compliance tooling need to verify App Attest
   key counters or Android marker series without downloading every allowance
@@ -260,7 +260,7 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   `recordProvisionedCounter(...)` when assembling receipts to ensure counters
   advance exactly once per spend; the helper throws `OfflineCounterException`
   with deterministic reasons when a jump or hash mismatch is detected.
-- `/v2/offline/revocations{,/query}` exposes the attestation verdict deny-list
+- `/v1/offline/revocations{,/query}` exposes the attestation verdict deny-list
   maintained on-ledger. `OfflineToriiClient.listRevocations|queryRevocations`
   return `OfflineRevocationList` instances mirroring the REST payload (flattened
   fields plus the raw Norito record), and `OfflineWallet.fetchRevocations(...)`
@@ -268,14 +268,14 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   familiar facade. Each item includes the human-readable issuer, display-ready
   account string, canonical reason, optional note/metadata maps, and the full
   record JSON for downstream auditing.
-- `/v2/offline/transfers/proof` accepts a transfer payload (`transfer`) and responds with the
+- `/v1/offline/transfers/proof` accepts a transfer payload (`transfer`) and responds with the
   canonical `OfflineProofRequest*` payloads. Use it to build `{sum,counter,replay}` witness JSON
   before admission.
-- `/v2/offline/spend-receipts` accepts raw receipts and returns the canonical
+- `/v1/offline/spend-receipts` accepts raw receipts and returns the canonical
   Poseidon `receipts_root` (`OfflineSpendReceiptsSubmitResponse`) so wallets can
   cross-check their local hashing (and surface structured failures) before
   attempting ledger reconciliation.
-- `/v2/offline/settlements` submits an offline-to-online bundle for ledger
+- `/v1/offline/settlements` submits an offline-to-online bundle for ledger
   admission (submits `SubmitOfflineToOnlineTransfer`). Use this endpoint only
   when operating in ledger-reconcilable mode; offline-only circulation treats
   receipts as final and does not require settlement. When rejection occurs,

@@ -449,7 +449,7 @@ class ToriiSubmitter:
         self._opener = opener or urllib.request.urlopen
 
     def submit(self, index: int, request_payload: dict[str, Any]) -> None:
-        endpoint = f"{self.url}/v2/sns/registrations"
+        endpoint = f"{self.url}/v1/sns/registrations"
         data = json.dumps(request_payload, separators=(",", ":")).encode("utf-8")
         selector = selector_key(request_payload)
         headers = {
@@ -497,7 +497,7 @@ class ToriiSubmitter:
 
     def _poll_status(self, index: int, selector: str, literal: str) -> None:
         encoded = urllib.parse.quote(literal, safe="")
-        endpoint = f"{self.url}/v2/sns/registrations/{encoded}"
+        endpoint = f"{self.url}/v1/sns/registrations/{encoded}"
         for attempt in range(1, self.poll_attempts + 1):
             req = urllib.request.Request(endpoint, headers={"Authorization": f"Bearer {self.token}"})
             try:
@@ -720,7 +720,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--poll-status",
         action="store_true",
-        help="After each Torii submission, poll `/v2/sns/registrations/{selector}` for confirmation.",
+        help="After each Torii submission, poll `/v1/sns/registrations/{selector}` for confirmation.",
     )
     parser.add_argument(
         "--poll-attempts",

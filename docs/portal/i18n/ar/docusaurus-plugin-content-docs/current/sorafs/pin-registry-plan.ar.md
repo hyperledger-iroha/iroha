@@ -73,7 +73,7 @@ Sidebar_label: خطة تسجيل الرقم السري
 
 ## واجهة خدمة (تكامل Torii/SDK)| المكون | | المالك/المالكون |
 |--------|--------|-----------------|
-| خدمة Torii | كشف `/v2/sorafs/pin` (إرسال)، `/v2/sorafs/pin/{cid}` (بحث)، `/v2/sorafs/aliases` (قائمة/ربط)، `/v2/sorafs/replication` (الطلبات/الإيصالات). توفير ترقيم + ترشيح. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
+| خدمة Torii | كشف `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). توفير ترقيم + ترشيح. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | الاتستاشن | تضمين ارتفاع/هاش التسجيل في الاستجابات؛ إضافة بناء Norito للاتستاشن تستهلكها SDKs. | الأشعة تحت الحمراء الأساسية |
 | سطر الأوامر | النهائي `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
 | SDK | توليد الارتباطات من أجل (Rust/Go/TS) من مخطط Norito؛ إضافة إلى تكامل. | فرق SDK |
@@ -126,9 +126,9 @@ Sidebar_label: خطة تسجيل الرقم السري
 يجب ان تشاهد كل قائمة تحقق ضمن SF-4 الى هذه البناء عند تسجيل التقدم.
 واجهة REST تتطلب الان نهاية نقاط قائمة مع اتستاشن:
 
-- `GET /v2/sorafs/pin` و `GET /v2/sorafs/pin/{digest}` يتجلى مع
+- `GET /v1/sorafs/pin` و `GET /v1/sorafs/pin/{digest}` يتجلى مع
   ربط الأسماء المستعارة واوامر التكرار وكائن اتستاشن مشغل من هاش اخر كتلة.
-- `GET /v2/sorafs/aliases` و `GET /v2/sorafs/replication` ليزران كتالوج الاسم المستعار
+- `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` ليزران كتالوج الاسم المستعار
   يجب وتراكم اوامر التكرار بترقيم ثابت ومرشحات الحالة.
 
 تغلف CLI هذه الاستدعاءات (`iroha app sorafs pin list`, `pin show`, `alias list`,

@@ -71,7 +71,7 @@ Voici les étapes de la procédure pas à pas pour [playbook du manifeste de mis
    Voir `torii.sorafs.discovery.admission.envelopes_dir` se référer à کرتا ہے۔
 3. API de découverte pour les annonces des fournisseurs et la vérification de la propagation :
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. En-têtes de gouvernance et exercice des points finaux du manifeste/plan :
    ```bash

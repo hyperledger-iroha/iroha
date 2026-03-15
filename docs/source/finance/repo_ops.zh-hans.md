@@ -99,7 +99,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    出处的配置快照：
 
    ```bash
-   curl -sS "${TORII_URL}/v2/configuration" \
+   curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
@@ -110,7 +110,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    检查嵌入的 `RepoGovernance` 值。存储 JSON 响应
    在 `artifacts/finance/repo/<agreement>/agreements_after.json` 下；那些价值观
    源自 `[settlement.repo]`，因此当
-   Torii 的 `/v2/configuration` 快照不足。
+   Torii 的 `/v1/configuration` 快照不足。
 4. 将两个工件（TOML 片段和 Torii/CLI 快照）保留在
    在提交治理请求之前收集证据。审核员必须能够
    重放该代码片段，验证其哈希值，并将其与运行时视图关联起来。
@@ -146,10 +146,10 @@ scripts/regen_repo_proof_fixture.sh
 
 ### 2.4 Torii API 表面
 
-- `GET /v2/repo/agreements` 返回带有可选分页、过滤的活动协议
+- `GET /v1/repo/agreements` 返回带有可选分页、过滤的活动协议
   (`filter={...}`)、排序和地址格式化参数。使用它进行快速审核或
   当原始 JSON 有效负载足够时，仪表板。
-- `POST /v2/repo/agreements/query` 接受结构化查询信封（分页、排序、
+- `POST /v1/repo/agreements/query` 接受结构化查询信封（分页、排序、
   `FilterExpr`、`fetch_size`），因此下游服务可以确定性地翻阅账本。
 - JavaScript SDK 现在公开 `listRepoAgreements`、`queryRepoAgreements` 和迭代器
   帮助器，以便 browser/Node.js 工具接收与 Rust/Python 相同类型的 DTO。
@@ -199,7 +199,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    治理 CLI 上的 `--notes` 字段）并收集所需的批准
    对于F1。保留已签名的批准数据包并附加片段。
 3. 在整个机群中滚动更改：更新 `[settlement.repo]`，重新启动每个
-   节点，然后捕获 `GET /v2/configuration` 快照（或
+   节点，然后捕获 `GET /v1/configuration` 快照（或
    `ToriiClient.getConfiguration`) 证明每个对等点的应用值。
 4.重新运行`integration_tests/tests/repo.rs` plus
    `repo_deterministic_lifecycle_proof_matches_fixture` 并接下来存储日志
@@ -218,11 +218,11 @@ Norito/`iroha_config` 管道现在公开已解决的回购策略
 每个同行应用的值——不仅仅是提议的 TOML。捕获已解决的
 每次推出后的配置及其摘要：
 
-1. 从每个对等方获取配置（`GET /v2/configuration` 或
+1. 从每个对等方获取配置（`GET /v1/configuration` 或
    `ToriiClient.getConfiguration`) 并隔离存储库节：
 
    ```bash
-   curl -s http://<torii-host>/v2/configuration \
+   curl -s http://<torii-host>/v1/configuration \
      | jq -cS '.settlement.repo' \
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
@@ -286,7 +286,7 @@ Norito/`iroha_config` 管道现在公开已解决的回购策略
   理由。
 
 **批准后推出**1. 应用批准的 `[settlement.repo]` 配置并重新启动每个节点（或滚动
-   通过您的自动化）。立即拨打 `GET /v2/configuration` 并存档
+   通过您的自动化）。立即拨打 `GET /v1/configuration` 并存档
    每个节点的响应，以便治理包显示哪些对等点接受了
    改变。【crates/iroha_torii/src/lib.rs:3225】
 2. 重新运行确定性存储库测试并附加新日志和构建
@@ -467,17 +467,17 @@ CI 已经通过以下方式行使了这些规则
 一旦治理批准变更并且 `[settlement.repo]` 节登陆
 在集群中，从每个对等方捕获经过身份验证的配置快照，以便
 审核员可以证明批准的值是有效的。 Torii 暴露了
-用于此目的的 `/v2/configuration` 路线和所有 SDK 表面帮助程序，例如
+用于此目的的 `/v1/configuration` 路线和所有 SDK 表面帮助程序，例如
 `ToriiClient.getConfiguration`，因此捕获工作流程适用于桌面脚本，
 CI，或手动操作员运行。【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
 
-1. 在每个对等点之后立即调用 `GET /v2/configuration`（或 SDK 帮助程序）
+1. 在每个对等点之后立即调用 `GET /v1/configuration`（或 SDK 帮助程序）
    推出。将完整的 JSON 保留在下面
    `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` 并记录
    `config/config_snapshot_index.md` 中的块高度/集群时间戳。
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
-   curl -fsSL https://peer01.example/v2/configuration \
+   curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
@@ -559,7 +559,7 @@ artifacts/finance/repo/<agreement-id>/
   无需重新运行线束。
 - `config/settlement_repo.toml` 包含 `[settlement.repo]` 片段
   （理发、替换矩阵）在执行回购协议时处于活动状态。
-- `config/peers/*.json` 捕获每个对等点的 `/v2/configuration` 快照，
+- `config/peers/*.json` 捕获每个对等点的 `/v1/configuration` 快照，
   关闭暂存 TOML 和运行时值同行报告之间的循环
   超过 Torii。
 
@@ -715,7 +715,7 @@ evidence guarantees that every repo change satisfies the roadmap F1 governance
    结算，转储将要应用的 `[settlement.repo]` TOML 块，以及
    将相关 `AccountEvent::Repo(*)` SSE 镜像到
    `artifacts/finance/repo/<slug>/events/repo-events.ndjson`。 GAR之后
-   通过，捕获每个对等点的 `/v2/configuration` 快照（第 2.9 节）并存储它们
+   通过，捕获每个对等点的 `/v1/configuration` 快照（第 2.9 节）并存储它们
    在 `config/peers/` 下，因此治理数据包证明部署成功。
 4. **生成证据清单。**
    ```bash

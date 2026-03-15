@@ -135,7 +135,7 @@ async fn proof_endpoints_reject_old_api_version() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/zk/proofs?limit=1")
+                .uri("/v1/zk/proofs?limit=1")
                 .extension(axum::extract::connect_info::ConnectInfo(SocketAddr::new(
                     IpAddr::V4(Ipv4Addr::LOCALHOST),
                     0,

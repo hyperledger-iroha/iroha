@@ -101,7 +101,7 @@ translation_last_reviewed: 2025-11-14
 Norito المطبقة في `crates/iroha_data_model::fraud`:
 
 - **استلام طلبات المخاطر (Risk intake)** – تستقبل
-  `POST /v2/fraud/query` بنية `RiskQuery`:
+  `POST /v1/fraud/query` بنية `RiskQuery`:
   - `query_id` (`[u8; 32]`، مُمثَّلة بصيغة hex)
   - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (enum مُعنون يتطابق مع `RiskOperation`؛ الحقل `type` في
@@ -113,7 +113,7 @@ Norito المطبقة في `crates/iroha_data_model::fraud`:
   - `context` (`RiskContext`؛ يحتوي على `tenant_id`، و`session_id` اختياري،
     و`reason` اختياري)
 - **قرار المخاطر (Risk decision)** – تستقبل
-  `POST /v2/fraud/assessment` الـ payload من النوع `FraudAssessment`
+  `POST /v1/fraud/assessment` الـ payload من النوع `FraudAssessment`
   (وهو أيضًا ما يُستخدَم في exports الحوكمة):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (enum `AssessmentDecision`)، `rule_outcomes`
@@ -121,7 +121,7 @@ Norito المطبقة في `crates/iroha_data_model::fraud`:
   - `generated_at_ms`
   - `signature` (قيمة base64 اختيارية تغلّف تقييم `FraudAssessment`
     المرمَّز بـ Norito)
-- **تصدير الحوكمة (Governance export)** – يعيد `GET /v2/fraud/governance/export`
+- **تصدير الحوكمة (Governance export)** – يعيد `GET /v1/fraud/governance/export`
   البنية `GovernanceExport` عند تفعيل الـ feature المسماة `governance`، مع
   تجميع الإعدادات الفعّالة، وآخر enactment، وإصدار النموذج، وـ policy
   digest، وhistogram من نوع `DecisionAggregate`.

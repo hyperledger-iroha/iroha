@@ -18,11 +18,11 @@ title: Torii ایپ API برابری کا آڈٹ
 担当者: Torii プラットフォーム SDK プログラム リード  
 テスト: TORII-APP-1 — `app_api` テスト
 
-یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی عکاسی کرتا ہے تاکہ مونو-ریپو سے باہر کے قارئین دیکھ سکیں کہ کون سی `/v2/*` سطحیں وائرڈ، ٹیسٹ شدہ اور دستاویزیやあیہ آڈٹ انراستوں کو ٹریک کرتا ہے جو `Torii::add_app_api_routes`، `add_contracts_and_vk_routes` اور `add_connect_routes` کے ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
+یہ صفحہ اندرونی `TORII-APP-1` آڈٹ (`docs/source/torii/app_api_parity_audit.md`) کی عکاسی کرتا ہے تاکہ مونو-ریپو سے باہر کے قارئین دیکھ سکیں کہ کون سی `/v1/*` سطحیں وائرڈ، ٹیسٹ شدہ اور دستاویزیやあیہ آڈٹ انراستوں کو ٹریک کرتا ہے جو `Torii::add_app_api_routes`، `add_contracts_and_vk_routes` اور `add_connect_routes` کے ذریعے دوبارہ ایکسپورٹ ہوتے ہیں۔
 
 ## دائرہ کار اور طریقہ
 
-آڈٹ `crates/iroha_torii/src/lib.rs:256-522` میں عوامی ری ایکسپورٹس اور 機能ゲート والے روٹ بلڈرز کا جائزہ لیتا ہے۔ روڈمیپ میں ہر `/v2/*` سطح کے لئے ہم نے درج ذیل تصدیق کی:
+آڈٹ `crates/iroha_torii/src/lib.rs:256-522` میں عوامی ری ایکسپورٹس اور 機能ゲート والے روٹ بلڈرز کا جائزہ لیتا ہے۔ روڈمیپ میں ہر `/v1/*` سطح کے لئے ہم نے درج ذیل تصدیق کی:
 
 - `crates/iroha_torii/src/routing.rs` ハンドラー فاذ اور DTO تعریفات۔
 - `app_api` یا `connect` فیچر گروپس کے تحت روٹر رجسٹریشن۔
@@ -40,25 +40,25 @@ title: Torii ایپ API برابری کا آڈٹ
 - 意味:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## ありがとうございます
 
-### اکاؤنٹ اجازتیں (`/v2/accounts/{id}/permissions`) — کورڈ
+### اکاؤنٹ اجازتیں (`/v1/accounts/{id}/permissions`) — کورڈ
 - ハンドラー: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)。
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)。
 - ルーター バインディング: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム。
 - 注: Norito JSON ボディ ہے جس میں `items`/`total` ہے، جو SDK ページネーション ヘルパー سے مطابقت رکھتا ہے۔
 
-### エイリアス OPRF 評価 (`POST /v2/aliases/voprf/evaluate`) — کورڈ
+### エイリアス OPRF 評価 (`POST /v1/aliases/voprf/evaluate`) — کورڈ
 - ハンドラー: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)。
 - DTO: `AliasVoprfEvaluateRequestDto`、`AliasVoprfEvaluateResponseDto`、`AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`)。
@@ -76,7 +76,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム。
 - 注: 決定論的な 16 進数、バックエンド識別子、およびバックエンド識別子。 SDK と DTO の組み合わせ
 
-### 証明 SSE ایونٹس (`GET /v2/events/sse`) — کورڈ
+### 証明 SSE ایونٹس (`GET /v1/events/sse`) — کورڈ
 - ハンドラー: `handle_v1_events_sse` فلٹر سپورٹ کے ساتھ (`crates/iroha_torii/src/routing.rs:14008-14133`)。
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) 安全フィルター配線。
 - ルーター バインディング: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -86,7 +86,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: Torii プラットフォーム (ランタイム)、統合テスト WG (フィクスチャ)。
 - 注: プルーフ フィルターのエンドツーエンドのテスト。 دستاویزات `docs/source/zk_app_api.md` میں ہیں۔
 
-### کنٹریکٹ لائف سائیکل (`/v2/contracts/*`) — کورڈ
+### کنٹریکٹ لائف سائیکل (`/v1/contracts/*`) — کورڈ
 - ハンドラー: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)、
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)、
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)、
@@ -101,7 +101,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者: スマート コントラクト WG Torii プラットフォーム。
 - メモ: اینڈپوائنٹس سائن شدہ ٹرانزیکشنز کو قطار میں ڈالते ہیں اور مشترکہ ٹیلیمیٹری میٹرکس (`handle_transaction_with_metrics`) کو دوبارہ استعمال کرتے ہیں۔
 
-### ویریفائنگ کی لائف سائیکل (`/v2/zk/vk/*`) — کورڈ
+### ویریفائنگ کی لائف سائیکل (`/v1/zk/vk/*`) — کورڈ
 - ハンドラー: `handle_post_vk_register`、`handle_post_vk_update`、`handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)。
 - DTO: `ZkVkRegisterDto`、`ZkVkUpdateDto`、`ZkVkDeprecateDto`、`VkListQuery`、`ProofFindByIdQueryDto`
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
   `crates/iroha_torii/tests/zk_verify_handler_integration.rs`、
   `crates/iroha_torii/tests/zk_vote_tally_handler.rs`。
 - 所有者: ZK ワーキング グループ Torii プラットフォーム
-- 注: DTO Norito スキーマ مطابق ہیں جنہیں SDK ریفرنس کرتے ہیں؛レート制限 `limits.rs` ذریعے نافذ ہے۔### Nexus 接続 (`/v2/connect/*`) — کورڈ (機能 `connect`)
+- 注: DTO Norito スキーマ مطابق ہیں جنہیں SDK ریفرنس کرتے ہیں؛レート制限 `limits.rs` ذریعے نافذ ہے۔### Nexus 接続 (`/v1/connect/*`) — کورڈ (機能 `connect`)
 - ハンドラー: `handle_connect_session`、`handler_connect_session_delete`、`handle_connect_ws`、
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)。
 - DTO: `ConnectSessionRequest`、`ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)、

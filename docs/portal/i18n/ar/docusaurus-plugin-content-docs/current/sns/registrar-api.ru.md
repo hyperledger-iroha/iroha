@@ -26,7 +26,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 1. النقل والتوثيق| تريبوفانيا | التفاصيل |
 |------------|--------|
-| البروتوكولات | الراحة تحت `/v2/sns/*` وخدمة gRPC `sns.v1.Registrar`. ستبدأ الآن Norito-JSON (`application/json`) وNorito-RPC (`application/x-norito`). |
+| البروتوكولات | الراحة تحت `/v1/sns/*` وخدمة gRPC `sns.v1.Registrar`. ستبدأ الآن Norito-JSON (`application/json`) وNorito-RPC (`application/x-norito`). |
 | مصادقة | رموز `Authorization: Bearer` أو شهادات mTLS، يتم اختيارها من خلال مضيف لاحقة. نقاط التحكم المعززة (التجميد/إلغاء التجميد، التعيينات المحجوزة) تحتاج إلى `scope=sns.admin`. |
 | التغذية | يقوم المسجل بتخصيص مستودعات `torii.preauth_scheme_limits` مع بيانات JSON بالإضافة إلى الحدود الإضافية حسب اللاحقة: `sns.register`، `sns.renew`، `sns.controller`، `sns.freeze`. |
 | القياس عن بعد | Torii نشر `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` لمسجل المعالج (مرشح لـ `scheme="norito_rpc"`); تم أيضًا تحسين واجهة برمجة التطبيقات (API) `sns_registrar_status_total{result, suffix_id}`. |
@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. نقاط الراحة| نقطة النهاية | الطريقة | الحمولة | الوصف |
 |----------|-------|--------|----------|
-| `/v2/sns/registrations` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو فتح الاسم مرة أخرى. قم بتقسيم الطبقة السعرية، وتحقق من صحة اللوحة/الإدارة، واحصل على مسجل الاشتراك. |
-| `/v2/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | توسيع نطاق. بادئ ذي بدء، النعمة/الفداء من السياسة. |
-| `/v2/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | قبل الترحيب بعد التحكم في الانحناء. |
-| `/v2/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | تخصيص وحدات التحكم; التحقق من حسابات عنوان البريد الإلكتروني. |
-| `/v2/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. تحتاج إلى تذكرة الوصي وقائمة الحوكمة. |
-| `/v2/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء التجميد بعد التصريف؛ من المفرح أن المجلس يتجاوز الإجازة. |
-| `/v2/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الاسم محفوظة لمضيف/مجلس. |
-| `/v2/sns/policies/{suffix_id}` | احصل على | -- | احصل على تيكويو `SuffixPolicyV1` (كشيريمو). |
-| `/v2/sns/registrations/{selector}` | احصل على | -- | تم تجديده `NameRecordV1` + مواد فعالة (Active، Grace، إلخ). |
+| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو فتح الاسم مرة أخرى. قم بتقسيم الطبقة السعرية، وتحقق من صحة اللوحة/الإدارة، واحصل على مسجل الاشتراك. |
+| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | توسيع نطاق. بادئ ذي بدء، النعمة/الفداء من السياسة. |
+| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | قبل الترحيب بعد التحكم في الانحناء. |
+| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | تخصيص وحدات التحكم; التحقق من حسابات عنوان البريد الإلكتروني. |
+| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. تحتاج إلى تذكرة الوصي وقائمة الحوكمة. |
+| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء التجميد بعد التصريف؛ من المفرح أن المجلس يتجاوز الإجازة. |
+| `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الاسم محفوظة لمضيف/مجلس. |
+| `/v1/sns/policies/{suffix_id}` | احصل على | -- | احصل على تيكويو `SuffixPolicyV1` (كشيريمو). |
+| `/v1/sns/registrations/{selector}` | احصل على | -- | تم تجديده `NameRecordV1` + مواد فعالة (Active، Grace، إلخ). |
 
 **محدد الإضافة:** الجزء `{selector}` يستخدم I105، مضغوط (`sora`) أو سداسي عشري قانوني بواسطة ADDR-5؛ تمت تسوية Torii من خلال `NameSelectorV1`.**نموذج أوشيبوك:** جميع نقاط الاتصال تتصل بـ Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` يجب أن تكتب بشكل صحيح `GovernanceHookV1` (معرف الاقتراح، تجزئات التصويت، إضافة المضيف/الوصي). يقوم الأمر بمجرد توجيه نقطة الاتصال اللاسلكية `/v2/sns/registrations/{selector}/...` إلى المشغلين الذين يمكنهم تكرارها مرة أخرى Torii، الذي سيتم إنشاء SDK.
+`--governance-json` يجب أن تكتب بشكل صحيح `GovernanceHookV1` (معرف الاقتراح، تجزئات التصويت، إضافة المضيف/الوصي). يقوم الأمر بمجرد توجيه نقطة الاتصال اللاسلكية `/v1/sns/registrations/{selector}/...` إلى المشغلين الذين يمكنهم تكرارها مرة أخرى Torii، الذي سيتم إنشاء SDK.
 
 ## 4. خدمة gRPC```text
 service Registrar {
@@ -205,7 +205,7 @@ service Registrar {
 
 Torii يختبر التوثيق، يختبر:
 
-1. معرف الاقتراح موجود في إدارة دفتر الأستاذ (`/v2/governance/proposals/{id}`) والحالة `Approved`.
+1. معرف الاقتراح موجود في إدارة دفتر الأستاذ (`/v1/governance/proposals/{id}`) والحالة `Approved`.
 2. يتم تضمين هذه القطع الأثرية المسجلة.
 3. يتم إرسال المضيف/الوصي إلى مجموعة المفاتيح العامة من `SuffixPolicyV1`.
 
@@ -213,7 +213,7 @@ Torii يختبر التوثيق، يختبر:
 
 ## 6. الامثلة العملية العملية
 
-### 6.1 التسجيل القياسي1. يطلب العميل `/v2/sns/policies/{suffix_id}` للحصول على الأسعار والمزايا والمستويات القابلة للاستكمال.
+### 6.1 التسجيل القياسي1. يطلب العميل `/v1/sns/policies/{suffix_id}` للحصول على الأسعار والمزايا والمستويات القابلة للاستكمال.
 2. جهاز العميل `RegisterNameRequestV1`:
    - تم الحصول على `selector` من التصنيف I105 أو من الاقتراح المضغوط (`sora`).
    - `term_years` في السياسة السابقة.
@@ -240,7 +240,7 @@ Torii يختبر التوثيق، يختبر:
 
 1. يقوم الجارديان بمعالجة `FreezeNameRequestV1` بالتذكرة، مع تحديد هوية الهوية.
 2. Torii يعيد الكتابة إلى `NameStatus::Frozen`، ويكتب `NameFrozen`.
-3. قام مجلس التفويض بتجاوز التجاوز؛ يقوم المشغل بحذف `/v2/sns/registrations/{selector}/freeze` مع `GovernanceHookV1`.
+3. قام مجلس التفويض بتجاوز التجاوز؛ يقوم المشغل بحذف `/v1/sns/registrations/{selector}/freeze` مع `GovernanceHookV1`.
 4. Torii تحقق من التجاوز، واكتب `NameUnfrozen`.## 7. التحقق من صحة ورموز أوشيبوك
 
 | كود | الوصف | HTTP |
@@ -256,7 +256,7 @@ Torii يختبر التوثيق، يختبر:
 ## 8.التمويل بعد التنفيذ
 
 - Torii المزادات المعلقة في `NameRecordV1.auction` وإلغاء تسجيلات الدفعات الأولية، مثل `PendingAuction`.
-- إيصالات تسجيل دفتر الأستاذ Norito; تقدم خدمات الخزانة واجهة برمجة تطبيقات المساعد (`/v2/finance/sns/payments`).
+- إيصالات تسجيل دفتر الأستاذ Norito; تقدم خدمات الخزانة واجهة برمجة تطبيقات المساعد (`/v1/finance/sns/payments`).
 - يجب على SDK ملاحظة هذه النقاط من خلال الميزات المميزة التي يمكن من خلالها إظهار الأسباب الجيدة أوشيبوك (`ERR_SNS_RESERVED`، وما إلى ذلك).
 
 ## 9. الخطوات التالية

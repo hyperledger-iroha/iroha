@@ -34,7 +34,7 @@ Norito ኮዴኮችን ይጠቀሙ; ምንም serde/JSON መውደቅ አይፈ
 ## API Surface (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 የውስጥ ስህተት | ያልተጠበቀ ውድቀት (የተመዘገበ + ማንቂያ)። |
 
 ```
-GET /v2/da/proof_policies
+GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 ማረጋገጫን ከገባሪ ፖሊሲ ስብስብ ጋር ለማያያዝ ተጨማሪ የዙር ጉዞ አያስፈልግዎትም።
 
 ```
-GET /v2/da/proof_policy_snapshot
+GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ pub struct DaIngestReceipt {
 - `iroha app da get` ባለ ብዙ ምንጭ ኦርኬስትራ በ DA-ተኮር ተለዋጭ ስም ያክላል
   `iroha app sorafs fetch`. ኦፕሬተሮች በማኒፌክት + chunk-plan artefacts (`--manifest`፣
   `--plan`፣ `--manifest-id`) **ወይም** በቀላሉ Torii የማከማቻ ትኬት በ`--storage-ticket` ማለፍ። መቼ
-  የቲኬት መንገድ ጥቅም ላይ ይውላል CLI አንጸባራቂውን ከ `/v2/da/manifests/<ticket>` ይጎትታል፣ ጥቅሉን ይቀጥላል
+  የቲኬት መንገድ ጥቅም ላይ ይውላል CLI አንጸባራቂውን ከ `/v1/da/manifests/<ticket>` ይጎትታል፣ ጥቅሉን ይቀጥላል
   በ`artifacts/da/fetch_<timestamp>/` (በ`--manifest-cache-dir` መሻር) ** ገላጭ
   hash** ለ`--manifest-id`፣ እና ኦርኬስትራውን በቀረበው `--gateway-provider` ያስኬዳል።
   ዝርዝር. የመክፈያ ማረጋገጫ አሁንም በተከተተው CAR/`blob_hash` መፍጨት ላይ የሚመረኮዝ ሲሆን የመግቢያ መታወቂያው ግን
@@ -248,7 +248,7 @@ pub struct DaIngestReceipt {
   ይሽራል፣ የውጤት ሰሌዳ ወደ ውጪ መላክ እና `--output` መንገዶች)፣ እና አንጸባራቂው የመጨረሻ ነጥብ ሊሻር የሚችለው በ
   `--manifest-endpoint` ለብጁ Torii አስተናጋጆች፣ ስለዚህ ከጫፍ እስከ ጫፍ ያለው ተገኝነት ፍተሻዎች ሙሉ በሙሉ በ
   የኦርኬስትራ ሎጂክን ሳያባዛ `da` የስም ቦታ።
-- `iroha app da get-blob` ቀኖናዊ መግለጫዎችን በቀጥታ ከ Torii በ `GET /v2/da/manifests/{storage_ticket}` ይጎትታል።
+- `iroha app da get-blob` ቀኖናዊ መግለጫዎችን በቀጥታ ከ Torii በ `GET /v1/da/manifests/{storage_ticket}` ይጎትታል።
   ትዕዛዙ አሁን ቅርሶችን በአንጸባራቂ ሃሽ (ብሎብ መታወቂያ) ይጽፋል
   `manifest_{manifest_hash}.norito`፣ `manifest_{manifest_hash}.json`፣ እና `chunk_plan_{manifest_hash}.json`
   በ `artifacts/da/fetch_<timestamp>/` (ወይም በተጠቃሚ የቀረበ `--output-dir`) ትክክለኛውን እያስተጋባ
@@ -259,7 +259,7 @@ pub struct DaIngestReceipt {
   `ToriiClient.getDaManifestBundle(...)`. ሁለቱም ዲኮድ የተደረገውን Norito ባይት፣ አንጸባራቂ JSON፣ አንጸባራቂ ሃሽ፣የኤስዲኬ ደዋዮች የኦርኬስትራ ክፍለ-ጊዜዎችን ወደ CLI እና ስዊፍት ሳይዘጉ እርጥበታማ ማድረግ እንዲችሉ ቸንክ ፕላን
   ደንበኞቹ በተጨማሪ ወደ `fetchDaPayloadViaGateway(...)` መደወል ይችላሉ እነዚያን ቅርቅቦች በአገሬው በኩል
   SoraFS ኦርኬስትራ መጠቅለያ።【IrohaSwift/ምንጮች/IrohaSwift/ToriiClient.swift:240】
-- የ`/v2/da/manifests` ምላሾች አሁን ላዩን `manifest_hash`፣ እና ሁለቱም የCLI + SDK ረዳቶች (`iroha app da get`፣
+- የ`/v1/da/manifests` ምላሾች አሁን ላዩን `manifest_hash`፣ እና ሁለቱም የCLI + SDK ረዳቶች (`iroha app da get`፣
   `ToriiClient.fetchDaPayloadViaGateway`፣ እና የስዊፍት/ጄኤስ ጌትዌይ መጠቅለያዎች) ይህንን የምግብ መፍጨት ሂደት እንደ
   ቀኖናዊ አንጸባራቂ ለዪ ክፍያዎችን በተከተተው የCAR/blob hash ማረጋገጥ በሚቀጥልበት ጊዜ።
 - `iroha app da rent-quote` ለቀረበው የማከማቻ መጠን የሚወስን የቤት ኪራይ እና የማበረታቻ ክፍተቶችን ያሰላል
@@ -277,7 +277,7 @@ pub struct DaIngestReceipt {
 - የፒን መዝገብ እኩልነት አሁን ወደ ኤስዲኬዎች ይዘልቃል፡ `ToriiClient.registerSorafsPinManifest(...)` በ
   ጃቫ ስክሪፕት ኤስዲኬ በ `iroha app sorafs pin register` ጥቅም ላይ የዋለውን ትክክለኛ የክፍያ ጭነት ይገነባል ፣
   ወደ ከመለጠፍዎ በፊት chunker ሜታዳታ፣ የፒን ፖሊሲዎች፣ ተለዋጭ ማስረጃዎች እና ተተኪ መፍጨት
-  `/v2/sorafs/pin/register`. ይህ CI ቦቶች እና አውቶሜሽን ሲደርሱ ወደ CLI እንዳይደርሱ ያደርጋል
+  `/v1/sorafs/pin/register`. ይህ CI ቦቶች እና አውቶሜሽን ሲደርሱ ወደ CLI እንዳይደርሱ ያደርጋል
   አንጸባራቂ ምዝገባዎችን መቅዳት እና ረዳቱ ከTyScript/README ሽፋን ጋር ወደ DA-8 ይልካል
   "ማስገባት/ማግኘት/አረጋግጥ" የመሳሪያ አሰራር ከ Rust/Swift ጎን ለጎን በJS ላይ ሙሉ በሙሉ ረክቷል።【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` ሁሉንም ከላይ ያሉትን ሰንሰለቶች ያሰራል፡ የማከማቻ ትኬት ይወስዳል፣ ያውርዳል
@@ -334,7 +334,7 @@ pub struct DaIngestReceipt {
   ያልታወቁ ስሪቶች፣ አዲስ አንጸባራቂ አቀማመጦች ሲርከብ የሚወስኑ ማሻሻያዎችን ዋስትና ይሰጣል።【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR መንጠቆዎች *** - የ PDP ቁርጠኝነት በቀጥታ ከ chunk መደብር የተገኙ እና ጸንተዋል
   የ DA-5 መርሐግብር አውጪዎች ከቀኖናዊ መረጃዎች የናሙና ፈተናዎችን እንዲጀምሩ ከማስረጃዎች በተጨማሪ። የ
-  `Sora-PDP-Commitment` ራስጌ አሁን በሁለቱም `/v2/da/ingest` እና `/v2/da/manifests/{ticket}` ይላካል
+  `Sora-PDP-Commitment` ራስጌ አሁን በሁለቱም `/v1/da/ingest` እና `/v1/da/manifests/{ticket}` ይላካል
   ምላሾች ስለዚህ ኤስዲኬዎች ወዲያውኑ የተፈረመውን ቁርጠኝነት ይማራሉ ይህም የወደፊት መርማሪዎች ይጠቅሳሉ።
 - **የሻርድ ጠቋሚ ጆርናል** — ሌይን ሜታዳታ `da_shard_id`ን ሊገልጽ ይችላል (ወደ `lane_id` ነባሪ) እና
   Sumeragi አሁን ከፍተኛውን `(epoch, sequence)` በ `(shard_id, lane_id)` ቀጥሏል
@@ -357,7 +357,7 @@ pub struct DaIngestReceipt {
   የመጫኛ ባይት ማጋለጥ። በድጋሚ ጨዋታ ወቅት ደረሰኞች ከኩራ ይደርቃሉ ስለዚህ አረጋጋጮች ተመሳሳይ መልሰው ያገኛሉ
   እንደገና ከተጀመረ በኋላ ሚስጥራዊነት ሜታዳታ።【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/.
 
-## የትግበራ ማስታወሻዎች- የ Torii's `/v2/da/ingest` የመጨረሻ ነጥብ አሁን የክፍያ ጭነት መጨናነቅን መደበኛ ያደርገዋል፣ የመልሶ ማጫወት መሸጎጫውን ያስፈጽማል፣
+## የትግበራ ማስታወሻዎች- የ Torii's `/v1/da/ingest` የመጨረሻ ነጥብ አሁን የክፍያ ጭነት መጨናነቅን መደበኛ ያደርገዋል፣ የመልሶ ማጫወት መሸጎጫውን ያስፈጽማል፣
   ቀኖናዊ ባይቶችን በቆራጥነት ቆርጦ `DaManifestV1` እንደገና ገንብቶ የተመሰጠረውን ጭነት ይጥላል።
   ደረሰኙን ከመሰጠቱ በፊት ወደ `config.da_ingest.manifest_store_dir` ለ SoraFS ኦርኬስትራ; የ
   ደንበኞቻቸው የተመሰጠረውን ቁርጠኝነት እንዲይዙ ተቆጣጣሪው የ `Sora-PDP-Commitment` አርዕስት አያይዟል።
@@ -370,7 +370,7 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ሽፋን ዝገት ፣ Python `ToriiClient`
   አሁን `decode_pdp_commitment_header` ወደ ውጭ ይላካል፣ እና `IrohaSwift` ተንቀሳቃሽ ረዳት አጋዥዎችን ይልካል።
   ደንበኞች ኢንኮድ የተደረገውን የናሙና መርሃ ግብር ወዲያውኑ መደበቅ ይችላሉ።
-- Torii በተጨማሪም `GET /v2/da/manifests/{storage_ticket}` ያጋልጣል ስለዚህ ኤስዲኬዎች እና ኦፕሬተሮች ማኒፌክቶችን ማምጣት ይችላሉ።
+- Torii በተጨማሪም `GET /v1/da/manifests/{storage_ticket}` ያጋልጣል ስለዚህ ኤስዲኬዎች እና ኦፕሬተሮች ማኒፌክቶችን ማምጣት ይችላሉ።
   እና የመስቀለኛ መንገዱን የስፑል ማውጫ ሳይነኩ ቸንክ እቅዶች። ምላሹ Norito ባይት ይመልሳል
   (base64)፣ የተሰራው አንጸባራቂ JSON፣ `chunk_plan` JSON ብሎብ ለ`sorafs fetch` ዝግጁ፣ እና ተዛማጅነት ያለው
   ሄክስ ዳይጀስት (`storage_ticket`፣ `client_blob_id`፣ `blob_hash`፣ `chunk_root`) የታችኛው ተፋሰስ መሣሪያ ማድረግ ይችላል።
@@ -388,7 +388,7 @@ pub struct DaIngestReceipt {
   `--block-hash` መሻር።【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/ምንጮች/IrohaSwift/ToriiClient.swift:170】
 
 ### ትልቅ የክፍያ ጭነት ፍሰት ፍሰትከተዋቀረው የነጠላ ጥያቄ ገደብ በላይ የሆኑ ንብረቶችን ማስገባት የሚፈልጉ ደንበኞች ሀ
-የዥረት ክፍለ ጊዜ `POST /v2/da/ingest/chunk/start` በመደወል። Torii በ ሀ
+የዥረት ክፍለ ጊዜ `POST /v1/da/ingest/chunk/start` በመደወል። Torii በ ሀ
 `ChunkSessionId` (BLAKE3-ከተጠየቀው የብሎብ ሜታዳታ የተገኘ) እና የተደራደረው ቸንክ መጠን።
 እያንዳንዱ ተከታይ የ`DaIngestChunk` ጥያቄ የሚከተሉትን ይይዛል፡-
 
@@ -403,7 +403,7 @@ Torii በ `config.da_ingest.manifest_store_dir/chunks/<session>/` እና
 ድህነትን ለማክበር በድጋሚ አጫውት መሸጎጫ ውስጥ ያለውን ሂደት ይመዘግባል። የመጨረሻው ቁራጭ ሲያርፍ፣ Torii
 ክፍያውን በዲስክ ላይ እንደገና ይሰበስባል (የማህደረ ትውስታ ፍንጮችን ለማስወገድ በ chunk directory በኩል መልቀቅ)
 ቀኖናዊውን አንጸባራቂ/ደረሰኝ ልክ በነጠላ ምት ሰቀላ ያሰላል እና በመጨረሻም ምላሽ ይሰጣል
-`POST /v2/da/ingest` የተደረደሩትን ቅርሶች በመብላት። ያልተሳኩ ክፍለ ጊዜዎች በግልጽ ሊሰረዙ ይችላሉ ወይም
+`POST /v1/da/ingest` የተደረደሩትን ቅርሶች በመብላት። ያልተሳኩ ክፍለ ጊዜዎች በግልጽ ሊሰረዙ ይችላሉ ወይም
 ከ `config.da_ingest.replay_cache_ttl` በኋላ በቆሻሻ የተሰበሰቡ ናቸው። ይህ ንድፍ የአውታረ መረብ ቅርጸቱን ያስቀምጣል
 Norito-ተስማሚ፣ ደንበኛ-ተኮር የሆኑ ድጋሚ ሊደረጉ የሚችሉ ፕሮቶኮሎችን ያስወግዳል፣ እና ያለውን አንጸባራቂ ቧንቧ እንደገና ይጠቀማል።
 ያልተለወጠ.

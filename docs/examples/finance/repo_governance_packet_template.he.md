@@ -80,11 +80,11 @@ default_margin_percent = "0.025"
 
 ### 3.1 Snapshots לתצורה לאחר אישור
 
-לאחר השלמת משאל העם או הצבעת הממשל והפצת השינוי `[settlement.repo]`, לכדו snapshots של `/v2/configuration` מכל peer כדי שמבקרים יוכלו להוכיח שהמדיניות המאושרת חיה בכל הקלאסטר (ראו `docs/source/finance/repo_ops.md` סעיף 2.9 לתהליך הראיות).
+לאחר השלמת משאל העם או הצבעת הממשל והפצת השינוי `[settlement.repo]`, לכדו snapshots של `/v1/configuration` מכל peer כדי שמבקרים יוכלו להוכיח שהמדיניות המאושרת חיה בכל הקלאסטר (ראו `docs/source/finance/repo_ops.md` סעיף 2.9 לתהליך הראיות).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
+curl -fsSL https://peer01.example/v1/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
 | Peer / מקור | קובץ | SHA-256 | גובה בלוק | הערות |

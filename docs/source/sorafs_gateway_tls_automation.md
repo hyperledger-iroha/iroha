@@ -196,7 +196,7 @@ PagerDuty payloads so you can run it directly from CI or ops bastions:
 - `--pagerduty-routing-key <key>` enables PagerDuty integration. Combine it with
   `--pagerduty-payload <path>` (defaults to
   `artifacts/sorafs_gateway_probe/pagerduty_event.json`) and, when ready,
-  `--pagerduty-url https://events.pagerduty.com/v2/enqueue` to post the event.
+  `--pagerduty-url https://events.pagerduty.com/v1/enqueue` to post the event.
   Additional flags (`--pagerduty-component`, `--pagerduty-group`,
   `--pagerduty-link text=url`, `--pagerduty-dedup-key`, etc.) map directly to
   the Events API payload.
@@ -215,7 +215,7 @@ cargo xtask sorafs-gateway-probe \
   --summary-json artifacts/sorafs_gateway_probe/tls_probe.json \
   --pagerduty-routing-key "$PAGERDUTY_ROUTING_KEY" \
   --pagerduty-link "Rollback plan=https://git.example.com/sorafs/tls-rotation" \
-  --pagerduty-url https://events.pagerduty.com/v2/enqueue
+  --pagerduty-url https://events.pagerduty.com/v1/enqueue
 ```
 
 Failed probes immediately trigger PagerDuty (omit the URL during training if you

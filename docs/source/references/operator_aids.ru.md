@@ -14,58 +14,58 @@ translation_last_reviewed: 2026-01-01
 На этой странице перечислены неконсенсусные операторские эндпоинты, которые помогают с наблюдаемостью и устранением неполадок. Ответы — JSON, если не указано иначе.
 
 Консенсус (Sumeragi)
-- GET `/v2/sumeragi/new_view`
+- GET `/v1/sumeragi/new_view`
   - Снимок количества полученных NEW_VIEW по `(height, view)`.
   - Формат: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
   - Пример:
-    - `curl -s http://127.0.0.1:8080/v2/sumeragi/new_view | jq .`
-- GET `/v2/sumeragi/new_view/sse` (SSE)
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
+- GET `/v1/sumeragi/new_view/sse` (SSE)
   - Периодический поток (≈1 с) того же payload для дашбордов.
   - Пример:
-    - `curl -Ns http://127.0.0.1:8080/v2/sumeragi/new_view/sse`
+    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Метрики: gauge `sumeragi_new_view_receipts_by_hv{height,view}` отражают эти счётчики.
-- GET `/v2/sumeragi/status`
+- GET `/v1/sumeragi/status`
   - Снимок индекса лидера, Highest/Locked QCs (`highest_qc`/`locked_qc`, высоты, view, хэши subject), счётчики collector/VRF, отсрочки pacemaker, глубина очереди транзакций и здоровье хранилища RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
-- GET `/v2/sumeragi/status/sse`
-  - Поток SSE (≈1 с) того же payload, что и `/v2/sumeragi/status`, для живых дашбордов.
-- GET `/v2/sumeragi/qc`
+- GET `/v1/sumeragi/status/sse`
+  - Поток SSE (≈1 с) того же payload, что и `/v1/sumeragi/status`, для живых дашбордов.
+- GET `/v1/sumeragi/qc`
   - Снимок highest/locked QCs; включает `subject_block_hash` для highest QC, если известно.
-- GET `/v2/sumeragi/pacemaker`
+- GET `/v1/sumeragi/pacemaker`
   - Таймеры/конфигурация pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
-- GET `/v2/sumeragi/leader`
+- GET `/v1/sumeragi/leader`
   - Снимок индекса лидера. В режиме NPoS включает контекст PRF: `{ height, view, epoch_seed }`.
-- GET `/v2/sumeragi/collectors`
+- GET `/v1/sumeragi/collectors`
   - Детерминированный план коллекторов, полученный из зафиксированной топологии и on-chain параметров: экспортирует `mode`, план `(height, view)` (где `height` равен текущей высоте цепи), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, упорядоченный список коллекторов и `epoch_seed` (hex), когда активен NPoS.
-- GET `/v2/sumeragi/params`
+- GET `/v1/sumeragi/params`
   - Снимок on-chain параметров Sumeragi `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - Когда `da_enabled` равно true, доказательство доступности (`availability evidence` или RBC `READY`) отслеживается, но commit не ждёт его; локальный `DELIVER` RBC также не является требованием. Операторы могут подтвердить здоровье транспорта payload через endpoints RBC ниже.
-- GET `/v2/sumeragi/rbc`
+- GET `/v1/sumeragi/rbc`
   - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
-- GET `/v2/sumeragi/rbc/sessions`
+- GET `/v1/sumeragi/rbc/sessions`
   - Снимок состояния по сессиям (хэш блока, height/view, счётчики чанков, флаг delivered, метка `invalid`, хэш payload, boolean recovered) для диагностики зависших доставок RBC и выделения восстановленных сессий после перезапуска.
   - CLI‑сокращение: `iroha --output-format text ops sumeragi rbc sessions` печатает `hash`, `height/view`, прогресс чанков, количество ready и флаги invalid/delivered.
 
 Доказательства (аудит; вне консенсуса)
-- GET `/v2/sumeragi/evidence/count` → `{ "count": <u64> }`
-- GET `/v2/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
+- GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
+- GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
   - Включает базовые поля (например, DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal) для инспекции.
   - Примеры:
-    - `curl -s http://127.0.0.1:8080/v2/sumeragi/evidence/count | jq .`
-    - `curl -s http://127.0.0.1:8080/v2/sumeragi/evidence | jq .`
-- POST `/v2/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
+- POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI‑помощники:
     - `iroha --output-format text ops sumeragi evidence list`
     - `iroha --output-format text ops sumeragi evidence count`
     - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (или `--evidence-hex-file <path>`)
 
 Аутентификация оператора (WebAuthn/mTLS)
-- POST `/v2/operator/auth/registration/options`
+- POST `/v1/operator/auth/registration/options`
   - Возвращает параметры регистрации WebAuthn (`publicKey`) для первоначального enrolment учётных данных.
-- POST `/v2/operator/auth/registration/verify`
+- POST `/v1/operator/auth/registration/verify`
   - Проверяет attestation‑payload WebAuthn и сохраняет операторские учётные данные.
-- POST `/v2/operator/auth/login/options`
+- POST `/v1/operator/auth/login/options`
   - Возвращает параметры аутентификации WebAuthn (`publicKey`) для входа оператора.
-- POST `/v2/operator/auth/login/verify`
+- POST `/v1/operator/auth/login/verify`
   - Проверяет assertion‑payload WebAuthn и возвращает токен сессии оператора.
 - Заголовки:
   - `x-iroha-operator-session`: токен сессии для операторских endpoints (выдан login verify).
@@ -95,7 +95,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v2/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -110,7 +110,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v2/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

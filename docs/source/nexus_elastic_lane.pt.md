@@ -143,7 +143,7 @@ exigem manifest agora devem expor `manifest_path` nao vazio - o helper falha rap
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v2/sumeragi/status \
+  --status-url https://torii.example.com/v1/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -280,7 +280,7 @@ manifest em um conjunto de artefatos para publicar runs de carga diretamente nos
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v2/sumeragi/status \
+     --status-url https://torii.example.com/v1/sumeragi/status \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -339,7 +339,7 @@ Enquanto o workload satura a lane:
 1. Snapshot de status + metrics do Torii:
 
    ```bash
-   curl -sS https://torii.example.com/v2/sumeragi/status \
+   curl -sS https://torii.example.com/v1/sumeragi/status \
      > artifacts/nexus/load/payments-2026q2/torii_status.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom

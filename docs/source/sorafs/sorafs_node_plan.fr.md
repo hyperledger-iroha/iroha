@@ -127,12 +127,12 @@ Logs / events:
 
 | Task | Description | Dependencies |
 |------|-------------|--------------|
-| PoR ingestion worker | Expand `NodeHandle::ingest_por_proof` to accept streamed proofs, persist them under `PorCoordinatorRuntime::storage`, and expose a Norito status endpoint (`/v2/sorafs/por/ingestion`). | `crates/iroha_torii/src/sorafs/por.rs`, `crates/sorafs_node/src/por.rs`. |
+| PoR ingestion worker | Expand `NodeHandle::ingest_por_proof` to accept streamed proofs, persist them under `PorCoordinatorRuntime::storage`, and expose a Norito status endpoint (`/v1/sorafs/por/ingestion`). | `crates/iroha_torii/src/sorafs/por.rs`, `crates/sorafs_node/src/por.rs`. |
 | Challenge queue plumbing | Subscribe to the coordinator events emitted by `PorCoordinatorRuntime::run_epoch`, fan out challenges to storage workers, and ensure retries are idempotent across restarts. | Runtime wiring hooks introduced in `PorCoordinatorRuntime`. |
 | Governance telemetry | Emit `sorafs_por_ingest_backlog` + `sorafs_por_ingest_failures_total` metrics, thread them into the gateway dashboards, and document alert thresholds in `docs/source/sorafs_observability_plan.md`. | Observability plan + `crates/iroha_telemetry`. |
 | Operator tooling | Add a `sorafs-node ingest por --manifest <cid>` helper plus runbook updates so operators can replay proofs locally before submitting. | CLI additions under `crates/sorafs_node/src/bin/sorafs-node.rs`. |
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` now delegates to
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now delegates to
   `sorafs_node::NodeHandle::por_ingestion_status`, returning backlog depth, the oldest epoch/deadline, and the
   most recent success/failure timestamps per provider while Torii updates
   `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` so the dashboards track stalled manifests

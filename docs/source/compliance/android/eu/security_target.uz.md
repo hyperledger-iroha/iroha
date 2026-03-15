@@ -55,7 +55,7 @@ Taxminlar:
 | O'zgartirilgan konfiguratsiya ko'rinishi | `ClientConfig` manifestlarni (xesh + sxema) qo'llashdan oldin tasdiqlaydi va `android.telemetry.config.reload` orqali rad etilgan qayta yuklashni qayd qiladi. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Imzolash kalitlarining buzilishi | StrongBox talab qiladigan siyosatlar, attestatsiya jabduqlari va qurilma-matritsa tekshiruvlari driftni aniqlaydi; har bir voqea uchun hujjatlashtirilgan bekor qiladi. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Telemetriyada PII qochqinligi | Blake2b-xeshlangan vakolatlar, chelaklangan qurilma profillari, tashuvchining qoldirilishi, jurnalni bekor qilish. | `docs/source/sdk/android/telemetry_redaction.md`; Qo'llab-quvvatlash o'yin kitobi §8. |
-| Torii RPC | da takrorlang yoki o'chirib tashlang `/v2/pipeline` soʻrov tuzuvchisi TLS pinlash, shovqin kanali siyosati va xeshlangan vakolat konteksti bilan qayta urinib koʻring. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (rejalashtirilgan). |
+| Torii RPC | da takrorlang yoki o'chirib tashlang `/v1/pipeline` soʻrov tuzuvchisi TLS pinlash, shovqin kanali siyosati va xeshlangan vakolat konteksti bilan qayta urinib koʻring. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (rejalashtirilgan). |
 | Imzosiz yoki takrorlanmaydigan nashrlar | AND6 nazorat ro'yxati bilan tasdiqlangan CycloneDX SBOM + Sigstore sertifikatlari; chiqarish RFClari `docs/source/release/provenance/android/` da dalil talab qiladi. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | To'liq bo'lmagan hodisani boshqarish | Runbook + playbook bekor qilish, tartibsizlik mashqlari va eskalatsiya daraxtini belgilaydi; telemetriyani bekor qilish imzolangan Norito so'rovlarini talab qiladi. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ Taxminlar:
 | 7.4 Kirishni boshqarish | StrongBox siyosatlari + imzolangan Norito artefaktlarini talab qiluvchi ish jarayonini bekor qilish. |
 | 7.5 Kriptografik boshqaruv elementlari | AND2 dan kalitlarni yaratish, saqlash va sertifikatlash talablari (kalitlarni boshqarish bo'yicha qo'llanma). |
 | 7.6 Operatsiya xavfsizligi | Telemetriya xashing, tartibsizlik mashqlari, hodisalarga javob berish va dalillarni chiqarish. |
-| 7.7 Aloqa xavfsizligi | `/v2/pipeline` TLS siyosati + xeshlangan vakolatlar (telemetrik redaktsiya hujjati). |
+| 7.7 Aloqa xavfsizligi | `/v1/pipeline` TLS siyosati + xeshlangan vakolatlar (telemetrik redaktsiya hujjati). |
 | 7.8 Tizimni sotib olish / ishlab chiqish | AND5/AND6 rejalarida takrorlanadigan Gradle konstruksiyalari, SBOMlar va kelib chiqish eshiklari. |
 | 7.9 Yetkazib beruvchi munosabatlari | Buildkite + Sigstore sertifikatlari uchinchi tomonga qaramlik SBOMlari bilan birga qayd etilgan. |
 | 7.10 Hodisalarni boshqarish | Runbook/Playbook eskalatsiyasi, jurnalni bekor qilish, telemetriya xatolik hisoblagichlari. |

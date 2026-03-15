@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 - Узел 18.18 находится рядом с `npm` и `pnpm`.
 - `sorafs_cli` вместо `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- عنوان Torii на `/v2/sorafs/*` в разделе "Программа/выбор" Будьте готовы к исчезновению.
+- عنوان Torii на `/v1/sorafs/*` в разделе "Программа/выбор" Будьте готовы к исчезновению.
 - مُصدِر OIDC (GitHub Actions, GitLab, идентификатор рабочей нагрузки, код) لاصدار `SIGSTORE_ID_TOKEN`.
 — Добавлено: `examples/sorafs_cli_quickstart.sh` для настройки рабочих процессов и `docs/source/sorafs_ci_templates.md` для рабочих процессов на GitHub/GitLab.
 - Проверка OAuth Попробуйте попробовать (`DOCS_OAUTH_*`)
@@ -576,7 +576,7 @@ npm run monitor:publishing -- \
 
 | Имя | غرض |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Код Torii или `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Код Torii или `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Эпоха المسجل مع الارسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Нажмите на кнопку «Скрыть». |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | кортеж псевдонима المربوط عند `perform_submit` = `true`. |

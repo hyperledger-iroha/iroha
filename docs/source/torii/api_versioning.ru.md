@@ -28,7 +28,7 @@ latest supported version and echoes it back alongside the full support matrix.
   - `torii_api_version_unsupported` — version not in the server support set.
   - `torii_api_version_too_old` — version below the per-surface minimum.
 
-The `/v2/api/versions` endpoint surfaces the support matrix (`default`,
+The `/v1/api/versions` endpoint surfaces the support matrix (`default`,
 `supported`, `min_proof_version`, optional `sunset_unix`) for diagnostics and
 SDK defaults. Clients should send the header explicitly; the CLI now defaults
 to `1.1` and threads overrides via `torii_api_version` in `client.toml`.

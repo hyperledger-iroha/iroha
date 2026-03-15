@@ -61,7 +61,7 @@ headers کے ساتھ فراہم ہو۔ یہ چیک لسٹ موجودہ helpers 
 
 `sorafs_cli manifest submit` کے ذریعے manifests کو Torii پر پش کریں اور aliases بائنڈ کریں۔
 `${SUBMITTED_EPOCH}` کو تازہ ترین consensus epoch پر سیٹ کریں (مثلا
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` یا ڈیش بورڈ سے)۔
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` یا ڈیش بورڈ سے)۔
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -69,7 +69,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

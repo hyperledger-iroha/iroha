@@ -76,13 +76,13 @@ slug: /sorafs/staging-manifest-playbook-hy
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Հարցրեք հայտնաբերման վերջնակետին և հաստատեք, որ գովազդը հայտնվում է կանոնական կեղծանուններով.
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Համոզվեք, որ `profile_aliases` ներառում է `"sorafs.sf1@1.0.0"` որպես առաջին մուտք:

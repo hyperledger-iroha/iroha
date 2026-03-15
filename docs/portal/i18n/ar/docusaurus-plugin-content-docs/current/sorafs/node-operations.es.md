@@ -44,7 +44,7 @@ Sidebar_label: دليل عمليات العقدة
   ```
 
 - تأكد من أن العملية Torii ستتيح الوصول إلى القراءة/الكتابة إلى `data_dir`.
-- تأكد من أن العقدة تعلن عن السعة المنتهية عبر `GET /v2/sorafs/capacity/state` عندما يتم تسجيل إعلان.
+- تأكد من أن العقدة تعلن عن السعة المنتهية عبر `GET /v1/sorafs/capacity/state` عندما يتم تسجيل إعلان.
 - عندما يتم تأهيل الملحق، تعرض لوحات المعلومات قدرًا كبيرًا من وحدات التحكم GiB·hour/PoR كالمساندة لتسليط الضوء على الاتجاهات دون اهتزاز إلى جانب القيم الفورية.
 
 ### تنفيذ مباشر لـ CLI (اختياري)
@@ -81,8 +81,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 بمجرد أن يكون Torii نشطًا، يمكنك استرداد نفس المصنوعات عبر HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 يتم استخدام نقاط النهاية المتعددة من قبل عامل التخزين المضمن، كما أن اختبارات الدخان لـ CLI ومسبار البوابة متزامنة بشكل دائم.## 2. دبوس Recorrido → جلب
@@ -91,7 +91,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. إرسال البيان إلى قاعدة التدوين 64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. استرداد البيانات الموضحة:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. قدم بيانًا على الأقل لكيفية وصولك.
 2. استكمال العملية Torii (العقدة كاملة).
 3. قم بإعادة طلب الجلب. يجب أن تكون الحمولة قابلة للاسترداد ويجب أن تتزامن الحمولة مع القيمة السابقة للتجديد.
-4. افحص `GET /v2/sorafs/storage/state` للتأكد من أن `bytes_used` يعكس البيانات المستمرة أثناء الإنشاء.
+4. افحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used` يعكس البيانات المستمرة أثناء الإنشاء.
 
 ## 4. تجربة الاسترداد من قبل cuota
 
@@ -129,7 +129,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 
 1. قم بتقديم بيان.
 2. طلب ​​عرض تقديمي:```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - يجب متابعة لوحات المعلومات:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
-  - مقاومات النجاح/سقوط PoR Expuestos عبر `/v2/sorafs/capacity/state`
+  - مقاومات النجاح/سقوط PoR Expuestos عبر `/v1/sorafs/capacity/state`
   - أهداف نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
 
 تضمن متابعة هذه التمارين أن يتمكن عامل التخزين من إدخال البيانات، وحفظ الموارد، واستئناف الحصص التي تم تكوينها، وإجراء اختبارات حول مدى تحديد العقدة قبل أن تعلن العقدة عن قدرتها على زيادة اتساعها.

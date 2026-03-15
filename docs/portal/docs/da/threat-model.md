@@ -209,7 +209,7 @@ whitelists malicious providers, or suppresses alerts.
 - The DA replay cache and cursor persistence landed in DA-2. See the
   implementation in `crates/iroha_core/src/da/replay_cache.rs` (cache logic) and
   the Torii integration in `crates/iroha_torii/src/da/ingest.rs`, which threads the
-  fingerprint checks through `/v2/da/ingest`.
+  fingerprint checks through `/v1/da/ingest`.
 - PDP/PoTR streaming simulations are exercised via the proof-stream harness in
   `crates/sorafs_car/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
   and failure scenarios animated in the threat model.

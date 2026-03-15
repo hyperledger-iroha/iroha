@@ -4,13 +4,13 @@ title: Torii MCP API
 description: Reference guide for using Torii's native Model Context Protocol bridge.
 ---
 
-Torii exposes a native Model Context Protocol (MCP) bridge at `/v2/mcp`.
+Torii exposes a native Model Context Protocol (MCP) bridge at `/v1/mcp`.
 This endpoint lets agents discover tools and invoke Torii/Connect routes through JSON-RPC.
 
 ## Endpoint shape
 
-- `GET /v2/mcp` returns capabilities metadata (not JSON-RPC wrapped).
-- `POST /v2/mcp` accepts JSON-RPC 2.0 requests.
+- `GET /v1/mcp` returns capabilities metadata (not JSON-RPC wrapped).
+- `POST /v1/mcp` accepts JSON-RPC 2.0 requests.
 - If `torii.mcp.enabled = false`, neither route is exposed.
 - If `torii.require_api_token` is enabled, missing/invalid token is rejected before JSON-RPC dispatch.
 

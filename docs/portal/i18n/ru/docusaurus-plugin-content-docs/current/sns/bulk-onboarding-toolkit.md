@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Хелпер делает один `POST /v2/sns/registrations` на запрос и останавливается при
+- Хелпер делает один `POST /v1/sns/registrations` на запрос и останавливается при
   первой HTTP ошибке. Ответы добавляются в лог как NDJSON записи.
-- `--poll-status` повторно запрашивает `/v2/sns/registrations/{selector}` после
+- `--poll-status` повторно запрашивает `/v1/sns/registrations/{selector}` после
   каждой отправки (до `--poll-attempts`, по умолчанию 5), чтобы подтвердить
   видимость записи. Укажите `--suffix-map` (JSON маппинг `suffix_id` в значения
   "suffix"), чтобы инструмент мог вывести `{label}.{suffix}` для polling.

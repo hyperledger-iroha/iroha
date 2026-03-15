@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب مع libros de tarifas حتى تتمكن لوحات المتابعة
 من الضبط على الأرصدة المنخفضة و penas:
 
-- RESTO: `GET /v2/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
+- RESTO: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
   تعكس حقول التي تم التحقق منها في اختبار remojo. راجع
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importación Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم

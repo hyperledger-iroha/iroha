@@ -6815,7 +6815,7 @@ fn resolve_asset_definition_id_by_alias(
 ) -> Result<AssetDefinitionId> {
     let response = client
         .post_asset_alias_resolve(alias.as_ref())
-        .wrap_err("failed to call `/v2/assets/aliases/resolve`")?;
+        .wrap_err("failed to call `/v1/assets/aliases/resolve`")?;
     let status = response.status();
     if !status.is_success() {
         if status.as_u16() == 404 {

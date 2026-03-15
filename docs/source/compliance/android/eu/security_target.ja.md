@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 |改ざんされた構成マニフェスト | `ClientConfig` は適用前にマニフェスト (ハッシュ + スキーマ) を検証し、拒否されたリロードを `android.telemetry.config.reload` 経由で記録します。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2。 |
 |署名キーの侵害 | StrongBox に必要なポリシー、認証ハーネス、およびデバイス マトリックス監査によりドリフトが特定されます。オーバーライドはインシデントごとに文書化されます。 | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`。 |
 |テレメトリにおける PII 漏洩 | Blake2b でハッシュされた認証機関、バケット化されたデバイス プロファイル、キャリアの省略、ログのオーバーライド。 | `docs/source/sdk/android/telemetry_redaction.md`;サポート ハンドブック §8。 |
-| Torii RPC での再生またはダウングレード | `/v2/pipeline` リクエスト ビルダーは、ハッシュ化された権限コンテキストを使用して、TLS ピニング、ノイズ チャネル ポリシー、および再試行バジェットを強制します。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md`（予定）。 |
+| Torii RPC での再生またはダウングレード | `/v1/pipeline` リクエスト ビルダーは、ハッシュ化された権限コンテキストを使用して、TLS ピニング、ノイズ チャネル ポリシー、および再試行バジェットを強制します。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md`（予定）。 |
 |署名のないリリースまたは複製不可能なリリース | CycloneDX SBOM + Sigstore 認証は AND6 チェックリストによってゲートされます。リリース RFC には `docs/source/release/provenance/android/` の証拠が必要です。 | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`。 |
 |不完全なインシデント処理 |ランブック + プレイブックは、オーバーライド、カオス ドリル、エスカレーション ツリーを定義します。テレメトリのオーバーライドには、署名された Norito リクエストが必要です。 | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`。 |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 アクセス制御 | StrongBox ポリシー + 署名された Norito アーティファクトを必要とするオーバーライド ワークフロー。 |
 | 7.5 暗号化コントロール | AND2 からのキーの生成、保管、および証明の要件 (キー管理ガイド)。 |
 | 7.6 運用上のセキュリティ |テレメトリ ハッシュ、カオス リハーサル、インシデント対応、リリース証拠ゲート。 |
-| 7.7 通信セキュリティ | `/v2/pipeline` TLS ポリシー + ハッシュされた権限 (テレメトリ編集ドキュメント)。 |
+| 7.7 通信セキュリティ | `/v1/pipeline` TLS ポリシー + ハッシュされた権限 (テレメトリ編集ドキュメント)。 |
 | 7.8 システムの取得/開発 | AND5/AND6 プランの再現可能な Gradle ビルド、SBOM、来歴ゲート。 |
 | 7.9 サプライヤーとの関係 | Buildkite + Sigstore 証明書は、サードパーティの依存関係 SBOM とともに記録されます。 |
 | 7.10 インシデント管理 |ランブック/プレイブックのエスカレーション、ログのオーバーライド、テレメトリの失敗カウンター。 |

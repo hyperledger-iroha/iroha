@@ -28,7 +28,7 @@ pub struct DaStripeLayout {
     pub row_parity_stripes: u16,
 }
 
-/// Norito payload accepted by the Torii `/v2/da/ingest` endpoint.
+/// Norito payload accepted by the Torii `/v1/da/ingest` endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]

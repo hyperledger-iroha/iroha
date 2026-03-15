@@ -97,7 +97,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 Развертывание телеметрии:
 
 - **Телеметрия fetch чанков** — CLI Iroha `sorafs toolkit pack` эмитит digests чанков, метаданные CAR и корни PoR для ingestion в dashboards.
-- **Provider adverts** — payloads adverts включают метаданные capabilities и aliases; проверяйте покрытие через `/v2/sorafs/providers` (например, наличие capability `range`).
+- **Provider adverts** — payloads adverts включают метаданные capabilities и aliases; проверяйте покрытие через `/v1/sorafs/providers` (например, наличие capability `range`).
 - **Мониторинг gateway** — операторы должны сообщать пары `Content-Chunker`/`Content-Digest`, чтобы обнаруживать неожиданные downgrades; ожидается, что использование bridge снизится до нуля до депрекации.
 
 Политика депрекации: как только утвержден профиль-преемник, запланируйте окно двойной публикации

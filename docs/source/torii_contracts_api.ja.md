@@ -14,7 +14,7 @@ translator: manual
 
 ## エンドポイント
 
-- **POST `/v2/contracts/code`**
+- **POST `/v1/contracts/code`**
   - `RegisterSmartContractCode` 命令を署名付きトランザクションにラップして送信します。
   - リクエストボディ: `RegisterContractCodeDto`（JSON または Norito JSON。後述）。
   - レスポンス: 正常受理時は HTTP `202 Accepted`。その他は標準のトランザクション受理エラー。
@@ -29,7 +29,7 @@ translator: manual
     | `manifest.code_hash` / `manifest.abi_hash` が 32 バイト小文字 hex ではない | `400 Bad Request` | `invalid JSON body: invalid hex string ... manifest.code_hash` など | Norito JSON 抽出時に検証されます。 |
     | トランザクションキュー満杯 | `429 Too Many Requests` | キュー拒否 JSON（`code`, `message`, `queue`, `retry_after_seconds` など） | レスポンスに `Retry-After` とキュー状態ヘッダが付与されます。 |
 
-    権限不足時に `/v2/pipeline/transactions/status` が返す拒否例（読みやすく整形）:
+    権限不足時に `/v1/pipeline/transactions/status` が返す拒否例（読みやすく整形）:
 
     ```json
     {
@@ -62,33 +62,33 @@ translator: manual
     }
     ```
 
-- **GET `/v2/contracts/code/{code_hash}`**
+- **GET `/v1/contracts/code/{code_hash}`**
   - コンテントアドレス化された `code_hash` によりオンチェーンの `ContractManifest` を取得します。
   - パスパラメータ: 32 バイト hex 文字列。
   - レスポンスボディ: `ContractCodeRecordDto`（JSON）。`manifest` のみを返します。
 
-- **POST `/v2/contracts/deploy`**
+- **POST `/v1/contracts/deploy`**
   - Base64 の `.to` バイトコード、権限アカウント、秘密鍵を受け取り、`code_hash`（プログラム本体）と `abi_hash`（ヘッダー `abi_version` 由来）を算出します。
   - リクエストボディ: `DeployContractDto`。レスポンスボディ: `DeployContractResponseDto`。
   - 単一トランザクションに `RegisterSmartContractCode`（マニフェスト）と `RegisterSmartContractBytes`（コード保存）をまとめて送信します。
   - バイトコードサイズはカスタムパラメータ `max_contract_code_bytes`（既定 16 MiB）以内である必要があります。より大きなプログラムをアップロードする場合は事前に値を引き上げてください。
   - テレメトリ: ハンドラーエラー時は `torii_contract_errors_total{endpoint="deploy"}`、レートリミッター作動時は `torii_contract_throttled_total{endpoint="deploy"}` がインクリメントされます。
-- **POST `/v2/contracts/instance`**
+- **POST `/v1/contracts/instance`**
   - Base64 の `.to` バイトコードと対象 `(namespace, contract_id)` を受け取り、デプロイとアクティベーションを一度に行います。
   - `RegisterSmartContractCode`、`RegisterSmartContractBytes`、`ActivateContractInstance` を同一トランザクションで送信します。
   - レスポンスボディ: `{ "ok": true, "namespace": "…", "contract_id": "…", "code_hash_hex": "…", "abi_hash_hex": "…" }`。
   - テレメトリ: ハンドラーエラー時は `torii_contract_errors_total{endpoint="instance"}`、レートリミッター作動時は `torii_contract_throttled_total{endpoint="instance"}` がインクリメントされます。
 
-- **GET `/v2/contracts/code-bytes/{code_hash}`**
+- **GET `/v1/contracts/code-bytes/{code_hash}`**
   - 指定 `code_hash` のコードバイトを取得します。
   - レスポンスボディ: `{ "code_b64": "…" }`。
 
-- **POST `/v2/contracts/instance/activate`**
+- **POST `/v1/contracts/instance/activate`**
   - `(namespace, contract_id)` に `code_hash` をバインドする `ActivateContractInstance` を送信します。
   - リクエストボディ: `ActivateInstanceDto`。レスポンスボディ: `ActivateInstanceResponseDto`。
   - テレメトリ: ハンドラーエラー時は `torii_contract_errors_total{endpoint="activate"}`、レートリミッター作動時は `torii_contract_throttled_total{endpoint="activate"}` がインクリメントされます。
 
-- **GET `/v2/contracts/instances/{ns}`**
+- **GET `/v1/contracts/instances/{ns}`**
   - ネームスペース `ns` における有効なコントラクトインスタンス一覧を返します（ガバナンスの一覧 API と同様の構造）。
   - クエリ: `contains`, `hash_prefix`, `offset`, `limit`, `order`（ガバナンス API と同じ意味）。
   - レスポンス: `{ namespace, instances: [{ contract_id, code_hash_hex }], total, offset, limit }`。
@@ -230,7 +230,7 @@ translator: manual
 
 ### レート制限とテレメトリ
 
-- `torii.deploy_rate_per_origin_per_sec` と `torii.deploy_burst_per_origin` は `/v2/contracts/{code,deploy,instance,instance/activate}` を保護する共通トークンバケットを設定します。既定値は 1 オリジンあたり 1 秒に 4 リクエスト、バースト 8（`X-API-Token`、リモート IP、エンドポイント名の組み合わせで識別）です。
+- `torii.deploy_rate_per_origin_per_sec` と `torii.deploy_burst_per_origin` は `/v1/contracts/{code,deploy,instance,instance/activate}` を保護する共通トークンバケットを設定します。既定値は 1 オリジンあたり 1 秒に 4 リクエスト、バースト 8（`X-API-Token`、リモート IP、エンドポイント名の組み合わせで識別）です。
 - レートリミッターで拒否されたリクエストは `torii_contract_throttled_total{endpoint}`（`endpoint` は `code` / `deploy` / `instance` / `activate`）をインクリメントします。
 - ハンドラー内で発生したエラー（不正ボディ、権限不足、キュー失敗など）は `torii_contract_errors_total{endpoint}` をインクリメントします。キューテレメトリと合わせて監視してください。
 
@@ -246,13 +246,13 @@ curl -s -X POST \
         "private_key": "ed25519:…",
         "manifest": { "code_hash": "<32-byte-hex>", "abi_hash": null }
       }' \
-  http://127.0.0.1:8080/v2/contracts/code
+  http://127.0.0.1:8080/v1/contracts/code
 ```
 
 マニフェストの取得:
 
 ```bash
-curl -s http://127.0.0.1:8080/v2/contracts/code/<32-byte-hex> | jq .
+curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
 ```
 
 デプロイとコードバイト取得:
@@ -265,9 +265,9 @@ curl -s -X POST \
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
-  http://127.0.0.1:8080/v2/contracts/deploy | jq .
+  http://127.0.0.1:8080/v1/contracts/deploy | jq .
 
-curl -s http://127.0.0.1:8080/v2/contracts/code-bytes/<32-byte-hex> | jq .
+curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
 ```
 
 デプロイとアクティベーションを同時に行う:
@@ -282,7 +282,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_b64": "…"
       }' \
-  http://127.0.0.1:8080/v2/contracts/instance | jq .
+  http://127.0.0.1:8080/v1/contracts/instance | jq .
 ```
 
 既存のアーティファクトをアクティベートする:
@@ -297,7 +297,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_hash": "<32-byte-hex>"
       }' \
-  http://127.0.0.1:8080/v2/contracts/instance/activate | jq .
+  http://127.0.0.1:8080/v1/contracts/instance/activate | jq .
 ```
 
 ### `abi_hash` の算出

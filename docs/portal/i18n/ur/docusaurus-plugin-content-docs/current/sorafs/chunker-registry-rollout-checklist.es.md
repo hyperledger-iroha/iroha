@@ -76,7 +76,7 @@ ID: چنکر رجسٹری-رول آؤٹ-چیک لسٹ
    `torii.sorafs.discovery.admission.envelopes_dir` کے ذریعہ حوالہ دیا گیا ہے۔
 3. تصدیق کریں کہ فراہم کنندہ اشتہارات کو دریافت API کے ذریعے پھیلایا جاتا ہے:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. گورننس ہیڈر کے ساتھ مینی فیسٹ/پلان اینڈ پوائنٹس چلائیں:
    ```bash

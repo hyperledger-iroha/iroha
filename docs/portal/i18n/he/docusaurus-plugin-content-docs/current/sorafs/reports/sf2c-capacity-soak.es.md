@@ -47,7 +47,7 @@ Las pruebas completan en menos de un segundo en un portátil estándar y no requ
 Torii ahora expone תצלומי מצב של קרדיטו של ספקים פנקסי חשבונות עמלה עבור לוחות מחוונים
 puedan gatear sobre saldos bajos y strikes penalty:
 
-- מנוחה: `GET /v2/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
+- מנוחה: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
   reflejan los campos del ledger verificados en la prueba de soak. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` גרפיקה

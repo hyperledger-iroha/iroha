@@ -19,11 +19,11 @@ translation_last_reviewed: 2026-02-07
 - إنشاء SDK:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` تم الاتصال بـ `GovernanceProposalResult` (تسوية حالة/نوع القطب)، `ToriiClient.get_governance_referendum_typed` تم الاتصال بـ `GovernanceReferendumResult`، `ToriiClient.get_governance_tally_typed` يعبر عن `GovernanceTally`، `ToriiClient.get_governance_locks_typed` يعبر عن `GovernanceLocksResult`، `ToriiClient.get_governance_unlock_stats_typed` يعبر عن `GovernanceUnlockStats`، و تم تفعيل `ToriiClient.list_governance_instances_typed` من خلال `GovernanceInstancesPage`، وهو نوع مخصص للتسليم عبر جميع الحوكمة الشاملة من خلال الاستخدام التجريبي في ملف README.
 - عميل Python البسيط (`iroha_torii_client`): `ToriiClient.finalize_referendum` و`ToriiClient.enact_proposal` يقوم بتكوين الحزم النموذجية `GovernanceInstructionDraft` (الموافقة على ذلك) Torii الهيكل العظمي `tx_instructions`)، احذف التوزيع الدقيق لـ JSON من خلال إنهاء/تفعيل التدفقات.
-- JavaScript (`@iroha/iroha-js`): يوفر `ToriiClient` أنواعًا من المساعدين للمقترحات والاستفتاءات وعمليات الفرز والأقفال وفتح الإحصائيات، وما إلى ذلك `listGovernanceInstances(namespace, options)` بالإضافة إلى نقاط نهاية المجلس (`getGovernanceCouncilCurrent`، `governanceDeriveCouncilVrf`، `governancePersistCouncil`، `getGovernanceCouncilAudit`)، بحيث يمكن لعملاء Node.js زيارة `/v2/gov/instances/{ns}` والبدء سير العمل المدعوم من VRF إلى جانب حالات التعاقد القائمة على النظام.
+- JavaScript (`@iroha/iroha-js`): يوفر `ToriiClient` أنواعًا من المساعدين للمقترحات والاستفتاءات وعمليات الفرز والأقفال وفتح الإحصائيات، وما إلى ذلك `listGovernanceInstances(namespace, options)` بالإضافة إلى نقاط نهاية المجلس (`getGovernanceCouncilCurrent`، `governanceDeriveCouncilVrf`، `governancePersistCouncil`، `getGovernanceCouncilAudit`)، بحيث يمكن لعملاء Node.js زيارة `/v1/gov/instances/{ns}` والبدء سير العمل المدعوم من VRF إلى جانب حالات التعاقد القائمة على النظام.
 
 نقاط النهاية
 
-- المشاركة `/v2/gov/proposals/deploy-contract`
+- المشاركة `/v1/gov/proposals/deploy-contract`
   - الطلب (JSON):
     {
       "مساحة الاسم": "التطبيقات"،
@@ -40,30 +40,30 @@ translation_last_reviewed: 2026-02-07
   - التحقق من الصحة: قم بتسجيل الدخول إلى `abi_hash` من أجل `abi_version` وتجاوز الحاجة. ل`abi_version = "v1"` عذرًا - `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
 واجهة برمجة تطبيقات العقود (النشر)
-- المشاركة `/v2/contracts/deploy`
+- المشاركة `/v1/contracts/deploy`
   - الطلب: { "authority": "i105..."، "private_key": "..."، "code_b64": "..." }
   - السلوك: انتقل إلى `code_hash` من خلال برامج IVM و`abi_hash` من خلال `abi_version`، ثم قم بالتصحيح `RegisterSmartContractCode` (البيان) و`RegisterSmartContractBytes` (البيانات الكاملة `.to`) من `authority`.
   - الرد: { "ok": صحيح، "code_hash_hex": "..."، "abi_hash_hex": "..." }
   - ذات صلة:
-    - احصل على `/v2/contracts/code/{code_hash}` -> بيان الضمان المصرح به
-    - احصل على `/v2/contracts/code-bytes/{code_hash}` -> أدخل `{ code_b64 }`
-- المشاركة `/v2/contracts/instance`
+    - احصل على `/v1/contracts/code/{code_hash}` -> بيان الضمان المصرح به
+    - احصل على `/v1/contracts/code-bytes/{code_hash}` -> أدخل `{ code_b64 }`
+- المشاركة `/v1/contracts/instance`
   - الطلب: { "authority": "i105..."، "private_key": "..."، "مساحة الاسم": "apps"، "contract_id": "calc.v1"، "code_b64": "..." }
   - السلوك: قم باستخدام الرمز الثانوي المفضل وقم بتنشيط رسم الخرائط `(namespace, contract_id)` من خلال `ActivateContractInstance`.
   - الاستجابة: { "ok": true، "namespace": "apps"، "contract_id": "calc.v1"، "code_hash_hex": "..."، "abi_hash_hex": "..." }
 
 خدمة الاسم المستعار
-- المشاركة `/v2/aliases/voprf/evaluate`
+- المشاركة `/v1/aliases/voprf/evaluate`
   - الطلب: { "blinded_element_hex": "..." }
   - الاستجابة: { "evaluated_element_hex": "...128hex"، "backend": "blake2b512-mock" }
     - `backend` ينفذ التقييم. الاسم الحقيقي: `blake2b512-mock`.
   - ملاحظات: تحديد السعر الوهمي، أول Blake2b512 مع فصل المجال `iroha.alias.voprf.mock.v1`. ممتاز لأدوات الاختبار، لأن خط أنابيب الإنتاج VOPRF غير مقيد بـ Iroha.
   - الأخطاء: HTTP `400` في حالة عدم وجود مفتاح سداسي عشري. يتم إرسال Torii إلى Norito مغلف `ValidationFail::QueryFailed::Conversion` مع وحدة فك التشفير الخاصة به.
-- المشاركة `/v2/aliases/resolve`
+- المشاركة `/v1/aliases/resolve`
   - الطلب: { "الاسم المستعار": "GB82 WEST 1234 5698 7654 32" }
   - الاستجابة: { "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "i105..."، "index": 0، "source": "iso_bridge" }
   - ملاحظات: تحتاج إلى التدريج المرحلي لجسر ISO (`[iso_bridge.account_aliases]` в `iroha_config`). يقوم Torii بتطبيع الاسم المستعار وإجراء الاختبارات والدخول إلى السجل النهائي. قم بالموافقة على 404 في الاسم المستعار و 503 عند إلغاء وقت تشغيل جسر ISO.
-- المشاركة `/v2/aliases/resolve_index`
+- المشاركة `/v1/aliases/resolve_index`
   - الطلب: { "الفهرس": 0 }
   - الاستجابة: { "الفهرس": 0، "الاسم المستعار": "GB82WEST12345698765432"، "account_id": "i105..."، "source": "iso_bridge" }
   -ملاحظات: فهرس الاسم المستعار يُسمى محددًا حسب التكوينات (المستندة إلى 0). يمكن للعملاء الرد على الأسئلة دون الاتصال بالإنترنت من أجل تعزيز مسار التدقيق من خلال الاسم المستعار للمصادقة.
@@ -74,7 +74,7 @@ translation_last_reviewed: 2026-02-07
   - الافتراضي: 16 ميجابايت. يتم إلغاء استنساخ `RegisterSmartContractBytes` عندما يتم تحديد حجم `.to` للحد الأقصى، مع انتهاك ثابت للغاية.
   - يمكن للمشغلين الإزالة من خلال `SetParameter(Custom)` مع `id = "max_contract_code_bytes"` والحمولة الصافية.
 
-- المشاركة `/v2/gov/ballots/zk`
+- المشاركة `/v1/gov/ballots/zk`
   - الطلب: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "election_id": "e1"، "proof_b64": "..."، "public": {...} }
   - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - ملاحظات:
@@ -82,12 +82,12 @@ translation_last_reviewed: 2026-02-07
     - إعادة التصويت لـ ZK، أو تقليل المبلغ أو انتهاء الصلاحية، أو إلغاء استنساخ الخادم باستخدام التشخيص `BallotRejected`.
     - يجب توصيل العقد `ZK_VOTE_VERIFY_BALLOT` إلى البريد `SubmitBallot`; يفرض المضيفون مزلاجًا فريدًا.
 
-- المشاركة `/v2/gov/ballots/plain`
+- المشاركة `/v1/gov/ballots/plain`
   - الطلب: { "authority": "i105..."، "private_key": "...؟"، "chain_id": "..."، "referendum_id": "r1"، "owner": "i105..."، "amount": "1000"، "duration_blocks": 6000، "direction": "Aye|Nay|امتناع" }
   - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }
   - ملاحظات: إعادة التصويت فقط على التوسيع - لا يمكن لبطاقة الاقتراع الجديدة تقليل المبلغ أو انتهاء صلاحية القفل الحالي. `owner` مطلوب الالتزام بمعاملات السلطة. الحد الأدنى من الإنفاق - `conviction_step_blocks`.
 
-- المشاركة `/v2/gov/finalize`
+- المشاركة `/v1/gov/finalize`
   - الطلب: { "referendum_id": "r1"، "proposal_id": "...64hex"، "authority": "i105...؟"، "private_key": "...؟" }
   - الاستجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...FinalizeReferendum"، "payload_hex": "..." }] }
   - التأثير على السلسلة (السقالة الحالية): تفعيل اقتراح النشر بشكل فعال الحد الأدنى `ContractManifest`، الوصول إلى `code_hash`، مع `abi_hash` و помечает الاقتراح كيف تم تفعيله. إذا كان البيان متاحًا لـ `code_hash` مع `abi_hash` آخر، فسيتم إلغاء تفعيل التشريع.
@@ -96,22 +96,22 @@ translation_last_reviewed: 2026-02-07
     - الموافقة على `h_end` تكتب تمت الموافقة/الرفض فقط للمرجع العادي; تبقى استفتاءات ZK مغلقة، حتى لا يتم الانتهاء من الحساب النهائي و`FinalizeReferendum`.
     - تستخدم نسبة الإقبال على التصويت فقط الموافقة+الرفض؛ الامتناع عن التصويت لا يؤثر على الإقبال.
 
-- المشاركة `/v2/gov/enact`
+- المشاركة `/v1/gov/enact`
   - الطلب: { "proposal_id": "...64hex"، "preimage_hash": "...64hex؟"، "window": { "lower": 0، "upper": 0}؟، "authority": "i105...؟"، "private_key": "...؟" }
   - الاستجابة: { "ok": true، "tx_instructions": [{ "wire_id": "...EnactReferendum"، "payload_hex": "..." }] }
   - ملاحظات: يقوم Torii بإجراء معاملة مباشرة عند كتابة `authority`/`private_key`؛ إنها في كثير من الأحيان هيكل عظمي لتقديم الدعم للعملاء والتعامل معهم. Preimage اختيارية ولها طابع المعلومات الخاص بها.
 
-- احصل على `/v2/gov/proposals/{id}`
+- احصل على `/v1/gov/proposals/{id}`
   - المسار `{id}`: معرف الاقتراح الست عشري (64 حرفًا)
   - الاستجابة: { "تم العثور عليه": منطقي، "اقتراح": { ... }؟ }
 
-- احصل على `/v2/gov/locks/{rid}`
+- احصل على `/v1/gov/locks/{rid}`
   - المسار `{rid}`: سلسلة معرف الاستفتاء
   - الاستجابة: { "تم العثور عليه": منطقي، "referendum_id": "rid"، "أقفال": {... }؟ }
 
-- احصل على `/v2/gov/council/current`
+- احصل على `/v1/gov/council/current`
   - الاستجابة: { "العصر": N، "الأعضاء": [{ "account_id": "..." }، ...] }
-  - ملاحظات: نفذ المجلس المستمر بعد الانتهاء؛ يتم هنا استخلاص احتياطي محدد باستخدام أصول وعتبات حصص كبيرة (تحدد مواصفات VRF لهذه الأغراض، حيث لا يتم الاحتفاظ ببراهين VRF على السلسلة).- POST `/v2/gov/council/derive-vrf` (الميزة: gov_vrf)
+  - ملاحظات: نفذ المجلس المستمر بعد الانتهاء؛ يتم هنا استخلاص احتياطي محدد باستخدام أصول وعتبات حصص كبيرة (تحدد مواصفات VRF لهذه الأغراض، حيث لا يتم الاحتفاظ ببراهين VRF على السلسلة).- POST `/v1/gov/council/derive-vrf` (الميزة: gov_vrf)
   - الطلب: { "committee_size": 21، "epoch": 123؟ , "candidates": [{ "account_id": "..."، "variant": "Normal|Small"، "pk_b64": "..."، "proof_b64": "..." }, ...] }
   - السلوك: التحقق من إثبات VRF كشرط للإدخال القانوني، المتوفر من `chain_id`، `epoch` ومنارة تجزئة الكتلة اللاحقة؛ فرز وحدات البايت الناتجة حسب فاصل التعادل; возвращает أعلى `committee_size` участников. لا تتورط.
   - الاستجابة: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "تم التحقق منه": K }
@@ -186,7 +186,7 @@ RBAC
 - المعاملات، ربط الموافقة المسبقة عن علم، تضمين البيانات الوصفية `gov_upgrade_id=<value>` (أو مفتاح، البيان المسبق) مع أي موافقات المدقق، trebуемыми النصاب القانوني.
 
 نقطة نهاية الراحة
-- POST `/v2/gov/protected-namespaces` - قم باستبدال `gov_protected_namespaces` على العقدة.
+- POST `/v1/gov/protected-namespaces` - قم باستبدال `gov_protected_namespaces` على العقدة.
   - الطلب: { "مساحات الأسماء": ["apps"، "system"] }
   - الرد: { "موافق": صحيح، "مطبق": 1 }
   - ملاحظات: مسبق للمسؤول/الاختبار؛ تحتاج إلى رمز واجهة برمجة التطبيقات (API) عند التكوين. في الإنتاج المقترح للمعاملة مع `SetParameter(Custom)`.
@@ -195,7 +195,7 @@ RBAC
 -`iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - احصل على مثيلات التعاقد لمساحة الاسم وتحقق مما يلي:
     - Torii هو رمز ثانوي لكل من `code_hash`، وهو Blake2b-32 يلخص `code_hash`.
-    - البيان تحت `/v2/contracts/code/{code_hash}` يطابق `code_hash` و`abi_hash`.
+    - البيان تحت `/v1/contracts/code/{code_hash}` يطابق `code_hash` و`abi_hash`.
     - قم بإعداد اقتراح الإدارة الذي تم تفعيله لـ `(namespace, contract_id, code_hash, abi_hash)`، واشتقاق العناصر مثل تجزئة معرف الاقتراح لاستخدامها.
   - قم بإرجاع JSON إلى `results[]` من خلال العقد (القضايا وملخصات البيان/الكود/الاقتراح) والملخص الفردي، إذا لم يكن مناسبًا (`--no-summary`).
   - مفيد لتدقيق مساحات الأسماء المحمية أو التحقق من سير عمل النشر الذي تسيطر عليه الإدارة.
@@ -212,7 +212,7 @@ RBAC
   - ملخص يخرج `vote --mode zk`، بما في ذلك تعليمات تشفير بصمة الإصبع وبطاقة الاقتراع (`owner`، `amount`، `duration_blocks`, `direction`)، يتم التحقق من صحة ما قبل الهيكل العظمي.
 
 قائمة المثيلات
-- احصل على `/v2/gov/instances/{ns}` - سجل عقود المقاولات النشطة لمساحة الاسم.
+- احصل على `/v1/gov/instances/{ns}` - سجل عقود المقاولات النشطة لمساحة الاسم.
   - معلمات الاستعلام:
     - `contains`: عامل التصفية عبر السلسلة الفرعية `contract_id` (حساس لحالة الأحرف)
     - `hash_prefix`: مرشح للبادئة السداسية `code_hash_hex` (أحرف صغيرة)
@@ -222,10 +222,10 @@ RBAC
   - مساعد SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) أو `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
 فتح عملية المسح (المشغل/المراجعة)
-- احصل على `/v2/gov/unlocks/stats`
+- احصل على `/v1/gov/unlocks/stats`
   - الاستجابة: { "height_current": H، "expired_locks_now": n، "referenda_with_expired": m، "last_sweep_height": S }
   - ملاحظات: `last_sweep_height` يزيل ارتفاع الكتلة الأخير، عندما يتم اجتياح الأقفال منتهية الصلاحية واستمرارها. `expired_locks_now` يتم نسخ سجلات القفل من خلال المسح الضوئي باستخدام `expiry_height <= height_current`.
-- المشاركة `/v2/gov/ballots/zk-v1`
+- المشاركة `/v1/gov/ballots/zk-v1`
   - الطلب (DTO بنمط v1):
     {
       "السلطة": "i105..."،
@@ -238,7 +238,7 @@ RBAC
       "مالك": "i105...؟",
       "nullifier": "blake2b32:...64hex؟"
     }
-  - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }- المشاركة `/v2/gov/ballots/zk-v1/ballot-proof` (الميزة: `zk-ballot`)
+  - الاستجابة: { "موافق": صحيح، "مقبول": صحيح، "tx_instructions": [{...}] }- المشاركة `/v1/gov/ballots/zk-v1/ballot-proof` (الميزة: `zk-ballot`)
   - استخدم `BallotProof` JSON واستخدم الهيكل العظمي `CastZkBallot`.
   - الطلب:
     {
@@ -308,7 +308,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 يمكن للمشغلين والأدوات إعادة شحن الحمولات وإعادة إرسالها مرة أخرى عبر:
 
-- Torii: `GET /v2/sumeragi/evidence` و`GET /v2/sumeragi/evidence/count`.
+- Torii: `GET /v1/sumeragi/evidence` و`GET /v1/sumeragi/evidence/count`.
 - سطر الأوامر: `iroha ops sumeragi evidence list`، `... count`، `... submit --evidence-hex <payload>`.
 
 تعمل الحوكمة على توزيع وحدات بايت الأدلة مثل التوثيق القانوني:
@@ -316,7 +316,7 @@ for (expected, kind) in offences.iter().enumerate() {
 1. **اكتشف الحمولة** حتى تصل إلى مرحلة الإنشاء. أرشفة جميع وحدات البايت Norito مع بيانات تعريف الارتفاع/العرض.
 2. **قم بإدخال الحمولة** قم بإدراج الحمولة في الاستبيان أو تعليمات Sudo (على سبيل المثال، `Unregister::peer`). تمكين الحمولة التحقق من صحتها مرة أخرى. تمنع الأدلة المشوهة أو التي لا معنى لها التحديد.
 3. ** قم بتخطيط طبولوجيا المتابعة ** لكي لا يكون المدقق الضخم دخانًا مؤقتًا. توجد أنواع الخطوط `SetParameter(Sumeragi::NextMode)` و`SetParameter(Sumeragi::ModeActivationHeight)` مع قائمة عادية.
-4. **نتائج التدقيق** من خلال `/v2/sumeragi/evidence` و`/v2/sumeragi/status`، للتأكد من أن الأدلة الحكيمة فاسدة وتطبيقات الحوكمة.
+4. **نتائج التدقيق** من خلال `/v1/sumeragi/evidence` و`/v1/sumeragi/status`، للتأكد من أن الأدلة الحكيمة فاسدة وتطبيقات الحوكمة.
 
 ### Последовательность توافق مشترك
 
@@ -331,11 +331,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- يعرض وقت التشغيل وCLI المعلمات المرحلية من خلال `/v2/sumeragi/params` و`iroha --output-format text ops sumeragi params`، بحيث يقوم المشغلون بفحص ارتفاعات التنشيط ومدققي القائمة.
+- يعرض وقت التشغيل وCLI المعلمات المرحلية من خلال `/v1/sumeragi/params` و`iroha --output-format text ops sumeragi params`، بحيث يقوم المشغلون بفحص ارتفاعات التنشيط ومدققي القائمة.
 - أتمتة الحكم مطلوبة دائمًا:
   1. الانتهاء من اتخاذ قرار بشأن الاستبعادات (أو الإثباتات)، تقديم الأدلة.
   2. نشر متابعة إعادة التكوين باستخدام `mode_activation_height = h_current + activation_lag_blocks`.
-  3. قم بمراقبة `/v2/sumeragi/status` حتى الإيقاف `effective_consensus_mode` على طول الطريق.
+  3. قم بمراقبة `/v1/sumeragi/status` حتى الإيقاف `effective_consensus_mode` على طول الطريق.
 
 أي نص برمجي يقوم بإعادة التحقق من الصحة أو استخدام التقطيع، ** لا يتطلب ** التنشيط بدون تأخير أو إيقاف معلمات التسليم؛ يتم إلغاء تشفير هذه المعاملات وإيقافها في النظام السابق.
 

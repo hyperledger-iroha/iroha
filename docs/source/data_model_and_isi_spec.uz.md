@@ -200,7 +200,7 @@ Umumiy konvert: `InstructionExecutionError` baholash xatolari, soʻrovlar xatosi
 - Taxallus + hisob komponentlari bo'yicha mint:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Kanonik yordam uchun taxallusni hal qiling:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` bilan `POST /v2/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl@sbp" }` bilan `POST /v1/assets/aliases/resolve`
 
 Migratsiya eslatmasi:
 - `name#domain` matnli obyekt taʼrifi identifikatorlari birinchi versiyada ataylab qoʻllab-quvvatlanmaydi.

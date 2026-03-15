@@ -45,7 +45,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ## قابلية الملاحظة
 
 Torii يعرض الآن لقطات من ائتمان مقدمي الخدمات جنبًا إلى جنب مع دفاتر الرسوم للوحات المعلومات
-بوابة بوسام فازر في ضربات الجزاء و ضربات الجزاء:- الباقي: `GET /v2/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
+بوابة بوسام فازر في ضربات الجزاء و ضربات الجزاء:- الباقي: `GET /v1/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
   قم بإعادة ملء الحقول التي تم التحقق منها من دفتر الأستاذ دون اختبار النقع. فيجا
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importacao Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` نظام التشغيل

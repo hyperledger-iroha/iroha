@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | Կեղծված կոնֆիգուրացիան դրսևորվում է | `ClientConfig`-ը վավերացնում է մանիֆեստները (հեշ + սխեմա) նախքան կիրառելը և գրանցում է մերժված վերաբեռնումները `android.telemetry.config.reload`-ի միջոցով: | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Ստորագրման բանալիների փոխզիջում | StrongBox-ի համար պահանջվող քաղաքականությունները, ատեստավորման ամրագոտիները և սարքի մատրիցային աուդիտները բացահայտում են շեղումը. յուրաքանչյուր միջադեպի համար փաստաթղթավորված վերացումներ: | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | PII արտահոսք հեռաչափության մեջ | Blake2b-ի հաշված հեղինակություններ, դույլերով սարքի պրոֆիլներ, օպերատորի բացթողում, անտեսում գրանցում: | `docs/source/sdk/android/telemetry_redaction.md`; Աջակցություն Playbook §8: |
-| Կրկնել կամ իջեցնել վարկանիշը Torii RPC-ում | `/v2/pipeline` հարցումների ստեղծողը պարտադրում է TLS ամրացում, աղմուկի ալիքի քաղաքականություն և նորից փորձել բյուջեները՝ հեշացված հեղինակային համատեքստով: | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (պլանավորված): |
+| Կրկնել կամ իջեցնել վարկանիշը Torii RPC-ում | `/v1/pipeline` հարցումների ստեղծողը պարտադրում է TLS ամրացում, աղմուկի ալիքի քաղաքականություն և նորից փորձել բյուջեները՝ հեշացված հեղինակային համատեքստով: | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (պլանավորված): |
 | Չստորագրված կամ չվերարտադրվող թողարկումներ | CycloneDX SBOM + Sigstore հավաստագրեր՝ փակված AND6 ստուգաթերթով; թողարկման RFC-ները պահանջում են ապացույցներ `docs/source/release/provenance/android/`-ում: | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Միջադեպերի ոչ ամբողջական մշակում | Runbook + playbook-ը սահմանում է անտեսումներ, քաոսային վարժություններ և էսկալացիայի ծառ; Հեռաչափության վերափոխումները պահանջում են ստորագրված Norito հարցումներ: | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 Մուտքի վերահսկում | StrongBox-ի քաղաքականությունը + անտեսում է աշխատանքային հոսքը, որը պահանջում է ստորագրված Norito արտեֆակտներ: |
 | 7.5 Կրիպտոգրաֆիկ հսկողություն | Բանալինների արտադրության, պահպանման և ատեստավորման պահանջները AND2-ից (բանալների կառավարման ուղեցույց): |
 | 7.6 Գործառնությունների անվտանգություն | Հեռաչափության հաշինգ, քաոսի փորձեր, միջադեպերի արձագանքում և ապացույցների թողարկում: |
-| 7.7 Կապի անվտանգություն | `/v2/pipeline` TLS քաղաքականություն + հաշված հեղինակություններ (հեռաչափության խմբագրման փաստաթուղթ): |
+| 7.7 Կապի անվտանգություն | `/v1/pipeline` TLS քաղաքականություն + հաշված հեղինակություններ (հեռաչափության խմբագրման փաստաթուղթ): |
 | 7.8 Համակարգի ձեռքբերում / մշակում | Վերարտադրվող Gradle-ի շինությունները, SBOM-ները և ծագման դարպասները AND5/AND6 պլաններում: |
 | 7.9 Մատակարարների հետ հարաբերություններ | Buildkite + Sigstore վկայագրեր, որոնք գրանցված են երրորդ կողմի կախվածության SBOM-ների հետ միասին: |
 | 7.10 Միջադեպերի կառավարում | Runbook/Playbook-ի էսկալացիա, անտեսման մատյան, հեռաչափության ձախողման հաշվիչներ: |

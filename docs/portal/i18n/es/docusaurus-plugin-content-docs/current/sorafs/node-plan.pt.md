@@ -55,7 +55,7 @@ O plumbing em runtime passa as interacoes PoR via `sorafs_node::por`: o tracker 
 Notas de implementación:
 
 - Utilice la pila Axum de Torii con cargas útiles `norito::json`.
-- Adición de esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría).- `/v2/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del trabajo pendiente, más la época/fecha límite, más antigua y las marcas de tiempo más recientes de éxito/falta por proveedor, a través de `sorafs_node::NodeHandle::por_ingestion_status`, e Torii registra los indicadores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para tableros. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
+- Adición de esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría).- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del trabajo pendiente, más la época/fecha límite, más antigua y las marcas de tiempo más recientes de éxito/falta por proveedor, a través de `sorafs_node::NodeHandle::por_ingestion_status`, e Torii registra los indicadores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para tableros. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
 
 ### D. Programador y cumplimiento de cuotas
 

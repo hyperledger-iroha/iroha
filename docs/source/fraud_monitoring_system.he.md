@@ -103,7 +103,7 @@ translator: manual
 
 ה-Gateway חושף מעטפות JSON התואמות לטיפוסי Norito ב-`crates/iroha_data_model::fraud`:
 
-- **Risk intake** – ‎`POST /v2/fraud/query` מקבל סכמת `RiskQuery`:
+- **Risk intake** – ‎`POST /v1/fraud/query` מקבל סכמת `RiskQuery`:
   - `query_id` (`[u8; 32]` בהקס)
   - `subject` (`AccountId`, ‎`domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (enum מתויג תואם `RiskOperation`; שדה `type` ב-JSON משקף את הווריאנט)
@@ -111,11 +111,11 @@ translator: manual
   - `features` (מערך של `{ key: String, value_hash: hex32 }` מ-`FeatureInput`)
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; כולל `tenant_id`, ‏`session_id` אופציונלי ו-`reason` אופציונלי)
-- **Risk decision** – ‎`POST /v2/fraud/assessment` לצריכת `FraudAssessment`:
+- **Risk decision** – ‎`POST /v1/fraud/assessment` לצריכת `FraudAssessment`:
   - `query_id`, ‏`engine_id`, ‏`risk_score_bps`, ‏`confidence_bps`, ‏`decision` (`AssessmentDecision`), ‏`rule_outcomes` (מערך `{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
   - `signature` (Base64 אופציונלי של הערכה מקודדת Norito)
-- **Governance export** – ‎`GET /v2/fraud/governance/export` מחזיר `GovernanceExport` (כאשר תכונת `governance` פעילה) שמאגד פרמטרים פעילים, enactment אחרון, גרסת מודל, Digest מדיניות והיסטוגרמת `DecisionAggregate`.
+- **Governance export** – ‎`GET /v1/fraud/governance/export` מחזיר `GovernanceExport` (כאשר תכונת `governance` פעילה) שמאגד פרמטרים פעילים, enactment אחרון, גרסת מודל, Digest מדיניות והיסטוגרמת `DecisionAggregate`.
 
 בדיקות Round-trip ב-`crates/iroha_data_model/src/fraud/types.rs` מבטיחות תאימות בינארית עם Norito, והבדיקה `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` בוחנת את צינור intake→decision קצה-לקצה.
 

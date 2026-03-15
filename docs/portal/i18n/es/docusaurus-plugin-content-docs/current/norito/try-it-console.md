@@ -72,10 +72,10 @@ Cuando las variables OAuth estan presentes, el sandbox renderiza un boton **Sign
 1. Construye un payload `.norito` con el CLI o los fragmentos descritos en el [inicio rapido de Norito](./quickstart.md). El proxy reenvia cuerpos `application/x-norito` sin cambios, asi que puedes reutilizar el mismo artefacto que enviarias con `curl`.
 2. Abre `/reference/torii-rapidoc` (preferido para payloads binarios) o `/reference/torii-swagger`.
 3. Selecciona el snapshot de Torii deseado del desplegable. Los snapshots estan firmados; el panel muestra el digest del manifiesto registrado en `static/openapi/manifest.json`.
-4. Elige el tipo de contenido `application/x-norito` en el cajon "Try it", haz clic en **Choose File**, y selecciona tu payload. El proxy reescribe la solicitud a `/proxy/v2/pipeline/submit` y la etiqueta con `X-TryIt-Client=docs-portal-rapidoc`.
+4. Elige el tipo de contenido `application/x-norito` en el cajon "Try it", haz clic en **Choose File**, y selecciona tu payload. El proxy reescribe la solicitud a `/proxy/v1/pipeline/submit` y la etiqueta con `X-TryIt-Client=docs-portal-rapidoc`.
 5. Para descargar respuestas Norito, configura `Accept: application/x-norito`. Swagger/RapiDoc exponen el selector de headers en el mismo cajon y transmiten el binario de vuelta a traves del proxy.
 
-Para rutas solo JSON, el sandbox Try it embebido suele ser mas rapido: introduce la ruta (por ejemplo, `/v2/accounts/i105.../assets`), selecciona el metodo HTTP, pega un cuerpo JSON cuando sea necesario y pulsa **Send request** para inspeccionar headers, duracion y payloads en linea.
+Para rutas solo JSON, el sandbox Try it embebido suele ser mas rapido: introduce la ruta (por ejemplo, `/v1/accounts/i105.../assets`), selecciona el metodo HTTP, pega un cuerpo JSON cuando sea necesario y pulsa **Send request** para inspeccionar headers, duracion y payloads en linea.
 
 ## Solucion de problemas
 

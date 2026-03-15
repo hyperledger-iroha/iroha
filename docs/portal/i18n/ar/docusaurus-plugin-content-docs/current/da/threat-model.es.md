@@ -251,7 +251,7 @@ DA اللاحق (DA-2 و DA-10).
 - إعادة تشغيل ذاكرة التخزين المؤقت واستمرارية بقاء المؤشرات في DA-2. الاصدار لا
   التنفيذ en `crates/iroha_core/src/da/replay_cache.rs` (منطق ذاكرة التخزين المؤقت)
   والتكامل Torii و`crates/iroha_torii/src/da/ingest.rs`، الذي يكملها
-  بصمات الأصابع عبر `/v2/da/ingest`.
+  بصمات الأصابع عبر `/v1/da/ingest`.
 - يتم تشغيل محاكاة دفق PDP/PoTR عبر التيار المثبت
   في `crates/sorafs_car/tests/sorafs_cli.rs`، قم بتعبئة تدفقات الطلب
   PoR/PDP/PoTR وسيناريوهات سقوط الرسوم المتحركة في نموذج الأمان.

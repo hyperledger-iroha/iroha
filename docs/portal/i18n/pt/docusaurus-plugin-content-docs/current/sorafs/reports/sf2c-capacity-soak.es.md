@@ -47,7 +47,7 @@ luminárias externas.
 Torii agora exponha snapshots de crédito de provedores junto com registros de taxas para os painéis
 puedan gatear sobre saldos baixos e pênaltis:
 
-- REST: `GET /v2/sorafs/capacity/state` devolve entradas `credit_ledger[*]` que
+- REST: `GET /v1/sorafs/capacity/state` devolve entradas `credit_ledger[*]` que
   reflita sobre os campos do razão selecionado na tentativa de imersão. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importação de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` gráficos

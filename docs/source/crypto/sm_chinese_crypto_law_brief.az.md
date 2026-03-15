@@ -68,7 +68,7 @@ Operatorlar:1. **Blokçeyn sistemini** İctimai Təhlükəsizlik Bürosunda qeyd
 1. **Sənədləşdirmə**
    - `docs/source/crypto/sm_program.md`-ə dövlət kommersiya kriptoqrafiyası statusunu, sənədləşdirmə gözləntilərini və əlaqə nöqtələrini qeyd edən uyğunluq əlavəsi əlavə edin.
    - Operatorların sənədləri hazırlayarkən istifadə edə biləcəyi Norito manifest sahəsini (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) dərc edin.
-   - Torii `/v2/node/capabilities` reklamının (və `iroha runtime capabilities` CLI ləqəbinin) hər buraxılışla göndərilməsinə əmin olun ki, operatorlar MLPS/密 üçün `crypto.sm` manifest şəklini çəkə bilsinlər.
+   - Torii `/v1/node/capabilities` reklamının (və `iroha runtime capabilities` CLI ləqəbinin) hər buraxılışla göndərilməsinə əmin olun ki, operatorlar MLPS/密 üçün `crypto.sm` manifest şəklini çəkə bilsinlər.
    - Öhdəlikləri ümumiləşdirən ikidilli (EN/ZH) uyğunluğun sürətli başlanğıcını təmin edin.
 2. **Artefaktları buraxın**
    - SM-in effektiv qurulması üçün SBOM/CycloneDX fayllarını göndərin.

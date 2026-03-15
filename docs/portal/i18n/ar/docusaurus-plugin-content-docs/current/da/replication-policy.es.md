@@ -32,7 +32,7 @@ _الحالة: التقدم - المسؤولون: فريق عمل البروتو
 | _الافتراضي (todas las demas classes)_ | 6 ساعات | 30 دياس | 3 | `warm` | `da.default` |
 
 يتم تعزيز هذه القيم في `torii.da_ingest.replication_policy` ويتم تطبيقها
-جميع الطلبات `/v2/da/ingest`. Torii إعادة كتابة البيانات باستخدام ملف التعريف
+جميع الطلبات `/v1/da/ingest`. Torii إعادة كتابة البيانات باستخدام ملف التعريف
 قوة الاحتفاظ وبث إعلان عندما يكتسب المتصلون قيمًا
 لا توجد مصادفات حتى يتمكن المشغلون من اكتشاف حزم SDK غير النشطة.
 
@@ -157,5 +157,5 @@ governance_tag = "da.taikai.archive"
 
 La cobertura de regression vive en
 `integration_tests/tests/da/replication_policy.rs`; لا سويت Envia una Politica de
-الاحتفاظ ليس بالصدفة مع `/v2/da/ingest` والتحقق من الحصول على البيان
+الاحتفاظ ليس بالصدفة مع `/v1/da/ingest` والتحقق من الحصول على البيان
 قم بإظهار الملف الشخصي في مكان نية المتصل.

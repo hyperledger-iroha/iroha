@@ -71,7 +71,7 @@ Ajouter un chunker à un morceau de papier
    `torii.sorafs.discovery.admission.envelopes_dir`.
 3. تحقق من انتشار إعلانات المزوّد عبر واجهة découverte :
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. اختبر نقاط manifeste/plan مع رؤوس الحوكمة :
    ```bash

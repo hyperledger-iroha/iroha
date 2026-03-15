@@ -18,7 +18,7 @@ Em seguida, verifique se você está usando o binário `sorafs_cli` (com `--feat
 
 - Nó 18.18+ com `npm` ou `pnpm`.
 - `sorafs_cli` ou `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii, который открывает `/v2/sorafs/*`, плюс учетная запись/приватный ключ, способные отправлять манифесты e алиасы.
+- URL Torii, который открывает `/v1/sorafs/*`, плюс учетная запись/приватный ключ, способные отправлять манифесты e алиасы.
 - Emissor OIDC (GitHub Actions, GitLab, identidade de carga de trabalho, etc.) para usar `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para simulação e `docs/source/sorafs_ci_templates.md` para fluxos de trabalho GitHub/GitLab.
 - Abra o teste OAuth Try it (`DOCS_OAUTH_*`) e use-o
@@ -582,7 +582,7 @@ Verifique os segredos/variáveis do repositório antes de executar o trabalho:
 
 | Nome | Atualizado |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii com `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii com `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de época, записанный при submissão. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Подписывающая autoridade para submissão манифеста. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tupla de alias, привязываемый при `perform_submit` = `true`. |

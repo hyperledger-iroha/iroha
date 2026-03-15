@@ -29,7 +29,7 @@ La checklist ci-dessous doit etre revue avant d'activer le marche pour des opera
 
 | Check | Validation | Evidence |
 |-------|------------|----------|
-| Le registry accepte les declarations canoniques de capacite | Le test d'integration exerce `/v2/sorafs/capacity/declare` via l'app API, en verifiant la gestion des signatures, la capture de metadata et le hand-off vers le registry du noeud. | `crates/iroha_torii/src/routing.rs:7654` |
+| Le registry accepte les declarations canoniques de capacite | Le test d'integration exerce `/v1/sorafs/capacity/declare` via l'app API, en verifiant la gestion des signatures, la capture de metadata et le hand-off vers le registry du noeud. | `crates/iroha_torii/src/routing.rs:7654` |
 | Le smart contract rejette les payloads incoherents | Le test unitaire garantit que les IDs de provider et les champs GiB engages correspondent a la declaration signee avant persistance. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Le CLI emet des artefacts d'onboarding canoniques | Le harness CLI ecrit des sorties Norito/JSON/Base64 deterministes et valide les round-trips pour que les operateurs puissent preparer les declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Le guide operateur couvre le workflow d'admission et les garde-fous de gouvernance | La documentation enumere le schema de declaration, les defaults de policy et les etapes de revue pour le council. | `../storage-capacity-marketplace.md` |

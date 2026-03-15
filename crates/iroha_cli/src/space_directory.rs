@@ -1578,7 +1578,7 @@ mod tests {
         .expect("build url");
         assert_eq!(
             url.as_str(),
-            "https://example.test/torii/v2/space-directory/uaids/uaid:abc/manifests"
+            "https://example.test/torii/v1/space-directory/uaids/uaid:abc/manifests"
         );
     }
 

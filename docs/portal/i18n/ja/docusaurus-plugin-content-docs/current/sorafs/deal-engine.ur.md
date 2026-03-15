@@ -56,12 +56,12 @@ SLO の施行に関する更新情報フォローアップ項目 監査人主導
 Torii 専用エンドポイントがプロバイダーの使用状況レポートを公開する
 特注の配線とライフサイクル ドライブの関係:
 
-- `POST /v2/sorafs/deal/usage` `DealUsageReport` テレメトリを受け入れます
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` テレメトリを受け入れます
   決定的な会計結果 (`UsageOutcome`) が返されます
-- `POST /v2/sorafs/deal/settle` 現在のウィンドウを終了します
+- `POST /v1/sorafs/deal/settle` 現在のウィンドウを終了します
   `DealSettlementRecord` Base64 エンコードされた `DealSettlementV1` ストリーム ストリーム
   ガバナンス DAG 出版物 جیار ہوتا ہے۔
-- Torii `/v2/events/sse` フィード `SorafsGatewayEvent::DealUsage` ブロードキャストを記録します
+- Torii `/v1/events/sse` フィード `SorafsGatewayEvent::DealUsage` ブロードキャストを記録します
   使用状況の送信 (エポック、従量制 GiB 時間、チケット カウンター、
   確定的請求)、`SorafsGatewayEvent::DealSettlement` レコード、正規決済台帳のスナップショット
   ディスク上のガバナンス アーティファクト BLAKE3 ダイジェスト/サイズ/base64 の処理

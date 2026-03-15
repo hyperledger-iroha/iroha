@@ -32,7 +32,7 @@ planned for v1). Examples:
 - Pointer-ABI types or syscall numbers change (see `crates/ivm_abi/src/pointer_abi.rs`
   and `crates/ivm_abi/src/syscalls.rs`).
 - Swift needs to expose ABI capability metadata (e.g., governance manifests,
-  Torii `/v2/runtime/*` endpoints, or manifest builders) for Connect, multisig,
+  Torii `/v1/runtime/*` endpoints, or manifest builders) for Connect, multisig,
   or DA surfaces.
 - Governance requests parity evidence for ABI adoption (weekly digest, council
   pre-read, partner readiness packet).
@@ -43,7 +43,7 @@ planned for v1). Examples:
 |-------------|-------|---------------------|
 | ABI change proposal, syscall list, pointer policy | IVM maintainers / Core Protocol | `crates/ivm/docs/syscalls.md`, `crates/ivm/docs/pointer_abi.md`, linked RFC |
 | Updated ABI hash + golden tests | IVM maintainers | `crates/ivm/tests/abi_hash_versions.rs`, `crates/ivm/tests/abi_syscall_list_golden.rs`, `crates/ivm/tests/pointer_type_ids_golden.rs` |
-| Torii runtime upgrade schema & endpoints | Torii team | `crates/iroha/src/torii/runtime.rs`, `/v2/runtime/*` OpenAPI entries, fixtures under `integration_tests/tests/runtime_upgrades/` |
+| Torii runtime upgrade schema & endpoints | Torii team | `crates/iroha/src/torii/runtime.rs`, `/v1/runtime/*` OpenAPI entries, fixtures under `integration_tests/tests/runtime_upgrades/` |
 | Swift SDK surfaces & tests | Swift lead | `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` |
 | Digest/status updates | Swift Program PM / Docs | `status.md`, `docs/source/status/swift_weekly_digest.md`, exporter automation in `scripts/swift_status_export.py` |
 
@@ -76,7 +76,7 @@ planned for v1). Examples:
    `ToriiRuntimeUpgradeManifest`, `ToriiRuntimeAbiActive`, and
    `ToriiRuntimeAbiHash` (see `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`)
    mirror any new fields (pointer types list, policy labels, start/end height).
-2. **Client APIs.** Verify `ToriiClient` & `TxBuilder` expose the latest `/v2/runtime/*`
+2. **Client APIs.** Verify `ToriiClient` & `TxBuilder` expose the latest `/v1/runtime/*`
    endpoints:
    - `listRuntimeUpgrades`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
      `proposeRuntimeUpgrade`, `activateRuntimeUpgrade`.
@@ -132,7 +132,7 @@ planned for v1). Examples:
 
 - **Swift Program Lead:** owns ABI readiness across SDK surfaces and parity dashboards.
 - **IVM Maintainer:** approves pointer/syscall changes and owns the golden tests.
-- **Torii Runtime Owner:** coordinates `/v2/runtime/*` behaviour and staging rollouts.
+- **Torii Runtime Owner:** coordinates `/v1/runtime/*` behaviour and staging rollouts.
 - **Docs/Support:** keep the digest/status entries aligned and notify partners.
 
 Escalate in `#sdk-parity` (internal) or the governance bridge if any of the

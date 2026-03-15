@@ -119,14 +119,14 @@ xotirada eskirgan akkumulyatorlarni qoldirmasdan ko'rinadi.
 Torii endi ikkita telemetriyaga ega HTTP so'nggi nuqtalarini ochib beradi, shuning uchun o'rni va kollektorlar
 Buyurtmali transportni o'rnatmasdan kuzatishlarni yuborishi mumkin:
 
-- `POST /v2/soranet/privacy/event` a qabul qiladi
+- `POST /v1/soranet/privacy/event` a qabul qiladi
   `RecordSoranetPrivacyEventDto` foydali yuk. Tanani o'rab oladi a
   `SoranetPrivacyEventV1` va ixtiyoriy `source` yorlig'i. Torii tasdiqlaydi
   faol telemetriya profiliga qarshi so'rov yuboradi, voqeani yozib oladi va javob beradi
   HTTP `202 Accepted` bilan Norito JSON konvertini o'z ichiga olgan
   hisoblangan paqir oynasi (`bucket_start_unix`, `bucket_duration_secs`) va
   o'rni rejimi.
-- `POST /v2/soranet/privacy/share` `RecordSoranetPrivacyShareDto` ni qabul qiladi
+- `POST /v1/soranet/privacy/share` `RecordSoranetPrivacyShareDto` ni qabul qiladi
   foydali yuk. Korpusda `SoranetPrivacyPrioShareV1` va ixtiyoriy bor
   Operatorlar kollektor oqimlarini tekshirishlari uchun `forwarded_by` maslahati. Muvaffaqiyatli
   jo'natmalar HTTP `202 Accepted` bilan Norito JSON konvertini umumlashtiradi
@@ -256,7 +256,7 @@ Bosilgan chelaklar ruxsat etilganidan oshib ketganda, CI yoki operatorlar tezda 
 oyna (standart 10%) yoki chelaklar hali mavjud bo'lmaganda. Tavsiya etilgan oqim:
 
 1. NDJSONni o‘rni administratorining so‘nggi nuqtasi(lar)idan hamda orkestratordan eksport qiling
-   `/v2/soranet/privacy/event|share` oqimi
+   `/v1/soranet/privacy/event|share` oqimi
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Siyosat byudjeti bilan yordamchini ishga tushiring:
 

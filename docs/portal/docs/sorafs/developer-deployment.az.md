@@ -34,7 +34,7 @@ alətləri real şlüzlərə və saxlama təminatçılarına yaymaq.
 
 ## Ətraf mühitin konfiqurasiyası
 
-- Şlüzlər sübut axınının son nöqtəsini aktivləşdirməlidir (`POST /v2/sorafs/proof/stream`)
+- Şlüzlər sübut axınının son nöqtəsini aktivləşdirməlidir (`POST /v1/sorafs/proof/stream`)
   beləliklə, CLI telemetriya xülasələrini yaya bilər.
 - Defolt parametrlərdən istifadə edərək `sorafs_alias_cache` siyasətini konfiqurasiya edin
   `iroha_config` və ya CLI köməkçisi (`sorafs_cli manifest submit --alias-*`).

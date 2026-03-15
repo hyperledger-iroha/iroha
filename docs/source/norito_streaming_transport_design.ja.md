@@ -155,7 +155,7 @@ parity = clamp(ceil((loss_ewma * 1.25 + 0.005) * w), 0, 6)
   - `fec_feedback_interval_ms`（既定 200）
   - `privacy_bucket_granularity_ms`（既定 30000）
 - CLI (`iroha_cli streaming capabilities`) で現在の機能とネゴシエート結果を確認可能。
-- ブートストラップマニフェストに `transport_capabilities_hash` を埋め込み、観測者は `/v2/streaming/manifest` を通じて照合できます。
+- ブートストラップマニフェストに `transport_capabilities_hash` を埋め込み、観測者は `/v1/streaming/manifest` を通じて照合できます。
 
 ## 依存関係と参照
 

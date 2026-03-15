@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | Ҡабул ителгән конфигурация | `ClientConfig` раҫлай манифесттары (хэш + схемаһы) ҡулланыу алдынан һәм журналдар аша перезагрузка инҡар итеү аша `android.telemetry.config.reload`. | Norito; `docs/source/android_runbook.md` §1–2. |
 | Асҡыстарға ҡул ҡуйыуҙы компромисс | КөслөБокс талап ителгән сәйәсәт, аттестация йүгәндәре, һәм ҡоролма-матрица аудиттары дрейф билдәләй; өҫтөнлөклө документлаштырылған бер ваҡиға. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | PII телеметрияла ағыу | Blak2b-хаслы властар, биҙрә ҡоролма профилдәре, ташыусы өҙөклөк, өҫтөнән ағас ҡырҡыу. | `docs/source/sdk/android/telemetry_redaction.md`; Ярҙам плейбук §8. |
-| Torii RPC-ла ҡабатлау йәки түбән баһа | `/v2/pipeline` запрос төҙөүсе TLS пиннинг, шау-шыу каналы сәйәсәтен һәм вәкәләтле контекст менән ҡабаттан тырышып бюджеттарҙы үтәй. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` X; `docs/source/sdk/android/networking.md` (планлаштырылған). |
+| Torii RPC-ла ҡабатлау йәки түбән баһа | `/v1/pipeline` запрос төҙөүсе TLS пиннинг, шау-шыу каналы сәйәсәтен һәм вәкәләтле контекст менән ҡабаттан тырышып бюджеттарҙы үтәй. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java` X; `docs/source/sdk/android/networking.md` (планлаштырылған). |
 | Ҡултамғаһыҙ йәки ҡабатланмаған релиздар | CycloneDX SBOM + Sigstore аттестацияһы AND6 тикшерелгән исемлеккә ҡапҡасы; RFC-ларҙы сығарыу `docs/source/release/provenance/android/`-та дәлилдәр талап итә. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Тулы булмаған ваҡиға менән эш итеү | Runbook + playbook билдәләү өҫтөнлөктәре, хаос күнекмәләр, һәм эскалация ағасы; телеметрия өҫтөнлөктәре талап ителә ҡул ҡуйылған Norito запростар. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 инеү менән идара итеү | Көслө Box сәйәсәте + өҫтөнлөклө эш ағымы талап ителә ҡул ҡуйылған Norito артефакттары. |
 | 7.5 Криптографик контроль | Төп быуын, һаҡлау, һәм аттестация талаптары AND2 (төп идара итеү етәксеһе). |
 | 7.6 Операциялар хәүефһеҙлеге | Телеметрия хеширование, хаос репетициялары, инциденттар яуап, һәм дәлилдәр сығарыу ҡапҡаһы. |
-| 7.7 Элемтә хәүефһеҙлеге | `/v2/pipeline` TLS сәйәсәте + хешировать властар (телеметрия редакция doc). |
+| 7.7 Элемтә хәүефһеҙлеге | `/v1/pipeline` TLS сәйәсәте + хешировать властар (телеметрия редакция doc). |
 | 7.8 Система алыу / үҫеш | Ҡабатланған град төҙөү, SBOMs, һәм провенанс ҡапҡалары AND5/AND6 пландарында. |
 | 7.9 Тәьмин итеүсе мөнәсәбәттәр | Өсөнсө яҡҡа бәйлелек SBOMs менән бер рәттән теркәлгән Aublykite + Sigstore аттестациялары. |
 | 7.10 Инциденттар менән идара итеү | Runbook/Playbook эскалацияһы, логин өҫтөндәге логин, телеметрия етешһеҙлектәре буйынса иҫәп-хисап. |

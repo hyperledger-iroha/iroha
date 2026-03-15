@@ -50,12 +50,12 @@ with settlement outcomes.
 Torii exposes dedicated endpoints so providers can report usage and drive the
 deal lifecycle without bespoke wiring:
 
-- `POST /v2/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
+- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
   deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` finalises the current window, streaming the
+- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
   resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
   ready for governance DAG publication.
-- Torii's `/v2/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
+- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
   records summarising each usage submission (epoch, metered GiB-hours, ticket
   counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
   records that include the canonical settlement ledger snapshot plus the

@@ -29,7 +29,7 @@ description: قائمة مجمعة، نقاط قياس، وملاحظات الم
 | partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ مكتمل 2025-04-26 | sorafs-op-01; ركز على ادلة تكافؤ وثائق orchestrator. |
 | partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ مكتمل 2025-04-26 | sorafs-op-02; تحقق من الروابط المتقاطعة بين Norito/telemetry. |
 | partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ مكتمل 2025-04-26 | sorafs-op-03; نفذ تمارين failover متعددة المصادر. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مكتمل 2025-04-26 | torii-int-01; مراجعة دليل Torii `/v2/pipeline` و cookbook Try it. |
+| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مكتمل 2025-04-26 | torii-int-01; مراجعة دليل Torii `/v1/pipeline` و cookbook Try it. |
 | partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ مكتمل 2025-04-26 | torii-int-02; شارك في تحديث لقطة Try it (docs-preview/w1 #2). |
 | partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ مكتمل 2025-04-26 | sdk-partner-01; ملاحظات cookbooks لـ JS/Swift + فحوصات sanity لجسر ISO. |
 | partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ مكتمل 2025-04-26 | sdk-partner-02; تم انهاء الامتثال 2025-04-11، ركز على ملاحظات Connect/telemetry. |

@@ -113,9 +113,9 @@ LaneCompliancePolicy {
 
 Torii expone:
 
-- `GET /v2/lane-compliance/policies/{lane_id}` - obtiene la referencia de politica mas reciente.
-- `POST /v2/lane-compliance/policies` - endpoint solo gobernanza que refleja los helpers de propuesta ISI.
-- `GET /v2/lane-compliance/decisions` - log de auditoria paginado con filtros para
+- `GET /v1/lane-compliance/policies/{lane_id}` - obtiene la referencia de politica mas reciente.
+- `POST /v1/lane-compliance/policies` - endpoint solo gobernanza que refleja los helpers de propuesta ISI.
+- `GET /v1/lane-compliance/decisions` - log de auditoria paginado con filtros para
   `lane_id`, `decision`, `jurisdiction` y `reason_code`.
 
 Los comandos CLI/SDK envuelven esas superficies HTTP para que los operadores puedan automatizar
@@ -126,7 +126,7 @@ revisiones y obtener artefactos (blob de politica firmado + atestaciones de revi
 1. **Admision (Torii)**
    - `Torii` descarga la politica activa cuando cambia un manifiesto de lane o cuando expira
      la firma en cache.
-   - Cada transaccion que entra en la cola `/v2/pipeline` se etiqueta con
+   - Cada transaccion que entra en la cola `/v1/pipeline` se etiqueta con
      `LaneComplianceContext` (ids de participante, UAID, metadatos del manifiesto de dataspace,
      policy id y el snapshot mas reciente de `LanePrivacyRegistry` descrito en
      `crates/iroha_core/src/interlane/mod.rs`).

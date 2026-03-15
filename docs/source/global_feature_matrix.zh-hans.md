@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 |可靠广播（DA 有效负载传输）| ◉ |当 `da_enabled=true` 作为传输/恢复路径时，启用 RBC 消息流（Init/Chunk/Ready/Deliver）；跟踪可用性证据（建议），同时提交独立进行。 |状态.md：最新|
 |提交 QC 状态根绑定 | ◉ | Commit QC 带有 `parent_state_root`/`post_state_root`；没有单独的执行QC门。 |状态.md：最新|
 |证据传播和审计端点 | ◉ | ControlFlow::Evidence，Torii 证据终点，阴性测试落地。 |状态.md:176;状态.md:760-761 |
-| RBC 遥测、准备情况/交付指标 | ◉ | `/v2/sumeragi/rbc*` 端点和遥测计数器/直方图可供操作员使用。 |状态.md:283-284;状态.md:772 |
+| RBC 遥测、准备情况/交付指标 | ◉ | `/v1/sumeragi/rbc*` 端点和遥测计数器/直方图可供操作员使用。 |状态.md:283-284;状态.md:772 |
 |共识参数广告和拓扑验证 | ◉ |节点广播 `(collectors_k, redundant_send_r)` 并验证对等点之间的平等性。 |状态.md:255 |
 |基于 PRF 的许可轮换 | ◉ |允许的领导者/收集者选择使用 PRF 种子 + 规范名册的高度/视图；前哈希轮转仍然是一个传统的助手。 |状态.md：最新|
 
@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 |--------|--------|--------|----------|
 |运行时升级准入（ABI 门控）| ◉ |入院时强制执行主动 ABI 集，并包含结构化错误和测试。 |状态.md:196 |
 |受保护的命名空间部署门控 | ▲|部署元数据要求并控制有线；政策/用户体验仍在不断发展。 |状态.md:171 |
-| Torii 治理读取端点 | ◉ | `/v2/gov/*` 读取通过路由器测试路由的 API。 |状态.md:212 |
+| Torii 治理读取端点 | ◉ | `/v1/gov/*` 读取通过路由器测试路由的 API。 |状态.md:212 |
 |验证密钥注册表生命周期和事件 | ◉ | VK 注册/更新/弃用、事件、CLI 过滤器和保留语义已实现。 |状态.md:236-239;状态.md:595;状态.md:603 |
 
 ## 零知识基础设施
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 |屏蔽根历史门控 | ◉ |根快照线程到具有有限历史记录和空根配置的 CoreHost 中。 |状态.md:303 |
 | ZK 投票执行与治理锁定 | ○ |实现了无效器推导、锁定更新、验证切换；完整的证明生命周期仍在成熟。 |状态.md:126-128;状态.md:194-195 |
 |证明附件预验证和重复数据删除 | ◉ |后端标签健全性、重复数据删除和证明记录在执行前保持不变。 |状态.md:348;状态.md:602 |
-| ZK Torii 证明获取端点 | ◉ | `/v2/zk/proof/{backend}/{hash}` 公开证明记录（状态、高度、vk_ref/commitment）。 |状态.md:94 |
+| ZK Torii 证明获取端点 | ◉ | `/v1/zk/proof/{backend}/{hash}` 公开证明记录（状态、高度、vk_ref/commitment）。 |状态.md:94 |
 
 ## IVM 和 Kotodama 集成|特色|状态 |笔记|证据|
 |--------|--------|--------|----------|
@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 |指针-ABI 严格验证和文档同步 | ◉ |通过黄金测试和生成的文档跨主机/IVM 强制实施 TLV 策略。 |状态.md:227;状态.md:317;状态.md:344;状态.md:366;状态.md:527 |
 |通过 CoreHost 进行 ZK 系统调用门控 | ◉ |每操作队列对经过验证的信封进行门控，并在 ISI 执行之前强制执行哈希匹配。 |板条箱/iroha_core/src/smartcontracts/ivm/host.rs:213;板条箱/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama 指针-ABI 文档和语法 | ◉ |语法/文档与实时构造函数和 SCALL 映射同步。 |状态.md:299-301 |
-| ISO 20022 模式驱动引擎和 Torii 桥 | ◉ |嵌入规范 ISO 20022 模式、确定性 XML 解析和公开 `/v2/iso20022/status/{MsgId}` API。 |状态.md:65-70 |
+| ISO 20022 模式驱动引擎和 Torii 桥 | ◉ |嵌入规范 ISO 20022 模式、确定性 XML 解析和公开 `/v1/iso20022/status/{MsgId}` API。 |状态.md:65-70 |
 
 ## 硬件加速
 

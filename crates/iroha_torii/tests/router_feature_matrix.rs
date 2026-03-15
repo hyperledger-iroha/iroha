@@ -30,7 +30,7 @@ const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi.json",
     "/openapi",
     "/swagger.json",
-    "/swagger/v2/swagger.json",
+    "/swagger/v1/swagger.json",
     "/schema",
 ];
 
@@ -244,7 +244,7 @@ async fn router_builds_under_current_features() {
         .oneshot(fixtures::operator_signed_request(
             &cfg.common.key_pair,
             Request::builder()
-                .uri(Uri::from_static("/v2/sumeragi/evidence/count"))
+                .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
             &[],
@@ -264,7 +264,7 @@ async fn router_builds_under_current_features() {
             &cfg.common.key_pair,
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/sumeragi/evidence"))
+                .uri(Uri::from_static("/v1/sumeragi/evidence"))
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(post_body))
                 .unwrap(),
@@ -306,7 +306,7 @@ async fn router_builds_under_current_features() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/domains"))
+                    .uri(Uri::from_static("/v1/domains"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -324,7 +324,7 @@ async fn router_builds_under_current_features() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )

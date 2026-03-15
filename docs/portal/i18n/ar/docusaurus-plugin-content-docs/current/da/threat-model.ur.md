@@ -231,7 +231,7 @@ Out-of-scope for this document:
 
 - DA-2 يمكن إعادة تشغيل ذاكرة التخزين المؤقت واستمرارية المؤشر. التنفيذ
   `crates/iroha_core/src/da/replay_cache.rs` (منطق ذاكرة التخزين المؤقت) وتكامل Torii
-  `crates/iroha_torii/src/da/ingest.rs` بصمة الإصبع `/v2/da/ingest`
+  `crates/iroha_torii/src/da/ingest.rs` بصمة الإصبع `/v1/da/ingest`
   يتحقق من موضوع کرتا ہے۔
 - أدوات محاكاة الدفق PDP/PoTR لأداة إثبات التدفق:
   `crates/sorafs_car/tests/sorafs_cli.rs`۔ هناك تدفقات طلب PoR/PDP/PoTR و

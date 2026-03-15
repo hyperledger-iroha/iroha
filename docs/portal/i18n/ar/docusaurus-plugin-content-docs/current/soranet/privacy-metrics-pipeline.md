@@ -71,8 +71,8 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 يعرض Torii الآن نقطتي HTTP محميتين بالـ telemetry بحيث يمكن للـ relays و collectors تمرير الملاحظات بدون تضمين نقل مخصص:
 
-- `POST /v2/soranet/privacy/event` يقبل حمولة `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. يتحقق Torii من الطلب مقابل ملف telemetry النشط، يسجل الحدث، ويرد بـ HTTP `202 Accepted` مع مغلف Norito JSON يحتوي على نافذة الحساب (`bucket_start_unix`, `bucket_duration_secs`) ووضع relay.
-- `POST /v2/soranet/privacy/share` يقبل حمولة `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` وتلميح `forwarded_by` اختياري حتى يتمكن المشغلون من تدقيق تدفقات collectors. تعيد الطلبات الناجحة HTTP `202 Accepted` مع مغلف Norito JSON يلخص collector ونافذة bucket وتلميح suppression؛ بينما يتم ربط اخفاقات التحقق باستجابة telemetry من نوع `Conversion` للحفاظ على معالجة اخطاء حتمية عبر collectors. تقوم حلقة احداث orchestrator الآن باصدار هذه shares عند استطلاع relays، لتحافظ على تزامن مجمع Prio في Torii مع buckets على relay.
+- `POST /v1/soranet/privacy/event` يقبل حمولة `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. يتحقق Torii من الطلب مقابل ملف telemetry النشط، يسجل الحدث، ويرد بـ HTTP `202 Accepted` مع مغلف Norito JSON يحتوي على نافذة الحساب (`bucket_start_unix`, `bucket_duration_secs`) ووضع relay.
+- `POST /v1/soranet/privacy/share` يقبل حمولة `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` وتلميح `forwarded_by` اختياري حتى يتمكن المشغلون من تدقيق تدفقات collectors. تعيد الطلبات الناجحة HTTP `202 Accepted` مع مغلف Norito JSON يلخص collector ونافذة bucket وتلميح suppression؛ بينما يتم ربط اخفاقات التحقق باستجابة telemetry من نوع `Conversion` للحفاظ على معالجة اخطاء حتمية عبر collectors. تقوم حلقة احداث orchestrator الآن باصدار هذه shares عند استطلاع relays، لتحافظ على تزامن مجمع Prio في Torii مع buckets على relay.
 
 تحترم النقطتان ملف telemetry: تصدران `503 Service Unavailable` عندما تكون المقاييس معطلة. يمكن للعملاء ارسال اجسام Norito ثنائية (`application/x.norito`) او Norito JSON (`application/x.norito+json`)، ويتفاوض الخادم تلقائيا على الصيغة عبر مستخلصات Torii القياسية.
 
@@ -155,7 +155,7 @@ cargo xtask soranet-privacy-report \
 
 لا تزال الحوكمة تتطلب اثبات ان اول تشغيل آلي لبى ميزانية suppression. تقبل الاداة الآن `--max-suppression-ratio <0-1>` بحيث يمكن لـ CI او المشغلين الفشل بسرعة عندما تتجاوز buckets suppressed النافذة المسموح بها (الافتراضي 10%) او عندما لا توجد buckets بعد. التدفق الموصى به:
 
-1. صدّر NDJSON من نقاط admin للـ relay بالاضافة الى تدفق `/v2/soranet/privacy/event|share` للـ orchestrator الى `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. صدّر NDJSON من نقاط admin للـ relay بالاضافة الى تدفق `/v1/soranet/privacy/event|share` للـ orchestrator الى `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. شغل المساعد مع ميزانية السياسة:
 
    ```bash

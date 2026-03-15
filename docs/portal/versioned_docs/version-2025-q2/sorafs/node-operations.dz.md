@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-dz
   ```
 
 - Torii བྱ་རིམ་འདི་ `data_dir` ལུ་ལྷག་ནི་/འབྲི་ནི་ཡོདཔ་ངེས་གཏན་བཟོ།
-- གསལ་བསྒྲགས་ཅིག་ཐོ་བཀོད་འབད་ཚར་བའི་ཤུལ་ལས་ `GET /v2/sorafs/capacity/state` བརྒྱུད་དེ་ མཐུད་མཚམས་ཁྱབ་བསྒྲགས་འདི་ ངེས་འཛིན་འབདཝ་ཨིན།
+- གསལ་བསྒྲགས་ཅིག་ཐོ་བཀོད་འབད་ཚར་བའི་ཤུལ་ལས་ `GET /v1/sorafs/capacity/state` བརྒྱུད་དེ་ མཐུད་མཚམས་ཁྱབ་བསྒྲགས་འདི་ ངེས་འཛིན་འབདཝ་ཨིན།
 - འཇམ་ཐང་ཐང་བཟོ་ནི་འདི་ ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ ཌེཤ་བོརཌ་ཚུ་གིས་ གིབི་·ཆུ་ཚོད་/པོ་ཨར་ ཀའུན་ཊར་གཉིས་ཆ་ར་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 ### CLI སྐམ་རྒྱུག་ (གདམ་ཁ།)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 ཚར་གཅིག་ Torii འདི་ ཐད་རི་བ་རི་ཨིན་ ཁྱོད་ཀྱིས་ HTTP བརྒྱུད་དེ་ ཅ་རྙིང་གཅིག་མཚུངས་ཚུ་ ལོག་ཐོབ་ཚུགས།
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 མཐའ་མའི་གཉིས་ཆ་ར་ བཙུགས་ཡོད་པའི་ གསོག་འཇོག་འབད་མི་ལཱ་འབད་མི་ཚུ་གིས་ ཞབས་ཏོག་བྱིན་དོ་ཡོདཔ་ལས་ CLI དུ་པའི་བརྟག་དཔྱད་དང་ འཛུལ་སྒོ་གི་འཚོལ་ཞིབ་ཚུ་ མཉམ་མཐུན་སྦེ་སྡོདཔ་ཨིན།
@@ -81,7 +81,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. གཞི་རྟེན་༦༤ ཨིན་ཀོ་ཌིང་དང་གཅིག་ཁར་ གསལ་སྟོན་འདི་ཕུལ་ནི།
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. པིན་འབད་ཡོད་པའི་གནས་སྡུད་འདི་ལེན།
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 ༡ གོང་དུ་བཤད་པ་ལྟར་ཉུང་མཐར་མངོན་པའི་མངོན་རྟགས་གཅིག་པིན།
 2. Torii ལས་སྦྱོར་འདི་ལོག་འགོ་བཙུགས།(ཡང་ན་ མཐུད་མཚམས་ཧྲིལ་བུ་)།
 ༣ ཕེཆ་ཞུ་བ་འདི་ལོག་སྟེ་བཙུགས་དགོ། པེ་ལོཌ་འདི་ ད་ལྟོ་ཡང་ ལོག་ཐོབ་ཚུགསཔ་ཨིནམ་ལས་ སླར་ལོག་འབད་མི་ ཟས་བཅུད་འདི་གིས་ སྔོན་འགྲོའི་ལོག་འགོ་བཙུགས་གནས་གོང་དང་མཐུན་དགོཔ་ཨིན།
-4. `GET /v2/sorafs/storage/state` གིས་ `bytes_used` འདི་ ལོག་འགོ་བཙུགས་པའི་ཤུལ་ལས་ གནས་ཏེ་ཡོད་པའི་ མངོན་གསལ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+4. `GET /v1/sorafs/storage/state` གིས་ `bytes_used` འདི་ ལོག་འགོ་བཙུགས་པའི་ཤུལ་ལས་ གནས་ཏེ་ཡོད་པའི་ མངོན་གསལ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
 ## 4. ཆོས་ཚན་བཀག་ཆ་བརྟག་དཔྱད།
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. པོ་ཨར་དཔེ་ཚད་ཅིག་ཞུ་བ་འབད།
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ཌེཤ་བོརཌི་ཚུ་གིས་ བརྟག་ཞིབ་འབད་དགོ།
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` དང་ `torii_sorafs_storage_fetch_inflight`
-  - པོ་ཨར་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ `/v2/sorafs/capacity/state` བརྒྱུད་དེ་ ཐོན་ཡོདཔ།
+  - པོ་ཨར་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ `/v1/sorafs/capacity/state` བརྒྱུད་དེ་ ཐོན་ཡོདཔ།
   - གཞིས་ཆགས་དཔར་བསྐྲུན་འབད་ནི་ དཔའ་བཅམ་མི་ཚུ་ `sorafs_node_deal_publish_total{result=success|failure}` བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
 འ་ནི་སྦྱོང་བརྡར་ཚུ་གི་ཤུལ་ལས་ བཙུགས་ཡོད་པའི་ གསོག་འཇོག་འབད་མི་ལཱ་འབད་མི་ཚུ་གིས་ གནས་སྡུད་ཚུ་ བཙུགས་ནི་དང་ ལོག་སྟེ་འགོ་བཙུགས་ནི་ དེ་ལས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཚད་རིམ་ཚུ་ལུ་ གུས་ཞབས་འབད་ནི་ དེ་ལས་ མཐུད་མཚམས་ལུ་ ལྕོགས་གྲུབ་ཁྱབ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ གཏན་འབེབས་བཟོ་མི་ པོ་ཨར་གྱི་བདེན་ཁུངས་ཚུ་ བཟོ་བཏོན་འབད་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།

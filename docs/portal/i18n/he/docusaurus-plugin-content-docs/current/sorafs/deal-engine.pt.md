@@ -58,12 +58,12 @@ probabilistica para que operadores possam correlacionar ganhos de micropagamento
 ## Integracao com Torii
 
 Torii נקודות קצה של חשיפה לגילוי נקודות קצה למטרות הוכחות דיווחים לשימוש וטיפול
-חיווט ciclo de vida do acordo sem sob medida:- `POST /v2/sorafs/deal/usage` aceita telemetria `DealUsageReport` e retorna
+חיווט ciclo de vida do acordo sem sob medida:- `POST /v1/sorafs/deal/usage` aceita telemetria `DealUsageReport` e retorna
   resultados deterministas de contabilidade (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` סיים את ג'אנלה, העברה
+- `POST /v1/sorafs/deal/settle` סיים את ג'אנלה, העברה
   `DealSettlementRecord` resultante junto com um `DealSettlementV1` em base64
   pronto para publicacao no DAG de governanca.
-- O feed `/v2/events/sse` do Torii agora transmite registros `SorafsGatewayEvent::DealUsage`
+- O feed `/v1/events/sse` do Torii agora transmite registros `SorafsGatewayEvent::DealUsage`
   resumindo cada envio de uso (תקופה, שעות GiB, Medidos, Contadores de Tickets,
   cobrancas deterministas), registros `SorafsGatewayEvent::DealSettlement`
   que incluem o canonico do Ledger de liquidacao mais o digest/tamanho/base64

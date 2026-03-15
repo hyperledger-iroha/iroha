@@ -8,7 +8,7 @@ source_hash: 0df3d72cb822e0fef5201d5a5d25b8588378f51e3e3106c73def669d68b1c674
 source_last_modified: "2025-12-29T18:16:35.166929+00:00"
 translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
 translator: machine-google-reviewed
 ---
@@ -19,7 +19,7 @@ SampleDownload файлын '@site/src/components/SampleDownload' ішінен �
 WebSocket тергіші `ToriiClient.openConnectWebSocket()` арқылы ашылды. Сценарий
 JS SDK жол картасының Connect бөлімін бейнелейді: ол детерминирленген
 URI алдын ала қарау, кезек тереңдігі телеметриясын жазады және канондықты ашады
-`/v2/connect/ws` соңғы нүктесі `ws` бумасын пайдаланып, Node.js қолданбалары
+`/v1/connect/ws` соңғы нүктесі `ws` бумасын пайдаланып, Node.js қолданбалары
 браузерлер сияқты бірдей ағын.
 
 <Үлгі жүктеп алу

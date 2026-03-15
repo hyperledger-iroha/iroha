@@ -61,13 +61,13 @@ os entregaveis exigidos para a primeira release e os divide em trilhas acionavis
 - `ReplicationOrderV1` vincula מציגה atribuicoes emitidas pela governanca com metas de redundancia, limiares de SLA e garantias por atribuicao; validadores impoem מטפל ב-canonicos, ספקים ייחודיים והגבלת דדליין לפני Torii או רישום ingerirem a orderem. [crates/sorafs_manifest/src/capacity.rs:301]
 - `CapacityTelemetryV1` תמונת מצב מפורשת בתקופה האחרונה (GiB declarados vs utilizados, contadores de replicacao, percentuais de uptime/PoR) que alimentam and distribuicao desers. Checagens de limites mantem utilizacao dentro das declaracoes e percentuais dentro de 0-100%. [crates/sorafs_manifest/src/capacity.rs:476]
 - עוזרים להשוות (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de lane/atribuicao/SLA) validacao deterministica de chaves e report de erro reutilizavel por CI e tooling downstream. [crates/sorafs_manifest/src/capacity.rs:230]
-- `PinProviderRegistry` תצוגה מקדימה או תמונת מצב על-שרשרת דרך `/v2/sorafs/capacity/state`, שילוב של ספקים והכרזות בעלות פנקס חשבונות לפי מאיו של Norito JSON קובע. [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
+- `PinProviderRegistry` תצוגה מקדימה או תמונת מצב על-שרשרת דרך `/v1/sorafs/capacity/state`, שילוב של ספקים והכרזות בעלות פנקס חשבונות לפי מאיו של Norito JSON קובע. [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - אכיפת אכיפת קוברטורה דה מטפלת ב-canonicos, deteccao de duplicados, limites por lane, guardas de atribuicao de replicacao e checks de range de telemetria para que regressoes aparecam imediatamente no CI. [crates/sorafs_manifest/src/capacity.rs:792]
-- כלי עבודה עבור מפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` המרת מפרט למידע על מטענים Norito canonicos, blobs base64 ו-JSON קורות חיים עבור מתקנים מכינים להפעלה של `/v2/sorafs/capacity/declare`, I100NI000 חזרות validacao מקומי. [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] Fixtures de referencia vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) I0180 gerados via.
+- כלי עבודה עבור מפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` המרת מפרט למידע על מטענים Norito canonicos, blobs base64 ו-JSON קורות חיים עבור מתקנים מכינים להפעלה של `/v1/sorafs/capacity/declare`, I100NI000 חזרות validacao מקומי. [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] Fixtures de referencia vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) I0180 gerados via.
 
 ### 2. Integracao do plano de control| טארפה | Responsavel(is) | Notas |
 |------|----------------|-------|
-| מטפלים Adicionar Torii `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` מטענים com Norito JSON. | צוות Torii | Espelhar logica do validador; reutilizar helpers Norito JSON. |
+| מטפלים Adicionar Torii `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` מטענים com Norito JSON. | צוות Torii | Espelhar logica do validador; reutilizar helpers Norito JSON. |
 | תצלומי מצב של Propagar `CapacityDeclarationV1` עבור מטא נתונים לעשות לוח תוצאות לעשות מתזמר e planos de fetch do gateway. | צוות Tooling WG / תזמורת | Estender `provider_metadata` com referencias de capacidade עבור ציון ריבוי מקורות הפוגה מגבלות על הנתיב. |
 | רמזים על כשל אוריינטרי עם לקוחות מתזמר/שער עבור אוריינטרים. | Networking TL / Gateway צוות | הו בונה לעשות לוח תוצאות לצרוך ordens assinadas pela governanca. |
 | כלי עבודה CLI: estender `sorafs_cli` com `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Fornecer JSON קבע + לוח התוצאות. |
@@ -88,7 +88,7 @@ os entregaveis exigidos para a primeira release e os divide em trilhas acionavis
 | הרחב את המדידה ל-Torii לעזר `CapacityTelemetryV1`. | צוות Torii | תוקף GiB-hour, PoR לאחר, זמן פעולה. |
 | אטואליזר צינור מדידה לעשות `sorafs_node` עבור שימוש דיווח לפי סדר + SLA אסטטיסטי. | צוות אחסון | Alinhar com ordens de replicacao e handles de chunker. |
 | צינור ההתיישבות: ממיר טלמטריה + רפליקציית מסמכים ב-XOR. | צוות אוצר / אחסנה | Conectar ao Deal Engine / יצוא האוצר. |
-| ייצוא לוחות מחוונים/אזהרות לביצוע מדידה (פיגור של אינסטה, טלמטריה מיושן). | צפייה | Estender pack de Grafana רפרנס ל-SF-6/SF-7. |- Torii agora expoe `/v2/sorafs/capacity/telemetry` e `/v2/sorafs/capacity/state` (JSON + Norito) para que Operatores enviem snapshots de telemetria por epoca e inspetores or audit or canonicoempo ou auditores de evidencia. [crates/iroha_torii/src/sorafs/api.rs:268] [crates/iroha_torii/src/sorafs/api.rs:816]
+| ייצוא לוחות מחוונים/אזהרות לביצוע מדידה (פיגור של אינסטה, טלמטריה מיושן). | צפייה | Estender pack de Grafana רפרנס ל-SF-6/SF-7. |- Torii agora expoe `/v1/sorafs/capacity/telemetry` e `/v1/sorafs/capacity/state` (JSON + Norito) para que Operatores enviem snapshots de telemetria por epoca e inspetores or audit or canonicoempo ou auditores de evidencia. [crates/iroha_torii/src/sorafs/api.rs:268] [crates/iroha_torii/src/sorafs/api.rs:816]
 - א integracao `PinProviderRegistry` garante que ordens de replicacao sejam acessiveis pelo mesmo point end; helpers de CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) agora validam e publicam telemetria a partir de runs automatizados com hashing deterministico e resolucao de aliases.
 - תמונות Snapshots de metering produzem entradas `CapacityTelemetrySnapshot` fixadas ao snapshot `metering`, e יצוא Prometheus alimentam o board Grafana pronto para08NI000007 para 08NI00 em quipes I0 faturamento monitorem acumulacao de GiB-שעה, עמלות ננו-SORA פרויקטים ותאימות של SLA בזמן אמת. [crates/iroha_torii/src/routing.rs:5143] [docs/source/grafana_sorafs_metering.json:1]
 - קוואנדו או החלקה של מדידה קיימת, או תמונת מצב הכוללת `smoothed_gib_hours` ו-`smoothed_por_success_bps` עבור מפעילי השוואת ערכים ב-EMA נגד תשלומים ברוטוס בארה"ב. [crates/sorafs_node/src/metering.rs:401]
@@ -163,7 +163,7 @@ manter os criterios de aceitacao em sync com a implementacao.
 ### כניסת ספקים ליציאה מבחני עשן
 - Regenere artefatos de declaracao/telemetria com `sorafs_manifest_stub capacity ...` e rode os
   tests de CLI antes da submissao (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Submeta באמצעות Torii (`/v2/sorafs/capacity/declare`) ו-Ccapture `/v2/sorafs/capacity/state` mais
+- Submeta באמצעות Torii (`/v1/sorafs/capacity/declare`) ו-Ccapture `/v1/sorafs/capacity/state` mais
   צילומי מסך עושים Grafana. Siga o fluxo de saida em `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Arquive artefatos assinados e outputs de reconciliacao dentro de
   `docs/examples/sorafs_capacity_marketplace_validation/`.

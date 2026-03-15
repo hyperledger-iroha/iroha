@@ -16,8 +16,8 @@ translator: manual
 
 ## רכיבים
 
-- **ממשק הקבצים המצורפים** – `POST /v2/zk/attachments` שומר מטענים אטומים (הוכחות, טרנסקריפטים). כאשר המוכיח מופעל, הרשומות נסרקות ברקע. ניתן לרשום, להוריד ולמחוק מצורפים דרך ה-API או `iroha_cli app zk attachments *`.
-- **מוכיח ברקע** – נשלט על ידי `torii.zk_prover_enabled=true`. התהליך מרוקן את תור המצורפים, מאמת `ProofAttachment`, ומפיק דוחות JSON (`/v2/zk/prover/reports`). תקציבי משאבים: `torii.zk_prover_max_inflight`, ‏`torii.zk_prover_max_scan_bytes`, ‏`torii.zk_prover_max_scan_millis`. הסקופ נשלט על ידי `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits`, ובמקרה שאין VK אינליין נטענים בייטים מ-`torii.zk_prover_keys_dir` בשם `<backend>__<name>.vk`.
+- **ממשק הקבצים המצורפים** – `POST /v1/zk/attachments` שומר מטענים אטומים (הוכחות, טרנסקריפטים). כאשר המוכיח מופעל, הרשומות נסרקות ברקע. ניתן לרשום, להוריד ולמחוק מצורפים דרך ה-API או `iroha_cli app zk attachments *`.
+- **מוכיח ברקע** – נשלט על ידי `torii.zk_prover_enabled=true`. התהליך מרוקן את תור המצורפים, מאמת `ProofAttachment`, ומפיק דוחות JSON (`/v1/zk/prover/reports`). תקציבי משאבים: `torii.zk_prover_max_inflight`, ‏`torii.zk_prover_max_scan_bytes`, ‏`torii.zk_prover_max_scan_millis`. הסקופ נשלט על ידי `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits`, ובמקרה שאין VK אינליין נטענים בייטים מ-`torii.zk_prover_keys_dir` בשם `<backend>__<name>.vk`.
 - **משטח טלמטריה** – מדדים רשומים ב-`crates/iroha_telemetry::metrics` ומפורסמים תחת `/metrics`.
 
 ## רשימת בדיקה מהירה
@@ -81,13 +81,13 @@ translator: manual
 2. לבדוק האם `torii_zk_prover_last_scan_ms` מתקרב למגבלה; ייתכן שהעיבוד מוגבל על ידי `torii.zk_prover_max_scan_millis`.
 3. לוודא שהעובד פעיל: בלוגים אמורים להציג שורות `scan_completed` בכל `torii.zk_prover_scan_period_secs`.
 4. לשקול העלאת `torii.zk_prover_max_inflight` (מקביליות) או קיצור מרווחי הסריקה.
-5. אם מצורפים ישנים אינם דרושים, ניתן למחוק אותם ידנית באמצעות `DELETE /v2/zk/attachments/:id` או הפקודה המקבילה ב-CLI.
+5. אם מצורפים ישנים אינם דרושים, ניתן למחוק אותם ידנית באמצעות `DELETE /v1/zk/attachments/:id` או הפקודה המקבילה ב-CLI.
 
 ### 3. דוחות חסרים או מתעכבים
 
 1. לבדוק את `torii.zk_prover_reports_ttl_secs` ולהבטיח שמדיניות השמירה תואמת לציפיות.
 2. לעקוב אחרי `torii_zk_prover_gc_total` כדי לראות אם דוחות נמחקים מוקדם מהמתוכנן.
-3. לוודא שלקוחות מושכים את `/v2/zk/prover/reports` לפני שפג ה-TTL.
+3. לוודא שלקוחות מושכים את `/v1/zk/prover/reports` לפני שפג ה-TTL.
 4. לצורך חקירה דחופה, ניתן למשוך את המצורפים הגולמיים ולעבד אותם מחדש במצב לא מקוון.
 
 ## אינטגרציה עם CLI ו-SDK

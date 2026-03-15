@@ -52,12 +52,12 @@ Sidebar_label: محرك الصفقات
 ## تكامل Torii
 
 تعرض نقاط النهاية المخصصة Torii المعلومات وتقرير استخدام موفري الخدمة
-بدون أسلاك مخصصة، محرك دورة حياة الصفقة:- `POST /v2/sorafs/deal/usage` `DealUsageReport` القياس عن بعد قبول کرتا ہے و
+بدون أسلاك مخصصة، محرك دورة حياة الصفقة:- `POST /v1/sorafs/deal/usage` `DealUsageReport` القياس عن بعد قبول کرتا ہے و
   نتائج المحاسبة الحتمية (`UsageOutcome`) تعود إلى کرتا ہے۔
-- `POST /v2/sorafs/deal/settle` إنهاء النافذة الحالية کرتا ہے، و
+- `POST /v1/sorafs/deal/settle` إنهاء النافذة الحالية کرتا ہے، و
   تم تنزيل `DealSettlementRecord` وتشفير base64 `DealSettlementV1` وبث البث المباشر
   تم نشر منشور DAG لحوكمة جو.
-- Torii کا `/v2/events/sse` تغذية اب `SorafsGatewayEvent::DealUsage` يسجل بث کرتا ہے
+- Torii کا `/v1/events/sse` تغذية اب `SorafsGatewayEvent::DealUsage` يسجل بث کرتا ہے
   ملخص تقديم الاستخدام (العصر، ساعات GiB المقيسة، عدادات التذاكر،
   الرسوم الحتمية)، يسجل `SorafsGatewayEvent::DealSettlement` لقطة دفتر الأستاذ للتسوية الأساسية
   قطعة أثرية للحوكمة على القرص BLAKE3 Digest/size/base64 تتضمن القرص، و

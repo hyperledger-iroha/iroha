@@ -209,7 +209,7 @@ fournisseurs malveillants et liste blanche et alertes supprimées
 
 **Où chercher ensuite :**- DA-2 utilise le cache de relecture et la persistance du curseur Mise en œuvre
   `crates/iroha_core/src/da/replay_cache.rs` (logique de cache) et intégration Torii
-  `crates/iroha_torii/src/da/ingest.rs` pour `/v2/da/ingest` avec empreinte digitale
+  `crates/iroha_torii/src/da/ingest.rs` pour `/v1/da/ingest` avec empreinte digitale
   vérifie le fil کرتا ہے۔
 - Faisceau de preuve de flux de simulations de streaming PDP/PoTR
   `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Flux de requêtes PoR/PDP/PoTR ici

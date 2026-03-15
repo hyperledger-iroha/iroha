@@ -164,7 +164,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` e o crate cliente Rust omitem o campo `lane_id` quando voce nao passa `--lane-id` / `LaneSelector`. או נתב de filas, portanto, cai em `default_lane`. השתמש בדגלים מפורשים `--lane-id`/`--dataspace-id` אפנים או מיראר um lane nao padrao.
 - **JS/Swift/Android.** כפי שיוצא מהדורות האולטימטיביות של SDK tratam `laneId`/`lane_id` כמו אופציונליים ו-fazem fallback para o valor anunciado por `/status`. Mantenha a politica de roteamento sincronizada entre staging e producao para que apps moveis nao precisem de reconfiguracoes de emergencia.
-- **בדיקות צינור/SSE.** מסנני אירועים של טרנסאקאו aceitam predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v2/pipeline/events/transactions` com esse filtro para provar que escritas enviadas Sem lane explicito chegam sob o id de lane de fallback.
+- **בדיקות צינור/SSE.** מסנני אירועים של טרנסאקאו aceitam predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v1/pipeline/events/transactions` com esse filtro para provar que escritas enviadas Sem lane explicito chegam sob o id de lane de fallback.
 
 ## 7. Observabilidade e ganchos de governanca
 

@@ -168,9 +168,9 @@ API Torii エントリのペイロードは往復で修正されます。 [crate
 > O ゲートウェイ Torii agora expoe ヘルパー読み取り専用アポイアドス ペロ メスモ
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - レトルナまたはマニフェスト
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - レトルナまたはマニフェスト
 > Norito armazenado (base64) junto com ダイジェスト/メタデータ。 [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - チャンクのレトルナ
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - チャンクのレトルナ
 > deterministico JSON (`chunk_fetch_specs`) パラツールのダウンストリーム。 [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > Esses エンドポイント espelham a Saida do CLI パラケ パイプライン ポッサム トロカール
@@ -213,19 +213,19 @@ API Torii エントリのペイロードは往復で修正されます。 [crate
      デ・ガバナンカ・エスティベル・デフィニド。クォータ推定値を前提とした設計
      operacoes de unpin iniciadas pelo operador。
 
-### 容量の宣言とスケジュールの統合の宣言- `CapacityDeclarationRecord` と `/v2/sorafs/capacity/declare` の Torii 更新情報
+### 容量の宣言とスケジュールの統合の宣言- `CapacityDeclarationRecord` と `/v1/sorafs/capacity/declare` の Torii 更新情報
   パラ o `CapacityManager` embutido、de modo que cada nodo constroi uma visao em meria
   デ・スアス・アロカコスはチャンカー・レーンとコンプロメティダスです。 O マネージャーはスナップショットを読み取り専用で公開します
-  テレメトリアに関する (`GET /v2/sorafs/capacity/state`) レーンの権限を無効にする
+  テレメトリアに関する (`GET /v1/sorafs/capacity/state`) レーンの権限を無効にする
   アンテス・デ・ノバス・オルデンス・セレム・アシータス。 [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- O エンドポイント `/v2/sorafs/capacity/schedule` aceita ペイロード `ReplicationOrderV1`
+- O エンドポイント `/v1/sorafs/capacity/schedule` aceita ペイロード `ReplicationOrderV1`
   エミミドス・ペラ・ガバナンカ。奇跡を命令し、ローカルを証明し、マネージャーを検証する
   重複のスケジュール、チャンカー/レーンの容量の検証、スライスとレトルナの予約
   うーん、`ReplicationPlan` 容量制限が発生しています。
   orquestracao possam seguir com a ingestao. Ordens para outros provedores sao
   reconhecidas com resposta `ignored` パラ ファシリター ワークフロー マルチ オペレーター。 [crates/iroha_torii/src/routing.rs:4845]
 - 結論のフック (例を示し、次のことを実行します) チャママム
-  `POST /v2/sorafs/capacity/complete` パラ リベラル リザーバス経由
+  `POST /v1/sorafs/capacity/complete` パラ リベラル リザーバス経由
   `CapacityManager::complete_order`。スナップショットを含むレスポスタ
   `ReplicationRelease` (残りの残り、チャンカー/レーン) パラケ ツール
   近くのオーデム sem ポーリングを実行できます。トラバーリョ フトゥロ

@@ -65,7 +65,7 @@ Norito ↔ ISO 20022 ko'prigi xabarlarni chiqarishdan oldin bajarilishi kerak b
   - Mijoz uchun bayonotlar (`camt.054`): mavjud bo'lganda **IBAN** qo'shing va uni tasdiqlang
     (uzunlik, mamlakat qoidalari, mod-97 nazorat summasi).[^swift_iban]
 - **Valyuta** → **ISO 4217** 3 harfli kod, kichik birlik yaxlitlashiga rioya qiling.[^iso_4217]
-- **Torii yutish** → `POST /v2/iso20022/pacs009` orqali PvP moliyalashtirish oyoqlarini yuboring; ko'prik
+- **Torii yutish** → `POST /v1/iso20022/pacs009` orqali PvP moliyalashtirish oyoqlarini yuboring; ko'prik
   `Purp=SECU` ni talab qiladi va endi mos yozuvlar ma'lumotlari sozlanganda BIC piyodalar o'tish joylarini qo'llaydi.
 
 #### Validatsiya qoidalari (emissiyadan oldin qo'llaniladi)

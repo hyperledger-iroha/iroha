@@ -70,7 +70,7 @@ description: ملخص بوابة لوحات Grafana الخاصة بـ viewer/cac
    routing manifest (TRM) وأي نافذة lineage كانت نشطة. المساعد
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    ينسخ spool files، ويصدر hashes، وقد يوقع الملخص اختياريا.
-2. سجل مخرجات `/v2/status` المصفاة إلى
+2. سجل مخرجات `/v1/status` المصفاة إلى
    `.telemetry.taikai_alias_rotations[]` واحفظها بجوار spool files. يقارن
    المراجعون `manifest_digest_hex` وحدود النافذة مع حالة spool المنسوخة.
 3. صدّر Prometheus snapshots للمقاييس المذكورة أعلاه وخذ لقطات شاشة للوحات

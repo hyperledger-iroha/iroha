@@ -117,7 +117,7 @@ altura de expiracao. O contador de telemetria
    `LaneRelayBroadcaster` agora consome os `LaneRelayEnvelope`s emitidos durante o selamento do
    bloco e os difunde como frames `NetworkMessage::LaneRelay` de alta prioridade. Os envelopes sao
    verificados, deduplicados por `(lane_id,dataspace_id,height,settlement_hash)`, e persistidos no
-   snapshot de status de Sumeragi (`/v2/sumeragi/status`) para operadores e auditores. O
+   snapshot de status de Sumeragi (`/v1/sumeragi/status`) para operadores e auditores. O
    broadcaster continuara evoluindo para anexar artefatos DA (provas de chunk RBC, headers Norito,
    manifests SoraFS/Object) e alimentar o merge ring sem bloqueio de head-of-line.
 
@@ -129,7 +129,7 @@ altura de expiracao. O contador de telemetria
 
 5. **Persistencia e exposicao.**  
    Kura escreve o lane block, a entrada de merge e o `LaneBlockCommitment` de forma atomica para
-   que o replay reconstrua a mesma reducao. `/v2/sumeragi/status` expoe:
+   que o replay reconstrua a mesma reducao. `/v1/sumeragi/status` expoe:
    - `lane_commitments` (metadata de execucao).
    - `lane_settlement_commitments` (o payload descrito aqui).
    - `lane_relay_envelopes` (headers de relay, QCs, digests DA, settlement hash e contagens de bytes RBC).
@@ -171,8 +171,8 @@ O merge ring DEVE aplicar o seguinte antes de aceitar um compromisso de lane:
   permanecer em zero), e `lane_relay_invalid_total` deve permanecer em zero fora de exercicios
   adversariais.
 - **Superficies Torii:**  
-  `/v2/sumeragi/status` inclui `lane_commitments`, `lane_settlement_commitments` e snapshots de
-  dataspace. `/v2/nexus/lane-config` (planejado) publicara a geometria de `LaneConfig` para que
+  `/v1/sumeragi/status` inclui `lane_commitments`, `lane_settlement_commitments` e snapshots de
+  dataspace. `/v1/nexus/lane-config` (planejado) publicara a geometria de `LaneConfig` para que
   clientes possam mapear `lane_id` <-> rotulos de dataspace.
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` traca backlog de lane, sinais de disponibilidade DA e os

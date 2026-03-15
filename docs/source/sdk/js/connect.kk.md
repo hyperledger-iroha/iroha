@@ -79,7 +79,7 @@ starts enforcing a new schema.
 
 `ToriiClient.getConnectStatus()` returns the active policy snapshot, per-IP
 session counts, and enforcement knobs that Torii exposes over
-`/v2/connect/status`. It mirrors the telemetry gadgets mentioned in JS4 so
+`/v1/connect/status`. It mirrors the telemetry gadgets mentioned in JS4 so
 SDK-hosted dashboards or runbooks can confirm Connect is enabled before opening
 sessions.
 

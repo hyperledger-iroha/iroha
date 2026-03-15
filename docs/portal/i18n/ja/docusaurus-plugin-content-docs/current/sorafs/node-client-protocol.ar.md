@@ -66,13 +66,13 @@ QoS を確認してください。テストを終了します。
 
 HTTP メッセージを送信してください。
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`|回答 |翻訳 |
+### `GET /v1/sorafs/storage/car/{manifest_id}`|回答 |翻訳 |
 |----------|----------|
 | **ヘッダー** | `Range` (ナレーション) `dag-scope: block`、`X-SoraFS-Chunker`、`X-SoraFS-Nonce` `X-SoraFS-Stream-Token` Base64 です。 |
 | **回答** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، وإعادةチャンカー/トークン。 |
 | **障害モード** | `416` 日本語版 `401` 日本語版 `429` 日本語版ストリーム/バイト。 |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ダイジェスト版をダウンロードしてください。意味
 自動車を運転してください。
@@ -120,11 +120,11 @@ SF-6 のセキュリティ (CLI Rust `sorafs_fetch` と SDK のサポート)
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` 残りの部分
   ピン Norito JSON の認証が必要です。
-- `iroha app sorafs storage pin` و`torii /v2/sorafs/pin/register` のマニフェスト
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` のマニフェスト
   Norito JSON の証明 別名 後継者証拠
   証明 `400` 証明 証明 `503` 証明 `Warning: 110` 証明
   証明は `412` です。
-- 残り REST (`/v2/sorafs/pin`、`/v2/sorafs/aliases`、`/v2/sorafs/replication`)
+- 残り REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   ありがとうございます。## いいえ
 

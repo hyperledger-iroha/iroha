@@ -57,7 +57,7 @@ Sidebar_label: خطة تنفيذ العقدة
 أفكار تنفيذية:
 
 - استخدم مكدس Axum الخاص بـ Torii مع حمولات `norito::json`.
-- إضافة مخططات Norito للاستجابات (`PinResultV1` و`FetchErrorV1` وبنى التليميترية).- ✅ أصبح المسار `/v2/sorafs/por/ingestion/{manifest_digest_hex}` خالصة الـ backlog وأقدم Epoch/deadline وأحدث طوابع النجاح/الفشل لكل مضمون، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وتسجل Torii عدادات `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- إضافة مخططات Norito للاستجابات (`PinResultV1` و`FetchErrorV1` وبنى التليميترية).- ✅ أصبح المسار `/v1/sorafs/por/ingestion/{manifest_digest_hex}` خالصة الـ backlog وأقدم Epoch/deadline وأحدث طوابع النجاح/الفشل لكل مضمون، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وتسجل Torii عدادات `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### د. المجدول وفرض الحصص
 

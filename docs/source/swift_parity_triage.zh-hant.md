@@ -16,7 +16,7 @@ Swift Norito fixture triage runbook. Keep translations in sync once localized.
 # Swift Norito Parity Triage Runbook
 
 Swift parity diffs are tracked by `dashboards/mobile_parity.swift` and the Swift CI
-lanes. This runbook explains how to respond when fixtures or `/v2/pipeline`
+lanes. This runbook explains how to respond when fixtures or `/v1/pipeline`
 integration tests drift from the Rust reference implementation.
 
 ## When to page the runbook
@@ -68,7 +68,7 @@ Fallback procedure:
    consuming a signed Rust archive, pass `SWIFT_FIXTURE_ARCHIVE=/path/to.tar.gz`
    so the state file captures the source digest.
 3. Execute `swift test --package-path IrohaSwift` (or `make swift-ci` if the
-   `/v2/pipeline` helpers changed) to ensure fixtures and builders stay in sync.
+   `/v1/pipeline` helpers changed) to ensure fixtures and builders stay in sync.
 4. Regenerate the parity metrics:
    ```bash
    ci/swift_status_export.sh \
@@ -179,7 +179,7 @@ fallback window.
 4. **Re-run Swift tests**
    - Execute `swift test --package-path IrohaSwift` to ensure the new fixtures
      still pass the fallback encoders.
-   - When `/v2/pipeline` changes are involved, also run `make swift-ci` to confirm the
+   - When `/v1/pipeline` changes are involved, also run `make swift-ci` to confirm the
      regen SLA block turns green and telemetry metadata stays intact.
 5. **Communicate**
 - Update `status.md` (Latest Updates + iOS section) with a short note linking
@@ -226,7 +226,7 @@ alerts.
 | Scenario | Primary | Secondary | Notes |
 |----------|---------|-----------|-------|
 | Fixture diff caused by Rust ABI change | Swift Lead | Android Foundations TL | Confirm governance approval before mirroring. |
-| `/v2/pipeline` regression | Swift Lead | Torii PM | Coordinate with Torii backlog to avoid double-fixes. |
+| `/v1/pipeline` regression | Swift Lead | Torii PM | Coordinate with Torii backlog to avoid double-fixes. |
 | Dashboard tooling failure | Swift Program PM | Telemetry owner | Re-run `scripts/render_swift_dashboards.sh` with verbose logs. |
 | XCFramework parity gap | Swift QA Lead | Build Infra | Kick `ci/xcframework-smoke` lane and capture artifacts. |
 

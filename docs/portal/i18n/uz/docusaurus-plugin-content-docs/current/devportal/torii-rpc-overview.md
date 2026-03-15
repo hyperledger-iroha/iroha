@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Norito-RPC umumiy ko'rinishi
 
 Norito-RPC Torii API uchun ikkilik transportdir. U bir xil HTTP yo'llarini qayta ishlatadi
-`/v2/pipeline` sifatida, lekin sxemani o'z ichiga olgan Norito ramkali foydali yuklarni almashtiradi
+`/v1/pipeline` sifatida, lekin sxemani o'z ichiga olgan Norito ramkali foydali yuklarni almashtiradi
 xeshlar va nazorat summalari. Deterministik, tasdiqlangan javoblar kerak bo'lganda foydalaning yoki
 quvur liniyasi JSON javoblari muammoga aylanganda.
 
@@ -30,7 +30,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Foydali yukingizni Norito kodek (`iroha_client`, SDK yordamchilari yoki) bilan seriyali qiling.
@@ -56,7 +56,7 @@ buyurtma skriptlarni yozmasdan foydali yuklar.
 1. [Proksi-serverni ishga tushiring](./try-it.md#start-the-proxy-locally) va sozlang
    `TRYIT_PROXY_PUBLIC_URL`, shuning uchun vidjetlar trafikni qaerga yuborishni bilishadi.
 2. Ushbu sahifadagi **Sinab ko'ring** kartasini yoki `/reference/torii-swagger`
-   paneli va `POST /v2/pipeline/submit` kabi oxirgi nuqtani tanlang.
+   paneli va `POST /v1/pipeline/submit` kabi oxirgi nuqtani tanlang.
 3. **Content-Type** ni `application/x-norito` ga almashtiring, **Binary** ni tanlang.
    muharriri va `fixtures/norito_rpc/transfer_asset.norito` yuklang
    (yoki ro'yxatda ko'rsatilgan har qanday foydali yuk

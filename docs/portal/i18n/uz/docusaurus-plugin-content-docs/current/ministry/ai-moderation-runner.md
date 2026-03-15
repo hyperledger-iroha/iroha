@@ -200,7 +200,7 @@ kutilgan tartib va to'g'ridan-to'g'ri namuna shlyuzining rad etish ro'yxatiga uz
   - HTTP/gRPC API-ni ochuvchi `run_moderation.py` (yoki Rust ekvivalenti) kirish nuqtasi.
 - Artefaktlarni `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` ga e'lon qiling.
 - `sorafs_ai_runner` kassasining bir qismi sifatida yuguruvchi ikkilik kemalar. Qurilish quvuri
-  manifest xeshni ikkilik faylga joylashtiradi (`/v2/info` orqali ochiladi).
+  manifest xeshni ikkilik faylga joylashtiradi (`/v1/info` orqali ochiladi).
 
 ## 8. Telemetriya va kuzatuvchanlik
 - Prometheus ko'rsatkichlari:

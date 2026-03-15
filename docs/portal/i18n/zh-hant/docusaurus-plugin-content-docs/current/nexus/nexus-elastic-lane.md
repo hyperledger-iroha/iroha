@@ -148,7 +148,7 @@ Torii 重新啟動後，運行新的煙霧助手來驗證通道報告 `manifest_
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v2/sumeragi/status \
+  --status-url https://torii.example.com/v1/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \

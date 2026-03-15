@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v2/offline/transfers/proof` endpoint.
+//! Integration tests for the `/v1/offline/transfers/proof` endpoint.
 #![cfg(feature = "app_api")]
 
 use std::{str::FromStr, sync::Arc};
@@ -51,7 +51,7 @@ async fn offline_transfer_proof_accepts_transfer_payload() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/offline/transfers/proof")
+                .uri("/v1/offline/transfers/proof")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -79,7 +79,7 @@ async fn offline_transfer_proof_rejects_missing_transfer() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/offline/transfers/proof")
+                .uri("/v1/offline/transfers/proof")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .expect("request"),

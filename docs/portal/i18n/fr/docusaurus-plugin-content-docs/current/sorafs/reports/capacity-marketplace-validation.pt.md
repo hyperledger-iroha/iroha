@@ -28,7 +28,7 @@ La liste de contrôle doit être révisée avant d'autoriser le marché des opé
 
 | Chéagem | Validation | Preuve |
 |-------|------------|--------------|
-| O Registry Aceita Declaracoes Canonicas de Capacidade | Le test d'intégration exercé `/v2/sorafs/capacity/declare` via l'API de l'application, vérifie le traitement des héritages, la capture des métadonnées et le transfert pour le registre du nœud. | `crates/iroha_torii/src/routing.rs:7654` |
+| O Registry Aceita Declaracoes Canonicas de Capacidade | Le test d'intégration exercé `/v1/sorafs/capacity/declare` via l'API de l'application, vérifie le traitement des héritages, la capture des métadonnées et le transfert pour le registre du nœud. | `crates/iroha_torii/src/routing.rs:7654` |
 | Le contrat intelligent nécessite des charges utiles divergentes | Le test unitaire garantit que les identifiants du fournisseur et les champs GiB compromis correspondent à une déclaration d'assassinat avant de persister. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | La CLI émet des articles canoniques d'intégration | L'exploitation de la CLI écrit comme Norito/JSON/Base64 déterministes et valides les allers-retours pour que les opérateurs puissent préparer des déclarations hors ligne. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Le guide de l'opérateur sur le flux de travail d'admission et les garde-fous de gouvernance | Un document énumérant le schéma de déclaration, les défauts de politique et les étapes de révision pour le conseil. | `../storage-capacity-marketplace.md` |

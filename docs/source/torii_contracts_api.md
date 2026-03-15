@@ -4,7 +4,7 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
 
 ## Endpoints
 
-- POST `/v2/contracts/code`
+- POST `/v1/contracts/code`
   - Wraps `RegisterSmartContractCode` into a signed transaction and submits it.
   - Request body: `RegisterContractCodeDto` (JSON or Norito JSON) — see schema below.
   - Response: HTTP 202 Accepted on successful enqueue; standard transaction admission errors otherwise.
@@ -18,7 +18,7 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
     | `manifest.code_hash` or `manifest.abi_hash` is not 32‑byte lowercase hex | `400 Bad Request` | `invalid JSON body: invalid hex string ... manifest.code_hash` | Parsing happens in the Norito JSON extractor before the transaction is built. |
 | Transaction queue is full | `429 Too Many Requests` | Queue rejection JSON (`code`, `message`, `queue`, optional `retry_after_seconds`) | Clients receive `Retry-After` along with queue depth/capacity headers; defer submission until load subsides or increase queue capacity. |
 
-    Example rejection emitted by `/v2/pipeline/transactions/status` when the authority lacks the required permission (pretty-printed for clarity):
+    Example rejection emitted by `/v1/pipeline/transactions/status` when the authority lacks the required permission (pretty-printed for clarity):
 
     ```json
     {
@@ -51,33 +51,33 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
     }
     ```
 
-- GET `/v2/contracts/code/{code_hash}`
+- GET `/v1/contracts/code/{code_hash}`
   - Fetches the on-chain `ContractManifest` by its content-addressed `code_hash`.
   - Path param: `code_hash` — 32‑byte hex string.
   - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   - Accepts base64 `.to` bytecode with authority and private key; computes `code_hash` (program body) and `abi_hash` (from header `abi_version`).
   - Request body: `DeployContractDto`; response body: `DeployContractResponseDto`.
   - Submits two ISIs in a single transaction: `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (code storage).
   - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
   - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
-- POST `/v2/contracts/instance`
+- POST `/v1/contracts/instance`
   - Accepts base64 `.to` bytecode and a target `(namespace, contract_id)` pair.
   - Wraps `RegisterSmartContractCode`, `RegisterSmartContractBytes`, and `ActivateContractInstance` into a single transaction so deployment and activation happen atomically.
   - Response body: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
   - Telemetry: increments `torii_contract_errors_total{endpoint="instance"}` on handler errors and `torii_contract_throttled_total{endpoint="instance"}` when throttled.
 
-- GET `/v2/contracts/code-bytes/{code_hash}`
+- GET `/v1/contracts/code-bytes/{code_hash}`
   - Fetches stored code bytes for a given `code_hash`.
   - Response body: `{ code_b64 }`.
 
-- POST `/v2/contracts/instance/activate`
+- POST `/v1/contracts/instance/activate`
   - Submits `ActivateContractInstance` binding `(namespace, contract_id) -> code_hash`.
   - Request body: `ActivateInstanceDto`; response body: `ActivateInstanceResponseDto`.
   - Telemetry: increments `torii_contract_errors_total{endpoint="activate"}` on handler errors and `torii_contract_throttled_total{endpoint="activate"}` on throttle events.
 
-- GET `/v2/contracts/instances/{ns}`
+- GET `/v1/contracts/instances/{ns}`
   - Lists active contract instances for `ns`. Mirrors the governance listing endpoint.
   - Query params: `contains`, `hash_prefix`, `offset`, `limit`, `order` (same semantics as governance endpoint).
   - Response: `{ namespace, instances: [{ contract_id, code_hash_hex }], total, offset, limit }`.
@@ -224,7 +224,7 @@ All DTOs derive both `JsonSerialize` and `NoritoSerialize`. Clients may submit e
 
 ### Rate limiting & telemetry
 
-- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v2/contracts/{code,deploy,instance,instance/activate}`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
+- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v1/contracts/{code,deploy,instance,instance/activate}`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
 - Requests rejected by the limiter increment `torii_contract_throttled_total{endpoint}` where `endpoint` is `code`, `deploy`, `instance`, or `activate`.
 - Any handler error (invalid body, permission missing, queue failure) increments `torii_contract_errors_total{endpoint}`. Track alongside queue metrics for alerting.
 
@@ -240,13 +240,13 @@ curl -s -X POST \
         "private_key": "ed25519:…",  
         "manifest": { "code_hash": "<32-byte-hex>", "abi_hash": null }
       }' \
-  http://127.0.0.1:8080/v2/contracts/code
+  http://127.0.0.1:8080/v1/contracts/code
 ```
 
 Fetch a manifest by hash:
 
 ```bash
-curl -s http://127.0.0.1:8080/v2/contracts/code/<32-byte-hex> | jq .
+curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
 
 Deploy code and then fetch code bytes:
 
@@ -258,9 +258,9 @@ curl -s -X POST \
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
-  http://127.0.0.1:8080/v2/contracts/deploy | jq .
+  http://127.0.0.1:8080/v1/contracts/deploy | jq .
 
-curl -s http://127.0.0.1:8080/v2/contracts/code-bytes/<32-byte-hex> | jq .
+curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
 ```
 
 Deploy and activate an instance atomically:
@@ -275,7 +275,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_b64": "…"
       }' \
-  http://127.0.0.1:8080/v2/contracts/instance | jq .
+  http://127.0.0.1:8080/v1/contracts/instance | jq .
 ```
 
 Activate an existing instance with previously uploaded artifacts:
@@ -290,7 +290,7 @@ curl -s -X POST \
         "contract_id": "calc.v1",
         "code_hash": "<32-byte-hex>"
       }' \
-  http://127.0.0.1:8080/v2/contracts/instance/activate | jq .
+  http://127.0.0.1:8080/v1/contracts/instance/activate | jq .
 ```
 
 ### Computing `abi_hash` for manifests

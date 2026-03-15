@@ -60,7 +60,7 @@ SF-3 میں پہلا عملدرآمد کریٹ `sorafs-node` ، جو عمل Iroh
 - `norito::json` پے لوڈ کے ساتھ AXUM اسٹیک Torii استعمال کریں۔
 - Norito رسپانس اسکیمیں (`PinResultV1` ، `FetchErrorV1` ، ٹیلی میٹری ڈھانچے) شامل کریں۔
 
-- I `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی ، سب سے قدیم عہد/آخری تاریخ اور `sorafs_node::NodeHandle::por_ingestion_status` کی وجہ سے ، ہر فراہم کنندہ کے لئے تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ کو ظاہر کرتا ہے ، اور Torii ریکارڈز Prometheus ڈیش بورڈز۔ 【کریٹس/sorafs_node/src/lib.rs: 510 】【 کریٹس/اروہہ_ٹوری/ایس آر سی/سورافس/api.rs: 188 3 】【 کریٹس/آئروہ_ٹوری/ایس آر سی/روٹنگ۔
+- I `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی ، سب سے قدیم عہد/آخری تاریخ اور `sorafs_node::NodeHandle::por_ingestion_status` کی وجہ سے ، ہر فراہم کنندہ کے لئے تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ کو ظاہر کرتا ہے ، اور Torii ریکارڈز Prometheus ڈیش بورڈز۔ 【کریٹس/sorafs_node/src/lib.rs: 510 】【 کریٹس/اروہہ_ٹوری/ایس آر سی/سورافس/api.rs: 188 3 】【 کریٹس/آئروہ_ٹوری/ایس آر سی/روٹنگ۔
 
 ### D. شیڈیولر اور کوٹہ نفاذ
 

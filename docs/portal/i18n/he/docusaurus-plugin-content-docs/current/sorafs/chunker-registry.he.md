@@ -101,7 +101,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 Rollout טלמטריה:
 
 - **טלמטריית fetch של chunks** — CLI של Iroha `sorafs toolkit pack` מפיק digests של chunk, מטאדאטת CAR ושורשי PoR לצריכת dashboards.
-- **Provider adverts** — payloads של adverts כוללים מטאדאטת יכולות ו-aliases; אמתו כיסוי דרך `/v2/sorafs/providers` (למשל קיום יכולת `range`).
+- **Provider adverts** — payloads של adverts כוללים מטאדאטת יכולות ו-aliases; אמתו כיסוי דרך `/v1/sorafs/providers` (למשל קיום יכולת `range`).
 - **ניטור gateway** — מפעילים צריכים לדווח על צמדי `Content-Chunker`/`Content-Digest` כדי לזהות downgrades בלתי צפויים; צפוי ששימוש ב-bridge ירד לאפס לפני הדפרקציה.
 
 מדיניות דפרקציה: לאחר שאושר פרופיל יורש, תזמנו חלון פרסום כפול (מתועד בהצעה) לפני סימון

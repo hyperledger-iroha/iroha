@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: first-release API version normalization (`v1` only)
+- Standardized Torii/API path references from `v2` to `v1` across code and
+  integration tests in this repository slice (`crates/` + `integration_tests/`):
+  - Torii route registration and handlers (`crates/iroha_torii/src/**`)
+  - Shared URI constants (`crates/iroha_torii_shared/src/lib.rs`)
+  - OpenAPI and MCP metadata/path templates
+  - Rust client and CLI call-sites (`crates/iroha/src/client.rs`,
+    `crates/iroha_cli/src/**`)
+  - Integration tests and Torii unit/integration tests that asserted `v2` paths
+- Fixed leftover non-leading-slash call-sites (for example legacy
+  `join("...")`/`join_torii_url(..., "...")` path fragments) to `v1`,
+  including node capabilities
+  probes and Sumeragi/public-lane helper endpoints.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --no-run` (pass)
+  - `rg -n 'legacy-version-marker' crates integration_tests -S` (no matches for legacy path markers)
+
+## 2026-03-15 Follow-up: proof-record Torii route fix in integration smoke test
+- Fixed `integration_tests/tests/proofs.rs` `submit_proof_and_query_record` polling path:
+  - switched proof lookup from a stale proof-record path to active `/v1/proofs/{id}`.
+  - this removes repeated `404 Not Found` polling and allows the test to observe the
+    persisted proof record as intended.
+- Validation (this follow-up):
+  - `cargo test -p integration_tests submit_proof_and_query_record --test proofs -- --nocapture` (pass before full v1-only sweep; final post-sweep rerun pending)
+
 ## 2026-03-15 Follow-up: Swift docs builder-ID alignment
 - Updated Swift-facing builder examples to match the current encoded-only validator contract:
   - `IrohaSwift/README.md` transfer/shield/unshield snippets now use canonical
@@ -2704,12 +2730,12 @@ Last updated: 2026-03-15
 - `cargo test -p iroha_core --lib governance_parliament_snapshot_state -- --nocapture` (pass)
 - `cargo check -p iroha_core` (pass)
 
-## 2026-03-08 Torii /v2 API Surface Cleanup
+## 2026-03-08 Torii Legacy API Surface Cleanup
 - Removed dead telemetry compatibility handlers from Torii:
   - `crates/iroha_torii/src/lib.rs` (`handler_status_root_v2`, `handler_status_tail_v2`)
-- Confirmed Torii route registrations do not expose `/v2/...` paths; active HTTP surface remains `/v1/...` (plus intentional unversioned utility endpoints such as `/status`, `/metrics`, `/api_version`).
+- Confirmed Torii route registrations do not expose legacy-versioned paths; active HTTP surface remains `/v1/...` (plus intentional unversioned utility endpoints such as `/status`, `/metrics`, `/api_version`).
 
-### Validation Matrix (Torii /v2 Cleanup)
+### Validation Matrix (Torii Legacy API Cleanup)
 - `cargo fmt --all`
 - `cargo test -p iroha_torii --test api_versioning -- --nocapture`
 
@@ -3303,7 +3329,7 @@ Last updated: 2026-03-15
     - `xtask/src/main.rs`
     - `crates/iroha_cli/src/space_directory.rs`
 - Fixed UAID runtime manifest polling path mismatch in `crates/iroha/src/client.rs`:
-  - `get_uaid_portfolio`, `get_uaid_bindings_with_query`, and `get_uaid_manifests` now target `/v2/...` routes.
+  - `get_uaid_portfolio`, `get_uaid_bindings_with_query`, and `get_uaid_manifests` now target canonical app routes.
 - Fixed proof fixture mismatch in `integration_tests/tests/events/proof.rs`:
   - Switched Halo2 fixture key from `halo2/ipa:tiny-add-v1` to `halo2/ipa:tiny-add` so verifying-key lookup succeeds.
 - Reduced localnet permit contention flakiness in `integration_tests/tests/nexus/cross_dataspace_localnet.rs` by serializing `cross_dataspace_localnet_genesis_preexecution_smoke` via `sandbox::serial_guard()`.

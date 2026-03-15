@@ -99,7 +99,7 @@ async fn offline_rejections_reports_counters() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/offline/rejections")
+                .uri("/v1/offline/rejections")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -145,7 +145,7 @@ async fn offline_rejections_require_metrics_profile() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/offline/rejections")
+                .uri("/v1/offline/rejections")
                 .body(Body::empty())
                 .unwrap(),
         )
