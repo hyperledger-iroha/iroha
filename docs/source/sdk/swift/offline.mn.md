@@ -77,7 +77,7 @@ let drained = try queue.drain()
 ## Troubleshooting checklist
 - **Overflow errors**: raise bounds intentionally only after exporting evidence; otherwise drain and clear the queue.
 - **Corrupted journal**: keep the file for audit, create a fresh journal directory, and retry. Verify NoritoBridge availability for BLAKE3 hashing paths.
-- **Missing bridge**: ensure `NoritoBridge.xcframework` is bundled and codesigned; remove debug-only `NORITO_BRIDGE_*` overrides in production.
+- **Missing bridge**: ensure `NoritoBridge.xcframework` is bundled and codesigned.
 
 ## Operational guidance
 - Ship with explicit `maxRecords`/`maxBytes` tuned to your retry policy; monitor `connect.queue_*` and `swift.offline.queue_depth` gauges.

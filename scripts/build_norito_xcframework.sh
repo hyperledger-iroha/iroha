@@ -7,6 +7,7 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
+#   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
 #
 # Outputs into ./dist/NoritoBridge.xcframework
 
@@ -24,6 +25,29 @@ FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 : "${IPHONESIMULATOR_DEPLOYMENT_TARGET:=19.0}"
 export IPHONEOS_DEPLOYMENT_TARGET
 export IPHONESIMULATOR_DEPLOYMENT_TARGET
+
+BRIDGE_VERSION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bridge-version)
+      shift
+      BRIDGE_VERSION="${1:-}"
+      if [[ -z "$BRIDGE_VERSION" ]]; then
+        echo "[-] --bridge-version requires a value" >&2
+        exit 1
+      fi
+      ;;
+    --bridge-version=*)
+      BRIDGE_VERSION="${1#*=}"
+      ;;
+    *)
+      echo "[-] Unknown argument: $1" >&2
+      echo "    Usage: $0 [--bridge-version <version>]" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
@@ -50,7 +74,6 @@ if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" ]]; then
   exit 1
 fi
 
-BRIDGE_VERSION="${NORITO_BRIDGE_VERSION:-}"
 if [[ -z "${BRIDGE_VERSION}" ]]; then
   VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
   if command -v rg >/dev/null 2>&1; then

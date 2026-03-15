@@ -139,10 +139,10 @@ final class NativeBridgeLoaderTests: XCTestCase {
 }
 
 final class BridgePolicyHintTests: XCTestCase {
-    func testBridgeRequirementHintReferencesEnvAndPath() {
+    func testBridgeRequirementHintReferencesPath() {
         let hint = NoritoNativeBridge.bridgeRequirementHint
         XCTAssertTrue(hint.contains("NoritoBridge.xcframework"))
-        XCTAssertTrue(hint.contains(BridgePolicyHint.envVar))
+        XCTAssertTrue(hint.contains("../dist/NoritoBridge.xcframework"))
     }
 }
 
@@ -160,7 +160,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
-                                      assetDefinitionId: "xor#test",
+                                      assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,
@@ -173,7 +173,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
                 XCTFail("expected nativeBridgeUnavailable, got \(error)")
                 return
             }
-            XCTAssertTrue(error.localizedDescription.contains(BridgePolicyHint.envVar))
+            XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
         #else
         throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")
@@ -201,7 +201,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
                 XCTFail("expected ConnectCodecError.bridgeUnavailable, got \(error)")
                 return
             }
-            XCTAssertTrue(error.localizedDescription.contains(BridgePolicyHint.envVar))
+            XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
         #else
         throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")

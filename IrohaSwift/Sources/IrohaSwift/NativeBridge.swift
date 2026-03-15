@@ -3,35 +3,15 @@ import CryptoKit
 #if canImport(Darwin)
 import Darwin
 
-private enum BridgeBuildMode {
-    case required
-    case optional
-    case disabled
-
-    static var current: BridgeBuildMode {
-        #if IROHASWIFT_BRIDGE_DISABLED
-        return .disabled
-        #elseif IROHASWIFT_BRIDGE_OPTIONAL
-        return .optional
-        #else
-        return .required
-        #endif
-    }
-}
-
 enum BridgePolicyHint {
     private static let relativeBridgePath = "../dist/NoritoBridge.xcframework"
-    static let envVar = "IROHASWIFT_USE_BRIDGE"
 
     static var message: String {
-        switch BridgeBuildMode.current {
-        case .required:
-            return "Add NoritoBridge.xcframework under \(relativeBridgePath) (or set \(envVar)=optional for Swift fallback, \(envVar)=0 to disable the bridge)."
-        case .optional:
-            return "NoritoBridge is optional in this build; place \(relativeBridgePath) to enable native helpers, keep \(envVar)=optional for Swift-only encoding, or set \(envVar)=0 to disable bridge loading."
-        case .disabled:
-            return "NoritoBridge is disabled in this build via \(envVar)=0. Re-enable it and place \(relativeBridgePath) to load the native helpers."
-        }
+        #if IROHASWIFT_BRIDGE_OPTIONAL
+        return "NoritoBridge.xcframework is not available in this build. Place it under \(relativeBridgePath) and rebuild to enable native helpers."
+        #else
+        return "Add NoritoBridge.xcframework under \(relativeBridgePath) to enable native helpers."
+        #endif
     }
 
     static func unavailableMessage(_ prefix: String) -> String {
@@ -51,7 +31,6 @@ enum NoritoBridgeLoader {
         case missing(path: String)
         case hashMismatch(path: String, expected: String, actual: String?)
         case versionMismatch(path: String, expected: String, actual: String?)
-        case disabled(reason: String)
     }
 
     static let expectedVersion = "0.1.0"
@@ -67,10 +46,6 @@ enum NoritoBridgeLoader {
     }
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
-        if BridgeBuildMode.current == .disabled {
-            return (nil, .disabled(reason: "\(BridgePolicyHint.envVar)=0"))
-        }
-
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
         // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions
@@ -233,21 +208,6 @@ enum NoritoBridgeLoader {
             seen.insert(path)
             paths.append(path)
         }
-
-        func appendBinaryIfNeeded(_ rawPath: String) -> String {
-            if rawPath.hasSuffix(".framework") {
-                return (rawPath as NSString).appendingPathComponent("NoritoBridge")
-            }
-            return rawPath
-        }
-
-        let env = ProcessInfo.processInfo.environment
-        #if DEBUG
-        if env["NORITO_BRIDGE_ALLOW_OVERRIDE"] == "1",
-           let override = env["NORITO_BRIDGE_OVERRIDE_PATH"] {
-            addIfExisting(URL(fileURLWithPath: appendBinaryIfNeeded(override)))
-        }
-        #endif
 
         for framework in Bundle.allFrameworks
             where framework.bundleURL.lastPathComponent == "NoritoBridge.framework" {
@@ -1049,6 +1009,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
+    private typealias EncodeAssetIdLiteralFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
 
     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
@@ -1582,6 +1548,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
+    private var encodeAssetIdLiteralFn: EncodeAssetIdLiteralFn? = nil
     private var freeFn: FreeFn? = nil
     private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
@@ -1693,6 +1660,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernancePersistCouncilWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
+    private let encodeAssetIdLiteralFn: Any? = nil
     private let freeFn: Any? = nil
     private let setChainDiscriminantFn: Any? = nil
     private let setAccelerationConfigFn: Any? = nil
@@ -2018,6 +1986,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.decodeAssetIdFn = unsafeBitCast(decodeAssetIdSymbol, to: DecodeAssetIdFn.self)
             } else {
                 self.decodeAssetIdFn = nil
+            }
+            if let encodeAssetIdLiteralSymbol = dlsym(handle, "connect_norito_encode_asset_id_literal") {
+                self.encodeAssetIdLiteralFn = unsafeBitCast(encodeAssetIdLiteralSymbol, to: EncodeAssetIdLiteralFn.self)
+            } else {
+                self.encodeAssetIdLiteralFn = nil
             }
             if let publicKeyFromPrivateSymbol = dlsym(handle, "connect_norito_public_key_from_private") {
                 self.publicKeyFromPrivateFn = unsafeBitCast(publicKeyFromPrivateSymbol, to: PublicKeyFromPrivateFn.self)
@@ -2425,6 +2398,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.decodeSignedFn = nil
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
+            self.encodeAssetIdLiteralFn = nil
             self.freeFn = nil
             self.setChainDiscriminantFn = nil
             self.setAccelerationConfigFn = nil
@@ -2564,8 +2538,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         case .pathDenied(let path):
             return BridgePolicyHint.unavailableMessage("NoritoBridge load denied for path \(path).")
-        case .disabled(let reason):
-            return BridgePolicyHint.unavailableMessage("NoritoBridge disabled in this build (\(reason)).")
         case .missing(let path):
             return BridgePolicyHint.unavailableMessage("NoritoBridge missing at \(path).")
         case .hashMismatch(let path, let expected, let actual):
@@ -2687,9 +2659,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var bridgeEnabledForRuntime: Bool {
         if let override = bridgeAvailabilityOverride {
             return override
-        }
-        if case .disabled = bridgeStatus {
-            return false
         }
         return true
     }
@@ -4994,6 +4963,46 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return String(data: jsonData, encoding: .utf8)
         #else
         return nil
+        #endif
+    }
+
+    func encodeAssetIdLiteral(assetDefinition: String, accountId: String) -> String? {
+        #if canImport(Darwin)
+        guard let encodeAssetIdLiteralFn, let freeFn else { return nil }
+        let trimmedAssetDefinition = assetDefinition.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAccountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAssetDefinition.isEmpty, !trimmedAccountId.isEmpty else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: UInt = 0
+        let status = trimmedAssetDefinition.withCString { assetDefinitionCString -> Int32 in
+            trimmedAccountId.withCString { accountCString -> Int32 in
+                encodeAssetIdLiteralFn(
+                    assetDefinitionCString,
+                    UInt(trimmedAssetDefinition.utf8.count),
+                    accountCString,
+                    UInt(trimmedAccountId.utf8.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        guard status == 0, let outPtr else {
+            if let outPtr { freeFn(outPtr) }
+            return nil
+        }
+        let outData = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return String(data: outData, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    var canEncodeAssetIdLiteral: Bool {
+        #if canImport(Darwin)
+        return encodeAssetIdLiteralFn != nil && freeFn != nil
+        #else
+        return false
         #endif
     }
 

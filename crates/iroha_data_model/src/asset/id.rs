@@ -295,6 +295,14 @@ impl AssetDefinitionId {
         format!("{AID_PREFIX}{}", hex::encode(self.aid_bytes))
     }
 
+    /// Returns `true` when this identifier is a canonical opaque `aid:<32-hex>`
+    /// literal rather than a domain-scoped asset definition synthesized from
+    /// business domain/name components.
+    #[must_use]
+    pub fn is_opaque_canonical(&self) -> bool {
+        self.domain.name.as_ref() == "aid" && self.name.as_ref() == hex::encode(self.aid_bytes)
+    }
+
     /// Parse strictly canonical `aid:<32-lower-hex-no-dash>` literals.
     ///
     /// # Errors
@@ -424,6 +432,20 @@ mod tests {
             parsed.to_string(),
             "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_string()
         );
+    }
+
+    #[test]
+    fn asset_definition_id_distinguishes_opaque_from_domain_scoped_ids() {
+        let opaque: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("opaque aid should parse");
+        assert!(opaque.is_opaque_canonical());
+
+        let domain_scoped = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        );
+        assert!(!domain_scoped.is_opaque_canonical());
     }
 
     #[test]

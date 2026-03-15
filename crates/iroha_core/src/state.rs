@@ -2329,6 +2329,9 @@ pub struct WorldTransaction<'block, 'world> {
 impl WorldTransaction<'_, '_> {
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
+        if definition_id.is_opaque_canonical() {
+            return;
+        }
         if let Some(definitions) = self
             .domain_asset_definitions
             .get_mut(definition_id.domain())
@@ -2344,6 +2347,9 @@ impl WorldTransaction<'_, '_> {
 
     /// Drop the domain linkage when the asset definition no longer exists.
     pub(crate) fn untrack_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
+        if definition_id.is_opaque_canonical() {
+            return;
+        }
         let remove_domain_index_entry = self
             .domain_asset_definitions
             .get_mut(definition_id.domain())
@@ -9691,6 +9697,9 @@ impl World {
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
         for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
+            if definition_id.is_opaque_canonical() {
+                continue;
+            }
             domain_definitions
                 .entry(definition_id.domain().clone())
                 .or_default()
@@ -23511,7 +23520,11 @@ impl StateTransaction<'_, '_> {
             "op": "none",
         });
 
-        if let DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(asset_event))) = event {
+        if let DataEvent::Domain(DomainEvent::Account(account_event)) = event {
+            let account_domain = account_event.origin_domain().to_string();
+            let AccountEvent::Asset(asset_event) = account_event else {
+                return Json::from(payload);
+            };
             let (op, changed) = match asset_event {
                 AssetEvent::Added(changed) => ("added", changed),
                 AssetEvent::Removed(changed) => ("removed", changed),
@@ -23520,22 +23533,34 @@ impl StateTransaction<'_, '_> {
 
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
-            let asset_definition_name = asset_id.definition().name().as_ref().to_owned();
-            let asset_definition_domain = asset_id.definition().domain().to_string();
+            let asset_definition_id = asset_id.definition().to_string();
+            let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
+                .then(|| asset_id.definition().name().as_ref().to_owned());
+            let asset_definition_domain = (!asset_id.definition().is_opaque_canonical())
+                .then(|| asset_id.definition().domain().to_string());
             let account_id = asset_id.account().to_string();
             if let Ok(amount_i64) = amount_str.parse::<i64>() {
                 let mut details = norito::json::Map::new();
                 details.insert("kind".to_owned(), norito::json!("asset_change"));
                 details.insert("op".to_owned(), norito::json!(op));
                 details.insert(
-                    "asset_definition_name".to_owned(),
-                    norito::json!(asset_definition_name),
+                    "asset_definition_id".to_owned(),
+                    norito::json!(asset_definition_id),
                 );
-                details.insert(
-                    "asset_definition_domain".to_owned(),
-                    norito::json!(asset_definition_domain),
-                );
+                if let Some(asset_definition_name) = asset_definition_name.as_ref() {
+                    details.insert(
+                        "asset_definition_name".to_owned(),
+                        norito::json!(asset_definition_name),
+                    );
+                }
+                if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
+                    details.insert(
+                        "asset_definition_domain".to_owned(),
+                        norito::json!(asset_definition_domain),
+                    );
+                }
                 details.insert("account_id".to_owned(), norito::json!(account_id));
+                details.insert("account_domain".to_owned(), norito::json!(account_domain));
                 details.insert("amount".to_owned(), norito::json!(amount_str));
                 details.insert("amount_i64".to_owned(), norito::json!(amount_i64));
                 payload = norito::json::Value::Object(details);
@@ -23547,14 +23572,23 @@ impl StateTransaction<'_, '_> {
                 );
                 details.insert("op".to_owned(), norito::json!(op));
                 details.insert(
-                    "asset_definition_name".to_owned(),
-                    norito::json!(asset_definition_name),
+                    "asset_definition_id".to_owned(),
+                    norito::json!(asset_definition_id),
                 );
-                details.insert(
-                    "asset_definition_domain".to_owned(),
-                    norito::json!(asset_definition_domain),
-                );
+                if let Some(asset_definition_name) = asset_definition_name.as_ref() {
+                    details.insert(
+                        "asset_definition_name".to_owned(),
+                        norito::json!(asset_definition_name),
+                    );
+                }
+                if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
+                    details.insert(
+                        "asset_definition_domain".to_owned(),
+                        norito::json!(asset_definition_domain),
+                    );
+                }
                 details.insert("account_id".to_owned(), norito::json!(account_id));
+                details.insert("account_domain".to_owned(), norito::json!(account_domain));
                 details.insert("amount".to_owned(), norito::json!(amount_str));
                 payload = norito::json::Value::Object(details);
             }
@@ -34415,6 +34449,9 @@ mod tests {
         let rose_id = AssetDefinitionId::new(wonderland.clone(), "rose".parse().unwrap());
         let tulip_id = AssetDefinitionId::new(wonderland.clone(), "tulip".parse().unwrap());
         let cactus_id = AssetDefinitionId::new(denoland.clone(), "cactus".parse().unwrap());
+        let opaque_id: AssetDefinitionId = "aid:2e3d34beb8a84239b3d9590770f1189e"
+            .parse()
+            .expect("opaque aid asset definition id");
         for definition_id in [&rose_id, &tulip_id, &cactus_id] {
             Register::asset_definition({
                 let __asset_definition_id = definition_id.clone();
@@ -34424,6 +34461,11 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
         }
+        Register::asset_definition(
+            AssetDefinition::numeric(opaque_id.clone()).with_name("pkr".to_owned()),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register opaque asset definition");
 
         let wonderland_definitions = stx
             .world
@@ -34444,6 +34486,21 @@ mod tests {
             denoland_definitions,
             BTreeSet::from([cactus_id.clone()]),
             "denoland should only expose its own definitions"
+        );
+        let synthetic_aid_domain: DomainId = "aid".parse().expect("synthetic label");
+        assert!(
+            stx.world
+                .asset_definitions_in_domain_iter(&synthetic_aid_domain)
+                .next()
+                .is_none(),
+            "opaque aid asset definitions must not be exposed through any domain index"
+        );
+        assert!(
+            stx.world
+                .domain_asset_definitions
+                .get(&synthetic_aid_domain)
+                .is_none(),
+            "opaque aid asset definitions must not create internal aid-domain index entries"
         );
 
         Unregister::asset_definition(cactus_id.clone())

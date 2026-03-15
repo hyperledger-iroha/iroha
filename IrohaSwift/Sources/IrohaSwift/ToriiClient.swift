@@ -141,7 +141,25 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
     }
 }
 
+public struct ToriiAccountAliasResolution: Decodable, Sendable {
+    public let alias: String
+    public let accountId: String
+    public let index: UInt64?
+    public let source: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case alias
+        case accountId = "account_id"
+        case index
+        case source
+    }
+}
+
 private struct ToriiAssetAliasResolveRequest: Encodable {
+    let alias: String
+}
+
+private struct ToriiAccountAliasResolveRequest: Encodable {
     let alias: String
 }
 
@@ -8272,6 +8290,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
     private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
     private static let defaultListPageSize = 100
+    internal var assetIdLiteralBuilder: (String, String) throws -> String = {
+        try OfflineNorito.assetIdLiteral(assetDefinitionId: $0, accountId: $1)
+    }
 
     public init(baseURL: URL, session: URLSession = .shared) {
         // Normalize to directory URL for correct relative URL resolution.
@@ -8301,6 +8322,24 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func resolveAssetAlias(_ alias: String,
                                   completion: @escaping (Result<ToriiAssetAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.resolveAssetAlias(alias) }
+    }
+
+    @discardableResult
+    public func resolveAccountAlias(_ alias: String,
+                                    completion: @escaping (Result<ToriiAccountAliasResolution?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.resolveAccountAlias(alias) }
+    }
+
+    @discardableResult
+    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
+                                                    accountIdOrAlias: String,
+                                                    completion: @escaping (Result<String, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.buildAssetIdLiteralResolvingAliases(
+                assetDefinitionIdOrAlias: assetDefinitionIdOrAlias,
+                accountIdOrAlias: accountIdOrAlias
+            )
+        }
     }
 
     @discardableResult
@@ -9280,6 +9319,85 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiAssetAliasResolution.self, from: data)
+    }
+
+    public func resolveAccountAlias(_ alias: String) async throws -> ToriiAccountAliasResolution? {
+        let normalizedAlias = try ToriiRequestValidation.normalizedNonEmpty(alias, field: "alias")
+        let body = try JSONEncoder().encode(ToriiAccountAliasResolveRequest(alias: normalizedAlias))
+        let request = try makeRequest(
+            path: "/v1/aliases/resolve",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiAccountAliasResolution.self, from: data)
+    }
+
+    public static func buildCanonicalAssetIdLiteralOffline(assetDefinitionId: String,
+                                                           accountId: String) throws -> String {
+        try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
+    }
+
+    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
+                                                    accountIdOrAlias: String) async throws -> String {
+        let normalizedAssetInput = try ToriiRequestValidation.normalizedNonEmpty(
+            assetDefinitionIdOrAlias,
+            field: "assetDefinitionIdOrAlias"
+        )
+        let normalizedAccountInput = try ToriiRequestValidation.normalizedNonEmpty(
+            accountIdOrAlias,
+            field: "accountIdOrAlias"
+        )
+
+        let resolvedAccountId: String
+        if let canonical = try? normalizeToriiAccountIdQueryValue(
+            normalizedAccountInput,
+            field: "accountIdOrAlias"
+        ) {
+            resolvedAccountId = canonical
+        } else {
+            guard let resolvedAlias = try await resolveAccountAlias(normalizedAccountInput) else {
+                throw ToriiClientError.invalidPayload(
+                    "account alias '\(normalizedAccountInput)' was not found"
+                )
+            }
+            resolvedAccountId = resolvedAlias.accountId
+        }
+
+        var resolvedAssetDefinition = normalizedAssetInput
+        if normalizedAssetInput.contains("@") {
+            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
+                throw ToriiClientError.invalidPayload(
+                    "asset alias '\(normalizedAssetInput)' was not found"
+                )
+            }
+            resolvedAssetDefinition = resolvedAlias.assetDefinitionId
+        }
+
+        do {
+            return try assetIdLiteralBuilder(
+                resolvedAssetDefinition,
+                resolvedAccountId
+            )
+        } catch OfflineNoritoError.invalidAssetId where !normalizedAssetInput.contains("@") {
+            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
+                throw ToriiClientError.invalidPayload(
+                    "asset definition '\(normalizedAssetInput)' is invalid and alias resolution did not find a mapping"
+                )
+            }
+            return try assetIdLiteralBuilder(
+                resolvedAlias.assetDefinitionId,
+                resolvedAccountId
+            )
+        }
     }
 
     /// Returns account transaction metadata from `/v1/accounts/{account_id}/transactions`.

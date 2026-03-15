@@ -19,6 +19,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
@@ -210,6 +212,103 @@ public final class HttpClientTransport implements IrohaClient {
         buildJsonGetRequest(
             "/v1/space-directory/uaids/" + encodePathSegment(canonical) + "/manifests", params);
     return fetchJson(request, UaidJsonParser::parseManifests, "UAID manifests");
+  }
+
+  /** Resolves an account alias via `POST /v1/aliases/resolve`. Returns {@code null} on 404. */
+  public CompletableFuture<AccountAliasResolution> resolveAccountAlias(final String alias) {
+    final String normalizedAlias = normalizeAliasInput(alias, "alias");
+    final byte[] body =
+        JsonEncoder.encode(Map.of("alias", normalizedAlias)).getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
+    return fetchJsonNullable(
+        request, HttpClientTransport::parseAccountAliasResolution, "account alias resolution");
+  }
+
+  /** Resolves an asset alias via `POST /v1/assets/aliases/resolve`. Returns {@code null} on 404. */
+  public CompletableFuture<AssetAliasResolution> resolveAssetAlias(final String alias) {
+    final String normalizedAlias = normalizeAliasInput(alias, "alias");
+    final byte[] body =
+        JsonEncoder.encode(Map.of("alias", normalizedAlias)).getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildJsonPostRequest("/v1/assets/aliases/resolve", body);
+    return fetchJsonNullable(
+        request, HttpClientTransport::parseAssetAliasResolution, "asset alias resolution");
+  }
+
+  /**
+   * Builds a canonical encoded asset id (`norito:<hex>`) from textual inputs.
+   *
+   * <p>When aliases are provided, this helper resolves them online (`/v1/aliases/resolve`,
+   * `/v1/assets/aliases/resolve`) before encoding. If a non-alias asset-definition input fails
+   * canonical encoding, this helper attempts asset-alias resolution before returning an error. For
+   * offline-only canonical encoding, use
+   * {@link AssetIdLiteral#encodeFromParts(String, String)}.
+   */
+  public CompletableFuture<String> buildAssetIdLiteralResolvingAliases(
+      final String assetDefinitionIdOrAlias, final String accountIdOrAlias) {
+    final String normalizedAssetInput =
+        normalizeAliasInput(assetDefinitionIdOrAlias, "assetDefinitionIdOrAlias");
+    final String normalizedAccountInput =
+        normalizeAliasInput(accountIdOrAlias, "accountIdOrAlias");
+
+    CompletableFuture<String> accountFuture;
+    try {
+      accountFuture =
+          CompletableFuture.completedFuture(
+              AccountIdLiteral.extractI105Address(normalizedAccountInput));
+    } catch (final IllegalArgumentException ex) {
+      accountFuture =
+          resolveAccountAlias(normalizedAccountInput)
+              .thenApply(
+                  resolved -> {
+                    if (resolved == null) {
+                      throw new IllegalArgumentException(
+                          "account alias '" + normalizedAccountInput + "' was not found");
+                    }
+                    return resolved.accountId();
+                  });
+    }
+
+    final CompletableFuture<String> assetDefinitionFuture;
+    if (normalizedAssetInput.indexOf('@') >= 0) {
+      assetDefinitionFuture =
+          resolveAssetAlias(normalizedAssetInput)
+              .thenApply(
+                  resolved -> {
+                    if (resolved == null) {
+                      throw new IllegalArgumentException(
+                          "asset alias '" + normalizedAssetInput + "' was not found");
+                    }
+                    return resolved.assetDefinitionId();
+                  });
+    } else {
+      assetDefinitionFuture = CompletableFuture.completedFuture(normalizedAssetInput);
+    }
+
+    return accountFuture.thenCompose(
+        accountId ->
+            assetDefinitionFuture.thenCompose(
+                assetDefinitionId -> {
+                  try {
+                    return CompletableFuture.completedFuture(
+                        AssetIdLiteral.encodeFromParts(assetDefinitionId, accountId));
+                  } catch (final IllegalArgumentException ex) {
+                    if (normalizedAssetInput.indexOf('@') >= 0) {
+                      throw ex;
+                    }
+                    return resolveAssetAlias(normalizedAssetInput)
+                        .thenApply(
+                            resolved -> {
+                              if (resolved == null) {
+                                throw new IllegalArgumentException(
+                                    "asset definition '"
+                                        + normalizedAssetInput
+                                        + "' is invalid and alias resolution did not find a mapping");
+                              }
+                              return AssetIdLiteral.encodeFromParts(
+                                  resolved.assetDefinitionId(), accountId);
+                            });
+                  }
+                }));
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -856,6 +955,80 @@ public final class HttpClientTransport implements IrohaClient {
     throw new IllegalStateException("Pipeline status response must be a JSON object");
   }
 
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> parseJsonObjectPayload(
+      final byte[] body, final String errorContext) {
+    final String json = new String(body, StandardCharsets.UTF_8).trim();
+    if (json.isEmpty()) {
+      throw new IllegalStateException(errorContext + " response body was empty");
+    }
+    final Object parsed = JsonParser.parse(json);
+    if (!(parsed instanceof Map<?, ?> map)) {
+      throw new IllegalStateException(errorContext + " response must be a JSON object");
+    }
+    return (Map<String, Object>) map;
+  }
+
+  private static String requiredString(
+      final Map<String, Object> map, final String field, final String errorContext) {
+    final Object value = map.get(field);
+    if (!(value instanceof String stringValue)) {
+      throw new IllegalStateException(errorContext + " missing `" + field + "` string field");
+    }
+    final String trimmed = stringValue.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalStateException(errorContext + " field `" + field + "` must not be blank");
+    }
+    return trimmed;
+  }
+
+  private static String optionalString(final Map<String, Object> map, final String field) {
+    final Object value = map.get(field);
+    if (!(value instanceof String stringValue)) {
+      return null;
+    }
+    final String trimmed = stringValue.trim();
+    return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private static Long optionalLong(final Map<String, Object> map, final String field) {
+    final Object value = map.get(field);
+    if (!(value instanceof Number numberValue)) {
+      return null;
+    }
+    return numberValue.longValue();
+  }
+
+  private static String normalizeAliasInput(final String value, final String field) {
+    final String trimmed = Objects.requireNonNull(value, field).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    return trimmed;
+  }
+
+  private static AccountAliasResolution parseAccountAliasResolution(final byte[] body) {
+    final Map<String, Object> map = parseJsonObjectPayload(body, "account alias resolution");
+    final String alias = requiredString(map, "alias", "account alias resolution");
+    final String accountId = requiredString(map, "account_id", "account alias resolution");
+    final Long index = optionalLong(map, "index");
+    final String source = optionalString(map, "source");
+    return new AccountAliasResolution(alias, accountId, index, source);
+  }
+
+  private static AssetAliasResolution parseAssetAliasResolution(final byte[] body) {
+    final Map<String, Object> map = parseJsonObjectPayload(body, "asset alias resolution");
+    final String alias = requiredString(map, "alias", "asset alias resolution");
+    final String assetDefinitionId =
+        requiredString(map, "asset_definition_id", "asset alias resolution");
+    final String assetName = requiredString(map, "asset_name", "asset alias resolution");
+    final String description = optionalString(map, "description");
+    final String logo = optionalString(map, "logo");
+    final String source = optionalString(map, "source");
+    return new AssetAliasResolution(
+        alias, assetDefinitionId, assetName, description, logo, source);
+  }
+
   private static TransactionStatusHttpException buildPipelineStatusHttpException(
       final String hashHex, final ClientResponse response) {
     final String bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body());
@@ -894,6 +1067,21 @@ public final class HttpClientTransport implements IrohaClient {
             .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
+  private TransportRequest buildJsonPostRequest(final String path, final byte[] body) {
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("POST")
+            .addHeader("Accept", "application/json")
+            .addHeader("Content-Type", "application/json")
+            .setBody(body)
             .setTimeout(config.requestTimeout());
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
@@ -980,6 +1168,58 @@ public final class HttpClientTransport implements IrohaClient {
                       response.message(),
                       null,
                       extractRejectCode(response));
+              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              try {
+                final T parsed = parser.apply(response.body());
+                notifyResponse(request, clientResponse);
+                future.complete(parsed);
+              } catch (final RuntimeException ex) {
+                notifyFailure(request, ex);
+                future.completeExceptionally(ex);
+              }
+            });
+    return future;
+  }
+
+  private <T> CompletableFuture<T> fetchJsonNullable(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<T> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                final RuntimeException error =
+                    new RuntimeException(errorContext + " request failed", cause);
+                notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() == 404) {
+                notifyResponse(request, clientResponse);
+                future.complete(null);
+                return;
+              }
               if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 final RuntimeException error =
                     new RuntimeException(
